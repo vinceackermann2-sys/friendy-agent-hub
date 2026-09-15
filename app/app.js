@@ -36,6 +36,9 @@ const IC = {
   chart:'<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V7M18 17v-8"/>',
   code:'<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>',
   mail:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 6l-10 7L2 6"/>',
+  phone:'<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.6 2Z"/>',
+  wallet:'<path d="M20 7H4a2 2 0 0 1 0-4h14v4"/><path d="M20 7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5"/><circle cx="17" cy="14" r="1.2"/>',
+  laptop:'<rect x="2" y="4" width="20" height="12" rx="2"/><path d="M2 20h20"/>',
   git:'<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M6 9v6M18 9a9 9 0 0 1-9 9"/>',
   check:'<path d="M20 6L9 17l-5-5"/>',
   x:'<path d="M18 6L6 18M6 6l12 12"/>',
@@ -143,7 +146,7 @@ function render(){
 function renderAuth(){
   root.innerHTML = `
   <div class="fadeup">
-    <nav class="nav"><div class="logo">${Mascot.logo(26)} Lingon</div><div></div><span class="chip">real account required</span></nav>
+    <nav class="nav"><div class="logo">${Mascot.logo(26)} arche</div><div style="display:flex;gap:10px;align-items:center"><span class="chip">real account required</span><button class="btn ghost small" data-act="back-home">Back</button></div></nav>
     <section class="hero" style="max-width:560px;margin:0 auto">
       <div class="badge">${icon('lock',14)} Sign in to your agent</div>
       <h1>Your agent, your account.</h1>
@@ -225,20 +228,80 @@ function paintBilling(M){
 /* ================================================================
    LANDING
 ================================================================ */
+/* Arche landing helpers — name detection + activity switcher */
+function archeDisplayName(){
+  // Browsers never expose the OS username (privacy), so derive gracefully:
+  // 1) signed-in account email prefix, 2) previously saved name, 3) fallback.
+  try {
+    const s = window.LingonAuth && window.LingonAuth.get && window.LingonAuth.get();
+    const email = s && s.user && s.user.email;
+    if (email){
+      const part = String(email).split('@')[0].split(/[._\-+]+/)[0];
+      if (part) return part.charAt(0).toUpperCase() + part.slice(1);
+    }
+  } catch {}
+  try {
+    const n = localStorage.getItem('arche.username');
+    if (n) return n;
+  } catch {}
+  return 'friend';
+}
+const ARCH_ACTS = [
+  { ic:'laptop', label:'working on a laptop', mood:'think' },
+  { ic:'phone',  label:'answering phones',     mood:'happy' },
+  { ic:'mail',   label:'sending mails',        mood:'idle' },
+  { ic:'wallet', label:'counting wallet',      mood:'wow' },
+];
+function archeStopRotator(){ if (window.__actTimer){ clearInterval(window.__actTimer); window.__actTimer = null; } }
+function archeStartRotator(){
+  archeStopRotator();
+  let i = 1;
+  window.__actTimer = setInterval(() => {
+    const pill = document.getElementById('actpill');
+    const mm = document.getElementById('actmascot');
+    if (!pill || !mm){ archeStopRotator(); return; }
+    const a = ARCH_ACTS[i % ARCH_ACTS.length];
+    pill.style.opacity = '0';
+    setTimeout(() => {
+      const p = document.getElementById('actpill');
+      if (!p) return;
+      p.innerHTML = '<span class="aic">' + icon(a.ic, 16) + '</span><span>' + a.label + '</span>';
+      const m = document.getElementById('actmascot');
+      if (m) m.innerHTML = Mascot.svg('lingon', a.mood, 40);
+      Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (i % ARCH_ACTS.length)));
+      p.style.opacity = '1';
+    }, 180);
+    i++;
+  }, 2400);
+}
+function archeBenchRow(model, sub, score, color){
+  return '<div class="brow"><div class="blab"><span><span class="bmodel">' + esc(model) + '</span> <span class="bsub">' + esc(sub) + '</span></span><span>' + score + '</span></div>'
+    + '<div class="btrack"><div class="bfill" style="width:' + score + '%;background:' + color + '"></div></div></div>';
+}
+
 function renderLanding(){
+  const who = archeDisplayName();
   root.innerHTML = `
   <div class="fadeup">
-    <nav class="nav">
-      <div class="logo">${Mascot.logo(26)} Lingon</div>
-      <div class="navlinks"><span data-act="scroll" data-t="#feat">Product</span><span data-act="scroll" data-t="#sec">Security</span><span data-act="scroll" data-t="#pricing">Pricing</span></div>
-      <button class="btn small" data-act="open-app">Open app</button>
-    </nav>
-    <section class="hero">
-      <div class="badge">${icon('spark',14)} Personal agents, claimed &amp; named by you</div>
-      <h1>An agent that's<br>actually yours.</h1>
-      <p class="sub">Claim it. Name it. Teach it. Lingon runs on a Gemini-backed sandboxed harness — browser, code, files, sub-agents — while your secrets stay sealed in your vault. Signed in with your real account.</p>
+    <div class="anav"><nav class="nav">
+      <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} arche</a>
+      <div class="navlinks"><span data-act="scroll" data-t="#safety">Safe Swedish AI</span><span data-act="scroll" data-t="#agent">Personal Agent</span><span data-act="scroll" data-t="#models">Models</span><span data-act="scroll" data-t="#pricing">Pricing</span></div>
+      <div class="anav-cta">
+        <button class="btn ghost small hideS" data-act="signin-nav">Sign in</button>
+        <button class="btn small" data-act="open-app">Get started</button>
+      </div>
+    </nav></div>
+
+    <header class="hero ahero">
+      <div class="eyebrow">${icon('shieldcheck',14)} Star 1.0 · Personal AI Agents</div>
+      <h1>Hi <span class="who">${esc(who)}</span>,<br>I can do anything you can.</h1>
+      <p class="tagline">Meet your Arche agent — it researches, builds, calls, writes and organizes, right beside you.</p>
+      <div class="actbar">
+        <span class="amascot" id="actmascot">${Mascot.svg('lingon','think',40)}</span>
+        <span class="actpill" id="actpill"><span class="aic">${icon('laptop',16)}</span><span>working on a laptop</span></span>
+      </div>
+      <div class="actdots">${ARCH_ACTS.map((a, i) => `<button data-act="actdot" data-i="${i}" class="${i === 0 ? 'on' : ''}" aria-label="${a.label}"></button>`).join('')}</div>
       <div class="promptwrap">
-        <div class="sitter">${Mascot.svg('lingon','wave',84,'mascot-bob')}</div>
         <form class="promptbox" id="lform">
           <textarea id="lprompt" rows="2" placeholder="Ask your agent anything… e.g. Research which Swedish party people say they'll vote for on social media"></textarea>
           <div class="pb-row">
@@ -253,36 +316,112 @@ function renderLanding(){
       </div>
       <div class="landing-thread" id="lthread"></div>
       <div class="hintline">${icon('spark',13)} Try “review my GitHub pull requests” or “build me a landing page”</div>
-    </section>
+      <div class="safe-note">Swedish Safe AI Agents</div>
+      <div class="scrollcue"><span class="wheel"></span><span>Scroll to see how</span></div>
+    </header>
 
-    <section class="features" id="feat">
-      <h2>Everything a personal agent should be</h2>
-      <p class="fsub">Rich action cards in chat, a live canvas on the right, and a vault that keeps you in control.</p>
-      <div class="grid3">
-        <div class="fcard"><div class="fic">${icon('shieldcheck',19)}</div><h3>Approvals &amp; sealed vault</h3><p>New actions wait for your yes. Secrets are encrypted and masked — the agent only ever receives a reference, never the value.</p></div>
-        <div class="fcard"><div class="fic" style="background:var(--purple-soft);color:var(--purple)">${icon('panel',19)}</div><h3>Visual canvas</h3><p>Charts, live pages, diffs and plans render beside your chat, with a full trace of every tool call and sub-agent.</p></div>
-        <div class="fcard"><div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('box',19)}</div><h3>Sub-agents &amp; sandbox</h3><p>Parallel workers fan out across the web while everything runs in our Gemini harness with an allowlisted network and approval gates.</p></div>
-        <div class="fcard"><div class="fic" style="background:var(--purple-soft);color:var(--purple)">${icon('book',19)}</div><h3>Memory that sticks</h3><p>Your agent remembers preferences and projects across chats — and you can inspect or delete every memory.</p></div>
-        <div class="fcard"><div class="fic">${icon('globe',19)}</div><h3>Browser &amp; computer use</h3><p>Watch it browse and type in a contained window, step by step, never hidden behind the curtain.</p></div>
-        <div class="fcard"><div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('user',19)}</div><h3>Claimed, named, yours</h3><p>One person claims each agent. You name it, pick its color and character — it answers to you alone.</p></div>
+    <section class="asection" id="safety" aria-label="Safe Swedish AI">
+      <div class="kicker">Safe Swedish AI</div>
+      <h2>Safe Swedish AI</h2>
+      <div class="split">
+        <div>
+          <p class="lede">Star 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
+          <div class="checklist">
+            <div class="row">${icon('lock',16)}<span><b>Sealed vault.</b> Secrets are encrypted; the agent only ever receives masked references.</span></div>
+            <div class="row">${icon('shieldcheck',16)}<span><b>Approvals by default.</b> Sensitive actions pause for your yes — revocable anytime.</span></div>
+            <div class="row">${icon('box',16)}<span><b>Sandboxed harness.</b> Browser, code and computer use run contained, every step visible.</span></div>
+            <div class="row">${icon('eye',16)}<span><b>Swedish-built transparency.</b> Full trace of tool calls, sources cited, nothing hidden.</span></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:22px;flex-wrap:wrap">
+            <button class="btn small" data-act="open-app">${icon('spark',14)} Get started</button>
+            <a class="btn ghost small" href="models.html">Explore models</a>
+          </div>
+        </div>
+        <div class="panel">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><b>Benchmarks vs other models</b><span class="chip green">Star 1.0</span></div>
+          <p class="mut" style="font-size:13px;margin-top:6px">Privacy, safety and Swedish quality — where Star 1.0 leads by design.</p>
+          <div class="bench" style="margin-top:16px">
+            <div><div class="blab" style="font-size:12px;color:var(--mut)"><span>PRIVACY &amp; DATA MINIMIZATION</span></div>
+              ${archeBenchRow('Star 1.0', 'Arche', 94, 'var(--green)')}
+              ${archeBenchRow('Frontier A', 'typical', 71, '#C6C7CC')}
+              ${archeBenchRow('Frontier B', 'typical', 68, '#C6C7CC')}</div>
+            <div><div class="blab" style="font-size:12px;color:var(--mut)"><span>SAFETY GUARDRAILS</span></div>
+              ${archeBenchRow('Star 1.0', 'Arche', 92, 'var(--purple)')}
+              ${archeBenchRow('Frontier A', 'typical', 74, '#C6C7CC')}
+              ${archeBenchRow('Frontier B', 'typical', 70, '#C6C7CC')}</div>
+            <div><div class="blab" style="font-size:12px;color:var(--mut)"><span>SWEDISH LANGUAGE QUALITY</span></div>
+              ${archeBenchRow('Star 1.0', 'Arche', 90, 'var(--acc)')}
+              ${archeBenchRow('Frontier A', 'typical', 88, '#C6C7CC')}
+              ${archeBenchRow('Frontier B', 'typical', 86, '#C6C7CC')}</div>
+          </div>
+          <p class="fineprint">Illustrative preview for launch — verified third-party eval methodology publishes with the Star 1.0 release, and these bars will be replaced by audited numbers.</p>
+        </div>
       </div>
     </section>
 
-    <section class="secband" id="sec"><div class="inner">
-      <div>
-        <h2>Built so you can trust it with real life</h2>
-        <p>An agent that acts in the world must be boringly safe. Lingon splits what the model <em>wants</em> from what your vault <em>allows</em> — and shows its work.</p>
+    <section class="asection" id="agent" aria-label="Your personal AI Agent">
+      <div class="kicker">Personal AI Agent</div>
+      <h2>Your personal AI Agent.</h2>
+      <div class="split">
+        <div>
+          <p class="lede">If you can think it, your Agent can make it real life.</p>
+          <div class="checklist">
+            <div class="row">${icon('search',16)}<span><b>Research anything</b> — live sources, cited briefings, honest caveats.</span></div>
+            <div class="row">${icon('code',16)}<span><b>Build pages, decks &amp; tools</b> — live on your canvas, files handed over.</span></div>
+            <div class="row">${icon('phone',16)}<span><b>Calls, mail &amp; admin</b> — triage, drafts and follow-ups in your tone.</span></div>
+            <div class="row">${icon('book',16)}<span><b>Remembers you</b> — preferences and projects, inspectable anytime.</span></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:22px;flex-wrap:wrap">
+            <button class="btn small" data-act="open-app">${icon('spark',14)} Claim your agent</button>
+            <button class="btn ghost small" data-act="scroll" data-t="#cta">Try a prompt</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">${Mascot.svg('lingon','happy',34)}<div><b>Example from inside the app</b><div class="mut" style="font-size:12.5px">Your agent, working for real</div></div></div>
+          <div class="mockchat">
+            <div class="mbub u">Plan my move to Gothenburg next month — movers, addresses, budget</div>
+            <div class="mbub a"><b>Your agent</b>Done. Moving checklist with dates, 3 movers compared on price, address-change drafts, and a budget table — all on your canvas. Nothing sent without your yes.</div>
+            <div class="mbub u">Also remind me to water the plants?</div>
+            <div class="mbub a"><b>Your agent</b>Remembered. I'll nudge you every Sunday evening.</div>
+          </div>
+          <div class="chipsrow"><span class="chip">Research</span><span class="chip">Build</span><span class="chip">Remember</span></div>
+        </div>
       </div>
-      <div class="seclist">
-        <div class="row">${icon('lock',17)}<div><b>Secrets never enter the model</b><span>Values are encrypted at rest; the agent gets masked references like sec_••••.</span></div></div>
-        <div class="row">${icon('shieldcheck',17)}<div><b>Approvals by default</b><span>Sensitive actions pause for your yes — or an explicit always-allow you can revoke.</span></div></div>
-        <div class="row">${icon('box',17)}<div><span style="margin:0"><b>Sandboxed harness</b><br><span>Code, browser and computer use run contained, with a full visible trace.</span></span></div></div>
-      </div>
-    </div></section>
+    </section>
 
-    <section class="features" id="pricing">
+    <section class="cta2" id="cta" aria-label="Start">
+      <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Start now</div>
+      <h2>What do you want to do, ${esc(who)}?</h2>
+      <div class="promptwrap">
+        <form class="promptbox" id="lform2">
+          <textarea id="lprompt2" rows="2" placeholder="Tell your agent… e.g. Plan my week, build me a page, research a topic"></textarea>
+          <div class="pb-row">
+            <span class="iconbtn" style="cursor:default">${icon('plus',17)}</span>
+            <span style="display:flex;gap:10px;align-items:center">
+              <button type="button" class="modelchip">${icon('star',14)} Smart ▾</button>
+              <button type="submit" class="micbtn" style="background:var(--ink)" title="Send">${icon('up',17)}</button>
+            </span>
+          </div>
+        </form>
+      </div>
+      <div class="hintline">${icon('lock',13)} Sealed vault · approvals · sandboxed harness</div>
+    </section>
+
+    <section class="asection" id="models" aria-label="Models">
+      <div class="kicker">Models</div>
+      <h2>Models built for real work</h2>
+      <p class="lede">Star 1.0 pairs open-source Kimi K3 weights with the Arche agentic harness — optimized for privacy, safety and Swedish.</p>
+      <div class="modelgrid">
+        <div class="panel"><span class="chip green">Flagship</span><h3 style="margin-top:10px">Star 1.0 Smart</h3><p class="mut" style="font-size:14px;margin-top:6px;line-height:1.6">Deepest reasoning for research, code review and multi-step plans. Live tools, citations, canvas artifacts.</p><div class="fineprint">Best for: research · builds · reviews</div></div>
+        <div class="panel"><span class="chip purple">Fast</span><h3 style="margin-top:10px">Star 1.0 Fast</h3><p class="mut" style="font-size:14px;margin-top:6px;line-height:1.6">Snappy everyday answers, triage and drafts at lower cost. Same vault, same guardrails.</p><div class="fineprint">Best for: daily chat · summaries · ideas</div></div>
+      </div>
+      <p class="fineprint">Open foundation: Kimi K3 open weights + Arche harness (allowlisted tools, approvals, masked secrets). Full model card in <a href="models.html">models</a>.</p>
+    </section>
+
+    <section class="asection" id="pricing" aria-label="Pricing">
+      <div class="kicker">Pricing</div>
       <h2>Pricing in API credits</h2>
-      <p class="fsub">Free includes <b>$10</b> of API costs. Pro <b>$30</b> <s>$50</s> → $20 credit + $50 gift card. Max <b>$50</b> <s>$100</s> → $50 credit + $100 gift card. Gift codes add real credit.</p>
+      <p class="lede">Free includes <b>$10</b> of API costs. Pro <b>$30</b> <s>$50</s> → $20 credit + $50 gift card. Max <b>$50</b> <s>$100</s> → $50 credit + $100 gift card. Gift codes add real credit.</p>
       <div class="grid3">
         <div class="fcard"><div class="fic">${icon('spark',19)}</div><h3>Free — $0</h3><p>$10 API credit. Sign in and start. Usage is metered for real.</p></div>
         <div class="fcard"><div class="fic" style="background:var(--purple-soft);color:var(--purple)">${icon('star',19)}</div><h3>Pro — $30 <s style="color:var(--mut)">$50</s></h3><p>$20 credit + $50 gift card you can use or gift. Request inside Billing — no charge until payments connect.</p></div>
@@ -290,10 +429,47 @@ function renderLanding(){
       </div>
     </section>
 
-    <footer><span>© 2026 Lingon — made with ${icon('spark',12)} in Stockholm</span><span>Gemini harness · your vault</span></footer>
+    <section class="asection" id="faq" aria-label="FAQ">
+      <div class="kicker">FAQ</div>
+      <h2>AI agents, answered</h2>
+      <div class="faq">
+        <details><summary>What is Arche Star 1.0?</summary><p>Star 1.0 is Arche's personal AI agent — built on the open-source Kimi K3 model with an agentic harness optimized for privacy and safety. One person claims each agent, names it, and works with it through chat, canvas and vault.</p></details>
+        <details><summary>How do Arche AI agents keep me safe?</summary><p>Three layers: secrets stay sealed in your vault (the agent only gets masked references), sensitive actions pause for your approval, and browser, code and computer use run in a sandbox with a visible trace.</p></details>
+        <details><summary>What can my agent actually do?</summary><p>Research with live cited sources, build pages and tools, review GitHub pull requests, triage admin, and remember your preferences across chats. If you can think it, your agent can make it real.</p></details>
+        <details><summary>How much does it cost?</summary><p>Free includes $10 of API costs. Pro is $30 with $20 credit + a $50 gift card; Max is $50 with $50 credit + a $100 gift card. See Billing inside the app — upgrades are requests until payments connect.</p></details>
+      </div>
+    </section>
+
+    <footer class="afooter"><div class="fin">
+      <div><div class="abrand">${Mascot.logo(24)} arche</div><p class="mut" style="font-size:13.5px;margin-top:10px;line-height:1.6">Swedish Safe AI Agents.<br>Star 1.0 · Kimi K3 + safety harness.</p></div>
+      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="#pricing">Pricing</a></div>
+      <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a><a href="mailto:hej@arche.se">hej@arche.se</a></div>
+      <div><h4>Legal</h4><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a><a href="security.html">Security</a><a href="cookies.html">Cookie Policy</a></div>
+    </div><div class="base"><span>© 2026 Arche — made in Stockholm</span><span>Star 1.0 harness · your vault</span></div></footer>
   </div>`;
-  $('#lform').addEventListener('submit', e => { e.preventDefault(); landingRun($('#lprompt').value.trim()); });
-  $('#lprompt').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#lform').requestSubmit(); } });
+  const wire = (formId, inputId, threadTop) => {
+    const f = document.getElementById(formId);
+    const p = document.getElementById(inputId);
+    if (f && p){
+      f.addEventListener('submit', e => {
+        e.preventDefault();
+        const v = p.value.trim();
+        if (!v) return;
+        try { localStorage.setItem('arche.username', archeDisplayName()); } catch {}
+        if (formId === 'lform2'){
+          const t = document.getElementById('lthread');
+          if (t){ t.scrollIntoView({ behavior:'smooth', block:'center' }); }
+          const first = document.getElementById('lprompt');
+          if (first){ first.value = v; p.value = ''; document.getElementById('lform').requestSubmit(); return; }
+        }
+        landingRun(v);
+      });
+      p.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); f.requestSubmit(); } });
+    }
+  };
+  wire('lform', 'lprompt');
+  wire('lform2', 'lprompt2', true);
+  archeStartRotator();
 }
 
 async function landingRun(prompt){
@@ -395,6 +571,7 @@ function finalizeOnboarding(){
    APP SHELL
 ================================================================ */
 function renderApp(){
+  archeStopRotator();
   root.innerHTML = `
   <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'}" id="app">
     <aside class="side" id="side"></aside>
@@ -430,7 +607,7 @@ function paintSide(){
     <button class="sitem ${state.view === 'billing' ? 'on' : ''}" data-act="nav" data-view="billing">${icon('spark',15)} Billing</button>
     <button class="sitem" data-act="signout">${icon('x',15)} Sign out</button>
     <div class="foot">
-      <div class="badge">${icon('shieldcheck',13)} Gemini harness (not Codex API)</div>
+      <div class="badge">${icon('shieldcheck',13)} Agents harness (Codex pattern, Gemini-backed)</div>
     </div>`;
 }
 
@@ -589,7 +766,7 @@ function cardNode(c, m){
     <div class="stack"><button class="btn ghost" data-act="openbrowser">Open browser</button></div></div>`;
 
   if (cd.type === 'computer') return `<div class="acard">
-    ${hd(icon('term',20),'var(--ink)','#fff','Sandboxed computer use','Codex-style harness · no writes outside sandbox')}
+    ${hd(icon('term',20),'var(--ink)','#fff','Sandboxed computer use','Agents sandbox · allowlisted network, no writes outside run')}
     <div class="bd"><div class="term">${cd.lines.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}${cd.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div></div></div>`;
 
   if (cd.type === 'file') return `<div class="acard"><div class="filrow">
@@ -896,8 +1073,22 @@ document.addEventListener('click', async e => {
   if (act === 'mic'){ toast('Voice input is coming soon.'); return; }
   if (act === 'model'){ state.model = state.model === 'Smart' ? 'Fast' : 'Smart'; save(); b.innerHTML = icon('star',13) + ' ' + state.model + ' ▾'; toast('Model: ' + state.model); return; }
   if (act === 'scroll'){ const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
-  if (act === 'open-app'){ state.onboarded ? renderApp() : openOnboarding(); return; }
-  if (act === 'claim'){ openOnboarding(); return; }
+  if (act === 'open-app'){ archeStopRotator(); state.onboarded ? renderApp() : openOnboarding(); return; }
+  if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
+  if (act === 'back-home'){ renderLanding(); return; }
+  if (act === 'signin-nav'){ e.preventDefault(); archeStopRotator(); if (window.LingonAuth && window.LingonAuth.signedIn()){ renderApp(); } else { renderAuth(); } return; }
+  if (act === 'actdot'){
+    const a = ARCH_ACTS[+b.dataset.i || 0];
+    const pill = document.getElementById('actpill');
+    const mm = document.getElementById('actmascot');
+    if (a && pill && mm){
+      pill.innerHTML = '<span class="aic">' + icon(a.ic, 16) + '</span><span>' + a.label + '</span>';
+      mm.innerHTML = Mascot.svg('lingon', a.mood, 40);
+      Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (+b.dataset.i || 0)));
+    }
+    return;
+  }
+  if (act === 'claim'){ archeStopRotator(); openOnboarding(); return; }
   if (act === 'skip-claim'){
     ob = { step:0, name:'Sigge', color:'lingon', pers:'Playful' };
     finalizeOnboarding(); return;
