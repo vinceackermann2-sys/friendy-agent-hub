@@ -104,6 +104,12 @@ const { chromium } = require('playwright');
   const browserUrl = await p.evaluate(() => document.querySelector('.win .url')?.textContent || '');
   if (!/^https?:\/\//.test(browserUrl.trim())) errs.push('Browser card has no real URL: ' + browserUrl.slice(0, 80));
   else step('browser card shows real rendered URL');
+  // Follow in canvas: run timeline + real screenshot render in the canvas tab.
+  await p.click('[data-act="ctab"][data-t="canvas"]');
+  await p.waitForSelector('#cbody .runbox', { timeout: 15000 });
+  step('canvas run timeline renders');
+  await p.waitForSelector('#cbody .shot img', { timeout: 15000 });
+  step('canvas shows real page screenshot');
 
   await p.click('[data-act="usermenu"]');
   await p.click('.usermenu [data-act="nav"][data-view="settings"]');

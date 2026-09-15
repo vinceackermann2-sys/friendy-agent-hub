@@ -83,8 +83,14 @@ const TOOLS = {
           text: document.body ? document.body.innerText.slice(0, 4000) : '',
           links: [...document.querySelectorAll('a[href]')].slice(0, 10).map((a) => ({ t: a.innerText.slice(0, 80), h: a.href.slice(0, 200) })),
         }));
+        // Capped JPEG screenshot so users can SEE the visited page. ~50-120KB.
+        let screenshot = null;
+        try {
+          const buf = await page.screenshot({ type: 'jpeg', quality: 55 });
+          if (buf.length <= 220000) screenshot = 'data:image/jpeg;base64,' + buf.toString('base64');
+        } catch {}
         ctx.trace(entry('globe', `browser_open: ${new URL(u).hostname}${new URL(u).pathname.slice(0, 40)} · “${String(data.title).slice(0, 60)}” · ${Date.now() - t0}ms`));
-        return { url: u, ok: true, ...data };
+        return { url: u, ok: true, ...data, screenshot };
       } finally {
         await browser.close().catch(() => {});
       }

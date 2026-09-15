@@ -104,7 +104,15 @@ window.Engine = (() => {
     let res;
     try {
       res = await api('/api/research', { method: 'POST', body: JSON.stringify({ query: raw, sessionId: rt.chat.id }) });
-      if (res.opened) br.update((c) => { c.url = res.opened.url; c.note = `Rendered “${(res.opened.title || '').slice(0, 70)}” in headless Chromium`; });
+      if (res.opened) br.update((c) => {
+        c.url = res.opened.url;
+        c.note = `Rendered “${(res.opened.title || '').slice(0, 70)}” in headless Chromium`;
+        if (res.opened.screenshot) {
+          // Bound localStorage: keep only this chat's latest screenshot.
+          rt.chat.messages.forEach((m) => { if (m.kind === 'card' && m.card.type === 'browser' && m.id !== br.msg.id) delete m.card.screenshot; });
+          c.screenshot = res.opened.screenshot;
+        }
+      });
       br.update((c) => { c.status = 'done'; c.note = (c.note ? c.note + ' · ' : '') + `${res.snippets?.length || 0} source groups · ${new Date(res.fetchedAt).toLocaleTimeString()}`; });
       br.resolve({ ok: true });
     } catch (e) {

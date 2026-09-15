@@ -109,7 +109,7 @@ async function realResearch(query, hooks = {}) {
   } catch (e) {
     summary = `I fetched ${pages.filter((p) => p.ok).length}/${pages.length} live sources, but the AI summarizer is unavailable (${e.message}). Open the sources directly:\n` + urls.map((u) => `- ${u}`).join('\n');
   }
-  return { query: q, sources: urls, snippets, summary, usage, opened: opened ? { url: opened.url, title: opened.title } : null, fetchedAt: new Date().toISOString() };
+  return { query: q, sources: urls, snippets, summary, usage, opened: opened ? { url: opened.url, title: opened.title, screenshot: opened.screenshot || null } : null, fetchedAt: new Date().toISOString() };
 }
 
 module.exports = { realResearch };
