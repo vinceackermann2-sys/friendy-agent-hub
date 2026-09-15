@@ -1,0 +1,26 @@
+const { chromium } = require('playwright');
+(async () => {
+  const b = await chromium.launch();
+  const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+  p.on('pageerror', e => console.log('PAGEERROR:', e.message));
+  p.on('console', m => { if (m.type() === 'error') console.log('CONSOLE:', m.text()); });
+  await p.goto('http://127.0.0.1:8000', { waitUntil: 'load' });
+  await p.evaluate(() => localStorage.clear());
+  await p.reload({ waitUntil: 'load' });
+  await p.waitForSelector('.hero h1');
+  await p.click('[data-act="open-app"]');
+  await p.waitForSelector('[data-act="ob-claim"]');
+  await p.click('[data-act="ob-claim"]');
+  await p.fill('#obname', 'Nova');
+  await p.click('[data-act="ob-next"]');
+  await p.click('[data-act="ob-next"]');
+  await p.click('[data-act="ob-done"]');
+  await p.waitForSelector('#cprompt', { timeout: 10000 });
+  console.log('in app, sending research prompt');
+  await p.fill('#cprompt', 'Research which Swedish party people say they vote for on social media');
+  await p.keyboard.press('Enter');
+  await p.waitForTimeout(15000);
+  const html = await p.evaluate(() => document.querySelector('#tinner') ? document.querySelector('#tinner').innerText.slice(0, 1200) : 'NO TINNER');
+  console.log('THREAD:\n' + html);
+  await b.close();
+})().catch(e => { console.error('FATAL', e.message); process.exit(1); });

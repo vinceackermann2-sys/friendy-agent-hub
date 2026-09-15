@@ -1,0 +1,76 @@
+/* Real web research — no fabricated counts.
+   Strategy: fetch real public pages in parallel (Reddit JSON, HN Algolia,
+   DuckDuckGo instant answers), extract snippets, then ask Gemini to summarize
+   honestly with sources. Everything returned is traceable. */
+const { callGemini } = require('./gemini');
+
+async function fetchText(url, timeoutMs = 9000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Lingon/1.0 (+personal-agent)', Accept: 'application/json,text/html' },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const ct = r.headers.get('content-type') || '';
+    const txt = await r.text();
+    return { url, ok: true, ct, text: txt.slice(0, 12000) };
+  } catch (e) {
+    return { url, ok: false, error: e.message };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function extractSnippets(pages) {
+  const out = [];
+  for (const p of pages) {
+    if (!p.ok) {
+      out.push({ url: p.url, note: `fetch failed: ${p.error}` });
+      continue;
+    }
+    try {
+      if (p.text.trim().startsWith('{')) {
+        const j = JSON.parse(p.text);
+        // Reddit listing
+        const kids = j?.data?.children || j?.hits || [];
+        const items = kids.slice(0, 6).map((k) => {
+          const d = k.data || k;
+          return `- ${String(d.title || d.text || '').slice(0, 220)}${d.subreddit ? ` (r/${d.subreddit})` : ''}${d.url ? ` <${d.url}>` : ''}`;
+        });
+        out.push({ url: p.url, items });
+      } else {
+        const noTags = p.text.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        out.push({ url: p.url, excerpt: noTags.slice(0, 900) });
+      }
+    } catch {
+      out.push({ url: p.url, excerpt: p.text.slice(0, 600) });
+    }
+  }
+  return out;
+}
+
+async function realResearch(query) {
+  const q = String(query || '').slice(0, 300);
+  const urls = [
+    `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=top&limit=8`,
+    `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&hitsPerPage=8`,
+    `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`,
+  ];
+  const pages = await Promise.all(urls.map((u) => fetchText(u)));
+  const snippets = extractSnippets(pages);
+
+  let summary = '';
+  try {
+    const sys = 'You are Lingon, a careful research assistant. Summarize ONLY what the fetched snippets support. Never invent vote shares, sample sizes, or quotes. List sources with URLs. If evidence is thin, say so plainly.';
+    const prompt = `User question: ${q}\n\nFetched evidence (JSON):\n${JSON.stringify(snippets).slice(0, 9000)}\n\nWrite a concise, honest briefing: what the public sources actually say, key threads to read, and what is NOT proven. End with 3 concrete links to open.`;
+    const r = await callGemini({ prompt, system: sys });
+    summary = r.text;
+  } catch (e) {
+    summary = `I fetched ${pages.filter((p) => p.ok).length}/${pages.length} live sources, but the AI summarizer is unavailable (${e.message}). Open the sources directly:\n` + urls.map((u) => `- ${u}`).join('\n');
+  }
+  return { query: q, sources: urls, snippets, summary, fetchedAt: new Date().toISOString() };
+}
+
+module.exports = { realResearch };
