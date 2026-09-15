@@ -51,12 +51,20 @@ function extractSnippets(pages) {
   return out;
 }
 
+function shortQuery(query) {
+  const stop = new Set('research,which,what,who,how,when,where,that,these,those,with,from,about,into,over,under,people,say,they,them,their,there,here,please,find,out,investigate,analyze,analyse,social,media,sentiment,opinion,vote,voting,party,parties,swedish,sweden'.split(','));
+  const words = String(query || '').toLowerCase().replace(/[^a-zåäö0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !stop.has(w));
+  const short = words.slice(0, 5).join(' ').trim();
+  return short || String(query || '').slice(0, 80);
+}
+
 async function realResearch(query) {
   const q = String(query || '').slice(0, 300);
+  const sq = shortQuery(q);
   const urls = [
-    `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=top&limit=8`,
-    `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&hitsPerPage=8`,
-    `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`,
+    `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(sq)}&tags=story&hitsPerPage=8`,
+    `https://api.duckduckgo.com/?q=${encodeURIComponent(sq)}&format=json&no_html=1&skip_disambig=1`,
+    `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(sq)}&limit=5&format=json`,
   ];
   const pages = await Promise.all(urls.map((u) => fetchText(u)));
   const snippets = extractSnippets(pages);
