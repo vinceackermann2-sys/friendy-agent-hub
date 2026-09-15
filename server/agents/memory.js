@@ -53,17 +53,21 @@ async function maybeExtract({ userId, prompt, answer, existing }) {
   if ((existing || []).length >= MAX_MEMORIES) return { saved: [], usage: null };
   let facts = [];
   let usage = null;
+  let usedModel = null;
   try {
+    const { MODEL_FALLBACK } = require('../gemini');
     const r = await callGemini({
+      model: MODEL_FALLBACK, // auxiliary call rides the cheap lane, no failover needed
       system: 'Extract durable user facts (preferences, identity, projects, relationships, standing instructions). Reply ONLY as JSON: {"facts":["..."]}. Max 3, each under 140 chars, first-person-neutral ("User prefers concise answers"). Omit transient chit-chat, secrets, credentials, one-off questions. Empty list if nothing durable.',
       prompt: `User: ${String(prompt).slice(0, 1500)}\nAssistant: ${String(answer).slice(0, 1500)}\n\nAlready known: ${(existing || []).slice(0, 20).map((m) => m.text).join(' | ').slice(0, 2000)}`,
       json: true,
     });
     usage = r.usage;
+    usedModel = r.model || MODEL_FALLBACK;
     const parsed = JSON.parse(r.text.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim());
     facts = (parsed.facts || []).filter((f) => typeof f === 'string').slice(0, 3);
   } catch {
-    return { saved: [], usage };
+    return { saved: [], usage, usedModel };
   }
   const store = require('../store');
   const saved = [];
@@ -76,7 +80,7 @@ async function maybeExtract({ userId, prompt, answer, existing }) {
       saved.push({ id: m.id, text: m.text });
     } catch {}
   }
-  return { saved, usage };
+  return { saved, usage, usedModel };
 }
 
 module.exports = { rankMemories, maybeExtract, looksFactWorthy, MAX_MEMORIES };

@@ -99,8 +99,16 @@ const { chromium } = require('playwright');
   if (/1,392 qualifying comments/.test(canvas)) errs.push('FAKE stats present');
   if (!/source|http/i.test(canvas)) errs.push('No live sources cited');
   step('briefing cites live sources');
+  // Real browser use: the browser card must show a real http(s) URL rendered
+  // in headless Chromium — not the old 'backend: POST ...' placeholder.
+  const browserUrl = await p.evaluate(() => document.querySelector('.win .url')?.textContent || '');
+  if (!/^https?:\/\//.test(browserUrl.trim())) errs.push('Browser card has no real URL: ' + browserUrl.slice(0, 80));
+  else step('browser card shows real rendered URL');
 
-  await p.click('[data-act="nav"][data-view="vault"]');
+  await p.click('[data-act="usermenu"]');
+  await p.click('.usermenu [data-act="nav"][data-view="settings"]');
+  await p.waitForSelector('[data-act="stab"][data-t="secrets"]');
+  await p.click('[data-act="stab"][data-t="secrets"]');
   await p.waitForSelector('.warnband');
   await p.fill('#vname', 'github_token');
   await p.fill('#vval', 'ghp_supersecret123');
@@ -110,16 +118,20 @@ const { chromium } = require('playwright');
   if (/ghp_/.test(masked)) errs.push('SECRET LEAKED: ' + masked);
   step('vault masks secret');
 
-  // Apps must be honestly empty
-  await p.click('[data-act="vtab"][data-t="apps"]');
+  // Apps must be honestly empty (separate Apps view, real connections only)
+  await p.click('[data-act="usermenu"]');
+  await p.click('.usermenu [data-act="nav"][data-view="apps"]');
   await p.waitForTimeout(500);
   const apps = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
-  if (!/No connected apps/i.test(apps)) errs.push('Apps tab not honestly empty: ' + apps.slice(0, 200));
+  if (!/not connected|No connected apps|real connections only/i.test(apps)) errs.push('Apps view not honestly empty: ' + apps.slice(0, 200));
   if (/connected · tokens sealed/.test(apps)) errs.push('Fake connection row still present');
   step('apps honestly empty');
 
-  // Billing: Free $10, redeem + upgrade flows exist
-  await p.click('[data-act="nav"][data-view="billing"]');
+  // Billing lives in Settings → Billing tab
+  await p.click('[data-act="usermenu"]');
+  await p.click('.usermenu [data-act="nav"][data-view="settings"]');
+  await p.waitForSelector('[data-act="stab"][data-t="billing"]');
+  await p.click('[data-act="stab"][data-t="billing"]');
   await p.waitForSelector('#billbody', { timeout: 15000 });
   await p.waitForTimeout(3000);
   const bill = await p.evaluate(() => document.querySelector('#main')?.innerText || '');

@@ -42,11 +42,11 @@ async function logModelUsage(userId, model, usages) {
   }
 }
 
-/* Research run: parallel subagent fetch (3 sources) + grounded summary. */
+/* Research run: parallel subagent fetch (3 sources) + real browser open + summary. */
 async function runResearch({ userId, sessionId, query, trace, push }) {
   const { realResearch } = require('../research');
   push(entry('search', 'runner: research task accepted (Agents-API session)'));
-  const r = await realResearch(query);
+  const r = await realResearch(query, { userId, onTrace: (e) => push(e) });
   push(entry('globe', `runner: ${r.sources.length} source groups fetched in sandbox`));
   await fanOut({
     userId, sessionId, max: 3,

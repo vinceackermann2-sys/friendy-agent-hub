@@ -9,7 +9,8 @@ plus our extras (Supabase Auth, per-account billing, gift cards).
 |---|---|
 | `sessions.create({agent:{model,tools,multi_agent}, vault_ids, environment, input})` | `Runner` in `server/agents/runner.js` (`/api/chat`, `/api/build`, `/api/research`); `sessionId` passed through, compaction in `sessions.js` |
 | Environment (openai_hosted / own / partner) | `sandbox.js`: self-hosted, no shell, allowlisted hosts, in-memory artifacts in sandboxed iframes |
-| Tools (MCP, function, built-in web search) + tool search + programmatic calling | `tools.js`: `web_search`, `github_prs`, `github_diff`, `build_page`, `memory_write`; `pickTools()` loads relevant defs; `runParallel()` runs independent calls concurrently |
+| Tools (MCP, function, built-in web search) + tool search + programmatic calling | `tools.js`: `web_search`, `browser_open` (real headless Chromium page loads), `code_run` (real sandboxed JS execution with stdout), `github_prs`, `github_diff`, `build_page`, `memory_write`, `history_search`; `pickTools()` loads relevant defs; `runParallel()` runs independent calls concurrently |
+| Computer use / browser use | `browser_open`: renders allowlisted pages for real (title/text/links ground the briefing; the browser card shows the real URL). `code_run`: `node:vm` execution, no I/O, 3s timeout — GitHub stats in the terminal card are its actual stdout |
 | Multi-agent (`max_concurrent_subagents`) | `subagents.js` `fanOut()` max 3, each with own context; research fans out per source |
 | Vault (`vault_ids`) | Vault secrets sealed server-side; model receives `sec_••••` refs only |
 | Sandboxes (code, files, artifacts) | No arbitrary exec. HTML artifacts via `build_page`, files as chat cards, diffs read-only |

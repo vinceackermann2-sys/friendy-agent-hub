@@ -9,7 +9,7 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { callGemini, isConfigured, MODEL_DEFAULT } = require('./gemini');
+const { callGemini, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK } = require('./gemini');
 const { PLANS, costOf } = require('./plans');
 const store = require('./store');
 const { pubClient, adminClient, requireAuth } = require('./auth');
@@ -22,6 +22,9 @@ const { fetchAllowlisted } = require('./agents/sandbox');
 
 const app = express();
 const PORT = Number(process.env.PORT || 8000);
+// Set BEHIND_PROXY=1 in production (Caddy/Nginx/Traefik in front) so req.ip,
+// protocol and rate limiting see the real client instead of the proxy.
+if (process.env.BEHIND_PROXY === '1') app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
@@ -120,6 +123,131 @@ app.get('/api/auth/me', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Sign in required.' });
   res.json({ user: { id: user.id, email: user.email } });
 });
+// ---------- Google sign-in via our OWN OAuth bridge ----------
+// The browser only ever sees belna.se + accounts.google.com — no third-party
+// hosted auth pages. Google verifies the email; we then bridge it into an app
+// session server-side (generateLink + verifyOtp), so billing, vault, memories
+// and RLS keep working unchanged.
+const OAUTH_STATE = new Map(); // state -> { next, redirectUri, exp }
+function siteOrigin(req) {
+  const env = (process.env.SITE_URL || '').replace(/\/$/, '');
+  if (env) return env;
+  if (req.headers.origin) return String(req.headers.origin).replace(/\/$/, '');
+  return (req.protocol + '://' + req.get('host')).replace(/\/$/, '');
+}
+function safeNext(n) {
+  const s = String(n || '/');
+  return s.startsWith('/') && !s.startsWith('//') ? s : '/';
+}
+function pruneOAuthState() {
+  if (OAUTH_STATE.size <= 500) return;
+  const now = Date.now();
+  for (const [k, v] of OAUTH_STATE) if (v.exp < now) OAUTH_STATE.delete(k);
+}
+app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
+  try {
+    const provider = String(req.query.provider || 'google');
+    if (provider !== 'google') return res.status(400).json({ error: 'Unsupported provider.' });
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) return res.status(500).json({ error: 'Google sign-in is not configured.' });
+    const crypto = require('crypto');
+    const state = crypto.randomBytes(32).toString('hex');
+    const redirectUri = siteOrigin(req) + '/api/auth/google/callback';
+    OAUTH_STATE.set(state, { next: safeNext(req.query.next), redirectUri, exp: Date.now() + 10 * 60e3 });
+    pruneOAuthState();
+    const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'openid email profile',
+      state,
+      access_type: 'online',
+      prompt: 'select_account',
+    }).toString();
+    res.json({ url });
+  } catch (e) {
+    res.status(500).json({ error: 'OAuth failed: ' + e.message });
+  }
+});
+app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
+  const back = (msg) => res.redirect('/?auth_error=' + encodeURIComponent(msg || 'Sign-in failed'));
+  try {
+    const { code, state, error } = req.query;
+    if (error) return back(req.query.error_description || error || 'Sign-in cancelled.');
+    const saved = state ? OAUTH_STATE.get(String(state)) : null;
+    if (state) OAUTH_STATE.delete(String(state)); // one-time use (CSRF protection)
+    if (!code || !saved || saved.exp < Date.now()) return back('Sign-in expired — please try again.');
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) return back('Google sign-in is not configured.');
+    // code -> tokens, server to server (secret never touches the browser)
+    const tok = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: saved.redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+    const tj = await tok.json().catch(() => ({}));
+    if (!tok.ok || !tj.access_token) return back((tj && (tj.error_description || tj.error)) || 'Google token exchange failed.');
+    const me = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: 'Bearer ' + tj.access_token },
+    });
+    const prof = await me.json().catch(() => ({}));
+    const email = String((prof && prof.email) || '').toLowerCase();
+    if (!me.ok || !email || (prof && prof.email_verified === false)) return back('Google did not verify an email address.');
+    // bridge the Google-verified email into an app session (same account as password/OTP)
+    const admin = adminClient();
+    const pub = pubClient();
+    if (!admin || !pub) return back('Auth not configured on server.');
+    const name = String((prof && prof.name) || email.split('@')[0]);
+    const created = await admin.auth.admin.createUser({
+      email, email_confirm: true,
+      user_metadata: { name, provider: 'google', google_sub: prof && prof.sub },
+    });
+    if (created.error && !/already exists|already been registered/i.test(created.error.message || '')) return back(created.error.message);
+    const link = await admin.auth.admin.generateLink({ type: 'magiclink', email });
+    const otp = link.data && link.data.properties && link.data.properties.email_otp;
+    if (link.error || !otp) return back((link.error && link.error.message) || 'Could not start session.');
+    const sess = await pub.auth.verifyOtp({ email, token: otp, type: 'magiclink' });
+    if (sess.error || !sess.data.session) return back((sess.error && sess.error.message) || 'Could not complete sign-in.');
+    const frag = '#access_token=' + encodeURIComponent(sess.data.session.access_token)
+      + '&refresh_token=' + encodeURIComponent(sess.data.session.refresh_token || '');
+    res.redirect(saved.next.split('#')[0].split('?')[0] + frag);
+  } catch (e) {
+    back(e.message);
+  }
+});
+// Email one-time code (passwordless)
+app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email || !/.+@.+\..+/.test(String(email))) return res.status(400).json({ error: 'Enter a valid email.' });
+    const pub = pubClient();
+    if (!pub) return res.status(500).json({ error: 'Auth not configured on server.' });
+    const { error } = await pub.auth.signInWithOtp({ email: String(email) });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Could not send code: ' + e.message });
+  }
+});
+app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
+  try {
+    const { email, token } = req.body || {};
+    const pub = pubClient();
+    if (!pub) return res.status(500).json({ error: 'Auth not configured on server.' });
+    const { data, error } = await pub.auth.verifyOtp({ email: String(email || ''), token: String(token || '').trim(), type: 'email' });
+    if (error || !data.session) return res.status(400).json({ error: (error && error.message) || 'Invalid or expired code.' });
+    res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
+  } catch (e) {
+    res.status(500).json({ error: 'Verify failed: ' + e.message });
+  }
+});
 
 // ---------- billing ----------
 async function billingFor(userId) {
@@ -214,7 +342,7 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
     let savedMems = [];
     try {
       const ex = await maybeExtract({ userId: req.user.id, prompt: String(prompt), answer: r.text, existing: all });
-      if (ex.usage) await Runner.logModelUsage(req.user.id, r.model || MODEL_DEFAULT, [ex.usage]);
+      if (ex.usage) await Runner.logModelUsage(req.user.id, ex.usedModel || MODEL_FALLBACK || MODEL_DEFAULT, [ex.usage]);
       savedMems = ex.saved;
       for (const sm of savedMems) push(entry('book', `memory_write: saved (“${sm.text.slice(0, 70)}…”)`));
     } catch {}
@@ -302,7 +430,20 @@ app.get('/api/github/prs', rateLimit(30, 60000), requireAuth(async (req, res) =>
         for (const pr of list) prs.push({ repo: repo.full_name, number: pr.number, title: pr.title, url: pr.html_url, user: pr.user?.login, created_at: pr.created_at, diff_url: pr.diff_url });
       } catch {}
     }
-    res.json({ repos: repos.map((r) => r.full_name), prs, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }] });
+    // Real computer use: stats are computed by EXECUTED sandboxed code over
+    // the live API data — the terminal card below shows its actual stdout.
+    const { TOOLS } = require('./agents/tools');
+    const toolTrace = [];
+    const statsRun = await TOOLS.code_run.run({
+      input: { repos: repos.map((r) => r.full_name), prs },
+      code: `const byRepo = {};
+for (const pr of input.prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
+console.log('repos checked: ' + input.repos.length);
+console.log('open PRs: ' + input.prs.length);
+for (const [repo, n] of Object.entries(byRepo).slice(0, 5)) console.log(repo + ': ' + n + ' open');
+if (!input.prs.length) console.log('nothing to review');`,
+    }, { trace: (e) => toolTrace.push(e), githubPat: null, userId: req.user.id });
+    res.json({ repos: repos.map((r) => r.full_name), prs, stdout: statsRun.stdout, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }

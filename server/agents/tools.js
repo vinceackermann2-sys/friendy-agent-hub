@@ -63,6 +63,55 @@ const TOOLS = {
       return { diff };
     },
   },
+  browser_open: {
+    name: 'browser_open', type: 'browser', approval: false,
+    description: 'Open one allowlisted URL in headless Chromium; returns real title, text and links.',
+    run: async ({ url }, ctx) => {
+      const { hostAllowed } = require('./sandbox');
+      const u = String(url || '');
+      if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
+      if (process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
+      const { chromium } = require('playwright');
+      const t0 = Date.now();
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+        await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await page.waitForTimeout(1200);
+        const data = await page.evaluate(() => ({
+          title: document.title,
+          text: document.body ? document.body.innerText.slice(0, 4000) : '',
+          links: [...document.querySelectorAll('a[href]')].slice(0, 10).map((a) => ({ t: a.innerText.slice(0, 80), h: a.href.slice(0, 200) })),
+        }));
+        ctx.trace(entry('globe', `browser_open: ${new URL(u).hostname}${new URL(u).pathname.slice(0, 40)} · “${String(data.title).slice(0, 60)}” · ${Date.now() - t0}ms`));
+        return { url: u, ok: true, ...data };
+      } finally {
+        await browser.close().catch(() => {});
+      }
+    },
+  },
+  code_run: {
+    name: 'code_run', type: 'code', approval: false,
+    description: 'Execute read-only JS (no I/O, no require, 3s timeout) over provided JSON; returns real stdout.',
+    run: async ({ code, input }, ctx) => {
+      const vm = require('node:vm');
+      const lines = [];
+      const sandbox = {
+        input: JSON.parse(JSON.stringify(input ?? null)),
+        console: { log: (...a) => lines.push(a.map(String).join(' ')) },
+      };
+      const t0 = Date.now();
+      try {
+        vm.createContext(sandbox);
+        vm.runInContext(String(code).slice(0, 4000), sandbox, { timeout: 3000 });
+      } catch (e) {
+        ctx.trace(entry('alert', `code_run error: ${e.message}`));
+        return { ok: false, error: e.message, stdout: lines.join('\n').slice(0, 2000) };
+      }
+      ctx.trace(entry('term', `code_run: executed in ${Date.now() - t0}ms (${lines.length} output lines)`));
+      return { ok: true, stdout: lines.join('\n').slice(0, 2000) };
+    },
+  },
   build_page: {
     name: 'build_page', type: 'function', approval: false,
     description: 'Generate a single-file HTML page via the model (sandboxed preview).',

@@ -100,11 +100,12 @@ window.Engine = (() => {
   async function research(rt, raw) {
     await rt.say(`On it — doing this **for real**: live fetch of public sources through the backend, then a Gemini briefing with citations. No invented sample sizes.`, { mood: 'think' });
     await rt.tools([{ ic: 'search', t: 'Contacting backend research endpoint', d: 'HN · DDG · Wikipedia' }]);
-    const br = rt.card({ type: 'browser', url: 'backend: POST /api/research', note: 'Fetching live sources…', status: 'running' });
+    const br = rt.card({ type: 'browser', url: 'about:blank', note: 'Opening a real headless browser…', status: 'running' });
     let res;
     try {
       res = await api('/api/research', { method: 'POST', body: JSON.stringify({ query: raw, sessionId: rt.chat.id }) });
-      br.update((c) => { c.status = 'done'; c.note = `Fetched ${res.snippets?.length || 0} source groups · ${new Date(res.fetchedAt).toLocaleTimeString()}`; });
+      if (res.opened) br.update((c) => { c.url = res.opened.url; c.note = `Rendered “${(res.opened.title || '').slice(0, 70)}” in headless Chromium`; });
+      br.update((c) => { c.status = 'done'; c.note = (c.note ? c.note + ' · ' : '') + `${res.snippets?.length || 0} source groups · ${new Date(res.fetchedAt).toLocaleTimeString()}`; });
       br.resolve({ ok: true });
     } catch (e) {
       br.update((c) => { c.status = 'done'; c.note = 'Research endpoint failed: ' + e.message; });
@@ -161,13 +162,16 @@ window.Engine = (() => {
     if (!ar.ok) { await rt.say(`Understood — I won't call GitHub.`); return; }
 
     const t = rt.card({ type: 'computer', status: 'running', lines: [] });
-    t.update((c) => c.lines.push({ t: '$ harness github_prs --read-only (live API)', cls: 'p' }));
+    t.update((c) => c.lines.push({ t: '$ code_run stats.js < live GitHub API data (sandboxed, read-only)', cls: 'p' }));
     let data;
     try {
       const j = await api('/api/github/prs', { headers: { 'X-GitHub-Token': token } });
       data = j;
       (j.trace || []).forEach((x) => rt.trace(x.ic, x.t));
-      t.update((c) => c.lines.push({ t: `✓ ${data.repos.length} repos checked · ${data.prs.length} open PRs`, cls: 'g' }));
+      // Real stdout from the executed sandbox — not composed client-side.
+      for (const line of String(j.stdout || '').split('\n').filter(Boolean).slice(0, 8)) {
+        t.update((c) => c.lines.push({ t: line, cls: 'g' }));
+      }
     } catch (e) {
       t.update((c) => { c.lines.push({ t: '✗ GitHub call failed: ' + e.message, cls: 'p' }); c.status = 'done'; });
       t.resolve({ ok: false });

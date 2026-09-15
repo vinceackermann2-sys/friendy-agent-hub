@@ -52,7 +52,27 @@ function shortQuery(query) {
   return short || String(query || '').slice(0, 80);
 }
 
-async function realResearch(query) {
+function pickBrowserTargets(pages, sq) {
+  // Ordered candidates: Wikipedia results, HN hit URLs, DDG sources, and as a
+  // last resort the Wikipedia search page itself (a real rendered page).
+  // browser_open enforces the allowlist; the caller tries each until one
+  // renders, and cites honestly whatever was actually opened.
+  const out = [];
+  for (const p of pages) {
+    if (!p.ok) continue;
+    try {
+      const j = JSON.parse(p.text);
+      if (Array.isArray(j) && Array.isArray(j[3])) out.push(...j[3].filter(Boolean).map(String));
+      if (Array.isArray(j.hits)) out.push(...j.hits.filter((h) => h && h.url).map((h) => String(h.url)));
+      if (j.AbstractURL) out.push(String(j.AbstractURL));
+      if (Array.isArray(j.Results)) out.push(...j.Results.filter((x) => x && x.FirstURL).map((x) => String(x.FirstURL)));
+    } catch {}
+  }
+  if (sq) out.push(`https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(sq)}`);
+  return [...new Set(out)].slice(0, 4);
+}
+
+async function realResearch(query, hooks = {}) {
   const q = String(query || '').slice(0, 300);
   const sq = shortQuery(q);
   const urls = [
@@ -62,6 +82,21 @@ async function realResearch(query) {
   ];
   const pages = await Promise.all(urls.map((u) => fetchText(u)));
   const snippets = extractSnippets(pages);
+  // Real browser use: open the top result in headless Chromium so the
+  // briefing is grounded in a rendered page, not just API JSON.
+  let opened = null;
+  const { TOOLS } = require('./agents/tools');
+  const ctx = { trace: (e) => hooks.onTrace && hooks.onTrace(e), githubPat: null, userId: hooks.userId || 'local' };
+  for (const target of pickBrowserTargets(pages, sq)) {
+    try {
+      opened = await TOOLS.browser_open.run({ url: target }, ctx);
+      snippets.push({ url: opened.url, renderedTitle: opened.title, excerpt: String(opened.text || '').slice(0, 900) });
+      break;
+    } catch (e) {
+      if (hooks.onTrace) hooks.onTrace({ ic: 'alert', t: `browser_open skipped ${target.slice(0, 60)} (${e.code || e.message})` });
+    }
+  }
+  if (!opened) snippets.push({ note: 'no candidate page rendered in the real browser — briefing uses API data only' });
 
   let summary = '';
   let usage = null;
@@ -74,7 +109,7 @@ async function realResearch(query) {
   } catch (e) {
     summary = `I fetched ${pages.filter((p) => p.ok).length}/${pages.length} live sources, but the AI summarizer is unavailable (${e.message}). Open the sources directly:\n` + urls.map((u) => `- ${u}`).join('\n');
   }
-  return { query: q, sources: urls, snippets, summary, usage, fetchedAt: new Date().toISOString() };
+  return { query: q, sources: urls, snippets, summary, usage, opened: opened ? { url: opened.url, title: opened.title } : null, fetchedAt: new Date().toISOString() };
 }
 
 module.exports = { realResearch };
