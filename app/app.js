@@ -85,7 +85,29 @@ let state;
 try { state = Object.assign(fresh(), JSON.parse(localStorage.getItem(LS) || 'null')) || fresh(); }
 catch (e) { state = fresh(); }
 if (!state.vault) state.vault = fresh().vault;
+// Honest apps: no fake OAuth connections exist — always empty.
+state.vault.apps = [];
 const save = () => localStorage.setItem(LS, JSON.stringify(state));
+
+/* ---------------- backend-synced memory/vault (auth-scoped) ---------------- */
+async function syncFromBackend() {
+  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return;
+  try {
+    const m = await window.LingonAuth.api('/api/memories');
+    const seen = new Set(state.memory.map((x) => x.text));
+    (m.memories || []).forEach((r) => {
+      if (!seen.has(r.text)) state.memory.unshift({ id: r.id, text: r.text, src: 'account', at: r.at });
+    });
+  } catch {}
+  try {
+    const s = await window.LingonAuth.api('/api/secrets');
+    const have = new Set(state.vault.secrets.map((x) => x.id));
+    (s.secrets || []).forEach((r) => {
+      if (!have.has(r.id)) state.vault.secrets.unshift({ id: r.id, ref: r.ref, name: r.name, at: r.at, backend: true });
+    });
+  } catch {}
+  save();
+}
 
 function expirePending(){
   state.chats.forEach(c => (c.messages || []).forEach(m => {
@@ -111,7 +133,93 @@ const chat = () => state.chats.find(c => c.id === state.activeChat);
 const isActive = c => state.view === 'chat' && state.activeChat === c.id;
 
 function render(){
+  if (window.LingonAuth && !window.LingonAuth.signedIn()) return renderAuth();
   if (state.onboarded && state.agent) renderApp(); else renderLanding();
+}
+
+/* ================================================================
+   AUTH (real Supabase Auth via backend proxy)
+================================================================ */
+function renderAuth(){
+  root.innerHTML = `
+  <div class="fadeup">
+    <nav class="nav"><div class="logo">${Mascot.logo(26)} Lingon</div><div></div><span class="chip">real account required</span></nav>
+    <section class="hero" style="max-width:560px;margin:0 auto">
+      <div class="badge">${icon('lock',14)} Sign in to your agent</div>
+      <h1>Your agent, your account.</h1>
+      <p class="sub">Real Supabase Auth. Memories, vault and billing are scoped to your signed-in account — no shared demo data.</p>
+      <div class="acard"><div class="bd">
+        <input class="field" id="aemail" type="email" placeholder="you@example.com" autocomplete="email">
+        <input class="field mono" id="apass" type="password" placeholder="password (8+ chars)" autocomplete="current-password" style="margin-top:8px">
+        <div class="stack" style="margin-top:12px">
+          <button class="btn" data-act="signin">Sign in</button>
+          <button class="btn green" data-act="signup">Create account</button>
+        </div>
+        <div class="secnote" id="amsg" style="min-height:18px;margin-top:8px"></div>
+      </div></div>
+      <div class="hintline">${icon('shieldcheck',13)} Backend verifies your JWT on every request — user ids come from the token, never the client.</div>
+    </section>
+  </div>`;
+}
+
+async function doAuth(kind){
+  const msg = $('#amsg');
+  const email = ($('#aemail').value || '').trim();
+  const password = $('#apass').value || '';
+  if (msg) msg.textContent = 'Working…';
+  try {
+    const r = await fetch('/api/auth/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Auth failed');
+    window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
+    try { window.LingonConfig.userId = j.user.id; } catch {}
+    state.view = 'chat';
+    save();
+    await syncFromBackend();
+    render();
+    toast('Signed in as ' + j.user.email);
+  } catch (e) {
+    if (msg) msg.textContent = e.message;
+  }
+}
+
+/* ================================================================
+   BILLING (real credits + gifts, no fake charges)
+================================================================ */
+let billingCache = null;
+async function getBilling(){
+  if (!window.LingonAuth.signedIn()) return null;
+  try {
+    billingCache = await window.LingonAuth.api('/api/billing');
+    return billingCache;
+  } catch { return billingCache; }
+}
+function paintBilling(M){
+  M.innerHTML = `<div class="page"><div class="pageinner">
+    <div class="phead"><h1>Billing</h1><span class="chip purple">real credits</span></div>
+    <p class="psub">Free includes <b>$10</b> of API costs. Pro <b>$30</b> <s>$50</s> → $20 credit + $50 gift card. Max <b>$50</b> <s>$100</s> → $50 credit + $100 gift card. Gift codes add real credit when redeemed. Upgrades are requests until payments connect — no charge is made.</p>
+    <div id="billbody"><div class="row mut">Loading…</div></div>
+    <div class="kv" style="margin-top:14px"><div class="row" style="background:var(--panel)">
+      <input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" style="flex:1">
+      <button class="btn small" data-act="redeem">Redeem gift</button>
+    </div></div>
+    <div class="kv" id="plancards" style="margin-top:14px"></div>
+  </div></div>`;
+  getBilling().then((b) => {
+    const el = $('#billbody');
+    if (el && b) el.innerHTML = `<div class="kv"><div class="row">
+      <span style="color:var(--purple)">${icon('spark',16)}</span>
+      <div><b>${b.plan.toUpperCase()}</b> · ${b.status}<div class="sub">Used $${Number(b.used).toFixed(4)} of $${Number(b.total).toFixed(2)} (plan $${b.credit} + gifts $${b.gifts})</div></div>
+      <div class="rgt"><span class="chip ${b.remaining > 1 ? 'green' : ''}">$${Number(b.remaining).toFixed(2)} left</span></div>
+    </div></div>`;
+    const pc = $('#plancards');
+    if (pc) pc.innerHTML = ['free', 'pro', 'max'].map((id) => {
+      const p = (b && b.plans && b.plans[id]) || { name: id, price: 0, was: null, credit: 0, gift: 0 };
+      const cur = b && b.plan === id;
+      return `<div class="row"><div><b>${p.name}</b> — $${p.price}${p.was ? ` <s class="mut">$${p.was}</s>` : ''}<div class="sub">$${p.credit} credit${p.gift ? ` + $${p.gift} gift card` : ''}</div></div>
+      <div class="rgt">${cur ? '<span class="chip green">current</span>' : id === 'free' ? '<span class="chip">default</span>' : `<button class="btn small" data-act="upgrade" data-p="${id}">Request ${p.name}</button>`}</div></div>`;
+    }).join('');
+  });
 }
 
 /* ================================================================
@@ -122,13 +230,13 @@ function renderLanding(){
   <div class="fadeup">
     <nav class="nav">
       <div class="logo">${Mascot.logo(26)} Lingon</div>
-      <div class="navlinks"><span data-act="scroll" data-t="#feat">Product</span><span data-act="scroll" data-t="#sec">Security</span><span data-act="scroll" data-t="#feat">Docs</span></div>
+      <div class="navlinks"><span data-act="scroll" data-t="#feat">Product</span><span data-act="scroll" data-t="#sec">Security</span><span data-act="scroll" data-t="#pricing">Pricing</span></div>
       <button class="btn small" data-act="open-app">Open app</button>
     </nav>
     <section class="hero">
       <div class="badge">${icon('spark',14)} Personal agents, claimed &amp; named by you</div>
       <h1>An agent that's<br>actually yours.</h1>
-      <p class="sub">Claim it. Name it. Teach it. Lingon runs on the OpenAI Agents API behind a sandboxed harness — browser, code, files, sub-agents — while your secrets stay sealed in your vault.</p>
+      <p class="sub">Claim it. Name it. Teach it. Lingon runs on a Gemini-backed sandboxed harness — browser, code, files, sub-agents — while your secrets stay sealed in your vault. Signed in with your real account.</p>
       <div class="promptwrap">
         <div class="sitter">${Mascot.svg('lingon','wave',84,'mascot-bob')}</div>
         <form class="promptbox" id="lform">
@@ -153,7 +261,7 @@ function renderLanding(){
       <div class="grid3">
         <div class="fcard"><div class="fic">${icon('shieldcheck',19)}</div><h3>Approvals &amp; sealed vault</h3><p>New actions wait for your yes. Secrets are encrypted and masked — the agent only ever receives a reference, never the value.</p></div>
         <div class="fcard"><div class="fic" style="background:var(--purple-soft);color:var(--purple)">${icon('panel',19)}</div><h3>Visual canvas</h3><p>Charts, live pages, diffs and plans render beside your chat, with a full trace of every tool call and sub-agent.</p></div>
-        <div class="fcard"><div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('box',19)}</div><h3>Sub-agents &amp; sandbox</h3><p>Parallel workers fan out across the web while everything runs in a sandboxed Codex-style harness with an allowlisted network.</p></div>
+        <div class="fcard"><div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('box',19)}</div><h3>Sub-agents &amp; sandbox</h3><p>Parallel workers fan out across the web while everything runs in our Gemini harness with an allowlisted network and approval gates.</p></div>
         <div class="fcard"><div class="fic" style="background:var(--purple-soft);color:var(--purple)">${icon('book',19)}</div><h3>Memory that sticks</h3><p>Your agent remembers preferences and projects across chats — and you can inspect or delete every memory.</p></div>
         <div class="fcard"><div class="fic">${icon('globe',19)}</div><h3>Browser &amp; computer use</h3><p>Watch it browse and type in a contained window, step by step, never hidden behind the curtain.</p></div>
         <div class="fcard"><div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('user',19)}</div><h3>Claimed, named, yours</h3><p>One person claims each agent. You name it, pick its color and character — it answers to you alone.</p></div>
@@ -172,7 +280,17 @@ function renderLanding(){
       </div>
     </div></section>
 
-    <footer><span>© 2026 Lingon — made with ${icon('spark',12)} in Stockholm</span><span>Agents API · sandboxed harness · your vault</span></footer>
+    <section class="features" id="pricing">
+      <h2>Pricing in API credits</h2>
+      <p class="fsub">Free includes <b>$10</b> of API costs. Pro <b>$30</b> <s>$50</s> → $20 credit + $50 gift card. Max <b>$50</b> <s>$100</s> → $50 credit + $100 gift card. Gift codes add real credit.</p>
+      <div class="grid3">
+        <div class="fcard"><div class="fic">${icon('spark',19)}</div><h3>Free — $0</h3><p>$10 API credit. Sign in and start. Usage is metered for real.</p></div>
+        <div class="fcard"><div class="fic" style="background:var(--purple-soft);color:var(--purple)">${icon('star',19)}</div><h3>Pro — $30 <s style="color:var(--mut)">$50</s></h3><p>$20 credit + $50 gift card you can use or gift. Request inside Billing — no charge until payments connect.</p></div>
+        <div class="fcard"><div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('box',19)}</div><h3>Max — $50 <s style="color:var(--mut)">$100</s></h3><p>$50 credit + $100 gift card you can use or gift. Request inside Billing.</p></div>
+      </div>
+    </section>
+
+    <footer><span>© 2026 Lingon — made with ${icon('spark',12)} in Stockholm</span><span>Gemini harness · your vault</span></footer>
   </div>`;
   $('#lform').addEventListener('submit', e => { e.preventDefault(); landingRun($('#lprompt').value.trim()); });
   $('#lprompt').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#lform').requestSubmit(); } });
@@ -288,6 +406,7 @@ function renderApp(){
 
 function paintSide(){
   const a = state.agent;
+  if (!a) return;
   const filesN = state.chats.reduce((n, c) => n + c.messages.filter(m => m.kind === 'card' && m.card.type === 'file').length, 0);
   $('#side').innerHTML = `
     <div class="agentchip" data-act="nav" data-view="profile">
@@ -306,10 +425,12 @@ function paintSide(){
     </div>
     <div class="slabel">Your agent</div>
     <button class="sitem ${state.view === 'profile' ? 'on' : ''}" data-act="nav" data-view="profile">${icon('user',15)} Profile</button>
-    <button class="sitem ${state.view === 'vault' ? 'on' : ''}" data-act="nav" data-view="vault">${icon('lock',15)} Vault <span class="cnt">${state.vault.secrets.length + state.vault.apps.length + filesN}</span></button>
+    <button class="sitem ${state.view === 'vault' ? 'on' : ''}" data-act="nav" data-view="vault">${icon('lock',15)} Vault <span class="cnt">${state.vault.secrets.length + filesN}</span></button>
     <button class="sitem ${state.view === 'memory' ? 'on' : ''}" data-act="nav" data-view="memory">${icon('book',15)} Memory <span class="cnt">${state.memory.length}</span></button>
+    <button class="sitem ${state.view === 'billing' ? 'on' : ''}" data-act="nav" data-view="billing">${icon('spark',15)} Billing</button>
+    <button class="sitem" data-act="signout">${icon('x',15)} Sign out</button>
     <div class="foot">
-      <div class="badge">${icon('shieldcheck',13)} Sandboxed harness · Agents API</div>
+      <div class="badge">${icon('shieldcheck',13)} Gemini harness (not Codex API)</div>
     </div>`;
 }
 
@@ -319,6 +440,7 @@ function paintMain(){
   if (state.view === 'vault') return paintVault(M);
   if (state.view === 'memory') return paintMemory(M);
   if (state.view === 'profile') return paintProfile(M);
+  if (state.view === 'billing') return paintBilling(M);
   return paintChat(M);
 }
 
@@ -515,7 +637,7 @@ function makeRT(c){
     chat: c, agent: state.agent, vault: state.vault,
     isFirst: c.messages.filter(m => m.role === 'user').length <= 1,
     recall: () => state.memory.slice(),
-    hasApp: n => state.vault.apps.includes(n),
+    hasApp: n => false,
     hasSecret: n => state.vault.secrets.some(s => s.name === n),
     secretRef: n => { const s = state.vault.secrets.find(s => s.name === n); return s ? s.ref : 'sec_••••'; },
     remember(text, src){ state.memory.unshift({ id: uid(), text, src: src || 'chat', at: Date.now() }); save(); },
@@ -690,12 +812,7 @@ function paintVault(M){
       </div>
     </div>`;
   } else if (tab === 'apps'){
-    body = `<div class="kv">
-      ${['github','gmail'].map(a => { const on = v.apps.includes(a); return `<div class="row">
-        <span class="tile" style="width:38px;height:38px;border-radius:11px;color:${a === 'github' ? 'var(--ink)' : 'var(--acc)'}">${icon(a === 'github' ? 'git' : 'mail',17)}</span>
-        <div><b>${a === 'github' ? 'GitHub' : 'Gmail'}</b><div class="sub">${on ? 'connected · tokens sealed' : 'not connected'}</div></div>
-        <div class="rgt"><button class="btn ${on ? 'ghost' : ''} small" data-act="toggleapp" data-app="${a}">${on ? 'Disconnect' : 'Connect'}</button></div></div>`; }).join('')}
-    </div>`;
+    body = `<div class="kv"><div class="row mut">No connected apps. GitHub works via a personal access token saved in Secrets (real read-only API) — there is no fake OAuth here. Gmail isn't connected.</div></div>`;
   } else if (tab === 'approved'){
     body = `<div class="kv">
       ${v.approvals.map(a => `<div class="row">
@@ -824,10 +941,10 @@ document.addEventListener('click', async e => {
     save(); resolveCard(c, m, { ok:true, always:true }, 'always'); return;
   }
   if (act === 'connect' && m){
-    m.card.status = 'connecting'; replaceNode(c, m);
-    await sleep(900);
-    if (!state.vault.apps.includes(m.card.app)) state.vault.apps.push(m.card.app);
-    resolveCard(c, m, { ok:true }, 'connected'); paintSide(); return;
+    // No fake OAuth: GitHub uses a PAT in Secrets; Gmail is not connected.
+    resolveCard(c, m, { ok:false }, 'denied');
+    toast(m.card.app === 'github' ? 'No OAuth here — save a GitHub PAT in Secrets instead.' : 'Gmail is not connected.');
+    return;
   }
   if (act === 'deny-connect' && m){ resolveCard(c, m, { ok:false }, 'denied'); return; }
   if (act === 'skip-secret' && m){ resolveCard(c, m, { ok:false }, 'skipped'); return; }
@@ -856,9 +973,34 @@ document.addEventListener('click', async e => {
     save(); paintVault($('#main')); paintSide(); toast('Sealed in vault — agent gets ' + ref + ' only'); return;
   }
   if (act === 'toggleapp'){
-    const a = b.dataset.app;
-    state.vault.apps = state.vault.apps.includes(a) ? state.vault.apps.filter(x => x !== a) : state.vault.apps.concat(a);
-    save(); paintVault($('#main')); paintSide(); return;
+    toast('No app connections to toggle — Apps is empty by design.');
+    return;
+  }
+  if (act === 'signin'){ doAuth('signin'); return; }
+  if (act === 'signup'){ doAuth('signup'); return; }
+  if (act === 'signout'){
+    window.LingonAuth.set(null);
+    state.view = 'chat';
+    render();
+    return;
+  }
+  if (act === 'redeem'){
+    const code = ($('#giftcode').value || '').trim();
+    if (!code){ toast('Paste a gift code first.'); return; }
+    try {
+      const j = await window.LingonAuth.api('/api/billing/redeem', { method: 'POST', body: JSON.stringify({ code }) });
+      billingCache = j.billing;
+      toast(`Redeemed $${j.amount} credit.`);
+      paintBilling($('#main'));
+    } catch (e) { toast(e.message); }
+    return;
+  }
+  if (act === 'upgrade'){
+    try {
+      const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: JSON.stringify({ plan: b.dataset.p }) });
+      toast(j.note || 'Request recorded.');
+    } catch (e) { toast(e.message); }
+    return;
   }
   if (act === 'revoke'){ state.vault.approvals = state.vault.approvals.filter(x => x.id !== b.dataset.id); save(); paintVault($('#main')); toast('Revoked — it will ask again'); return; }
   if (act === 'pmode'){ state.vault.mode = b.dataset.m; save(); paintVault($('#main')); return; }

@@ -56,7 +56,7 @@ async function callGemini({ prompt, system, history, model, json }) {
     const parts = data?.candidates?.[0]?.content?.parts || [];
     const text = parts.map((p) => p.text || '').join('').trim();
     if (!text) throw Object.assign(new Error('Empty response from Gemini'), { code: 'EMPTY' });
-    return { text, raw: data };
+    return { text, raw: data, usage: data?.usageMetadata || null };
   } finally {
     clearTimeout(t);
   }

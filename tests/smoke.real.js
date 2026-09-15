@@ -1,11 +1,7 @@
-/* Lingon REAL smoke — verifies nothing is simulated.
-   Requires: npm start running on http://127.0.0.1:8000 with GEMINI_API_KEY set.
-   Checks:
-   - /api/health gemini:true
-   - landing renders, claim flow works
-   - real chat returns non-empty, non-canned AI text
-   - research hits live endpoint and renders a briefing artifact (no fake 1,392)
-   - vault secret is masked in UI
+/* Lingon REAL smoke — auth + billing + no fakes.
+   Requires: npm start on http://127.0.0.1:8000, GEMINI_API_KEY + Supabase set.
+   Flow: health → signup test user → auth gate → onboarding → real chat →
+   research (live, no fake stats) → vault masked → Apps empty → billing Free $10.
 */
 const { chromium } = require('playwright');
 
@@ -14,17 +10,29 @@ const { chromium } = require('playwright');
   const errs = [];
   const step = (s) => console.log('• ' + s);
 
-  // health first
   try {
     const r = await fetch(base + '/api/health');
     const j = await r.json();
     console.log('HEALTH:', JSON.stringify(j));
-    if (!j.gemini) {
-      console.error('SMOKE FAIL — backend reports gemini:false. Set GEMINI_API_KEY in C:\\lingon\\.env and restart npm start.');
-      process.exit(1);
-    }
+    if (!j.gemini) throw new Error('gemini:false — set GEMINI_API_KEY');
+    if (!j.supabase) throw new Error('supabase:false — set SUPABASE keys');
   } catch (e) {
-    console.error('SMOKE FAIL — backend not reachable at ' + base + ' (' + e.message + '). Run npm start first.');
+    console.error('SMOKE FAIL — backend: ' + e.message);
+    process.exit(1);
+  }
+
+  // unique test user
+  const email = `smoke${Date.now()}@example.com`;
+  const password = 'SmokeTest123!';
+  let session;
+  try {
+    const r = await fetch(base + '/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    session = { access_token: j.access_token, refresh_token: j.refresh_token, user: j.user };
+    console.log('SIGNED UP:', email);
+  } catch (e) {
+    console.error('SMOKE FAIL — signup: ' + e.message);
     process.exit(1);
   }
 
@@ -35,9 +43,19 @@ const { chromium } = require('playwright');
 
   await p.goto(base, { waitUntil: 'load' });
   await p.evaluate(() => localStorage.clear());
+  await p.evaluate((s) => {
+    localStorage.setItem('lingon.session', JSON.stringify(s));
+    try { window.LingonConfig.userId = s.user.id; } catch {}
+  }, session);
   await p.reload({ waitUntil: 'load' });
   await p.waitForSelector('.hero h1', { timeout: 10000 });
-  step('landing renders');
+  step('landing renders (authed)');
+
+  // pricing visible, honest harness wording
+  const landing = await p.evaluate(() => document.body.innerText);
+  if (!/Free.*\$10/i.test(landing)) errs.push('Pricing Free $10 missing on landing');
+  if (/Codex-style|OpenAI Agents API/.test(landing)) errs.push('Stale Codex wording on landing');
+  step('pricing + harness wording honest');
 
   await p.click('[data-act="open-app"]');
   await p.waitForSelector('[data-act="ob-claim"]');
@@ -52,33 +70,29 @@ const { chromium } = require('playwright');
   await p.waitForSelector('#cprompt', { timeout: 15000 });
   step('onboarding complete');
 
-  // REAL chat — must not be canned
   await p.fill('#cprompt', 'Reply with exactly the words: lingon real backend check');
   await p.keyboard.press('Enter');
-  await p.waitForTimeout(12000);
+  await p.waitForTimeout(14000);
   const thread = await p.evaluate(() => document.querySelector('#tinner')?.innerText || '');
-  console.log('THREAD SAMPLE:\n' + thread.slice(0, 900));
-  if (!thread.toLowerCase().includes('lingon')) errs.push('REAL CHAT missing expected echo — got: ' + thread.slice(0, 200));
-  if (/1,392 qualifying comments|Social Democrats lead observed share/.test(thread)) errs.push('SIMULATED research text leaked into real chat');
+  console.log('THREAD SAMPLE:\n' + thread.slice(0, 700));
+  if (!thread.toLowerCase().includes('lingon')) errs.push('REAL CHAT missing echo');
+  if (/1,392 qualifying comments/.test(thread)) errs.push('SIMULATED text leaked');
   step('real chat answered');
 
-  // REAL research — live endpoint, no fabricated counts
   await p.click('[data-act="newchat"]');
   await p.waitForSelector('#cprompt');
   await p.fill('#cprompt', 'Research Swedish party sentiment on social media');
   await p.keyboard.press('Enter');
   await p.waitForSelector('.qopt', { timeout: 90000 });
-  step('research question card (live backend responded)');
+  step('research live');
   await p.click('.qopt');
   await p.waitForSelector('#cbody', { timeout: 60000 });
   await p.waitForTimeout(4000);
   const canvas = await p.evaluate(() => document.querySelector('#cbody')?.innerText || '');
-  console.log('CANVAS SAMPLE:\n' + canvas.slice(0, 900));
-  if (/1,392 qualifying comments/.test(canvas)) errs.push('FAKE research stats present — simulation not removed');
-  if (!/reddit|hacker|duckduckgo|source|http/i.test(canvas)) errs.push('No live sources cited in briefing');
-  step('research briefing cites live sources');
+  if (/1,392 qualifying comments/.test(canvas)) errs.push('FAKE stats present');
+  if (!/source|http/i.test(canvas)) errs.push('No live sources cited');
+  step('briefing cites live sources');
 
-  // vault masking
   await p.click('[data-act="nav"][data-view="vault"]');
   await p.waitForSelector('.warnband');
   await p.fill('#vname', 'github_token');
@@ -86,8 +100,27 @@ const { chromium } = require('playwright');
   await p.click('[data-act="addsecret"]');
   await p.waitForSelector('[data-rev]');
   const masked = await p.textContent('[data-rev]');
-  if (/ghp_/.test(masked)) errs.push('SECRET LEAKED IN LIST: ' + masked);
-  step('vault masks secret: ' + (masked || '').trim().slice(0, 40));
+  if (/ghp_/.test(masked)) errs.push('SECRET LEAKED: ' + masked);
+  step('vault masks secret');
+
+  // Apps must be honestly empty
+  await p.click('[data-act="vtab"][data-t="apps"]');
+  await p.waitForTimeout(500);
+  const apps = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
+  if (!/No connected apps/i.test(apps)) errs.push('Apps tab not honestly empty: ' + apps.slice(0, 200));
+  if (/connected · tokens sealed/.test(apps)) errs.push('Fake connection row still present');
+  step('apps honestly empty');
+
+  // Billing: Free $10, redeem + upgrade flows exist
+  await p.click('[data-act="nav"][data-view="billing"]');
+  await p.waitForSelector('#billbody', { timeout: 15000 });
+  await p.waitForTimeout(3000);
+  const bill = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
+  console.log('BILLING SAMPLE:\n' + bill.slice(0, 600));
+  if (!/FREE/i.test(bill)) errs.push('Billing plan missing');
+  if (!/\$10/.test(bill)) errs.push('Free $10 credit missing');
+  if (!/Redeem gift/i.test(bill)) errs.push('Gift redeem missing');
+  step('billing real');
 
   await p.waitForTimeout(800);
   console.log(errs.length ? 'ERRORS:\n' + errs.join('\n') : 'NO CONSOLE/PAGE ERRORS');

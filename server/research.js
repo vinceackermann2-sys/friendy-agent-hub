@@ -70,15 +70,17 @@ async function realResearch(query) {
   const snippets = extractSnippets(pages);
 
   let summary = '';
+  let usage = null;
   try {
     const sys = 'You are Lingon, a careful research assistant. Summarize ONLY what the fetched snippets support. Never invent vote shares, sample sizes, or quotes. List sources with URLs. If evidence is thin, say so plainly.';
     const prompt = `User question: ${q}\n\nFetched evidence (JSON):\n${JSON.stringify(snippets).slice(0, 9000)}\n\nWrite a concise, honest briefing: what the public sources actually say, key threads to read, and what is NOT proven. End with 3 concrete links to open.`;
     const r = await callGemini({ prompt, system: sys });
     summary = r.text;
+    usage = r.usage;
   } catch (e) {
     summary = `I fetched ${pages.filter((p) => p.ok).length}/${pages.length} live sources, but the AI summarizer is unavailable (${e.message}). Open the sources directly:\n` + urls.map((u) => `- ${u}`).join('\n');
   }
-  return { query: q, sources: urls, snippets, summary, fetchedAt: new Date().toISOString() };
+  return { query: q, sources: urls, snippets, summary, usage, fetchedAt: new Date().toISOString() };
 }
 
 module.exports = { realResearch };

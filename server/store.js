@@ -193,8 +193,170 @@ async function delSecret(userId, id) {
   saveLocal(d);
 }
 
+// ---------- billing: subscriptions, usage, gift cards ----------
+async function getSubscription(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { data, error } = await s.from('subscriptions').select('*').eq('user_id', userId).single();
+      if (!error && data) return data;
+      if (error && error.code !== 'PGRST116') throw error;
+    } catch (e) {
+      console.warn('[store] subscription fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.subs || []).find((x) => x.userId === userId) || { user_id: userId, plan: 'free', status: 'active' };
+}
+async function setSubscription(userId, plan, status) {
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('subscriptions').upsert({ user_id: userId, plan, status: status || 'active' }, { onConflict: 'user_id' });
+      if (error) throw error;
+      return { user_id: userId, plan, status: status || 'active' };
+    } catch (e) {
+      console.warn('[store] set subscription fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.subs = d.subs || [];
+  const i = d.subs.findIndex((x) => x.userId === userId);
+  const row = { userId, plan, status: status || 'active' };
+  if (i >= 0) d.subs[i] = row; else d.subs.push(row);
+  saveLocal(d);
+  return { user_id: userId, plan, status: status || 'active' };
+}
+async function logUsage(userId, { model, usage, cost }) {
+  const row = {
+    id: 'use_' + uid(), user_id: userId, model: model || 'gemini-2.5-flash',
+    prompt_tokens: (usage && (usage.promptTokenCount || 0)) || 0,
+    candidates_tokens: (usage && (usage.candidatesTokenCount || 0)) || 0,
+    total_tokens: (usage && (usage.totalTokenCount || 0)) || 0,
+    cost_usd: Number(cost || 0),
+  };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('api_usage').insert(row);
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] usage fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.usage = d.usage || [];
+  d.usage.unshift(row);
+  saveLocal(d);
+  return row;
+}
+async function usageTotal(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('api_usage').select('cost_usd').eq('user_id', userId);
+      if (error) throw error;
+      return (data || []).reduce((n, r) => n + Number(r.cost_usd || 0), 0);
+    } catch (e) {
+      console.warn('[store] usage total fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.usage || []).filter((r) => r.user_id === userId || r.userId === userId).reduce((n, r) => n + Number(r.cost_usd || r.cost || 0), 0);
+}
+function giftCode() {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c = '';
+  for (let i = 0; i < 12; i++) c += abc[Math.floor(Math.random() * abc.length)];
+  return 'LNG-' + c.slice(0, 4) + '-' + c.slice(4, 8) + '-' + c.slice(8, 12);
+}
+async function createGift(fromUser, amountUsd) {
+  const code = giftCode();
+  const row = { code, amount_usd: Number(amountUsd), from_user: fromUser, to_user: null, redeemed_by: null };
+  const s = supa();
+  if (s) {
+    try {
+      const { error } = await s.from('gift_cards').insert(row);
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] gift fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.gifts = d.gifts || [];
+  d.gifts.unshift(row);
+  saveLocal(d);
+  return row;
+}
+async function redeemGift(userId, code) {
+  const c = String(code || '').trim().toUpperCase();
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { data, error } = await s.from('gift_cards').select('*').eq('code', c).single();
+      if (error || !data) return { ok: false, error: 'Code not found.' };
+      if (data.redeemed_by) return { ok: false, error: 'Code already redeemed.' };
+      const { error: e2 } = await s.from('gift_cards').update({ redeemed_by: userId, redeemed_at: new Date().toISOString(), to_user: userId }).eq('code', c);
+      if (e2) throw e2;
+      return { ok: true, amount: Number(data.amount_usd) };
+    } catch (e) {
+      console.warn('[store] redeem fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.gifts = d.gifts || [];
+  const g = d.gifts.find((x) => x.code === c);
+  if (!g) return { ok: false, error: 'Code not found.' };
+  if (g.redeemed_by) return { ok: false, error: 'Code already redeemed.' };
+  g.redeemed_by = userId;
+  g.to_user = userId;
+  saveLocal(d);
+  return { ok: true, amount: Number(g.amount_usd) };
+}
+async function giftsCredit(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('gift_cards').select('amount_usd').eq('redeemed_by', userId);
+      if (error) throw error;
+      return (data || []).reduce((n, r) => n + Number(r.amount_usd || 0), 0);
+    } catch {
+      // fall through
+    }
+  }
+  const d = loadLocal();
+  return (d.gifts || []).filter((g) => g.redeemed_by === userId).reduce((n, g) => n + Number(g.amount_usd || 0), 0);
+}
+async function requestUpgrade(userId, plan) {
+  const row = { id: 'up_' + uid(), user_id: userId, plan, status: 'requested' };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('upgrade_requests').insert(row);
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] upgrade fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.upgrades = d.upgrades || [];
+  d.upgrades.unshift(row);
+  saveLocal(d);
+  return row;
+}
+
 module.exports = {
   listMemories, addMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret,
   supaConfigured,
+  getSubscription, setSubscription, logUsage, usageTotal,
+  createGift, redeemGift, giftsCredit, requestUpgrade,
 };

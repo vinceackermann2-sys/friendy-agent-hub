@@ -1,15 +1,10 @@
-/* Lingon frontend config — backend base URL (same origin by default). */
+/* Lingon frontend config — backend base URL (same origin by default).
+   userId is the Supabase user id when signed in (set by auth.js). */
 window.LingonConfig = {
   apiBase: '',
-  userId: null,
+  userId: 'local',
 };
 try {
-  let uid = localStorage.getItem('lingon.userId');
-  if (!uid) {
-    uid = 'u_' + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem('lingon.userId', uid);
-  }
-  window.LingonConfig.userId = uid;
-} catch (e) {
-  window.LingonConfig.userId = 'local';
-}
+  const s = JSON.parse(localStorage.getItem('lingon.session') || 'null');
+  if (s?.user?.id) window.LingonConfig.userId = s.user.id;
+} catch {}
