@@ -50,14 +50,20 @@ function decryptValue(obj) {
   }
 }
 
-// ---- Supabase (optional) ----
+// ---- Supabase (optional, supports old + new key names) ----
 let sb = null;
+function supaKey() {
+  return (
+    (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim() ||
+    (process.env.SUPABASE_SECRET_KEY || '').trim() ||
+    (process.env.SUPABASE_ANON_KEY || '').trim() ||
+    (process.env.SUPABASE_PUBLISHABLE_KEY || '').trim()
+  );
+}
 function supa() {
   if (sb !== undefined && sb !== null) return sb;
   const url = (process.env.SUPABASE_URL || '').trim();
-  const svc = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  const anon = (process.env.SUPABASE_ANON_KEY || '').trim();
-  const token = svc || anon;
+  const token = supaKey();
   if (!url || !token) {
     sb = null;
     return sb;
@@ -71,7 +77,14 @@ function supa() {
   return sb;
 }
 function supaConfigured() {
-  return !!(process.env.SUPABASE_URL || '').trim() && !!((process.env.SUPABASE_ANON_KEY || '').trim() || (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
+  return !!(process.env.SUPABASE_URL || '').trim() && !!supaKey();
+}
+async function ensureProfile(userId) {
+  const s = supa();
+  if (!s || !userId) return;
+  try {
+    await s.from('profiles').upsert({ id: userId }, { onConflict: 'id' });
+  } catch {}
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -95,6 +108,7 @@ async function addMemory(userId, text, src) {
   const row = { id: `mem_${uid()}`, user_id: userId, text: String(text).slice(0, 2000), src: src || 'chat' };
   if (s) {
     try {
+      await ensureProfile(userId);
       const { error } = await s.from('memories').insert(row);
       if (error) throw error;
       return { id: row.id, text: row.text, src: row.src, at: Date.now() };
@@ -139,6 +153,7 @@ async function addSecret(userId, name, value) {
   const s = supa();
   if (s) {
     try {
+      await ensureProfile(userId);
       const { error } = await s.from('vault_secrets').insert({ id, user_id: userId, name, ref, encrypted_value: sealed });
       if (error) throw error;
       return { id, ref, name, at: Date.now() };

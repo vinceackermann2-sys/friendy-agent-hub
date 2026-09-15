@@ -1,13 +1,17 @@
 # Supabase free backend (5 min)
 
-1. Go to https://supabase.com/dashboard → New project (free tier).
-2. SQL Editor → paste `schema.sql` → Run.
-3. Project Settings → API → copy:
-   - `SUPABASE_URL` (Project URL)
-   - `SUPABASE_ANON_KEY` (anon public)
-   - `SUPABASE_SERVICE_ROLE_KEY` (service_role, secret — server only)
-4. In `C:\lingon`, copy `.env.example` to `.env` and paste the values + your `GEMINI_API_KEY`.
-5. Restart: `npm start`. Health check: http://localhost:8000/api/health should show `"supabase": true`.
+1. Go to https://supabase.com/dashboard → your project `alikzitdkdiatimjygdz`.
+2. SQL Editor → New query → paste the full contents of `supabase/schema.sql` in this repo → Run.
+   You must see “Success”. This creates profiles / agents / chats / messages /
+   memories / vault_secrets / vault_apps / approvals.
+3. Project Settings → API → copy (new dashboard names):
+   - `SUPABASE_URL` = Project URL
+   - `SUPABASE_PUBLISHABLE_KEY` (sb_publishable_…, anon equivalent)
+   - `SUPABASE_SECRET_KEY` (sb_secret_…, service_role equivalent — server only)
+   Old ANON / SERVICE_ROLE names also work.
+4. In `C:\lingon`, values are already in `.env` (gitignored). Restart: `npm start`.
+   Health: http://localhost:8000/api/health should show `"supabase": true`
+   AND memory writes should stop logging “Could not find table public.memories”.
 
 The app works without Supabase too (local `server/data.json` fallback), but with
 these keys every chat/memory/vault row is real, multi-device, and RLS-protected.
