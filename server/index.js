@@ -430,20 +430,24 @@ app.get('/api/github/prs', rateLimit(30, 60000), requireAuth(async (req, res) =>
         for (const pr of list) prs.push({ repo: repo.full_name, number: pr.number, title: pr.title, url: pr.html_url, user: pr.user?.login, created_at: pr.created_at, diff_url: pr.diff_url });
       } catch {}
     }
-    // Real computer use: stats are computed by EXECUTED sandboxed code over
-    // the live API data — the terminal card below shows its actual stdout.
-    const { TOOLS } = require('./agents/tools');
+    // Real computer use: stats are EXECUTED in the chat's live PC session
+    // (shared sandbox terminal) — the terminal card shows its actual stdout,
+    // and `input`/`last` stay bound so the user can take over and run more.
     const toolTrace = [];
-    const statsRun = await TOOLS.code_run.run({
+    const sessionId = String(req.query.sessionId || req.body?.sessionId || 'unsorted');
+    const pcs = pc.getOrCreate(req.user.id, sessionId);
+    const statsRun = pc.run(pcs, {
       input: { repos: repos.map((r) => r.full_name), prs },
+      who: 'agent',
+      trace: (e) => toolTrace.push(e),
       code: `const byRepo = {};
 for (const pr of input.prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
 console.log('repos checked: ' + input.repos.length);
 console.log('open PRs: ' + input.prs.length);
 for (const [repo, n] of Object.entries(byRepo).slice(0, 5)) console.log(repo + ': ' + n + ' open');
 if (!input.prs.length) console.log('nothing to review');`,
-    }, { trace: (e) => toolTrace.push(e), githubPat: null, userId: req.user.id });
-    res.json({ repos: repos.map((r) => r.full_name), prs, stdout: statsRun.stdout, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
+    }, { trace: (e) => toolTrace.push(e) });
+    res.json({ repos: repos.map((r) => r.full_name), prs, stdout: statsRun.stdout, pcId: statsRun.pcId, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
@@ -505,11 +509,15 @@ app.delete('/api/secrets/:id', requireAuth(async (req, res) => {
 
 // ---------- live browser: REST + WS frame stream ----------
 const live = require('./agents/live');
+const pc = require('./agents/pc');
 app.post('/api/live/takeover', requireAuth(async (req, res) => {
-  const { liveId, on } = req.body || {};
-  const s = live.owned(String(liveId || ''), req.user.id);
-  if (!s) return res.status(404).json({ error: 'live session not found (expired?)' });
-  res.json(live.takeOver(s, on));
+  const { liveId, pcId, id, on } = req.body || {};
+  const key = String(liveId || pcId || id || '');
+  const bs = live.owned(key, req.user.id);
+  if (bs) return res.json(live.takeOver(bs, on));
+  const ps = pc.owned(key, req.user.id);
+  if (ps) return res.json(pc.takeOver(ps, on));
+  return res.status(404).json({ error: 'live session not found (expired?)' });
 }));
 app.post('/api/live/input', requireAuth(async (req, res) => {
   const { liveId, ev } = req.body || {};
@@ -526,6 +534,22 @@ app.post('/api/live/stop', requireAuth(async (req, res) => {
   const s = live.owned(String(liveId || ''), req.user.id);
   if (s) await live.stop(s);
   res.json({ ok: true });
+}));
+
+// ---------- live computer: shared sandbox terminal ----------
+app.post('/api/pc/run', rateLimit(30, 60000), requireAuth(async (req, res) => {
+  const { sessionId, code, input } = req.body || {};
+  if (!code) return res.status(400).json({ error: 'code required' });
+  const s = pc.getOrCreate(req.user.id, String(sessionId || 'unsorted'));
+  const r = await pc.run(s, { code: String(code), input, who: 'agent' });
+  res.json(r);
+}));
+app.post('/api/pc/input', rateLimit(30, 60000), requireAuth(async (req, res) => {
+  const { pcId, code } = req.body || {};
+  const s = pc.owned(String(pcId || ''), req.user.id);
+  if (!s) return res.status(404).json({ error: 'computer session not found (expired?)' });
+  if (!s.userControl) return res.status(409).json({ error: 'Agent holds the computer — take over first.' });
+  res.json(pc.run(s, { code: String(code || ''), who: 'user' }));
 }));
 
 // ---------- static frontend ----------
@@ -547,11 +571,23 @@ const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', async (req, socket, head) => {
   try {
     const u = new URL(req.url, 'http://x');
+    const { getUserFromRequest } = require('./auth');
+    const token = u.searchParams.get('token') || '';
+    const user = await getUserFromRequest({ headers: { authorization: 'Bearer ' + token } });
+    if (u.pathname.startsWith('/ws/pc/')) {
+      const id = u.pathname.split('/').pop();
+      const s = user && pc.owned(id, user.id);
+      if (!s) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); return socket.destroy(); }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        s.viewers.add(ws);
+        s.lastActive = Date.now();
+        ws.on('close', () => s.viewers.delete(ws));
+        ws.send(JSON.stringify({ hello: s.pcId, log: s.log.slice(-14), userControl: s.userControl }));
+      });
+      return;
+    }
     if (!u.pathname.startsWith('/ws/live/')) return socket.destroy();
     const id = u.pathname.split('/').pop();
-    const token = u.searchParams.get('token') || '';
-    const { getUserFromRequest } = require('./auth');
-    const user = await getUserFromRequest({ headers: { authorization: 'Bearer ' + token } });
     const s = user && live.owned(id, user.id);
     if (!s) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); return socket.destroy(); }
     wss.handleUpgrade(req, socket, head, (ws) => {

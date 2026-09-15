@@ -174,13 +174,14 @@ window.Engine = (() => {
     t.update((c) => c.lines.push({ t: '$ code_run stats.js < live GitHub API data (sandboxed, read-only)', cls: 'p' }));
     let data;
     try {
-      const j = await api('/api/github/prs', { headers: { 'X-GitHub-Token': token } });
+      const j = await api(`/api/github/prs?sessionId=${encodeURIComponent(rt.chat.id)}`, { headers: { 'X-GitHub-Token': token } });
       data = j;
       (j.trace || []).forEach((x) => rt.trace(x.ic, x.t));
       // Real stdout from the executed sandbox — not composed client-side.
       for (const line of String(j.stdout || '').split('\n').filter(Boolean).slice(0, 8)) {
         t.update((c) => c.lines.push({ t: line, cls: 'g' }));
       }
+      if (j.pcId) t.update((c) => { c.pcId = j.pcId; });
     } catch (e) {
       t.update((c) => { c.lines.push({ t: '✗ GitHub call failed: ' + e.message, cls: 'p' }); c.status = 'done'; });
       t.resolve({ ok: false });

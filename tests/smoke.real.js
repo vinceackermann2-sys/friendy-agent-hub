@@ -116,6 +116,8 @@ const { chromium } = require('playwright');
   step('live viewport renders (poster)');
   await p.waitForFunction(() => (window.__liveFrames || 0) >= 1, { timeout: 30000 });
   step('live browser streams real frames over WS');
+  await p.waitForSelector('#pcout', { timeout: 15000 });
+  step('live computer terminal present');
   await p.click('#takebtn');
   await p.waitForFunction(() => document.querySelector('#livestate')?.textContent === 'you drive', { timeout: 15000 });
   step('take over hands control to user');

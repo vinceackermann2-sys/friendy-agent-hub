@@ -693,3 +693,7 @@ footer.afooter{ max-width:none; margin-left:0; margin-right:0; display:block; }
 .controlbar .cinfo .sub{ color:var(--mut); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .livedot{ width:8px; height:8px; border-radius:50%; background:#2F6FDB; display:inline-block; margin-left:6px; animation:cursorpulse 1.2s infinite; }
 
+.pctitle{ font-weight:800; font-size:13px; display:flex; gap:8px; align-items:center; margin-top:12px; }
+.pcinput{ display:flex; gap:8px; margin-top:8px; }
+.pcinput input{ flex:1; }
+

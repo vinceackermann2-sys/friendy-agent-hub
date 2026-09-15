@@ -1066,13 +1066,23 @@ function computerLinesFor(c){
   });
   return out.slice(-14);
 }
+function pcIdFor(c){
+  if (!c) return null;
+  for (let i = (c.messages || []).length - 1; i >= 0; i--){
+    const m = c.messages[i];
+    if (m.kind === 'card' && m.card.type === 'computer' && m.card.pcId) return m.card.pcId;
+  }
+  return null;
+}
 
 /* Live view client: one WS per tab render. Frames paint the <img>; state
    messages drive the blue working glow; input forwards only in takeover. */
 let liveWS = null, liveIdShown = null, liveControl = false;
+let pcWS = null, pcIdShown = null;
 function liveClose(){
   try { liveWS && liveWS.close(); } catch {}
-  liveWS = null; liveIdShown = null; liveControl = false;
+  try { pcWS && pcWS.close(); } catch {}
+  liveWS = null; liveIdShown = null; liveControl = false; pcWS = null; pcIdShown = null;
 }
 function paintLive(body, c){
   const id = liveIdFor(c);
@@ -1091,7 +1101,9 @@ function paintLive(body, c){
         <img id="liveimg" alt="Live browser"${poster ? ` src="${poster}"` : ''}>
         <div class="bigcursor" id="bigcursor"></div>
       </div>
-      ${terms.length ? `<div class="term mini" style="margin-top:10px">${terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}</div>` : ''}
+      <div class="pctitle">${icon('term',13)} Computer — live sandbox terminal</div>
+      <div class="term mini" id="pcout" style="margin-top:6px">${terms.length ? terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('') : '<div class="mut">No runs yet in this chat.</div>'}</div>
+      <div class="pcinput" id="pcinput" style="display:none"><input class="field mono" id="pccmd" placeholder="Type JS — runs for real in the sandbox (e.g. console.log(input.prs.length))"><button class="btn small" data-act="pcrun">Run</button></div>
       <div class="controlbar">
         <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
         <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">streaming the real page</div></div>
@@ -1102,7 +1114,7 @@ function paintLive(body, c){
   liveConnect(id);
 }
 function liveConnect(id){
-  if (liveWS && liveIdShown === id) return;
+  if (liveWS && liveIdShown === id){ pcConnect(); return; }
   liveClose();
   const sess = window.LingonAuth && window.LingonAuth.get();
   if (!sess || !sess.access_token){ $('#livestate').textContent = 'sign in expired'; return; }
@@ -1137,6 +1149,31 @@ function liveConnect(id){
     if (e.key.length === 1) liveSend({ type: 'type', text: e.key });
     else if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Delete'].includes(e.key)){ e.preventDefault(); liveSend({ type: 'key', key: e.key }); }
   };
+  pcConnect();
+}
+/* Computer stream: appends real sandbox output lines as runs happen. */
+function pcConnect(){
+  const c = chat();
+  const pcId = pcIdFor(c);
+  const out = $('#pcout');
+  if (!pcId || !out) return;
+  if (pcWS && pcIdShown === pcId) return;
+  try { pcWS && pcWS.close(); } catch {}
+  const sess = window.LingonAuth && window.LingonAuth.get();
+  if (!sess || !sess.access_token) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(proto + '//' + location.host + '/ws/pc/' + pcId + '?token=' + encodeURIComponent(sess.access_token));
+  pcWS = ws; pcIdShown = pcId;
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.hello && m.log && out) out.innerHTML = m.log.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('');
+    if (Array.isArray(m.out) && out){
+      if (out.querySelector('.mut') && out.children.length <= 1) out.innerHTML = '';
+      m.out.forEach(L => { out.insertAdjacentHTML('beforeend', `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`); });
+      out.scrollTop = out.scrollHeight;
+    }
+    if (m.state) liveState(m.state === 'user' ? 'user' : m.state);
+  };
 }
 function liveState(s, m){
   const wrap = $('#livewrap'), st = $('#livestate'), sub = $('#livesub'), btn = $('#takebtn');
@@ -1148,13 +1185,18 @@ function liveState(s, m){
   if (sub && liveControl) sub.textContent = 'you hold the mouse & keyboard — agent waits';
 }
 async function liveTakeover(){
-  const id = liveIdShown; if (!id) return;
+  const c = chat();
+  const id = liveIdShown, pcId = pcIdFor(c);
+  if (!id && !pcId){ toast('No live session in this chat yet.'); return; }
   const want = !liveControl;
   try {
-    await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
+    if (id) await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
+    if (pcId) await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ pcId, on: want }) });
     liveControl = want;
+    const pi = $('#pcinput'); if (pi) pi.style.display = want ? 'flex' : 'none';
+    pcConnect();
     liveState(want ? 'user' : 'idle');
-    toast(want ? 'You drive — the agent waits.' : 'Agent drives again.');
+    toast(want ? 'You drive browser + computer — the agent waits.' : 'Agent drives again.');
   } catch (e) { toast(e.message); }
 }
 async function liveSend(ev){
@@ -1540,6 +1582,25 @@ document.addEventListener('click', async e => {
   if (act === 'viewcanvas'){ state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
   if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'live'; $('#app') && $('#app').classList.remove('nocanvas'); save(); paintCanvas(); return; }
   if (act === 'takeover'){ liveTakeover(); return; }
+  if (act === 'pcrun'){
+    const code = ($('#pccmd').value || '').trim();
+    if (!code){ toast('Type some JS first.'); return; }
+    const c = chat(); const pcId = pcIdFor(c);
+    if (!pcId){ toast('No computer session in this chat yet.'); return; }
+    $('#pccmd').value = '';
+    try {
+      const j = await window.LingonAuth.api('/api/pc/input', { method: 'POST', body: JSON.stringify({ pcId, code }) });
+      const out = $('#pcout');
+      if (out && j.stdout !== undefined){
+        if (out.querySelector('.mut') && out.children.length <= 1) out.innerHTML = '';
+        String(j.stdout).split('\n').filter(Boolean).forEach(t => out.insertAdjacentHTML('beforeend', `<div class="g">${esc(t)}</div>`));
+        if (!String(j.stdout).trim()) out.insertAdjacentHTML('beforeend', `<div class="mut">ok (no output)</div>`);
+        out.scrollTop = out.scrollHeight;
+      }
+      if (!j.ok) toast(j.error || 'Run failed');
+    } catch (e) { toast(e.message); }
+    return;
+  }
   if (act === 'closestop-live'){
     const id = liveIdShown;
     if (id){ window.LingonAuth.api('/api/live/stop', { method: 'POST', body: JSON.stringify({ liveId: id }) }).catch(() => {}); }
