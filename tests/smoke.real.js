@@ -110,6 +110,18 @@ const { chromium } = require('playwright');
   step('canvas run timeline renders');
   await p.waitForSelector('#cbody .shot img', { timeout: 15000 });
   step('canvas shows real page screenshot');
+  // Live tab: real streamed browser, takeover control bar with mascot.
+  await p.click('[data-act="ctab"][data-t="live"]');
+  await p.waitForSelector('#liveimg[src^="data:"]', { timeout: 15000 });
+  step('live viewport renders (poster)');
+  await p.waitForFunction(() => (window.__liveFrames || 0) >= 1, { timeout: 30000 });
+  step('live browser streams real frames over WS');
+  await p.click('#takebtn');
+  await p.waitForFunction(() => document.querySelector('#livestate')?.textContent === 'you drive', { timeout: 15000 });
+  step('take over hands control to user');
+  await p.click('#takebtn');
+  await p.waitForFunction(() => document.querySelector('#takebtn')?.textContent === 'Take over', { timeout: 15000 });
+  step('give back returns control');
 
   await p.click('[data-act="usermenu"]');
   await p.click('.usermenu [data-act="nav"][data-view="settings"]');

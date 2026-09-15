@@ -503,6 +503,31 @@ app.delete('/api/secrets/:id', requireAuth(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- live browser: REST + WS frame stream ----------
+const live = require('./agents/live');
+app.post('/api/live/takeover', requireAuth(async (req, res) => {
+  const { liveId, on } = req.body || {};
+  const s = live.owned(String(liveId || ''), req.user.id);
+  if (!s) return res.status(404).json({ error: 'live session not found (expired?)' });
+  res.json(live.takeOver(s, on));
+}));
+app.post('/api/live/input', requireAuth(async (req, res) => {
+  const { liveId, ev } = req.body || {};
+  const s = live.owned(String(liveId || ''), req.user.id);
+  if (!s) return res.status(404).json({ error: 'live session not found (expired?)' });
+  try {
+    res.json(await live.input(s, ev || {}));
+  } catch (e) {
+    res.status(e.code === 'NO_CONTROL' ? 409 : 500).json({ error: e.message });
+  }
+}));
+app.post('/api/live/stop', requireAuth(async (req, res) => {
+  const { liveId } = req.body || {};
+  const s = live.owned(String(liveId || ''), req.user.id);
+  if (s) await live.stop(s);
+  res.json({ ok: true });
+}));
+
 // ---------- static frontend ----------
 const APP_DIR = path.join(__dirname, '..', 'app');
 app.use(express.static(APP_DIR, { extensions: ['html'] }));
@@ -515,7 +540,37 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(APP_DIR, 'index.html'));
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const http = require('http');
+const { WebSocketServer } = require('ws');
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', async (req, socket, head) => {
+  try {
+    const u = new URL(req.url, 'http://x');
+    if (!u.pathname.startsWith('/ws/live/')) return socket.destroy();
+    const id = u.pathname.split('/').pop();
+    const token = u.searchParams.get('token') || '';
+    const { getUserFromRequest } = require('./auth');
+    const user = await getUserFromRequest({ headers: { authorization: 'Bearer ' + token } });
+    const s = user && live.owned(id, user.id);
+    if (!s) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); return socket.destroy(); }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      s.viewers.add(ws);
+      s.lastActive = Date.now();
+      ws.on('close', () => s.viewers.delete(ws));
+      ws.send(JSON.stringify({ hello: s.id, url: s.url, title: s.title }));
+      // Prove the pipe with a real current frame (static pages emit few
+      // screencast frames on their own); live frames follow on any repaint.
+      s.page.screenshot({ type: 'jpeg', quality: 55 }).then(
+        (buf) => { try { ws.readyState === 1 && ws.send(JSON.stringify({ frame: buf.toString('base64') })); } catch {} },
+        () => {}
+      );
+    });
+  } catch {
+    try { socket.destroy(); } catch {}
+  }
+});
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Lingon real backend on http://localhost:${PORT}`);
   console.log(`- Gemini: ${isConfigured() ? 'configured (' + MODEL_DEFAULT + ')' : 'MISSING — set GEMINI_API_KEY in .env'}`);
   console.log(`- Supabase: ${store.supaConfigured() ? 'configured' : 'local JSON fallback (server/data.json)'}`);

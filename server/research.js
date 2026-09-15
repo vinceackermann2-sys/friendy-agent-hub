@@ -84,16 +84,43 @@ async function realResearch(query, hooks = {}) {
   const snippets = extractSnippets(pages);
   // Real browser use: open the top result in headless Chromium so the
   // briefing is grounded in a rendered page, not just API JSON.
+  // Live session first (streamed + interruptible); one-shot headless as fallback.
   let opened = null;
+  const live = require('./agents/live');
   const { TOOLS } = require('./agents/tools');
   const ctx = { trace: (e) => hooks.onTrace && hooks.onTrace(e), githubPat: null, userId: hooks.userId || 'local' };
-  for (const target of pickBrowserTargets(pages, sq)) {
-    try {
-      opened = await TOOLS.browser_open.run({ url: target }, ctx);
-      snippets.push({ url: opened.url, renderedTitle: opened.title, excerpt: String(opened.text || '').slice(0, 900) });
-      break;
-    } catch (e) {
-      if (hooks.onTrace) hooks.onTrace({ ic: 'alert', t: `browser_open skipped ${target.slice(0, 60)} (${e.code || e.message})` });
+  const targets = pickBrowserTargets(pages, sq);
+  try {
+    const s = await live.start({ userId: ctx.userId, trace: ctx.trace });
+    for (const target of targets) {
+      try {
+        await live.navigate(s, target, ctx.trace);
+        const c = await live.content(s);
+        let screenshot = null;
+        try {
+          const buf = await s.page.screenshot({ type: 'jpeg', quality: 40 });
+          if (buf.length <= 220000) screenshot = 'data:image/jpeg;base64,' + buf.toString('base64');
+        } catch {}
+        opened = { url: c.url, title: c.title, liveId: s.id, live: true, screenshot };
+        snippets.push({ url: c.url, renderedTitle: c.title, excerpt: String(c.text || '').slice(0, 900) });
+        break;
+      } catch (e) {
+        if (hooks.onTrace) hooks.onTrace({ ic: 'alert', t: `live navigate skipped ${target.slice(0, 60)} (${e.code || e.message})` });
+      }
+    }
+    if (!opened) await live.stop(s);
+  } catch (e) {
+    if (hooks.onTrace) hooks.onTrace({ ic: 'alert', t: 'live session unavailable, one-shot browser fallback' });
+  }
+  if (!opened) {
+    for (const target of targets) {
+      try {
+        opened = await TOOLS.browser_open.run({ url: target }, ctx);
+        snippets.push({ url: opened.url, renderedTitle: opened.title, excerpt: String(opened.text || '').slice(0, 900) });
+        break;
+      } catch (e) {
+        if (hooks.onTrace) hooks.onTrace({ ic: 'alert', t: `browser_open skipped ${target.slice(0, 60)} (${e.code || e.message})` });
+      }
     }
   }
   if (!opened) snippets.push({ note: 'no candidate page rendered in the real browser — briefing uses API data only' });
@@ -109,7 +136,7 @@ async function realResearch(query, hooks = {}) {
   } catch (e) {
     summary = `I fetched ${pages.filter((p) => p.ok).length}/${pages.length} live sources, but the AI summarizer is unavailable (${e.message}). Open the sources directly:\n` + urls.map((u) => `- ${u}`).join('\n');
   }
-  return { query: q, sources: urls, snippets, summary, usage, opened: opened ? { url: opened.url, title: opened.title, screenshot: opened.screenshot || null } : null, fetchedAt: new Date().toISOString() };
+  return { query: q, sources: urls, snippets, summary, usage, opened: opened ? { url: opened.url, title: opened.title, screenshot: opened.screenshot || null, liveId: opened.liveId || null, live: !!opened.liveId } : null, fetchedAt: new Date().toISOString() };
 }
 
 module.exports = { realResearch };

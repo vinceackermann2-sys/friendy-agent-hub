@@ -107,6 +107,7 @@ window.Engine = (() => {
       if (res.opened) br.update((c) => {
         c.url = res.opened.url;
         c.note = `Rendered “${(res.opened.title || '').slice(0, 70)}” in headless Chromium`;
+        if (res.opened.liveId) c.liveId = res.opened.liveId;
         if (res.opened.screenshot) {
           // Bound localStorage: keep only this chat's latest screenshot.
           rt.chat.messages.forEach((m) => { if (m.kind === 'card' && m.card.type === 'browser' && m.id !== br.msg.id) delete m.card.screenshot; });

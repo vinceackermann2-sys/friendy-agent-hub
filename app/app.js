@@ -101,7 +101,7 @@ state.canvasOpen = false;
 if (!state.agentTab) state.agentTab = 'appearance';
 if (state.agentPanel) state.canvasTab = 'agent';
 delete state.agentPanel;
-if (!['agent', 'canvas', 'trace'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+if (!['agent', 'canvas', 'live', 'trace'].includes(state.canvasTab)) state.canvasTab = 'canvas';
 if (!state.settingsTab) state.settingsTab = 'profiles';
 if (!state.browserProfile) state.browserProfile = fresh().browserProfile;
 // Honest apps: no fake OAuth connections exist — always empty.
@@ -844,7 +844,7 @@ function cardNode(c, m){
     <div class="bd"><div class="win"><div class="bar"><i></i><i></i><i></i><span class="url">${esc(cd.url)}</span></div>
     ${cd.screenshot ? `<div class="shot"><img src="${cd.screenshot}" alt="Rendered page screenshot" loading="lazy"></div>` : ''}
     <div class="scr">${cd.status === 'done' ? `<span style="color:var(--green)">${icon('check',14)}</span>` : `<span class="spin">${icon('refresh',14)}</span>`} ${esc(cd.note)}</div></div></div>
-    <div class="stack"><button class="btn ghost" data-act="viewcanvas">Follow in canvas</button></div></div>`;
+    <div class="stack">${cd.liveId ? `<button class="btn" data-act="watchlive">Watch live</button>` : ''}<button class="btn ghost" data-act="viewcanvas">Follow in canvas</button></div></div>`;
 
   if (cd.type === 'computer') return `<div class="acard">
     ${hd(icon('term',20),'var(--ink)','#fff','Sandboxed computer use','Agents sandbox · allowlisted network, no writes outside run')}
@@ -1050,14 +1050,133 @@ function agentSliderContent(){
     </div>${body}</div>`;
 }
 
+/* Live tab helpers: newest live browser session id for this chat. */
+function liveIdFor(c){
+  if (!c) return null;
+  for (let i = (c.messages || []).length - 1; i >= 0; i--){
+    const m = c.messages[i];
+    if (m.kind === 'card' && m.card.type === 'browser' && m.card.liveId) return m.card.liveId;
+  }
+  return null;
+}
+function computerLinesFor(c){
+  const out = [];
+  (c && c.messages || []).forEach(m => {
+    if (m.kind === 'card' && m.card.type === 'computer') (m.card.lines || []).forEach(L => out.push(L));
+  });
+  return out.slice(-14);
+}
+
+/* Live view client: one WS per tab render. Frames paint the <img>; state
+   messages drive the blue working glow; input forwards only in takeover. */
+let liveWS = null, liveIdShown = null, liveControl = false;
+function liveClose(){
+  try { liveWS && liveWS.close(); } catch {}
+  liveWS = null; liveIdShown = null; liveControl = false;
+}
+function paintLive(body, c){
+  const id = liveIdFor(c);
+  const terms = computerLinesFor(c);
+  if (!id){
+    if (liveIdShown) liveClose();
+    body.innerHTML = `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">No live session</div><div class="mut2">Ask for research and the agent's real browser appears here — watch it, take over, hand back.</div></div>`;
+    return;
+  }
+  const poster = (c.messages || []).reduce((acc, m) => (m.kind === 'card' && m.card.type === 'browser' && m.card.screenshot) ? m.card.screenshot : acc, '');
+  window.__liveFrames = 0;
+  body.innerHTML = `
+    <div class="livewrap" id="livewrap">
+      <div class="livebar"><span class="url" id="liveurl">connecting…</span><span class="chip purple" id="livestate">connecting</span></div>
+      <div class="liveview" id="liveview">
+        <img id="liveimg" alt="Live browser"${poster ? ` src="${poster}"` : ''}>
+        <div class="bigcursor" id="bigcursor"></div>
+      </div>
+      ${terms.length ? `<div class="term mini" style="margin-top:10px">${terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}</div>` : ''}
+      <div class="controlbar">
+        <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
+        <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">streaming the real page</div></div>
+        <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
+        <button class="btn ghost small" data-act="closestop-live">Close</button>
+      </div>
+    </div>`;
+  liveConnect(id);
+}
+function liveConnect(id){
+  if (liveWS && liveIdShown === id) return;
+  liveClose();
+  const sess = window.LingonAuth && window.LingonAuth.get();
+  if (!sess || !sess.access_token){ $('#livestate').textContent = 'sign in expired'; return; }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(proto + '//' + location.host + '/ws/live/' + id + '?token=' + encodeURIComponent(sess.access_token));
+  liveWS = ws; liveIdShown = id; liveControl = false;
+  const img = () => $('#liveimg'), wrap = () => $('#livewrap'), st = () => $('#livestate');
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.frame && img()){ img().src = 'data:image/jpeg;base64,' + m.frame; window.__liveFrames = (window.__liveFrames || 0) + 1; }
+    if (m.hello && $('#liveurl')) $('#liveurl').textContent = m.url || m.hello;
+    if (m.state) liveState(m.state, m);
+  };
+  ws.onclose = () => { if (st()){ st().textContent = 'session ended'; } const b = $('#takebtn'); if (b){ b.disabled = true; } };
+  const view = $('#liveview'), cur = $('#bigcursor');
+  let lastMove = 0;
+  const pos = (e) => {
+    const r = view.getBoundingClientRect();
+    return { x: Math.round((e.clientX - r.left) * (1280 / r.width)), y: Math.round((e.clientY - r.top) * (900 / r.height)) };
+  };
+  view.onmousemove = (e) => {
+    const r = view.getBoundingClientRect();
+    cur.style.left = (e.clientX - r.left) + 'px'; cur.style.top = (e.clientY - r.top) + 'px';
+    const now = Date.now();
+    if (liveControl && ws.readyState === 1 && now - lastMove > 80){ lastMove = now; const p = pos(e); liveSend({ type: 'move', ...p }); }
+  };
+  view.onclick = (e) => { if (!liveControl || ws.readyState !== 1) return; const p = pos(e); liveSend({ type: 'click', ...p }); };
+  view.onwheel = (e) => { if (!liveControl || ws.readyState !== 1) return; e.preventDefault(); liveSend({ type: 'scroll', dy: Math.round(e.deltaY) }); };
+  document.onkeydown = (e) => {
+    if (!liveControl || !liveWS || liveWS.readyState !== 1) return;
+    if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+    if (e.key.length === 1) liveSend({ type: 'type', text: e.key });
+    else if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Delete'].includes(e.key)){ e.preventDefault(); liveSend({ type: 'key', key: e.key }); }
+  };
+}
+function liveState(s, m){
+  const wrap = $('#livewrap'), st = $('#livestate'), sub = $('#livesub'), btn = $('#takebtn');
+  if (m && m.url && $('#liveurl')) $('#liveurl').textContent = m.url;
+  if (m && m.title && $('#livesub') && !liveControl) sub.textContent = m.title;
+  if (wrap) wrap.classList.toggle('working', s === 'working' && !liveControl);
+  if (st) st.textContent = liveControl ? 'you drive' : s;
+  if (btn) btn.textContent = liveControl ? 'Give back' : 'Take over';
+  if (sub && liveControl) sub.textContent = 'you hold the mouse & keyboard — agent waits';
+}
+async function liveTakeover(){
+  const id = liveIdShown; if (!id) return;
+  const want = !liveControl;
+  try {
+    await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
+    liveControl = want;
+    liveState(want ? 'user' : 'idle');
+    toast(want ? 'You drive — the agent waits.' : 'Agent drives again.');
+  } catch (e) { toast(e.message); }
+}
+async function liveSend(ev){
+  // Input goes over REST (auth-checked); frames come over WS.
+  const id = liveIdShown; if (!id) return;
+  try {
+    const j = await window.LingonAuth.api('/api/live/input', { method: 'POST', body: JSON.stringify({ liveId: id, ev }) });
+    if (j.url && $('#liveurl')) $('#liveurl').textContent = j.url;
+  } catch {}
+}
 function paintCanvas(){
   const cv = $('#canvas'); if (!cv) return;
+  if (state.canvasTab === 'live'){ /* keep socket across repaints of the same session */ }
+  else if (liveWS) liveClose();
   const c = chat();
   const top = state.canvasTab || 'canvas';
+  const liveId = liveIdFor(c);
   cv.innerHTML = `
     <div class="atabs ttop">
       <button class="agent ${top === 'agent' ? 'on' : ''}" data-act="ctab" data-t="agent" title="Agent panel">${Mascot.svg(state.agent.color,'idle',22)}<span>${esc(state.agent.name)}</span></button>
       <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas</button>
+      <button class="${top === 'live' ? 'on' : ''}" data-act="ctab" data-t="live">${icon('globe',14)} Live${liveId ? '<span class="livedot"></span>' : ''}</button>
       <button class="${top === 'trace' ? 'on' : ''}" data-act="ctab" data-t="trace">${icon('list',14)} Trace <span class="cnt">${(c && c.trace || []).length}</span></button>
     </div>
     <div class="cbody" id="cbody"></div>`;
@@ -1076,6 +1195,10 @@ function paintCanvas(){
     body.innerHTML = (c && c.trace && c.trace.length)
       ? `<div class="tools" style="border:none;padding:0">${c.trace.map(t => `<div class="tline">${icon(t.ic,13)}<span>${esc(t.t)}</span></div>`).join('')}</div>`
       : `<div class="cempty">${Mascot.svg(state.agent.color,'think',70,'mascot-bob')}<div class="mut2">Every tool call, guardrail and sub-agent step will appear here.</div></div>`;
+    return;
+  }
+  if (top === 'live'){
+    paintLive(body, c);
     return;
   }
   const a = c && c.artifact;
@@ -1415,6 +1538,13 @@ document.addEventListener('click', async e => {
   if (act === 'togglecanvas'){ state.canvasOpen = !state.canvasOpen; save(); $('#app').classList.toggle('nocanvas', !state.canvasOpen); paintCanvas(); return; }
   if (act === 'ctab'){ state.canvasTab = b.dataset.t; paintCanvas(); return; }
   if (act === 'viewcanvas'){ state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
+  if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'live'; $('#app') && $('#app').classList.remove('nocanvas'); save(); paintCanvas(); return; }
+  if (act === 'takeover'){ liveTakeover(); return; }
+  if (act === 'closestop-live'){
+    const id = liveIdShown;
+    if (id){ window.LingonAuth.api('/api/live/stop', { method: 'POST', body: JSON.stringify({ liveId: id }) }).catch(() => {}); }
+    liveClose(); state.canvasTab = 'canvas'; save(); paintCanvas(); return;
+  }
   if (act === 'openbrowser'){ toast('For safety, browsing stays contained in the sandbox window above.'); return; }
   if (act === 'artmenu'){ toast('Artifact saved — find it in Vault → Library.'); return; }
   if (act === 'chip'){ sendPrompt(b.dataset.t); return; }
