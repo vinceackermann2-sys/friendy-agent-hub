@@ -21,31 +21,43 @@ Health: http://localhost:8000/api/health → `{ ok:true, gemini:true, ... }`
 `.env` is gitignored and never committed. The frontend never sees the key —
 it only calls `/api/*` on the same origin.
 
-## Supabase (free, optional but recommended)
+## Auth (real Supabase Auth)
 
-The app works without Supabase (real local `server/data.json` store). To go
-multi-device:
+Sign up / sign in in the app (email + 8-char password). The backend verifies
+your Supabase JWT on every stateful request and derives `user_id` from the
+token — client-supplied ids are ignored. Memories, vault, usage and gifts are
+per-account. Rate limits + security headers are on.
 
-1. Create free project at https://supabase.com/dashboard
-2. SQL Editor → run `supabase/schema.sql`
-3. API settings → copy URL + anon + service_role into `.env`
-4. Restart `npm start` → `/api/health` shows `"supabase": true`
+## Supabase setup
 
-Details in `supabase/README.md`.
+1. SQL Editor → run `supabase/schema.sql`, then `supabase/schema2.sql`
+   (billing: subscriptions / api_usage / gift_cards / upgrade_requests + hardened RLS).
+2. API settings → URL + publishable + secret into `.env` (already done here).
+3. Restart `npm start` → `/api/health` shows `"supabase": true`.
+
+## Plans (real credits, no fake charges)
+
+- Free $0 → $10 API credit
+- Pro $30 (was $50) → $20 credit + $50 gift card (use or gift)
+- Max $50 (was $100) → $50 credit + $100 gift card (use or gift)
+Usage is metered from real Gemini token counts. Caps return 402 with upgrade
+prompt. Gift redeem adds real credit. Upgrades are recorded requests until
+payments connect — no charge is made. See Billing in the app.
+
+## Harness (honest)
+
+NOT the OpenAI Codex Agents API. Our own Gemini tool boundary
+(`server/harness.js`): allowlisted fetch, read-only GitHub with your
+per-request PAT (`X-GitHub-Token`), sandboxed HTML artifacts, approvals for
+sensitive tools, full trace. Vault → Apps shows empty — no fake OAuth.
 
 ## What is real vs honest
 
-- Chat / build / research summaries: real Gemini `gemini-2.5-flash` via backend.
-- Research sources: real parallel fetch (Reddit JSON, HN Algolia, DuckDuckGo)
-  with excerpts + cited briefing. No invented percentages or sample sizes.
-- GitHub: real `GET user/repos`, `GET repos/{repo}/pulls`, real diff, Gemini
-  review of the real diff. Token is per-request (`Authorization: Bearer`),
-  never stored in logs, never sent to the model.
-- Memory + vault: real backend persistence (Supabase or local JSON),
-  encrypted at rest when `ENCRYPTION_KEY` is set. Vault values never enter
-  model context — traces show `sec_••••` only.
-- Gmail: honest stub — needs OAuth client, so the agent says so instead of
-  inventing emails.
+- Chat / build / research: real Gemini `gemini-2.5-flash`, usage-logged.
+- Research: live HN / DuckDuckGo / Wikipedia fetch + cited briefing, no invented stats.
+- GitHub: real PR list + diff + Gemini review. PAT per-request, never logged/sent to model.
+- Memory + vault: Supabase per-account, encrypted at rest. `sec_••••` only in traces.
+- Gmail/apps: honestly empty — no fake connections.
 
 ## Tests
 
@@ -53,10 +65,8 @@ Details in `supabase/README.md`.
 npm run smoke:real
 ```
 
-`tests/smoke.real.js` boots the backend expectation (server must be running),
-claims an agent, sends a real chat ("say Hej in 5 words"), checks the answer
-is non-empty and not a canned simulation, adds a vault secret and checks the
-UI masks it, and asserts `/api/health` reports `gemini:true`.
+Signs up a fresh test user, checks landing pricing + honest harness wording,
+onboards, real chat, live research, vault masking, Apps empty, Billing Free $10.
 
 ## GitHub repo
 
