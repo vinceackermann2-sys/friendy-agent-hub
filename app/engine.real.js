@@ -46,6 +46,13 @@ window.Engine = (() => {
         body: JSON.stringify({ prompt, history, agent: { name: rt.agent.name, pers: rt.agent.pers }, memories }),
       });
       if (Array.isArray(j.trace)) j.trace.forEach((t) => rt.trace(t.ic || 'spark', t.t));
+      // ChatGPT-style: surface automatic saves like "Memory updated".
+      for (const sm of j.savedMems || []) {
+        if (!rt.recall().some((m) => m.text === sm.text)) {
+          rt.remember(sm.text, 'auto');
+          rt.card({ type: 'memory', text: 'Memory updated — ' + sm.text, status: 'done' });
+        }
+      }
       return j.text;
     } catch (e) {
       if (e.code === 401) throw new Error('Please sign in again (session expired).');

@@ -33,7 +33,7 @@ async function modelAnswer({ agent, task, history, systemExtra, model }) {
   const { history: h2, compacted, costUsage } = await compactIfNeeded({ history, model });
   const system = `${agent.instructions || ''}${systemExtra || ''}`;
   const r = await callGemini({ prompt: task, system, history: h2, model });
-  return { text: r.text, usage: r.usage, compacted, compactUsage: costUsage || null };
+  return { text: r.text, usage: r.usage, model: r.model || model, compacted, compactUsage: costUsage || null };
 }
 
 async function logModelUsage(userId, model, usages) {

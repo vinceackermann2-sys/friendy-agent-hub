@@ -175,19 +175,21 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
     push(entry('box', `session ${sessionId ? String(sessionId).slice(0, 8) : 'new'} accepted (agents-api shape)`));
     const tools = pickTools(prompt + ' ' + (agent?.name || ''));
     push(entry('search', `tool search: ${tools.map((t) => t.name).join(', ')}`));
-    // Server-side per-user memory read (authoritative): frontend-supplied
-    // memories are merged in, deduped — the agent always reads what it wrote.
+    // Server-side per-user memory read (authoritative): stored memories are
+    // relevance-ranked against the prompt (ChatGPT-style), frontend-supplied
+    // ones merged in — the agent reads what it wrote, no "remember" needed.
+    const { rankMemories, maybeExtract } = require('./agents/memory');
     let serverMems = [];
     try {
       serverMems = await store.listMemories(req.user.id);
-      push(entry('book', `memory_read: ${serverMems.length} account memories loaded`));
     } catch {}
     const seen = new Set();
-    const merged = [...(Array.isArray(memories) ? memories : []), ...serverMems]
-      .filter((m) => m && m.text && !seen.has(m.text) && seen.add(m.text))
-      .slice(0, 10);
-    const memTxt = merged.length
-      ? '\n\nWhat you remember about this user (use when relevant):\n' + merged.map((m) => `- ${m.text}`).join('\n')
+    const all = [...(Array.isArray(memories) ? memories : []), ...serverMems]
+      .filter((m) => m && m.text && !seen.has(m.text) && seen.add(m.text));
+    const ranked = rankMemories(all, String(prompt));
+    push(entry('book', `memory_read: ${ranked.length} relevant of ${all.length} account memories`));
+    const memTxt = ranked.length
+      ? '\n\nWhat you remember about this user (use when relevant):\n' + ranked.map((m) => `- ${m.text}`).join('\n')
       : '';
     const system = `You are ${agent?.name || 'Lingon'}, a personal AI agent (${agent?.pers || 'Playful'} style). You run inside an Agents-API-shaped harness (self-hosted sandbox, not OpenAI-hosted): tools execute server-side on an allowlist, secrets arrive as REFERENCES like sec_xxxx only, sensitive tools need user approval. Never claim to have browsed, run code, or read email unless the trace shows it. Never invent vote counts, PR numbers, or inbox contents.${memTxt}`;
     const r = await Runner.modelAnswer({
@@ -195,13 +197,21 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
       history: history || [], model: MODEL_DEFAULT,
     });
     if (r.compacted) push(entry('list', 'context compaction: older turns summarized, session continues'));
-    await Runner.logModelUsage(req.user.id, MODEL_DEFAULT, [r.usage, r.compactUsage]);
+    await Runner.logModelUsage(req.user.id, r.model || MODEL_DEFAULT, [r.usage, r.compactUsage]);
     const cost = costOf(r.usage);
-    push(entry('spark', `gemini ${MODEL_DEFAULT} · $${cost.toFixed(5)}`));
+    push(entry('spark', `gemini ${r.model || MODEL_DEFAULT} · $${cost.toFixed(5)}`));
+    // Automatic memory write (ChatGPT-style): extract durable facts, persist.
+    let savedMems = [];
+    try {
+      const ex = await maybeExtract({ userId: req.user.id, prompt: String(prompt), answer: r.text, existing: all });
+      if (ex.usage) await Runner.logModelUsage(req.user.id, MODEL_DEFAULT, [ex.usage]);
+      savedMems = ex.saved;
+      for (const sm of savedMems) push(entry('book', `memory_write: saved (“${sm.text.slice(0, 70)}…”)`));
+    } catch {}
     try {
       await store.logToolRun({ userId: req.user.id, sessionId: sessionId || null, kind: 'run', name: 'chat', status: 'done', detail: String(prompt).slice(0, 300) });
     } catch {}
-    res.json({ text: r.text, model: MODEL_DEFAULT, trace });
+    res.json({ text: r.text, model: r.model || MODEL_DEFAULT, trace, savedMems });
   } catch (e) {
     if (e.code === 'NO_CREDIT') return res.status(402).json({ error: e.message, upgrade_required: true });
     if (e.code === 'BAD_INPUT') return res.status(400).json({ error: e.message });
@@ -221,7 +231,7 @@ app.post('/api/build', rateLimit(20, 60000), requireAuth(async (req, res) => {
     const system = 'You generate a complete, single dependency-free HTML file. Output ONLY the HTML (no markdown fences, no explanation). Keep it under 12KB, mobile-friendly, no external requests except Google Fonts.';
     const prompt = `Build a landing one-pager.\nStyle: ${style || 'Minimal & calm'}\nMade by agent: ${agent?.name || 'Lingon'}\nBrief: ${String(brief || 'A personal agent that researches, builds and remembers.').slice(0, 2000)}\nInclude: hero with headline + sub + CTA button, 3 feature bullets, footer. Inline <style> only.`;
     const r = await Runner.modelAnswer({ agent: { instructions: system }, task: prompt, history: [], model: MODEL_DEFAULT });
-    await Runner.logModelUsage(req.user.id, MODEL_DEFAULT, [r.usage]);
+    await Runner.logModelUsage(req.user.id, r.model || MODEL_DEFAULT, [r.usage]);
     let html = r.text.trim().replace(/^```html/i, '').replace(/^```/, '').replace(/```$/, '').trim();
     if (!/<html/i.test(html)) html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Made by ${(agent?.name || 'Lingon')}</title></head><body>${html}</body></html>`;
     trace.push(entry('code', `build_page: sandboxed artifact (${html.length} chars)`));
@@ -332,7 +342,7 @@ app.delete('/api/secrets/:id', requireAuth(async (req, res) => {
 const APP_DIR = path.join(__dirname, '..', 'app');
 app.use(express.static(APP_DIR, { extensions: ['html'] }));
 // SEO pretty URLs for landing sub-pages (also served as *.html via static).
-for (const p of ['terms', 'privacy', 'security', 'cookies', 'models', 'pricing']) {
+for (const p of ['terms', 'privacy', 'security', 'cookies', 'models', 'pricing', 'faq']) {
   app.get('/' + p, (req, res) => res.sendFile(path.join(APP_DIR, p + '.html')));
 }
 app.get('*', (req, res, next) => {

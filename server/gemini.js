@@ -1,6 +1,9 @@
 /* Lingon backend — Gemini wrapper (server-side only).
-   The API key never leaves the server. Frontend calls /api/* only. */
+   The API key never leaves the server. Frontend calls /api/* only.
+   Quota failover: if the primary model returns 429/quota errors, we retry
+   once on GEMINI_FALLBACK_MODEL and report which model answered. */
 const MODEL_DEFAULT = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL_FALLBACK = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash-lite';
 
 function key() {
   return (process.env.GEMINI_API_KEY || '').trim();
@@ -36,30 +39,46 @@ async function callGemini({ prompt, system, history, model, json }) {
     body.generationConfig = { responseMimeType: 'application/json' };
   }
 
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 60000);
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const msg = data?.error?.message || `Gemini HTTP ${r.status}`;
-      const e = new Error(msg);
-      e.code = 'GEMINI_HTTP';
-      e.status = r.status;
-      throw e;
+  async function attempt(modelName) {
+    const u = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(k)}`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 60000);
+    try {
+      const r = await fetch(u, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = data?.error?.message || `Gemini HTTP ${r.status}`;
+        const e = new Error(msg);
+        e.code = 'GEMINI_HTTP';
+        e.status = r.status;
+        e.quota = r.status === 429 || /quota/i.test(msg);
+        throw e;
+      }
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      const text = parts.map((p) => p.text || '').join('').trim();
+      if (!text) throw Object.assign(new Error('Empty response from Gemini'), { code: 'EMPTY' });
+      return { text, raw: data, usage: data?.usageMetadata || null, model: modelName };
+    } finally {
+      clearTimeout(t);
     }
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const text = parts.map((p) => p.text || '').join('').trim();
-    if (!text) throw Object.assign(new Error('Empty response from Gemini'), { code: 'EMPTY' });
-    return { text, raw: data, usage: data?.usageMetadata || null };
-  } finally {
-    clearTimeout(t);
+  }
+
+  const first = model || m;
+  try {
+    return await attempt(first);
+  } catch (e) {
+    // Failover on quota errors unless caller pinned a non-default model.
+    const pinned = model && model !== MODEL_DEFAULT;
+    if (e.quota && !pinned && MODEL_FALLBACK && MODEL_FALLBACK !== first) {
+      return attempt(MODEL_FALLBACK); // throws honestly if fallback also fails
+    }
+    throw e;
   }
 }
 
-module.exports = { callGemini, isConfigured, MODEL_DEFAULT };
+module.exports = { callGemini, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK };
