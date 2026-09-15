@@ -1,25 +1,19 @@
 /* Real web research — no fabricated counts.
-   Strategy: fetch real public pages in parallel (Reddit JSON, HN Algolia,
-   DuckDuckGo instant answers), extract snippets, then ask Gemini to summarize
-   honestly with sources. Everything returned is traceable. */
+   Runs INSIDE the harness sandbox: every fetch goes through
+   sandbox.fetchAllowlisted (allowlisted hosts, timeout). Strategy: parallel
+   fetch (HN Algolia, DuckDuckGo, Wikipedia), extract snippets, Gemini summary
+   with sources. Everything traceable. */
 const { callGemini } = require('./gemini');
+const { fetchAllowlisted } = require('./agents/sandbox');
 
 async function fetchText(url, timeoutMs = 9000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { 'User-Agent': 'Lingon/1.0 (+personal-agent)', Accept: 'application/json,text/html' },
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const r = await fetchAllowlisted(url, {}, timeoutMs);
     const ct = r.headers.get('content-type') || '';
     const txt = await r.text();
     return { url, ok: true, ct, text: txt.slice(0, 12000) };
   } catch (e) {
     return { url, ok: false, error: e.message };
-  } finally {
-    clearTimeout(t);
   }
 }
 

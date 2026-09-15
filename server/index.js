@@ -10,7 +10,6 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { callGemini, isConfigured, MODEL_DEFAULT } = require('./gemini');
-const { hostAllowed } = require('./harness');
 const { PLANS, costOf } = require('./plans');
 const store = require('./store');
 const { pubClient, adminClient, requireAuth } = require('./auth');
@@ -19,6 +18,7 @@ const Runner = require('./agents/runner');
 const { checkPrompt } = require('./agents/guardrails');
 const { entry } = require('./agents/tracing');
 const { pickTools } = require('./agents/tools');
+const { fetchAllowlisted } = require('./agents/sandbox');
 
 const app = express();
 const PORT = Number(process.env.PORT || 8000);
@@ -175,8 +175,19 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
     push(entry('box', `session ${sessionId ? String(sessionId).slice(0, 8) : 'new'} accepted (agents-api shape)`));
     const tools = pickTools(prompt + ' ' + (agent?.name || ''));
     push(entry('search', `tool search: ${tools.map((t) => t.name).join(', ')}`));
-    const memTxt = Array.isArray(memories) && memories.length
-      ? '\n\nWhat you remember about this user (use when relevant):\n' + memories.slice(0, 10).map((m) => `- ${m.text}`).join('\n')
+    // Server-side per-user memory read (authoritative): frontend-supplied
+    // memories are merged in, deduped — the agent always reads what it wrote.
+    let serverMems = [];
+    try {
+      serverMems = await store.listMemories(req.user.id);
+      push(entry('book', `memory_read: ${serverMems.length} account memories loaded`));
+    } catch {}
+    const seen = new Set();
+    const merged = [...(Array.isArray(memories) ? memories : []), ...serverMems]
+      .filter((m) => m && m.text && !seen.has(m.text) && seen.add(m.text))
+      .slice(0, 10);
+    const memTxt = merged.length
+      ? '\n\nWhat you remember about this user (use when relevant):\n' + merged.map((m) => `- ${m.text}`).join('\n')
       : '';
     const system = `You are ${agent?.name || 'Lingon'}, a personal AI agent (${agent?.pers || 'Playful'} style). You run inside an Agents-API-shaped harness (self-hosted sandbox, not OpenAI-hosted): tools execute server-side on an allowlist, secrets arrive as REFERENCES like sec_xxxx only, sensitive tools need user approval. Never claim to have browsed, run code, or read email unless the trace shows it. Never invent vote counts, PR numbers, or inbox contents.${memTxt}`;
     const r = await Runner.modelAnswer({
@@ -251,9 +262,8 @@ app.get('/api/github/prs', rateLimit(30, 60000), requireAuth(async (req, res) =>
     // GitHub PAT comes via X-GitHub-Token only — never confused.
     const pat = (req.headers['x-github-token'] || '').trim();
     if (!pat) return res.status(401).json({ error: 'GitHub token required (paste a fine-grained PAT; sent per-request, never stored).' });
-    if (!hostAllowed('https://api.github.com/')) return res.status(500).json({ error: 'host blocked' });
     const gh = async (url) => {
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json', 'User-Agent': 'Lingon/1.0' } });
+      const r = await fetchAllowlisted(url, { headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json' } });
       if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.text()).slice(0, 300)}`);
       return r.json();
     };
@@ -276,8 +286,8 @@ app.get('/api/github/diff', rateLimit(30, 60000), requireAuth(async (req, res) =
     const pat = (req.headers['x-github-token'] || '').trim();
     const { repo, number } = req.query;
     if (!pat || !repo || !number) return res.status(400).json({ error: 'token + repo + number required' });
-    const r = await fetch(`https://api.github.com/repos/${repo}/pulls/${number}`, {
-      headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.diff', 'User-Agent': 'Lingon/1.0' },
+    const r = await fetchAllowlisted(`https://api.github.com/repos/${repo}/pulls/${number}`, {
+      headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.diff' },
     });
     res.json({ diff: (await r.text()).slice(0, 30000) });
   } catch (e) {

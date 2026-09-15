@@ -39,7 +39,13 @@ const { chromium } = require('playwright');
   const b = await chromium.launch();
   const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
   p.on('pageerror', (e) => errs.push('PAGEERROR: ' + e.message));
-  p.on('console', (m) => { if (m.type() === 'error') errs.push('CONSOLE: ' + m.text()); });
+  p.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    const loc = m.location();
+    // Ignore third-party asset failures (fonts etc.) — only first-party errors fail.
+    if (loc && loc.url && !loc.url.startsWith(base)) return;
+    errs.push('CONSOLE: ' + m.text());
+  });
 
   await p.goto(base, { waitUntil: 'load' });
   await p.evaluate(() => localStorage.clear());
@@ -77,6 +83,7 @@ const { chromium } = require('playwright');
   console.log('THREAD SAMPLE:\n' + thread.slice(0, 700));
   if (!thread.toLowerCase().includes('lingon')) errs.push('REAL CHAT missing echo');
   if (/1,392 qualifying comments/.test(thread)) errs.push('SIMULATED text leaked');
+  if (/couldn't reach the AI backend|exceeded your current quota/i.test(thread)) errs.push('AI backend unreachable (model quota/error) — not verified this run');
   step('real chat answered');
 
   await p.click('[data-act="newchat"]');
