@@ -20,10 +20,14 @@
   if (!list.memories.some((m) => m.text.includes(marker))) fail('saved memory not listed: ' + JSON.stringify(list.memories).slice(0, 300));
   console.log('persisted: ok (' + list.memories.length + ' memories)');
 
-  const c2 = await (await fetch(base + '/api/chat', { method: 'POST', headers: H, body: JSON.stringify({ prompt: 'What is my favorite grain?', history: [], agent: { name: 'T' }, memories: [] }) })).json();
+  const c2 = await (await fetch(base + '/api/chat', { method: 'POST', headers: H, body: JSON.stringify({ prompt: 'What is my favorite grain?', history: [], agent: { name: 'T' }, memories: [], sessionId: 'test-chat-1' }) })).json();
   if (c2.error) fail('chat2: ' + c2.error);
   console.log('answer:', String(c2.text).slice(0, 200));
   if (!String(c2.text).includes(marker)) fail('agent did not recall the fact');
+
+  const hist = await (await fetch(base + '/api/history/search?q=' + encodeURIComponent(marker.slice(0, 13)), { headers: H })).json();
+  if (!(hist.turns || []).length) fail('transcript search found nothing');
+  console.log('transcript search: ok (' + hist.turns.length + ' turns)');
   console.log('MEMORY-AUTO PASS');
   process.exit(0);
 })().catch((e) => { console.error('MEMORY-AUTO FAIL — ' + e.message); process.exit(1); });

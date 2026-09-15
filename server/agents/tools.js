@@ -81,6 +81,16 @@ const TOOLS = {
       return m;
     },
   },
+  history_search: {
+    name: 'history_search', type: 'function', approval: false,
+    description: 'Keyword search over the user\'s own past chat turns (transcripts).',
+    run: async ({ query }, ctx) => {
+      const store = require('../store');
+      const turns = await store.searchTurns(ctx.userId, String(query || '').slice(0, 200));
+      ctx.trace(entry('file', `history_search: ${turns.length} past turns matched`));
+      return turns.map((t) => ({ role: t.role, text: String(t.text).slice(0, 600) }));
+    },
+  },
 };
 
 // Tool search: load only relevant definitions for the task (token saving).
@@ -90,6 +100,7 @@ function pickTools(task) {
   if (/(research|investigat|social|poll|sentiment|news|search|find)/.test(t)) names.add('web_search');
   if (/(github|\bpr\b|pull request|repo|diff|code review)/.test(t)) { names.add('github_prs'); names.add('github_diff'); }
   if (/(build|landing|page|site|website|dashboard)/.test(t)) names.add('build_page');
+  if (/(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous)/.test(t)) names.add('history_search');
   if (names.size === 1) names.add('web_search'); // default research capability
   return [...names].map((n) => TOOLS[n]);
 }

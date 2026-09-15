@@ -22,13 +22,13 @@ window.Engine = (() => {
   function preview(prompt) {
     const p = String(prompt || '').toLowerCase();
     switch (intent(p)) {
-      case 'research': return `Here's how I'd run it for real: live fetch of public Hacker News, DuckDuckGo and Wikipedia sources through my backend, then a Gemini briefing with cited sources on your canvas. No invented percentages — only what the sources actually support.`;
-      case 'github': return `I'd use your own GitHub fine-grained PAT (sealed in your vault, sent only to api.github.com via X-GitHub-Token) to list your real open pull requests, fetch the real diff, and have Gemini review it. Nothing is mocked.`;
-      case 'build': return `I'd have Gemini generate a real single-file page from your brief, render a live preview on the canvas, and hand you the file. You iterate, I regenerate.`;
-      case 'inbox': return `No inbox connection exists. Gmail OAuth isn't configured, so I won't pretend to read email — ask me for research, GitHub reviews, or pages instead.`;
-      case 'vault': return `Secrets live in your backend vault (Supabase, encrypted at rest). I only ever receive a reference like \`sec_••••\` — the value never enters model context. Claim me and try the secrets box.`;
-      case 'memory': return `I keep real backend memory tied to your signed-in account (inspectable and deletable). Claim me and I'll start remembering across chats.`;
-      default: return `I'd break that into steps and run it through the real backend (Gemini + live tools where connected), keeping artifacts on your canvas. Anything sensitive goes through your vault and approvals.`;
+      case 'research': return `Here's how I'd run it for real as Star 1.0: live fetch of public Hacker News, DuckDuckGo and Wikipedia sources through my backend, then a briefing with cited sources on your canvas. No invented percentages — only what the sources actually support. I never simulate or fake results.`;
+      case 'github': return `As Star 1.0, I'd use your own GitHub fine-grained PAT (sealed in your vault, sent only to api.github.com via X-GitHub-Token) to list your real open pull requests, fetch the real diff, and review it. Nothing is mocked or simulated.`;
+      case 'build': return `As Star 1.0, I'd generate a real single-file page from your brief, render a live preview on the canvas, and hand you the file. You iterate, I regenerate — no fake previews.`;
+      case 'inbox': return `No inbox connection exists. Gmail OAuth isn't configured, so I won't pretend to read email — ask me for research, GitHub reviews, or pages instead. I never simulate inbox contents.`;
+      case 'vault': return `Secrets live in your backend vault (Supabase, encrypted at rest). I only ever receive a reference like \`sec_••••\` — the value never enters model context. I never reveal other users, safety data, or company internals. Claim me and try the secrets box.`;
+      case 'memory': return `I keep real backend memory tied to your signed-in account (inspectable and deletable, never shared with other users). As Star 1.0, claim me and I'll start remembering across chats.`;
+      default: return `As Star 1.0, I'd break that into steps and run it through the real backend (live tools where connected), keeping artifacts on your canvas. I never simulate or fake responses, and I never reveal other users, safety data, or company internals. Anything sensitive goes through your vault and approvals.`;
     }
   }
 
@@ -43,7 +43,7 @@ window.Engine = (() => {
     try {
       const j = await api('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({ prompt, history, agent: { name: rt.agent.name, pers: rt.agent.pers }, memories }),
+        body: JSON.stringify({ prompt, history, agent: { name: rt.agent.name, pers: rt.agent.pers }, memories, sessionId: rt.chat.id }),
       });
       if (Array.isArray(j.trace)) j.trace.forEach((t) => rt.trace(t.ic || 'spark', t.t));
       // ChatGPT-style: surface automatic saves like "Memory updated".
@@ -90,9 +90,9 @@ window.Engine = (() => {
       const r = await fetch((window.LingonConfig.apiBase || '') + '/api/health');
       health = await r.json();
     } catch {}
-    const mode = health?.gemini ? `Live backend (Gemini ${health.model}, Supabase-backed). Harness: Agents-API shape (sessions, tools, subagents, sandbox, tracing) on Gemini.` : 'Backend reachable, but GEMINI_API_KEY is missing on the server.';
+    const mode = health?.gemini ? `Live backend (Star 1.0 on Gemini ${health.model}, Supabase-backed). Harness: Agents-API shape (sessions, tools, subagents, sandbox, tracing) on Star 1.0.` : 'Backend reachable, but GEMINI_API_KEY is missing on the server.';
     const mem = rt.recall().find((m) => m.src === 'you said so' || m.src === 'from our chat');
-    await rt.say(`Hej — I'm **${rt.agent.name}**. Claimed, named, and entirely yours. ${mode} I research with live sources, review real GitHub PRs with your PAT, and generate real pages — nothing is pre-scripted.` + (mem ? `\n\nAnd yes — I still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
+    await rt.say(`Hej — I'm **${rt.agent.name}**, powered by **Star 1.0**. Claimed, named, and entirely yours. ${mode} I research with live sources, review real GitHub PRs with your PAT, and generate real pages — nothing is pre-scripted, simulated, or faked. I never reveal other users, safety data, or company internals — your data stays yours.` + (mem ? `\n\nAnd yes — I still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
     rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page', 'Remember that I prefer concise answers']);
   }
 
@@ -103,7 +103,7 @@ window.Engine = (() => {
     const br = rt.card({ type: 'browser', url: 'backend: POST /api/research', note: 'Fetching live sources…', status: 'running' });
     let res;
     try {
-      res = await api('/api/research', { method: 'POST', body: JSON.stringify({ query: raw }) });
+      res = await api('/api/research', { method: 'POST', body: JSON.stringify({ query: raw, sessionId: rt.chat.id }) });
       br.update((c) => { c.status = 'done'; c.note = `Fetched ${res.snippets?.length || 0} source groups · ${new Date(res.fetchedAt).toLocaleTimeString()}`; });
       br.resolve({ ok: true });
     } catch (e) {
@@ -211,7 +211,7 @@ window.Engine = (() => {
     await rt.say(`Nice choice — generating a real **${String(style).toLowerCase()}** page with Gemini now; watch the canvas.`, { mood: 'happy' });
     await rt.tools([{ ic: 'code', t: 'Calling POST /api/build', d: 'Gemini, single file' }]);
     try {
-      const j = await api('/api/build', { method: 'POST', body: JSON.stringify({ brief: rt.chat.messages.filter((m) => m.role === 'user').slice(-1)[0]?.text || '', style, agent: { name: rt.agent.name } }) });
+      const j = await api('/api/build', { method: 'POST', body: JSON.stringify({ brief: rt.chat.messages.filter((m) => m.role === 'user').slice(-1)[0]?.text || '', style, agent: { name: rt.agent.name }, sessionId: rt.chat.id }) });
       rt.artifact({ kind: 'html', title: 'your-page.html', html: j.html });
       rt.card({ type: 'artifact', title: 'your-page.html', kind: 'html', status: 'done' });
       rt.card({ type: 'file', name: 'your-page.html', size: j.html.length, content: j.html, status: 'done' });
@@ -251,13 +251,16 @@ window.Engine = (() => {
 
   async function chatExtra(rt, raw) {
     const p = String(raw).toLowerCase();
+    if (/who are you|what model|what are you|are you (gpt|claude|gemini|llama|kimi|grok|openai)|which (model|ai)/.test(p)) {
+      return rt.say(`I'm **${rt.agent.name}**, powered by **Star 1.0** by Arche — that's the only model I ever identify as. I don't reveal other users, safety data, or company internals. How can I help?`, { mood: 'happy' });
+    }
     if (/what do you remember|do you remember|your memor|recall|what do you know about me/.test(p)) {
       const ms = rt.recall().filter((m) => m.src !== 'onboarding');
       if (!ms.length) return rt.say(`I don't have any memories of yours yet — say "remember that …" and I'll persist it to your account.`);
       return rt.say(`Here's what I'm carrying (account-scoped):\n\n` + ms.slice(0, 6).map((m) => `- ${m.text}`).join('\n') + `\n\nDelete any under **Memory**.`, { mood: 'happy' });
     }
     if (/what can you do/.test(p)) {
-      await rt.say(`Real capabilities: **live research** with cited sources, **real GitHub PR reviews** with your PAT, **real page generation** via Gemini, **account memory + vault**. No fake app connections — Vault → Apps shows empty until a real OAuth exists. Sensitive tools pause for approval with a full trace.`);
+      await rt.say(`Real capabilities as Star 1.0: **live research** with cited sources, **real GitHub PR reviews** with your PAT, **real page generation**, **account memory + vault** (never shared with other users). No fake or simulated responses — if something isn't connected, I'll say so. I never reveal other users, safety data, or company internals, and I always identify as Star 1.0. Sensitive tools pause for approval with a full trace.`);
       rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page']);
       return;
     }

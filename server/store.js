@@ -353,6 +353,51 @@ async function requestUpgrade(userId, plan) {
   return row;
 }
 
+// ---------- conversation history (Strawberry-style transcripts, per-user) ----------
+async function saveTurn(userId, chatId, role, text) {
+  const row = { id: 'msg_' + uid(), chat_id: chatId || 'unsorted', user_id: userId, role, kind: 'text', text: String(text || '').slice(0, 6000) };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      await s.from('chats').upsert({ id: row.chat_id, user_id: userId, title: row.chat_id.slice(0, 42) }, { onConflict: 'id' });
+      const { error } = await s.from('messages').insert(row);
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] save turn fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.turns = d.turns || [];
+  d.turns.unshift({ ...row, at: Date.now() });
+  saveLocal(d);
+  return row;
+}
+async function searchTurns(userId, query, limit = 6) {
+  const q = String(query || '').toLowerCase().split(/[^a-zåäö0-9]+/).filter((w) => w.length > 3);
+  if (!q.length) return [];
+  const s = supa();
+  if (s) {
+    try {
+      const ors = q.slice(0, 4).map((w) => `text.ilike.%${w}%`).join(',');
+      const { data, error } = await s.from('messages').select('chat_id,role,text,created_at').eq('user_id', userId).or(ors).order('created_at', { ascending: false }).limit(limit * 3);
+      if (error) throw error;
+      return (data || []).slice(0, limit);
+    } catch (e) {
+      console.warn('[store] search turns fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.turns || [])
+    .filter((t) => t.userId === userId || t.user_id === userId)
+    .map((t) => ({ score: q.filter((w) => String(t.text).toLowerCase().includes(w)).length, t }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((x) => x.t);
+}
+
 async function logToolRun({ userId, sessionId, kind, name, status, detail, ms }) {
   const row = {
     id: 'run_' + uid(), user_id: userId || 'local', session_id: sessionId || null,
@@ -384,4 +429,5 @@ module.exports = {
   getSubscription, setSubscription, logUsage, usageTotal,
   createGift, redeemGift, giftsCredit, requestUpgrade,
   logToolRun,
+  saveTurn, searchTurns,
 };
