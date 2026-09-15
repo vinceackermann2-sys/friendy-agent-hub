@@ -10,11 +10,15 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { callGemini, isConfigured, MODEL_DEFAULT } = require('./gemini');
-const { realResearch } = require('./research');
 const { hostAllowed } = require('./harness');
 const { PLANS, costOf } = require('./plans');
 const store = require('./store');
 const { pubClient, adminClient, requireAuth } = require('./auth');
+// Agents-API-shaped harness (Codex pattern, Gemini-backed) + extras
+const Runner = require('./agents/runner');
+const { checkPrompt } = require('./agents/guardrails');
+const { entry } = require('./agents/tracing');
+const { pickTools } = require('./agents/tools');
 
 const app = express();
 const PORT = Number(process.env.PORT || 8000);
@@ -59,7 +63,7 @@ app.get('/api/health', (req, res) => {
     gemini: isConfigured(),
     model: MODEL_DEFAULT,
     supabase: store.supaConfigured(),
-    harness: 'gemini-custom (not Codex API)',
+    harness: 'agents-api-shape (codex pattern, gemini-backed, self-hosted sandbox)',
     plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credit: p.credit, gift: p.gift })),
     time: new Date().toISOString(),
   });
@@ -160,42 +164,60 @@ async function checkCredit(userId) {
   return b;
 }
 
-// ---------- chat (auth + credit enforced, usage logged) ----------
+// ---------- chat — Agents-API session via Runner (auth + credit, usage logged) ----------
 app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
+  const trace = [];
+  const push = (e) => trace.push(e);
   try {
-    await checkCredit(req.user.id);
-    const { prompt, history, agent, memories } = req.body || {};
-    if (!prompt || !String(prompt).trim()) return res.status(400).json({ error: 'prompt required' });
-    if (String(prompt).length > 6000) return res.status(400).json({ error: 'prompt too long (6000 chars).' });
+    const { prompt, history, agent, memories, sessionId } = req.body || {};
+    checkPrompt(prompt);
+    await Runner.ensureCredit(req.user.id);
+    push(entry('box', `session ${sessionId ? String(sessionId).slice(0, 8) : 'new'} accepted (agents-api shape)`));
+    const tools = pickTools(prompt + ' ' + (agent?.name || ''));
+    push(entry('search', `tool search: ${tools.map((t) => t.name).join(', ')}`));
     const memTxt = Array.isArray(memories) && memories.length
       ? '\n\nWhat you remember about this user (use when relevant):\n' + memories.slice(0, 10).map((m) => `- ${m.text}`).join('\n')
       : '';
-    const system = `You are ${agent?.name || 'Lingon'}, a personal AI agent (${agent?.pers || 'Playful'} style). Answer helpfully and concisely. You run with a sandboxed harness, a sealed vault (you only ever receive secret REFERENCES like sec_xxxx, never values), and approvals for sensitive actions. Never claim to have browsed, run code, or read email unless the harness trace shows it. Never invent vote counts, PR numbers, or inbox contents.${memTxt}`;
-    const r = await callGemini({ prompt: String(prompt), system, history: history || [] });
+    const system = `You are ${agent?.name || 'Lingon'}, a personal AI agent (${agent?.pers || 'Playful'} style). You run inside an Agents-API-shaped harness (self-hosted sandbox, not OpenAI-hosted): tools execute server-side on an allowlist, secrets arrive as REFERENCES like sec_xxxx only, sensitive tools need user approval. Never claim to have browsed, run code, or read email unless the trace shows it. Never invent vote counts, PR numbers, or inbox contents.${memTxt}`;
+    const r = await Runner.modelAnswer({
+      agent: { instructions: system }, task: String(prompt),
+      history: history || [], model: MODEL_DEFAULT,
+    });
+    if (r.compacted) push(entry('list', 'context compaction: older turns summarized, session continues'));
+    await Runner.logModelUsage(req.user.id, MODEL_DEFAULT, [r.usage, r.compactUsage]);
     const cost = costOf(r.usage);
-    await store.logUsage(req.user.id, { model: MODEL_DEFAULT, usage: r.usage, cost });
-    res.json({ text: r.text, model: MODEL_DEFAULT, trace: [{ ic: 'spark', t: `gemini ${MODEL_DEFAULT} · $${cost.toFixed(5)}` }] });
+    push(entry('spark', `gemini ${MODEL_DEFAULT} · $${cost.toFixed(5)}`));
+    try {
+      await store.logToolRun({ userId: req.user.id, sessionId: sessionId || null, kind: 'run', name: 'chat', status: 'done', detail: String(prompt).slice(0, 300) });
+    } catch {}
+    res.json({ text: r.text, model: MODEL_DEFAULT, trace });
   } catch (e) {
     if (e.code === 'NO_CREDIT') return res.status(402).json({ error: e.message, upgrade_required: true });
+    if (e.code === 'BAD_INPUT') return res.status(400).json({ error: e.message });
     if (e.code === 'NO_KEY') return res.status(500).json({ error: 'AI key missing on server.' });
     safeLog('[chat] error', e.message);
     res.status(502).json({ error: 'AI request failed: ' + e.message });
   }
 }));
 
-// ---------- build ----------
+// ---------- build — Runner session (sandboxed HTML artifact) ----------
 app.post('/api/build', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  const trace = [];
   try {
-    await checkCredit(req.user.id);
-    const { brief, style, agent } = req.body || {};
+    await Runner.ensureCredit(req.user.id);
+    const { brief, style, agent, sessionId } = req.body || {};
+    trace.push(entry('box', `session ${sessionId ? String(sessionId).slice(0, 8) : 'new'}: build_page run`));
     const system = 'You generate a complete, single dependency-free HTML file. Output ONLY the HTML (no markdown fences, no explanation). Keep it under 12KB, mobile-friendly, no external requests except Google Fonts.';
     const prompt = `Build a landing one-pager.\nStyle: ${style || 'Minimal & calm'}\nMade by agent: ${agent?.name || 'Lingon'}\nBrief: ${String(brief || 'A personal agent that researches, builds and remembers.').slice(0, 2000)}\nInclude: hero with headline + sub + CTA button, 3 feature bullets, footer. Inline <style> only.`;
-    const r = await callGemini({ prompt, system });
-    const cost = costOf(r.usage);
-    await store.logUsage(req.user.id, { model: MODEL_DEFAULT, usage: r.usage, cost });
+    const r = await Runner.modelAnswer({ agent: { instructions: system }, task: prompt, history: [], model: MODEL_DEFAULT });
+    await Runner.logModelUsage(req.user.id, MODEL_DEFAULT, [r.usage]);
     let html = r.text.trim().replace(/^```html/i, '').replace(/^```/, '').replace(/```$/, '').trim();
     if (!/<html/i.test(html)) html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Made by ${(agent?.name || 'Lingon')}</title></head><body>${html}</body></html>`;
-    res.json({ html: html.slice(0, 60000) });
+    trace.push(entry('code', `build_page: sandboxed artifact (${html.length} chars)`));
+    try {
+      await store.logToolRun({ userId: req.user.id, sessionId: sessionId || null, kind: 'tool', name: 'build_page', status: 'done', detail: style || '' });
+    } catch {}
+    res.json({ html: html.slice(0, 60000), trace });
   } catch (e) {
     if (e.code === 'NO_CREDIT') return res.status(402).json({ error: e.message, upgrade_required: true });
     if (e.code === 'NO_KEY') return res.status(500).json({ error: 'AI key missing on server.' });
@@ -203,16 +225,18 @@ app.post('/api/build', rateLimit(20, 60000), requireAuth(async (req, res) => {
   }
 }));
 
-// ---------- research ----------
+// ---------- research — Runner multi-agent session ----------
 app.post('/api/research', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  const trace = [];
+  const push = (e) => trace.push(e);
   try {
-    await checkCredit(req.user.id);
-    const { query } = req.body || {};
+    await Runner.ensureCredit(req.user.id);
+    const { query, sessionId } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query required' });
-    const r = await realResearch(String(query));
+    const r = await Runner.runResearch({ userId: req.user.id, sessionId: sessionId || null, query: String(query), trace, push });
     const cost = costOf(r.usage);
     if (cost > 0) await store.logUsage(req.user.id, { model: MODEL_DEFAULT, usage: r.usage, cost });
-    res.json(r);
+    res.json({ ...r, trace });
   } catch (e) {
     if (e.code === 'NO_CREDIT') return res.status(402).json({ error: e.message, upgrade_required: true });
     res.status(502).json({ error: 'Research failed: ' + e.message });
@@ -297,6 +321,10 @@ app.delete('/api/secrets/:id', requireAuth(async (req, res) => {
 // ---------- static frontend ----------
 const APP_DIR = path.join(__dirname, '..', 'app');
 app.use(express.static(APP_DIR, { extensions: ['html'] }));
+// SEO pretty URLs for landing sub-pages (also served as *.html via static).
+for (const p of ['terms', 'privacy', 'security', 'cookies', 'models', 'pricing']) {
+  app.get('/' + p, (req, res) => res.sendFile(path.join(APP_DIR, p + '.html')));
+}
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(APP_DIR, 'index.html'));

@@ -353,10 +353,35 @@ async function requestUpgrade(userId, plan) {
   return row;
 }
 
+async function logToolRun({ userId, sessionId, kind, name, status, detail, ms }) {
+  const row = {
+    id: 'run_' + uid(), user_id: userId || 'local', session_id: sessionId || null,
+    kind: kind || 'tool', name: name || '', status: status || 'done',
+    detail: String(detail || '').slice(0, 2000), ms: ms || 0,
+  };
+  const s = supa();
+  if (s) {
+    try {
+      if (userId) await ensureProfile(userId);
+      const { error } = await s.from('tool_runs').insert(row);
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] tool run fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.runs = d.runs || [];
+  d.runs.unshift(row);
+  saveLocal(d);
+  return row;
+}
+
 module.exports = {
   listMemories, addMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret,
   supaConfigured,
   getSubscription, setSubscription, logUsage, usageTotal,
   createGift, redeemGift, giftsCredit, requestUpgrade,
+  logToolRun,
 };

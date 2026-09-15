@@ -1,5 +1,5 @@
 /* ============ Lingon REAL engine — Gemini backend, no simulations ============
-   Harness note: this is NOT the OpenAI Codex Agents API. It is our own
+   Harness note: Agents API shape (Codex pattern per openai.com Agents API), Gemini-backed and self-hosted — not OpenAI-hosted. It is our own
    Gemini-backed harness: tools run server-side (allowlisted fetch, read-only
    GitHub with YOUR per-request PAT, sandboxed HTML artifacts), secrets never
    enter model context, sensitive tools pause for your approval, and every step
@@ -83,7 +83,7 @@ window.Engine = (() => {
       const r = await fetch((window.LingonConfig.apiBase || '') + '/api/health');
       health = await r.json();
     } catch {}
-    const mode = health?.gemini ? `Live backend (Gemini ${health.model}, Supabase-backed). Harness: our Gemini tool boundary — not Codex API.` : 'Backend reachable, but GEMINI_API_KEY is missing on the server.';
+    const mode = health?.gemini ? `Live backend (Gemini ${health.model}, Supabase-backed). Harness: Agents-API shape (sessions, tools, subagents, sandbox, tracing) on Gemini.` : 'Backend reachable, but GEMINI_API_KEY is missing on the server.';
     const mem = rt.recall().find((m) => m.src === 'you said so' || m.src === 'from our chat');
     await rt.say(`Hej — I'm **${rt.agent.name}**. Claimed, named, and entirely yours. ${mode} I research with live sources, review real GitHub PRs with your PAT, and generate real pages — nothing is pre-scripted.` + (mem ? `\n\nAnd yes — I still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
     rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page', 'Remember that I prefer concise answers']);
