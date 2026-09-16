@@ -22,13 +22,13 @@ window.Engine = (() => {
   function preview(prompt) {
     const p = String(prompt || '').toLowerCase();
     switch (intent(p)) {
-      case 'research': return `Here's how I'd run it for real as Star 1.0: live fetch of public Hacker News, DuckDuckGo and Wikipedia sources through my backend, then a briefing with cited sources on your canvas. No invented percentages — only what the sources actually support. I never simulate or fake results.`;
-      case 'github': return `As Star 1.0, I'd use your own GitHub fine-grained PAT (sealed in your vault, sent only to api.github.com via X-GitHub-Token) to list your real open pull requests, fetch the real diff, and review it. Nothing is mocked or simulated.`;
-      case 'build': return `As Star 1.0, I'd generate a real single-file page from your brief, render a live preview on the canvas, and hand you the file. You iterate, I regenerate — no fake previews.`;
+      case 'research': return `Here's how I'd run it for real as Arche 1.0: live fetch of public Hacker News, DuckDuckGo and Wikipedia sources through my backend, then a briefing with cited sources on your canvas. No invented percentages — only what the sources actually support. I never simulate or fake results.`;
+      case 'github': return `As Arche 1.0, I'd use your own GitHub fine-grained PAT (sealed in your vault, sent only to api.github.com via X-GitHub-Token) to list your real open pull requests, fetch the real diff, and review it. Nothing is mocked or simulated.`;
+      case 'build': return `As Arche 1.0, I'd generate a real single-file page from your brief, render a live preview on the canvas, and hand you the file. You iterate, I regenerate — no fake previews.`;
       case 'inbox': return `No inbox connection exists. Gmail OAuth isn't configured, so I won't pretend to read email — ask me for research, GitHub reviews, or pages instead. I never simulate inbox contents.`;
       case 'vault': return `Secrets live in your backend vault (Supabase, encrypted at rest). I only ever receive a reference like \`sec_••••\` — the value never enters model context. I never reveal other users, safety data, or company internals. Claim me and try the secrets box.`;
-      case 'memory': return `I keep real backend memory tied to your signed-in account (inspectable and deletable, never shared with other users). As Star 1.0, claim me and I'll start remembering across chats.`;
-      default: return `As Star 1.0, I'd break that into steps and run it through the real backend (live tools where connected), keeping artifacts on your canvas. I never simulate or fake responses, and I never reveal other users, safety data, or company internals. Anything sensitive goes through your vault and approvals.`;
+      case 'memory': return `I keep real backend memory tied to your signed-in account (inspectable and deletable, never shared with other users). As Arche 1.0, claim me and I'll start remembering across chats.`;
+      default: return `As Arche 1.0, I'd break that into steps and run it through the real backend (live tools where connected), keeping artifacts on your canvas. I never simulate or fake responses, and I never reveal other users, safety data, or company internals. Anything sensitive goes through your vault and approvals.`;
     }
   }
 
@@ -90,9 +90,9 @@ window.Engine = (() => {
       const r = await fetch((window.LingonConfig.apiBase || '') + '/api/health');
       health = await r.json();
     } catch {}
-    const mode = health?.gemini ? `Live backend (Star 1.0 on Gemini ${health.model}, Supabase-backed). Harness: Agents-API shape (sessions, tools, subagents, sandbox, tracing) on Star 1.0.` : 'Backend reachable, but GEMINI_API_KEY is missing on the server.';
+    const mode = health?.gemini ? `Live backend (Arche 1.0 on Gemini ${health.model}, Supabase-backed). Harness: Agents-API shape (sessions, tools, subagents, sandbox, tracing) on Arche 1.0.` : 'Backend reachable, but GEMINI_API_KEY is missing on the server.';
     const mem = rt.recall().find((m) => m.src === 'you said so' || m.src === 'from our chat');
-    await rt.say(`Hej — I'm **${rt.agent.name}**, powered by **Star 1.0**. Claimed, named, and entirely yours. ${mode} I research with live sources, review real GitHub PRs with your PAT, and generate real pages — nothing is pre-scripted, simulated, or faked. I never reveal other users, safety data, or company internals — your data stays yours.` + (mem ? `\n\nAnd yes — I still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
+    await rt.say(`Hej — I'm **${rt.agent.name}**, powered by **Arche 1.0**. Claimed, named, and entirely yours. ${mode} I research with live sources, review real GitHub PRs with your PAT, and generate real pages — nothing is pre-scripted, simulated, or faked. I never reveal other users, safety data, or company internals — your data stays yours.` + (mem ? `\n\nAnd yes — I still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
     rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page', 'Remember that I prefer concise answers']);
   }
 
@@ -104,7 +104,16 @@ window.Engine = (() => {
     let res;
     try {
       res = await api('/api/research', { method: 'POST', body: JSON.stringify({ query: raw, sessionId: rt.chat.id }) });
-      if (res.opened) br.update((c) => { c.url = res.opened.url; c.note = `Rendered “${(res.opened.title || '').slice(0, 70)}” in headless Chromium`; });
+      if (res.opened) br.update((c) => {
+        c.url = res.opened.url;
+        c.note = `Rendered “${(res.opened.title || '').slice(0, 70)}” in headless Chromium`;
+        if (res.opened.liveId) c.liveId = res.opened.liveId;
+        if (res.opened.screenshot) {
+          // Bound localStorage: keep only this chat's latest screenshot.
+          rt.chat.messages.forEach((m) => { if (m.kind === 'card' && m.card.type === 'browser' && m.id !== br.msg.id) delete m.card.screenshot; });
+          c.screenshot = res.opened.screenshot;
+        }
+      });
       br.update((c) => { c.status = 'done'; c.note = (c.note ? c.note + ' · ' : '') + `${res.snippets?.length || 0} source groups · ${new Date(res.fetchedAt).toLocaleTimeString()}`; });
       br.resolve({ ok: true });
     } catch (e) {
@@ -165,13 +174,14 @@ window.Engine = (() => {
     t.update((c) => c.lines.push({ t: '$ code_run stats.js < live GitHub API data (sandboxed, read-only)', cls: 'p' }));
     let data;
     try {
-      const j = await api('/api/github/prs', { headers: { 'X-GitHub-Token': token } });
+      const j = await api(`/api/github/prs?sessionId=${encodeURIComponent(rt.chat.id)}`, { headers: { 'X-GitHub-Token': token } });
       data = j;
       (j.trace || []).forEach((x) => rt.trace(x.ic, x.t));
       // Real stdout from the executed sandbox — not composed client-side.
       for (const line of String(j.stdout || '').split('\n').filter(Boolean).slice(0, 8)) {
         t.update((c) => c.lines.push({ t: line, cls: 'g' }));
       }
+      if (j.pcId) t.update((c) => { c.pcId = j.pcId; });
     } catch (e) {
       t.update((c) => { c.lines.push({ t: '✗ GitHub call failed: ' + e.message, cls: 'p' }); c.status = 'done'; });
       t.resolve({ ok: false });
@@ -256,7 +266,7 @@ window.Engine = (() => {
   async function chatExtra(rt, raw) {
     const p = String(raw).toLowerCase();
     if (/who are you|what model|what are you|are you (gpt|claude|gemini|llama|kimi|grok|openai)|which (model|ai)/.test(p)) {
-      return rt.say(`I'm **${rt.agent.name}**, powered by **Star 1.0** by Arche — that's the only model I ever identify as. I don't reveal other users, safety data, or company internals. How can I help?`, { mood: 'happy' });
+      return rt.say(`I'm **${rt.agent.name}**, powered by **Arche 1.0** by Belna — that's the only model I ever identify as. I don't reveal other users, safety data, or company internals. How can I help?`, { mood: 'happy' });
     }
     if (/what do you remember|do you remember|your memor|recall|what do you know about me/.test(p)) {
       const ms = rt.recall().filter((m) => m.src !== 'onboarding');
@@ -264,7 +274,7 @@ window.Engine = (() => {
       return rt.say(`Here's what I'm carrying (account-scoped):\n\n` + ms.slice(0, 6).map((m) => `- ${m.text}`).join('\n') + `\n\nDelete any under **Memory**.`, { mood: 'happy' });
     }
     if (/what can you do/.test(p)) {
-      await rt.say(`Real capabilities as Star 1.0: **live research** with cited sources, **real GitHub PR reviews** with your PAT, **real page generation**, **account memory + vault** (never shared with other users). No fake or simulated responses — if something isn't connected, I'll say so. I never reveal other users, safety data, or company internals, and I always identify as Star 1.0. Sensitive tools pause for approval with a full trace.`);
+      await rt.say(`Real capabilities as Arche 1.0: **live research** with cited sources, **real GitHub PR reviews** with your PAT, **real page generation**, **account memory + vault** (never shared with other users). No fake or simulated responses — if something isn't connected, I'll say so. I never reveal other users, safety data, or company internals, and I always identify as Arche 1.0. Sensitive tools pause for approval with a full trace.`);
       rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page']);
       return;
     }

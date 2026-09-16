@@ -39,6 +39,7 @@ const IC = {
   phone:'<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.6 2Z"/>',
   wallet:'<path d="M20 7H4a2 2 0 0 1 0-4h14v4"/><path d="M20 7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5"/><circle cx="17" cy="14" r="1.2"/>',
   laptop:'<rect x="2" y="4" width="20" height="12" rx="2"/><path d="M2 20h20"/>',
+  brief:'<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2M2 13h20"/>',
   git:'<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M6 9v6M18 9a9 9 0 0 1-9 9"/>',
   check:'<path d="M20 6L9 17l-5-5"/>',
   x:'<path d="M18 6L6 18M6 6l12 12"/>',
@@ -50,6 +51,7 @@ const IC = {
   dice:'<path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
   aur:'<path d="M7 17L17 7M7 7h10v10"/>',
   panel:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
+  board:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-9 9"/>',
   list:'<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
   key:'<circle cx="7.5" cy="15.5" r="4"/><path d="M11 12L21 2M18 5l3 3"/>',
   star:'<path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1Z"/>',
@@ -79,15 +81,29 @@ function md(src){
 const LS = 'lingon.v1';
 const fresh = () => ({
   onboarded:false, agent:null, view:'chat', activeChat:null,
-  canvasOpen:true, canvasTab:'canvas', model:'Smart',
+  canvasOpen:false, canvasTab:'canvas', model:'Smart', theme:'grey',
   chats:[], pendingPrompt:null,
   vault:{ secrets:[], apps:[], approvals:[], mode:'default' },
   memory:[],
+  // right-side canvas slider: canvasTab 'agent' shows the agent panel;
+  // agentTab picks its content: 'appearance' | 'approvals' | 'library'
+  agentTab:'appearance',
+  // settings / apps rework
+  settingsTab:'profiles', userMenuOpen:false,
+  userProfile:null, browserProfile:{ profile:'Default', sandbox:true, allowlist:true },
 });
 let state;
 try { state = Object.assign(fresh(), JSON.parse(localStorage.getItem(LS) || 'null')) || fresh(); }
 catch (e) { state = fresh(); }
 if (!state.vault) state.vault = fresh().vault;
+// Canvas is never open by default — user or a fresh artifact opens it.
+state.canvasOpen = false;
+if (!state.agentTab) state.agentTab = 'appearance';
+if (state.agentPanel) state.canvasTab = 'agent';
+delete state.agentPanel;
+if (!['agent', 'canvas', 'live', 'trace'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+if (!state.settingsTab) state.settingsTab = 'profiles';
+if (!state.browserProfile) state.browserProfile = fresh().browserProfile;
 // Honest apps: no fake OAuth connections exist — always empty.
 state.vault.apps = [];
 const save = () => localStorage.setItem(LS, JSON.stringify(state));
@@ -136,6 +152,7 @@ const chat = () => state.chats.find(c => c.id === state.activeChat);
 const isActive = c => state.view === 'chat' && state.activeChat === c.id;
 
 function render(){
+  applyTheme();
   if (window.LingonAuth && !window.LingonAuth.signedIn()) return renderAuth();
   if (state.onboarded && state.agent) renderApp(); else renderLanding();
 }
@@ -143,26 +160,105 @@ function render(){
 /* ================================================================
    AUTH (real Supabase Auth via backend proxy)
 ================================================================ */
+/* ================================================================
+   AUTH — Account & Credit Usage card: Google, one-time code, password
+================================================================ */
+let authMode = 'signin'; // 'signin' | 'signup'
 function renderAuth(){
+  let lastGoogle = false;
+  try { lastGoogle = localStorage.getItem('belna.lastProvider') === 'google'; } catch {}
   root.innerHTML = `
-  <div class="fadeup">
-    <nav class="nav"><div class="logo">${Mascot.logo(26)} arche</div><div style="display:flex;gap:10px;align-items:center"><span class="chip">real account required</span><button class="btn ghost small" data-act="back-home">Back</button></div></nav>
-    <section class="hero" style="max-width:560px;margin:0 auto">
-      <div class="badge">${icon('lock',14)} Sign in to your agent</div>
-      <h1>Your agent, your account.</h1>
-      <p class="sub">Real Supabase Auth. Memories, vault and billing are scoped to your signed-in account — no shared demo data.</p>
-      <div class="acard"><div class="bd">
-        <input class="field" id="aemail" type="email" placeholder="you@example.com" autocomplete="email">
-        <input class="field mono" id="apass" type="password" placeholder="password (8+ chars)" autocomplete="current-password" style="margin-top:8px">
-        <div class="stack" style="margin-top:12px">
-          <button class="btn" data-act="signin">Sign in</button>
-          <button class="btn green" data-act="signup">Create account</button>
-        </div>
-        <div class="secnote" id="amsg" style="min-height:18px;margin-top:8px"></div>
-      </div></div>
-      <div class="hintline">${icon('shieldcheck',13)} Backend verifies your JWT on every request — user ids come from the token, never the client.</div>
-    </section>
+  <div class="fadeup authpage">
+    <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="faq.html">Open Docs &#8599;</a></div>
+    <div class="authcard">
+      <h1>Log in to manage profile and billing</h1>
+      <button class="btn gbtn" data-act="google"><span class="glogo"></span>Continue with Google${lastGoogle ? '<span class="lastused">Last used</span>' : ''}</button>
+      <div class="ordiv"><span></span>OR<span></span></div>
+      <div id="authmain">
+        <input class="field authfield" id="aemail" type="email" placeholder="Enter Email" autocomplete="email">
+        <button class="btn authbtn" data-act="otp-send">Login with one-time code</button>
+        <button class="btn ghost authbtn" data-act="pw-mode">Log in with password</button>
+      </div>
+      <div id="authotp" style="display:none">
+        <p class="mut" style="font-size:14px;line-height:1.55">We sent a 6-digit code to <b id="otpemail"></b>.<br>It expires in a few minutes.</p>
+        <input class="field authfield mono" id="acode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="123456" style="text-align:center;letter-spacing:.3em;margin-top:12px">
+        <button class="btn authbtn" data-act="otp-verify">Verify code</button>
+        <button class="btn ghost authbtn" data-act="auth-back">Back</button>
+      </div>
+      <div id="authpw" style="display:none">
+        <div class="pwtitle" id="pwtitle">Welcome back</div>
+        <div class="mut" style="font-size:13px;margin-top:2px" id="pwemail"></div>
+        <input class="field authfield mono" id="apass" type="password" placeholder="Password (8+ chars)" autocomplete="current-password" style="margin-top:12px">
+        <button class="btn authbtn" id="pwgo" data-act="pw-go">Log in with password</button>
+        <button class="btn ghost authbtn" data-act="auth-back">Back</button>
+      </div>
+      <div class="secnote" id="amsg" style="min-height:18px;justify-content:center;margin-top:14px"></div>
+      <div class="authfoot" id="authfoot">New to Belna? <button data-act="auth-mode">Create an account</button></div>
+      <div><button class="backlink" data-act="back-home">← Back to home</button></div>
+    </div>
   </div>`;
+  authPaintMode();
+}
+function showAuthPane(id){
+  ['authmain', 'authotp', 'authpw'].forEach(p => { const n = document.getElementById(p); if (n) n.style.display = p === id ? '' : 'none'; });
+  const m = document.getElementById('amsg'); if (m) m.textContent = '';
+}
+function authPaintMode(){
+  const go = document.getElementById('pwgo');
+  const title = document.getElementById('pwtitle');
+  const foot = document.getElementById('authfoot');
+  if (authMode === 'signup'){
+    if (go) go.textContent = 'Create account';
+    if (title) title.textContent = 'Create your Belna account';
+    if (foot) foot.innerHTML = 'Have an account? <button data-act="auth-mode">Log in</button>';
+  } else {
+    if (go) go.textContent = 'Log in with password';
+    if (title) title.textContent = 'Welcome back';
+    if (foot) foot.innerHTML = 'New to Belna? <button data-act="auth-mode">Create an account</button>';
+  }
+}
+async function authOAuth(){
+  const msg = document.getElementById('amsg');
+  if (msg) msg.textContent = 'Redirecting to Google…';
+  try {
+    const r = await fetch('/api/auth/oauth-url?provider=google&next=' + encodeURIComponent('/'));
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Google sign-in unavailable');
+    window.location.href = j.url;
+  } catch (e){ if (msg) msg.textContent = e.message; }
+}
+async function authOtpSend(){
+  const msg = document.getElementById('amsg');
+  const email = ((document.getElementById('aemail') || {}).value || '').trim();
+  if (!/.+@.+\..+/.test(email)){ if (msg) msg.textContent = 'Enter a valid email first.'; return; }
+  if (msg) msg.textContent = 'Sending code…';
+  try {
+    const r = await fetch('/api/auth/otp', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ email }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Could not send code');
+    document.getElementById('otpemail').textContent = email;
+    showAuthPane('authotp');
+    document.getElementById('acode').focus();
+  } catch (e){ if (msg) msg.textContent = e.message; }
+}
+async function authOtpVerify(){
+  const msg = document.getElementById('amsg');
+  const email = ((document.getElementById('aemail') || {}).value || '').trim();
+  const token = ((document.getElementById('acode') || {}).value || '').trim();
+  if (!token){ if (msg) msg.textContent = 'Enter the code from your email.'; return; }
+  if (msg) msg.textContent = 'Verifying…';
+  try {
+    const r = await fetch('/api/auth/verify', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ email, token }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Invalid code');
+    window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
+    try { window.LingonConfig.userId = j.user.id; localStorage.setItem('belna.lastProvider', 'otp'); } catch {}
+    state.view = 'chat';
+    save();
+    await syncFromBackend();
+    render();
+    toast('Signed in as ' + j.user.email);
+  } catch (e){ if (msg) msg.textContent = e.message; }
 }
 
 async function doAuth(kind){
@@ -199,7 +295,7 @@ async function getBilling(){
 }
 function paintBilling(M){
   M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Billing</h1><span class="chip purple">real credits</span></div>
+    <div class="phead"><h1>Billing</h1><span class="chip">real credits</span></div>
     <p class="psub">Free includes <b>$10</b> of API costs. Pro <b>$30</b> <s>$50</s> → $20 credit + $50 gift card. Max <b>$50</b> <s>$100</s> → $50 credit + $100 gift card. Gift codes add real credit when redeemed. Upgrades are requests until payments connect — no charge is made.</p>
     <div id="billbody"><div class="row mut">Loading…</div></div>
     <div class="kv" style="margin-top:14px"><div class="row" style="background:var(--panel)">
@@ -211,7 +307,7 @@ function paintBilling(M){
   getBilling().then((b) => {
     const el = $('#billbody');
     if (el && b) el.innerHTML = `<div class="kv"><div class="row">
-      <span style="color:var(--purple)">${icon('spark',16)}</span>
+      <span style="color:var(--mut)">${icon('spark',16)}</span>
       <div><b>${b.plan.toUpperCase()}</b> · ${b.status}<div class="sub">Used $${Number(b.used).toFixed(4)} of $${Number(b.total).toFixed(2)} (plan $${b.credit} + gifts $${b.gifts})</div></div>
       <div class="rgt"><span class="chip ${b.remaining > 1 ? 'green' : ''}">$${Number(b.remaining).toFixed(2)} left</span></div>
     </div></div>`;
@@ -228,64 +324,40 @@ function paintBilling(M){
 /* ================================================================
    LANDING
 ================================================================ */
-/* Arche landing helpers — name detection + activity switcher */
-function archeDisplayName(){
-  // Browsers never expose the OS username (privacy), so derive gracefully:
-  // 1) signed-in account email prefix, 2) previously saved name, 3) fallback.
-  try {
-    const s = window.LingonAuth && window.LingonAuth.get && window.LingonAuth.get();
-    const email = s && s.user && s.user.email;
-    if (email){
-      const part = String(email).split('@')[0].split(/[._\-+]+/)[0];
-      if (part) return part.charAt(0).toUpperCase() + part.slice(1);
-    }
-  } catch {}
-  try {
-    const n = localStorage.getItem('arche.username');
-    if (n) return n;
-  } catch {}
-  return 'friend';
-}
-const ARCH_ACTS = [
-  { ic:'laptop', label:'working on a laptop', mood:'think' },
-  { ic:'phone',  label:'answering phones',     mood:'happy' },
-  { ic:'mail',   label:'sending mails',        mood:'idle' },
-  { ic:'wallet', label:'counting wallet',      mood:'wow' },
+/* Belna landing — mascot prop switcher (laptop / briefcase / phone / wallet).
+   The mascot sits in a circle card inside the headline and cycles the item
+   it holds. Dots switch the held item manually. */
+const BELNA_ACTS = [
+  { ic:'laptop', label:'holding a laptop', mood:'think' },
+  { ic:'brief',  label:'holding a briefcase', mood:'idle' },
+  { ic:'phone',  label:'answering phones', mood:'happy' },
+  { ic:'wallet', label:'counting wallet', mood:'wow' },
 ];
-function archeStopRotator(){ if (window.__actTimer){ clearInterval(window.__actTimer); window.__actTimer = null; } }
-function archeStartRotator(){
-  archeStopRotator();
-  let i = 1;
-  window.__actTimer = setInterval(() => {
-    const pill = document.getElementById('actpill');
-    const mm = document.getElementById('actmascot');
-    if (!pill || !mm){ archeStopRotator(); return; }
-    const a = ARCH_ACTS[i % ARCH_ACTS.length];
-    pill.style.opacity = '0';
-    setTimeout(() => {
-      const p = document.getElementById('actpill');
-      if (!p) return;
-      p.innerHTML = '<span class="aic">' + icon(a.ic, 16) + '</span><span>' + a.label + '</span>';
-      const m = document.getElementById('actmascot');
-      if (m) m.innerHTML = Mascot.svg('lingon', a.mood, 40);
-      Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (i % ARCH_ACTS.length)));
-      p.style.opacity = '1';
-    }, 180);
-    i++;
-  }, 2400);
+function belnaStopRotator(){ if (window.__actTimer){ clearInterval(window.__actTimer); window.__actTimer = null; } }
+function belnaPaintHold(i){
+  const a = BELNA_ACTS[i % BELNA_ACTS.length];
+  const core = document.getElementById('mcore');
+  const prop = document.getElementById('hprop');
+  const hold = document.getElementById('mhold');
+  if (!core || !prop) return;
+  core.innerHTML = Mascot.svg('lingon', a.mood, 44);
+  prop.innerHTML = icon(a.ic, 15);
+  if (hold){ hold.title = 'Your Belna agent, ' + a.label; hold.setAttribute('aria-label', 'Your Belna agent, ' + a.label); }
+  Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (i % BELNA_ACTS.length)));
 }
-function archeBenchRow(model, sub, score, color){
-  return '<div class="brow"><div class="blab"><span><span class="bmodel">' + esc(model) + '</span> <span class="bsub">' + esc(sub) + '</span></span><span>' + score + '</span></div>'
-    + '<div class="btrack"><div class="bfill" style="width:' + score + '%;background:' + color + '"></div></div></div>';
+function belnaStartRotator(){
+  belnaStopRotator();
+  let i = 1;
+  belnaPaintHold(0);
+  window.__actTimer = setInterval(() => { belnaPaintHold(i % BELNA_ACTS.length); i++; }, 2400);
 }
 
 function renderLanding(){
-  const who = archeDisplayName();
   root.innerHTML = `
   <div class="fadeup">
     <div class="anav"><nav class="nav">
-      <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} arche</a>
-      <div class="navlinks"><span data-act="scroll" data-t="#safety">Safe Swedish AI</span><span data-act="scroll" data-t="#agent">Personal Agent</span><span data-act="scroll" data-t="#models">Models</span><span data-act="scroll" data-t="#pricing">Pricing</span></div>
+      <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} belna</a>
+      <div class="navlinks"><span data-act="scroll" data-t="#safety">Safe Swedish AI</span><span data-act="scroll" data-t="#agent">Personal Agent</span><a href="models.html">Models</a><a href="pricing.html">Pricing</a><a href="faq.html">FAQ</a></div>
       <div class="anav-cta">
         <button class="btn ghost small hideS" data-act="signin-nav">Sign in</button>
         <button class="btn small" data-act="open-app">Get started</button>
@@ -293,14 +365,9 @@ function renderLanding(){
     </nav></div>
 
     <header class="hero ahero">
-      <div class="eyebrow">${icon('shieldcheck',14)} Star 1.0 · Personal AI Agents</div>
-      <h1>Hi <span class="who">${esc(who)}</span>,<br>I can do anything you can.</h1>
-      <p class="tagline">Meet your Arche agent — it researches, builds, calls, writes and organizes, right beside you.</p>
-      <div class="actbar">
-        <span class="amascot" id="actmascot">${Mascot.svg('lingon','think',40)}</span>
-        <span class="actpill" id="actpill"><span class="aic">${icon('laptop',16)}</span><span>working on a laptop</span></span>
-      </div>
-      <div class="actdots">${ARCH_ACTS.map((a, i) => `<button data-act="actdot" data-i="${i}" class="${i === 0 ? 'on' : ''}" aria-label="${a.label}"></button>`).join('')}</div>
+      <h1>Hi,<br>I can do anything <span class="mhold" id="mhold"><span class="mcore" id="mcore">${Mascot.svg('lingon','think',44)}</span><span class="hprop" id="hprop">${icon('laptop',15)}</span></span> you can.</h1>
+      <div class="safe-note" style="margin-top:18px">Safe Swedish AI Agents</div>
+      <div class="actdots">${BELNA_ACTS.map((a, i) => `<button data-act="actdot" data-i="${i}" class="${i === 0 ? 'on' : ''}" title="${a.label}" aria-label="${a.label}"></button>`).join('')}</div>
       <div class="promptwrap">
         <form class="promptbox" id="lform">
           <textarea id="lprompt" rows="2" placeholder="Ask your agent anything… e.g. Research which Swedish party people say they'll vote for on social media"></textarea>
@@ -315,9 +382,6 @@ function renderLanding(){
         </form>
       </div>
       <div class="landing-thread" id="lthread"></div>
-      <div class="hintline">${icon('spark',13)} Try “review my GitHub pull requests” or “build me a landing page”</div>
-      <div class="safe-note">Swedish Safe AI Agents</div>
-      <div class="scrollcue"><span class="wheel"></span><span>Scroll to see how</span></div>
     </header>
 
     <section class="asection" id="safety" aria-label="Safe Swedish AI">
@@ -325,7 +389,7 @@ function renderLanding(){
       <h2>Safe Swedish AI</h2>
       <div class="split">
         <div>
-          <p class="lede">Star 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
+          <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
           <div class="checklist">
             <div class="row">${icon('lock',16)}<span><b>Sealed vault.</b> Secrets are encrypted; the agent only ever receives masked references.</span></div>
             <div class="row">${icon('shieldcheck',16)}<span><b>Approvals by default.</b> Sensitive actions pause for your yes — revocable anytime.</span></div>
@@ -337,24 +401,20 @@ function renderLanding(){
             <a class="btn ghost small" href="models.html">Explore models</a>
           </div>
         </div>
-        <div class="panel">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><b>Benchmarks vs other models</b><span class="chip green">Star 1.0</span></div>
-          <p class="mut" style="font-size:13px;margin-top:6px">Privacy, safety and Swedish quality — where Star 1.0 leads by design.</p>
-          <div class="bench" style="margin-top:16px">
-            <div><div class="blab" style="font-size:12px;color:var(--mut)"><span>PRIVACY &amp; DATA MINIMIZATION</span></div>
-              ${archeBenchRow('Star 1.0', 'Arche', 94, 'var(--green)')}
-              ${archeBenchRow('Frontier A', 'typical', 71, '#C6C7CC')}
-              ${archeBenchRow('Frontier B', 'typical', 68, '#C6C7CC')}</div>
-            <div><div class="blab" style="font-size:12px;color:var(--mut)"><span>SAFETY GUARDRAILS</span></div>
-              ${archeBenchRow('Star 1.0', 'Arche', 92, 'var(--purple)')}
-              ${archeBenchRow('Frontier A', 'typical', 74, '#C6C7CC')}
-              ${archeBenchRow('Frontier B', 'typical', 70, '#C6C7CC')}</div>
-            <div><div class="blab" style="font-size:12px;color:var(--mut)"><span>SWEDISH LANGUAGE QUALITY</span></div>
-              ${archeBenchRow('Star 1.0', 'Arche', 90, 'var(--acc)')}
-              ${archeBenchRow('Frontier A', 'typical', 88, '#C6C7CC')}
-              ${archeBenchRow('Frontier B', 'typical', 86, '#C6C7CC')}</div>
-          </div>
-          <p class="fineprint">Illustrative preview for launch — verified third-party eval methodology publishes with the Star 1.0 release, and these bars will be replaced by audited numbers.</p>
+        <div class="panel" style="padding:0;overflow:hidden">
+          <div style="padding:22px 22px 0;display:flex;align-items:center;justify-content:space-between;gap:10px"><b>Arche 1.0 vs frontier models</b><span class="chip green">real benchmarks</span></div>
+          <p class="mut" style="font-size:13px;margin-top:6px;padding:0 22px">Arche 1.0 runs Kimi K3 open weights inside the Belna harness — same scores, plus privacy.</p>
+          <div style="overflow-x:auto;margin-top:12px"><table class="btable">
+            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
+            <tbody>
+              <tr><td>GPQA Diamond</td><td class="star">93.5</td><td><b>94.1</b></td><td>92.6</td><td>91.0</td></tr>
+              <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td><b>88.8</b></td><td>88.0</td><td>84.6</td></tr>
+              <tr><td>BrowseComp</td><td class="star"><b>91.2</b></td><td>90.4</td><td>88.0</td><td>84.3</td></tr>
+              <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td><b>85.0</b></td><td>83.4</td></tr>
+              <tr><td>SWE-Marathon</td><td class="star"><b>42.0</b></td><td>39.0</td><td>35.0</td><td>40.0</td></tr>
+            </tbody>
+          </table></div>
+          <p class="fineprint" style="padding:0 22px 20px">Scores: Moonshot AI Kimi K3 technical results (max reasoning effort); competitor scores as reported in the same release. Full table on the <a href="models.html">models page</a>.</p>
         </div>
       </div>
     </section>
@@ -391,7 +451,7 @@ function renderLanding(){
 
     <section class="cta2" id="cta" aria-label="Start">
       <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Start now</div>
-      <h2>What do you want to do, ${esc(who)}?</h2>
+      <h2>What do you want to do?</h2>
       <div class="promptwrap">
         <form class="promptbox" id="lform2">
           <textarea id="lprompt2" rows="2" placeholder="Tell your agent… e.g. Plan my week, build me a page, research a topic"></textarea>
@@ -405,47 +465,15 @@ function renderLanding(){
         </form>
       </div>
       <div class="hintline">${icon('lock',13)} Sealed vault · approvals · sandboxed harness</div>
-    </section>
-
-    <section class="asection" id="models" aria-label="Models">
-      <div class="kicker">Models</div>
-      <h2>Models built for real work</h2>
-      <p class="lede">Star 1.0 pairs open-source Kimi K3 weights with the Arche agentic harness — optimized for privacy, safety and Swedish.</p>
-      <div class="modelgrid">
-        <div class="panel"><span class="chip green">Flagship</span><h3 style="margin-top:10px">Star 1.0 Smart</h3><p class="mut" style="font-size:14px;margin-top:6px;line-height:1.6">Deepest reasoning for research, code review and multi-step plans. Live tools, citations, canvas artifacts.</p><div class="fineprint">Best for: research · builds · reviews</div></div>
-        <div class="panel"><span class="chip purple">Fast</span><h3 style="margin-top:10px">Star 1.0 Fast</h3><p class="mut" style="font-size:14px;margin-top:6px;line-height:1.6">Snappy everyday answers, triage and drafts at lower cost. Same vault, same guardrails.</p><div class="fineprint">Best for: daily chat · summaries · ideas</div></div>
-      </div>
-      <p class="fineprint">Open foundation: Kimi K3 open weights + Arche harness (allowlisted tools, approvals, masked secrets). Full model card in <a href="models.html">models</a>.</p>
-    </section>
-
-    <section class="asection" id="pricing" aria-label="Pricing">
-      <div class="kicker">Pricing</div>
-      <h2>Pricing in API credits</h2>
-      <p class="lede">Free includes <b>$10</b> of API costs. Pro <b>$30</b> <s>$50</s> → $20 credit + $50 gift card. Max <b>$50</b> <s>$100</s> → $50 credit + $100 gift card. Gift codes add real credit.</p>
-      <div class="grid3">
-        <div class="fcard"><div class="fic">${icon('spark',19)}</div><h3>Free — $0</h3><p>$10 API credit. Sign in and start. Usage is metered for real.</p></div>
-        <div class="fcard"><div class="fic" style="background:var(--purple-soft);color:var(--purple)">${icon('star',19)}</div><h3>Pro — $30 <s style="color:var(--mut)">$50</s></h3><p>$20 credit + $50 gift card you can use or gift. Request inside Billing — no charge until payments connect.</p></div>
-        <div class="fcard"><div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('box',19)}</div><h3>Max — $50 <s style="color:var(--mut)">$100</s></h3><p>$50 credit + $100 gift card you can use or gift. Request inside Billing.</p></div>
-      </div>
-    </section>
-
-    <section class="asection" id="faq" aria-label="FAQ">
-      <div class="kicker">FAQ</div>
-      <h2>AI agents, answered</h2>
-      <div class="faq">
-        <details><summary>What is Arche Star 1.0?</summary><p>Star 1.0 is Arche's personal AI agent — built on the open-source Kimi K3 model with an agentic harness optimized for privacy and safety. One person claims each agent, names it, and works with it through chat, canvas and vault.</p></details>
-        <details><summary>How do Arche AI agents keep me safe?</summary><p>Three layers: secrets stay sealed in your vault (the agent only gets masked references), sensitive actions pause for your approval, and browser, code and computer use run in a sandbox with a visible trace.</p></details>
-        <details><summary>What can my agent actually do?</summary><p>Research with live cited sources, build pages and tools, review GitHub pull requests, triage admin, and remember your preferences across chats. If you can think it, your agent can make it real.</p></details>
-        <details><summary>How much does it cost?</summary><p>Free includes $10 of API costs. Pro is $30 with $20 credit + a $50 gift card; Max is $50 with $50 credit + a $100 gift card. See Billing inside the app — upgrades are requests until payments connect.</p></details>
-      </div>
+      <p class="fineprint" style="text-align:center;margin-top:14px">Free includes <b>$10</b> of API costs · Pro $30 · Max $50 — <a href="pricing.html">see full pricing</a> · <a href="models.html">meet Arche 1.0</a> · <a href="faq.html">FAQ</a></p>
     </section>
 
     <footer class="afooter"><div class="fin">
-      <div><div class="abrand">${Mascot.logo(24)} arche</div><p class="mut" style="font-size:13.5px;margin-top:10px;line-height:1.6">Swedish Safe AI Agents.<br>Star 1.0 · Kimi K3 + safety harness.</p></div>
-      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="#pricing">Pricing</a></div>
-      <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a><a href="mailto:hej@arche.se">hej@arche.se</a></div>
+      <div><div class="abrand">${Mascot.logo(24)} belna</div><p class="mut" style="font-size:13.5px;margin-top:10px;line-height:1.6">Swedish Safe AI Agents.<br>Arche 1.0 · Kimi K3 + safety harness.</p></div>
+      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="pricing.html">Pricing</a><a href="faq.html">FAQ</a></div>
+      <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a><a href="mailto:hej@belna.se">hej@belna.se</a></div>
       <div><h4>Legal</h4><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a><a href="security.html">Security</a><a href="cookies.html">Cookie Policy</a></div>
-    </div><div class="base"><span>© 2026 Arche — made in Stockholm</span><span>Star 1.0 harness · your vault</span></div></footer>
+    </div><div class="base"><span>© 2026 Belna — made in Stockholm</span><span>Arche 1.0 harness · your vault</span></div></footer>
   </div>`;
   const wire = (formId, inputId, threadTop) => {
     const f = document.getElementById(formId);
@@ -455,7 +483,6 @@ function renderLanding(){
         e.preventDefault();
         const v = p.value.trim();
         if (!v) return;
-        try { localStorage.setItem('arche.username', archeDisplayName()); } catch {}
         if (formId === 'lform2'){
           const t = document.getElementById('lthread');
           if (t){ t.scrollIntoView({ behavior:'smooth', block:'center' }); }
@@ -469,7 +496,7 @@ function renderLanding(){
   };
   wire('lform', 'lprompt');
   wire('lform2', 'lprompt2', true);
-  archeStartRotator();
+  belnaStartRotator();
 }
 
 async function landingRun(prompt){
@@ -504,6 +531,18 @@ async function landingRun(prompt){
 let ob = null;
 const NAMES = ['Sigge','Nova','Astrid','Nisse','Mio','Saga','Otto','Vera','Lingo','Belle'];
 const PERS = ['Playful','Precise','Calm','Bold'];
+const THEMES = [
+  { id:'grey', name:'Standard Grey', c:'#5A5D63' },
+  { id:'brick', name:'Beige Red', c:'#D9483B' },
+  { id:'blue', name:'Blue', c:'#4353C6' },
+  { id:'yellow', name:'Yellow', c:'#C6922A' },
+  { id:'green', name:'Green', c:'#5F8344' },
+  { id:'pink', name:'Pink', c:'#C96B94' },
+];
+function applyTheme(){
+  if (!THEMES.some(t => t.id === state.theme)) state.theme = 'grey';
+  try { document.body.setAttribute('data-accent', state.theme); } catch {}
+}
 
 function openOnboarding(){
   ob = { step:0, name:'', color:'lingon', pers:'Playful' };
@@ -571,7 +610,8 @@ function finalizeOnboarding(){
    APP SHELL
 ================================================================ */
 function renderApp(){
-  archeStopRotator();
+  applyTheme();
+  belnaStopRotator();
   root.innerHTML = `
   <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'}" id="app">
     <aside class="side" id="side"></aside>
@@ -581,15 +621,38 @@ function renderApp(){
   paintSide(); paintMain(); paintCanvas();
 }
 
+function currentUser(){
+  let sess = null;
+  try { sess = window.LingonAuth && window.LingonAuth.get(); } catch {}
+  const email = (sess && sess.user && sess.user.email) || 'you@example.com';
+  const name = (state.userProfile && state.userProfile.name) || email.split('@')[0];
+  return { email, name };
+}
+function artifactRows(){
+  const rows = [];
+  state.chats.forEach(c => {
+    if (c.artifact) rows.push({ title: c.artifact.title, kind: c.artifact.kind, chat: c.title, chatId: c.id });
+    (c.messages || []).forEach(m => {
+      if (m.kind === 'card' && m.card.type === 'file') rows.push({ title: m.card.name, kind: 'file', chat: c.title, chatId: c.id, card: m.card });
+    });
+  });
+  return rows;
+}
+function approvalRows(){
+  const rows = [];
+  state.chats.forEach(c => (c.messages || []).forEach(m => {
+    if (m.kind === 'card' && m.card.type === 'approval')
+      rows.push({ title: m.card.title, status: m.card.status, chat: c.title });
+  }));
+  return rows;
+}
+
 function paintSide(){
   const a = state.agent;
   if (!a) return;
-  const filesN = state.chats.reduce((n, c) => n + c.messages.filter(m => m.kind === 'card' && m.card.type === 'file').length, 0);
+  const u = currentUser();
+  const initials = esc((u.name || 'U').slice(0, 1).toUpperCase());
   $('#side').innerHTML = `
-    <div class="agentchip" data-act="nav" data-view="profile">
-      ${Mascot.svg(a.color,'idle',34)}
-      <div><b>${esc(a.name)}</b><div class="st"><i></i>claimed · online</div></div>
-    </div>
     <button class="btn" style="margin:8px 4px 4px" data-act="newchat">${icon('plus',15)} New chat</button>
     <div class="slabel">Chats</div>
     <div style="overflow-y:auto;flex:1">
@@ -600,24 +663,41 @@ function paintSide(){
           <span class="del" data-act="delchat" data-id="${c.id}" title="Delete chat">${icon('trash',13)}</span>
         </button>`).join('') || '<div class="empty" style="padding:20px">No chats yet</div>'}
     </div>
-    <div class="slabel">Your agent</div>
-    <button class="sitem ${state.view === 'profile' ? 'on' : ''}" data-act="nav" data-view="profile">${icon('user',15)} Profile</button>
-    <button class="sitem ${state.view === 'vault' ? 'on' : ''}" data-act="nav" data-view="vault">${icon('lock',15)} Vault <span class="cnt">${state.vault.secrets.length + filesN}</span></button>
-    <button class="sitem ${state.view === 'memory' ? 'on' : ''}" data-act="nav" data-view="memory">${icon('book',15)} Memory <span class="cnt">${state.memory.length}</span></button>
-    <button class="sitem ${state.view === 'billing' ? 'on' : ''}" data-act="nav" data-view="billing">${icon('spark',15)} Billing</button>
-    <button class="sitem" data-act="signout">${icon('x',15)} Sign out</button>
-    <div class="foot">
-      <div class="badge">${icon('shieldcheck',13)} Agents harness (Codex pattern, Gemini-backed)</div>
+    <div class="sidebottom">
+      <div class="usagecard" id="usagecard"><span class="mut" style="font-size:12px">Loading usage…</span></div>
+      <div class="userwrap">
+        ${state.userMenuOpen ? `<div class="usermenu pop">
+          <button class="sitem" data-act="nav" data-view="settings">${icon('gear',15)} Settings</button>
+          <button class="sitem" data-act="nav" data-view="apps">${icon('box',15)} Apps</button>
+          <button class="sitem" data-act="signout">${icon('x',15)} Sign out</button>
+        </div>` : ''}
+        <button class="userrow" data-act="usermenu">
+          <span class="uava">${initials}</span>
+          <span class="uinfo"><b>${esc(u.name)}</b><span class="umail">${esc(u.email)}</span></span>
+        </button>
+      </div>
     </div>`;
+  // usage card: usage left + plan (real billing when signed in)
+  try {
+    getBilling().then(b => {
+      const box = $('#usagecard');
+      if (!box) return;
+      if (b) box.innerHTML = `<div class="urow"><span class="chip ${b.remaining > 1 ? 'green' : ''}">$${Number(b.remaining).toFixed(2)} left</span><span class="uplan">${esc(String(b.plan).toUpperCase())} plan</span></div><div class="ubar"><i style="width:${Math.min(100, Math.max(0, (b.total ? (b.total - b.remaining) / b.total * 100 : 0)))}%"></i></div>`;
+      else box.innerHTML = `<div class="urow"><span class="chip green">$10.00 left</span><span class="uplan">FREE plan</span></div><div class="ubar"><i style="width:4%"></i></div>`;
+    }).catch(() => {});
+  } catch {}
 }
 
 function paintMain(){
   const M = $('#main');
   if (state.view === 'chat') return paintChat(M);
-  if (state.view === 'vault') return paintVault(M);
-  if (state.view === 'memory') return paintMemory(M);
-  if (state.view === 'profile') return paintProfile(M);
-  if (state.view === 'billing') return paintBilling(M);
+  if (state.view === 'settings') return paintSettings(M);
+  if (state.view === 'apps') return paintApps(M);
+  // legacy views now live inside Settings tabs
+  if (state.view === 'vault'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); return paintSettings(M); }
+  if (state.view === 'memory'){ state.view = 'settings'; state.settingsTab = 'memory'; save(); return paintSettings(M); }
+  if (state.view === 'profile'){ state.view = 'settings'; state.settingsTab = 'profiles'; save(); return paintSettings(M); }
+  if (state.view === 'billing'){ state.view = 'settings'; state.settingsTab = 'billing'; save(); return paintSettings(M); }
   return paintChat(M);
 }
 
@@ -656,7 +736,7 @@ function paintChat(M){
     <div class="floathead"><div class="fav">${Mascot.svg(state.agent.color,'idle',40)}</div><div class="pill">${esc(state.agent.name)}<span class="st" id="floatstatus"></span></div></div>
     <div class="chathead">
       <span class="ttl">${esc(c.title)}</span>
-      ${c.busy ? '<span class="chip purple">' + icon('refresh',12) + ' working…</span>' : ''}
+      ${c.busy ? '<span class="chip">' + icon('refresh',12) + ' working…</span>' : ''}
       <span class="sp"></span>
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('panel',16)}</button>
     </div>
@@ -698,13 +778,13 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
 
 /* ---------------- cards ---------------- */
 const STCHIP = {
-  pending:'<span class="chip acc">waiting for you</span>',
+  pending:'<span class="chip">waiting for you</span>',
   approved:'<span class="chip green">approved</span>',
   always:'<span class="chip green">always allowed</span>',
-  denied:'<span class="chip" style="background:var(--acc-soft);color:var(--acc)">denied</span>',
+  denied:'<span class="chip">denied</span>',
   connected:'<span class="chip green">connected</span>',
   saved:'<span class="chip green">sealed in vault</span>',
-  answered:c => `<span class="chip purple">you: ${esc(c.choice)}</span>`,
+  answered:c => `<span class="chip green">you: ${esc(c.choice)}</span>`,
   done:'<span class="chip green">done</span>',
   skipped:'<span class="chip">skipped</span>',
   expired:'<span class="chip">expired</span>',
@@ -714,7 +794,7 @@ const stChip = c => { const v = STCHIP[c.status]; return typeof v === 'function'
 function cardNode(c, m){
   const k = c.id, mid = m.id, cd = m.card;
   const auto = cd.type === 'subagents' || cd.type === 'browser' || cd.type === 'computer';
-  const chip = auto ? (cd.status === 'done' ? STCHIP.done : '<span class="chip purple">running</span>') : stChip(cd);
+  const chip = auto ? (cd.status === 'done' ? STCHIP.done : '<span class="chip">running</span>') : stChip(cd);
   const hd = (ic, bg, fg, title, sub) => `<div class="hd"><div class="tile" style="background:${bg};color:${fg}">${ic}</div><div><b>${title}</b><div class="sub">${sub}</div></div><div class="st">${chip}</div></div>`;
   const pending = cd.status === 'pending';
 
@@ -731,7 +811,7 @@ function cardNode(c, m){
   }
 
   if (cd.type === 'secret') return `<div class="acard">
-    ${hd(icon('lock',20),'var(--purple-soft)','var(--purple)','Secure credentials store','encrypted at rest · agent gets a reference only')}
+    ${hd(icon('lock',20),'var(--acc-soft)','var(--acc)','Secure credentials store','encrypted at rest · agent gets a reference only')}
     <div class="bd">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <input class="field" style="flex:1;min-width:140px" data-f="name" placeholder="secret name" value="${esc(cd.nameVal || cd.suggest || '')}">
@@ -742,7 +822,7 @@ function cardNode(c, m){
     ${pending ? `<div class="stack"><button class="btn" data-act="save-secret" data-chat="${k}" data-msg="${mid}">${icon('lock',14)} Save to vault</button><button class="btn ghost" data-act="skip-secret" data-chat="${k}" data-msg="${mid}">Skip</button></div>` : (cd.status === 'saved' ? `<div class="ft"><span class="note mono">${esc(cd.ref)} · ••••••••</span></div>` : '')}</div>`;
 
   if (cd.type === 'question') return `<div class="acard">
-    ${hd(icon('spark',20),'var(--purple-soft)','var(--purple)','Question', state.agent.name + ' is asking')}
+    ${hd(icon('spark',20),'var(--acc-soft)','var(--acc)','Question', state.agent.name + ' is asking')}
     <div class="bd"><b>${esc(cd.q)}</b>
     <div class="qopts" style="margin-top:10px">${cd.options.map(o => {
       const on = cd.status === 'answered' && cd.choice === o;
@@ -760,10 +840,11 @@ function cardNode(c, m){
     </div>`).join('')}</div></div>`;
 
   if (cd.type === 'browser') return `<div class="acard">
-    ${hd(icon('globe',20),'#EAF1FB','#2F6FDB','Browser', esc(cd.note))}
+    ${hd(icon('globe',20),'var(--ink)','#fff','Browser', esc(cd.note))}
     <div class="bd"><div class="win"><div class="bar"><i></i><i></i><i></i><span class="url">${esc(cd.url)}</span></div>
+    ${cd.screenshot ? `<div class="shot"><img src="${cd.screenshot}" alt="Rendered page screenshot" loading="lazy"></div>` : ''}
     <div class="scr">${cd.status === 'done' ? `<span style="color:var(--green)">${icon('check',14)}</span>` : `<span class="spin">${icon('refresh',14)}</span>`} ${esc(cd.note)}</div></div></div>
-    <div class="stack"><button class="btn ghost" data-act="openbrowser">Open browser</button></div></div>`;
+    <div class="stack">${cd.liveId ? `<button class="btn" data-act="watchlive">Watch live</button>` : ''}<button class="btn ghost" data-act="viewcanvas">Follow in canvas</button></div></div>`;
 
   if (cd.type === 'computer') return `<div class="acard">
     ${hd(icon('term',20),'var(--ink)','#fff','Sandboxed computer use','Agents sandbox · allowlisted network, no writes outside run')}
@@ -784,7 +865,7 @@ function cardNode(c, m){
     </div></div>`;
 
   if (cd.type === 'memory') return `<div class="acard">
-    ${hd(icon('book',20),'var(--purple-soft)','var(--purple)','Saved to memory','I can recall this in any chat')}
+    ${hd(icon('book',20),'var(--green-soft)','var(--green)','Saved to memory','I can recall this in any chat')}
     <div class="bd">${esc(cd.text)}</div></div>`;
 
   return '';
@@ -874,6 +955,25 @@ function replaceNode(c, m){
   const old = document.querySelector(`[data-mid="${m.id}"]`);
   if (old) old.replaceWith(msgNode(c, m));
   updateFloat();
+  // Live-follow: browser/computer progress also renders in the canvas timeline.
+  if (m.kind === 'card' && (m.card.type === 'browser' || m.card.type === 'computer')
+      && state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && isActive(c)) paintCanvas();
+}
+
+/* Run timeline: browser visits + computer runs from this chat, so users can
+   follow tool use live in the canvas — same data as the chat cards. */
+function runTimelineHTML(c){
+  if (!c) return '';
+  const runs = (c.messages || []).filter(m => m.kind === 'card' && (m.card.type === 'browser' || m.card.type === 'computer'));
+  if (!runs.length) return '';
+  return `<div class="runbox"><div class="runhead">${icon('box',14)} Live run — browser &amp; computer use</div>` + runs.map(m => {
+    const cd = m.card;
+    if (cd.type === 'browser') return `<div class="runrow"><span class="rtile">${icon('globe',14)}</span><div class="rbody">
+      <div class="rurl">${esc(cd.url)}</div><div class="rnote">${cd.status === 'done' ? 'rendered' : 'opening…'} · ${esc(cd.note)}</div>
+      ${cd.screenshot ? `<div class="shot"><img src="${cd.screenshot}" alt="Rendered page screenshot" loading="lazy"></div>` : ''}</div></div>`;
+    return `<div class="runrow"><span class="rtile dark">${icon('term',14)}</span><div class="rbody">
+      <div class="term mini">${cd.lines.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}</div></div></div>`;
+  }).join('') + `</div>`;
 }
 
 function resolveCard(c, m, payload, status){
@@ -913,26 +1013,240 @@ function newChat(){
   runGreet(c);
 }
 
-/* ---------------- canvas ---------------- */
+/* ---------------- canvas + right-side agent slider ---------------- */
+function agentSliderContent(){
+  const t = state.agentTab || 'appearance';
+  const a = state.agent;
+  let body = '';
+  if (t === 'appearance'){
+    body = `
+      <div class="aslider-sec">
+        <div style="display:flex;gap:12px;align-items:center">${Mascot.svg(a.color,'happy',54)}<div><b>${esc(a.name)}</b><div><span class="chip">Arche 1.0</span></div></div></div>
+        <label class="alabel">Agent name</label>
+        <input class="field" id="agentname" maxlength="18" value="${esc(a.name)}">
+        <label class="alabel">Mascot appearance</label>
+        <div class="swatches" style="justify-content:flex-start;margin-top:8px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}" title="${Mascot.PALETTE[k].name}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
+        <label class="alabel">Personality</label>
+        <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
+      </div>`;
+  } else if (t === 'library'){
+    const arts = artifactRows();
+    body = `<div class="aslider-sec"><label class="alabel">Artifacts &amp; files (${arts.length})</label>
+      <div class="kv">${arts.map(r => `<div class="row"><span style="color:var(--mut)">${icon(r.kind === 'file' ? 'file' : 'spark',15)}</span><div><b>${esc(r.title)}</b><div class="sub">${esc(r.kind)} · from “${esc(r.chat)}”</div></div></div>`).join('') || '<div class="row mut">No artifacts or files yet.</div>'}</div>
+      <div class="secnote">${icon('shieldcheck',14)} Everything here was really generated — never simulated.</div></div>`;
+  } else {
+    const ap = approvalRows();
+    body = `<div class="aslider-sec"><label class="alabel">Approval history (${ap.length + state.vault.approvals.length})</label>
+      <div class="kv">
+        ${state.vault.approvals.map(x => `<div class="row"><span style="color:var(--green)">${icon('check',15)}</span><div><b>${esc(x.label)}</b><div class="sub">always allowed · ${fmtWhen(x.at)}</div></div><div class="rgt"><button class="btn ghost small" data-act="revoke" data-id="${x.id}">Revoke</button></div></div>`).join('')}
+        ${ap.map(x => `<div class="row"><span style="color:var(--mut)">${icon('shieldcheck',15)}</span><div><b>${esc(x.title)}</b><div class="sub">${esc(x.status)} · “${esc(x.chat)}”</div></div></div>`).join('') || (state.vault.approvals.length ? '' : '<div class="row mut">No approvals yet — sensitive actions will pause for you here.</div>')}
+      </div></div>`;
+  }
+  return `<div class="aslider fill">
+    <div class="atabs">
+      <button class="${t === 'appearance' ? 'on' : ''}" data-act="agenttab" data-t="appearance">Appearance</button>
+      <button class="${t === 'approvals' ? 'on' : ''}" data-act="agenttab" data-t="approvals">Approvals</button>
+      <button class="${t === 'library' ? 'on' : ''}" data-act="agenttab" data-t="library">Library</button>
+    </div>${body}</div>`;
+}
+
+/* Live tab helpers: newest live browser session id for this chat. */
+function liveIdFor(c){
+  if (!c) return null;
+  for (let i = (c.messages || []).length - 1; i >= 0; i--){
+    const m = c.messages[i];
+    if (m.kind === 'card' && m.card.type === 'browser' && m.card.liveId) return m.card.liveId;
+  }
+  return null;
+}
+function computerLinesFor(c){
+  const out = [];
+  (c && c.messages || []).forEach(m => {
+    if (m.kind === 'card' && m.card.type === 'computer') (m.card.lines || []).forEach(L => out.push(L));
+  });
+  return out.slice(-14);
+}
+function pcIdFor(c){
+  if (!c) return null;
+  for (let i = (c.messages || []).length - 1; i >= 0; i--){
+    const m = c.messages[i];
+    if (m.kind === 'card' && m.card.type === 'computer' && m.card.pcId) return m.card.pcId;
+  }
+  return null;
+}
+
+/* Live view client: one WS per tab render. Frames paint the <img>; state
+   messages drive the blue working glow; input forwards only in takeover. */
+let liveWS = null, liveIdShown = null, liveControl = false;
+let pcWS = null, pcIdShown = null;
+function liveClose(){
+  try { liveWS && liveWS.close(); } catch {}
+  try { pcWS && pcWS.close(); } catch {}
+  liveWS = null; liveIdShown = null; liveControl = false; pcWS = null; pcIdShown = null;
+}
+function paintLive(body, c){
+  const id = liveIdFor(c);
+  const terms = computerLinesFor(c);
+  if (!id){
+    if (liveIdShown) liveClose();
+    body.innerHTML = `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">No live session</div><div class="mut2">Ask for research and the agent's real browser appears here — watch it, take over, hand back.</div></div>`;
+    return;
+  }
+  const poster = (c.messages || []).reduce((acc, m) => (m.kind === 'card' && m.card.type === 'browser' && m.card.screenshot) ? m.card.screenshot : acc, '');
+  window.__liveFrames = 0;
+  body.innerHTML = `
+    <div class="livewrap" id="livewrap">
+      <div class="livebar"><span class="url" id="liveurl">connecting…</span><span class="chip purple" id="livestate">connecting</span></div>
+      <div class="liveview" id="liveview">
+        <img id="liveimg" alt="Live browser"${poster ? ` src="${poster}"` : ''}>
+        <div class="bigcursor" id="bigcursor"></div>
+      </div>
+      <div class="pctitle">${icon('term',13)} Computer — live sandbox terminal</div>
+      <div class="term mini" id="pcout" style="margin-top:6px">${terms.length ? terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('') : '<div class="mut">No runs yet in this chat.</div>'}</div>
+      <div class="pcinput" id="pcinput" style="display:none"><input class="field mono" id="pccmd" placeholder="Type JS — runs for real in the sandbox (e.g. console.log(input.prs.length))"><button class="btn small" data-act="pcrun">Run</button></div>
+      <div class="controlbar">
+        <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
+        <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">streaming the real page</div></div>
+        <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
+        <button class="btn ghost small" data-act="closestop-live">Close</button>
+      </div>
+    </div>`;
+  liveConnect(id);
+}
+function liveConnect(id){
+  if (liveWS && liveIdShown === id){ pcConnect(); return; }
+  liveClose();
+  const sess = window.LingonAuth && window.LingonAuth.get();
+  if (!sess || !sess.access_token){ $('#livestate').textContent = 'sign in expired'; return; }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(proto + '//' + location.host + '/ws/live/' + id + '?token=' + encodeURIComponent(sess.access_token));
+  liveWS = ws; liveIdShown = id; liveControl = false;
+  const img = () => $('#liveimg'), wrap = () => $('#livewrap'), st = () => $('#livestate');
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.frame && img()){ img().src = 'data:image/jpeg;base64,' + m.frame; window.__liveFrames = (window.__liveFrames || 0) + 1; }
+    if (m.hello && $('#liveurl')) $('#liveurl').textContent = m.url || m.hello;
+    if (m.state) liveState(m.state, m);
+  };
+  ws.onclose = () => { if (st()){ st().textContent = 'session ended'; } const b = $('#takebtn'); if (b){ b.disabled = true; } };
+  const view = $('#liveview'), cur = $('#bigcursor');
+  let lastMove = 0;
+  const pos = (e) => {
+    const r = view.getBoundingClientRect();
+    return { x: Math.round((e.clientX - r.left) * (1280 / r.width)), y: Math.round((e.clientY - r.top) * (900 / r.height)) };
+  };
+  view.onmousemove = (e) => {
+    const r = view.getBoundingClientRect();
+    cur.style.left = (e.clientX - r.left) + 'px'; cur.style.top = (e.clientY - r.top) + 'px';
+    const now = Date.now();
+    if (liveControl && ws.readyState === 1 && now - lastMove > 80){ lastMove = now; const p = pos(e); liveSend({ type: 'move', ...p }); }
+  };
+  view.onclick = (e) => { if (!liveControl || ws.readyState !== 1) return; const p = pos(e); liveSend({ type: 'click', ...p }); };
+  view.onwheel = (e) => { if (!liveControl || ws.readyState !== 1) return; e.preventDefault(); liveSend({ type: 'scroll', dy: Math.round(e.deltaY) }); };
+  document.onkeydown = (e) => {
+    if (!liveControl || !liveWS || liveWS.readyState !== 1) return;
+    if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+    if (e.key.length === 1) liveSend({ type: 'type', text: e.key });
+    else if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Delete'].includes(e.key)){ e.preventDefault(); liveSend({ type: 'key', key: e.key }); }
+  };
+  pcConnect();
+}
+/* Computer stream: appends real sandbox output lines as runs happen. */
+function pcConnect(){
+  const c = chat();
+  const pcId = pcIdFor(c);
+  const out = $('#pcout');
+  if (!pcId || !out) return;
+  if (pcWS && pcIdShown === pcId) return;
+  try { pcWS && pcWS.close(); } catch {}
+  const sess = window.LingonAuth && window.LingonAuth.get();
+  if (!sess || !sess.access_token) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(proto + '//' + location.host + '/ws/pc/' + pcId + '?token=' + encodeURIComponent(sess.access_token));
+  pcWS = ws; pcIdShown = pcId;
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.hello && m.log && out) out.innerHTML = m.log.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('');
+    if (Array.isArray(m.out) && out){
+      if (out.querySelector('.mut') && out.children.length <= 1) out.innerHTML = '';
+      m.out.forEach(L => { out.insertAdjacentHTML('beforeend', `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`); });
+      out.scrollTop = out.scrollHeight;
+    }
+    if (m.state) liveState(m.state === 'user' ? 'user' : m.state);
+  };
+}
+function liveState(s, m){
+  const wrap = $('#livewrap'), st = $('#livestate'), sub = $('#livesub'), btn = $('#takebtn');
+  if (m && m.url && $('#liveurl')) $('#liveurl').textContent = m.url;
+  if (m && m.title && $('#livesub') && !liveControl) sub.textContent = m.title;
+  if (wrap) wrap.classList.toggle('working', s === 'working' && !liveControl);
+  if (st) st.textContent = liveControl ? 'you drive' : s;
+  if (btn) btn.textContent = liveControl ? 'Give back' : 'Take over';
+  if (sub && liveControl) sub.textContent = 'you hold the mouse & keyboard — agent waits';
+}
+async function liveTakeover(){
+  const c = chat();
+  const id = liveIdShown, pcId = pcIdFor(c);
+  if (!id && !pcId){ toast('No live session in this chat yet.'); return; }
+  const want = !liveControl;
+  try {
+    if (id) await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
+    if (pcId) await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ pcId, on: want }) });
+    liveControl = want;
+    const pi = $('#pcinput'); if (pi) pi.style.display = want ? 'flex' : 'none';
+    pcConnect();
+    liveState(want ? 'user' : 'idle');
+    toast(want ? 'You drive browser + computer — the agent waits.' : 'Agent drives again.');
+  } catch (e) { toast(e.message); }
+}
+async function liveSend(ev){
+  // Input goes over REST (auth-checked); frames come over WS.
+  const id = liveIdShown; if (!id) return;
+  try {
+    const j = await window.LingonAuth.api('/api/live/input', { method: 'POST', body: JSON.stringify({ liveId: id, ev }) });
+    if (j.url && $('#liveurl')) $('#liveurl').textContent = j.url;
+  } catch {}
+}
 function paintCanvas(){
   const cv = $('#canvas'); if (!cv) return;
+  if (state.canvasTab === 'live'){ /* keep socket across repaints of the same session */ }
+  else if (liveWS) liveClose();
   const c = chat();
+  const top = state.canvasTab || 'canvas';
+  const liveId = liveIdFor(c);
   cv.innerHTML = `
-    <div class="ctabs">
-      <button class="ctab ${state.canvasTab === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('panel',14)} Canvas</button>
-      <button class="ctab ${state.canvasTab === 'trace' ? 'on' : ''}" data-act="ctab" data-t="trace">${icon('list',14)} Trace <span class="cnt">${(c && c.trace || []).length}</span></button>
+    <div class="atabs ttop">
+      <button class="agent ${top === 'agent' ? 'on' : ''}" data-act="ctab" data-t="agent" title="Agent panel">${Mascot.svg(state.agent.color,'idle',22)}<span>${esc(state.agent.name)}</span></button>
+      <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas</button>
+      <button class="${top === 'live' ? 'on' : ''}" data-act="ctab" data-t="live">${icon('globe',14)} Live${liveId ? '<span class="livedot"></span>' : ''}</button>
+      <button class="${top === 'trace' ? 'on' : ''}" data-act="ctab" data-t="trace">${icon('list',14)} Trace <span class="cnt">${(c && c.trace || []).length}</span></button>
     </div>
     <div class="cbody" id="cbody"></div>`;
   const body = $('#cbody');
+  if (top === 'agent'){
+    body.innerHTML = agentSliderContent();
+    const an = $('#agentname');
+    if (an) an.addEventListener('change', e => {
+      const v = e.target.value.trim(); if (!v) return;
+      state.agent.name = v; save(); paintSide(); paintCanvas();
+      toast('Renamed — they answer to ' + v + ' now.');
+    });
+    return;
+  }
   if (state.canvasTab === 'trace'){
     body.innerHTML = (c && c.trace && c.trace.length)
       ? `<div class="tools" style="border:none;padding:0">${c.trace.map(t => `<div class="tline">${icon(t.ic,13)}<span>${esc(t.t)}</span></div>`).join('')}</div>`
       : `<div class="cempty">${Mascot.svg(state.agent.color,'think',70,'mascot-bob')}<div class="mut2">Every tool call, guardrail and sub-agent step will appear here.</div></div>`;
     return;
   }
+  if (top === 'live'){
+    paintLive(body, c);
+    return;
+  }
   const a = c && c.artifact;
+  const run = runTimelineHTML(c);
   if (!a){
-    body.innerHTML = `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">The canvas</div><div class="mut2">Charts, live pages, diffs and plans I create will render here while we chat.</div></div>`;
+    body.innerHTML = run || `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">The canvas</div><div class="mut2">Charts, live pages, diffs and plans I create will render here while we chat.</div></div>`;
     return;
   }
   if (a.kind === 'chart'){
@@ -943,15 +1257,15 @@ function paintCanvas(){
     return;
   }
   if (a.kind === 'html'){
-    body.innerHTML = `<div class="arti-head"><b>${esc(a.title)}</b><span class="chip green">live</span></div><div class="arti-frame"><iframe sandbox="allow-scripts" srcdoc="${esc(a.html)}"></iframe></div>`;
+    body.innerHTML = run + `<div class="arti-head"><b>${esc(a.title)}</b><span class="chip green">live</span></div><div class="arti-frame"><iframe sandbox="allow-scripts" srcdoc="${esc(a.html)}"></iframe></div>`;
     return;
   }
   if (a.kind === 'code'){
-    body.innerHTML = `<div class="arti-head"><b>${esc(a.title)}</b><button class="btn ghost tiny" data-act="copycode">${icon('copy',13)} Copy</button></div><div class="codebox" id="codebox">${esc(a.code)}</div>`;
+    body.innerHTML = run + `<div class="arti-head"><b>${esc(a.title)}</b><button class="btn ghost tiny" data-act="copycode">${icon('copy',13)} Copy</button></div><div class="codebox" id="codebox">${esc(a.code)}</div>`;
     return;
   }
   if (a.kind === 'plan'){
-    body.innerHTML = `<div class="planbox"><div class="ct" style="font-weight:800;margin-bottom:10px">${esc(a.title)}</div><div class="md">${a.items.map(i => `<p>${md(i).replace(/<\/?p>/g,'')}</p>`).join('')}</div></div>`;
+    body.innerHTML = run + `<div class="planbox"><div class="ct" style="font-weight:800;margin-bottom:10px">${esc(a.title)}</div><div class="md">${a.items.map(i => `<p>${md(i).replace(/<\/?p>/g,'')}</p>`).join('')}</div></div>`;
     return;
   }
 }
@@ -975,7 +1289,7 @@ function paintVault(M){
     <div class="warnband">${icon('shieldcheck',18)}<div><b>The agent never sees your secrets.</b>Values are masked everywhere in chat and traces; the model receives references like <span class="mono">sec_••••</span> only. Reveal below is for your eyes alone, on this device.</div></div>
     <div class="kv">
       ${v.secrets.map(s => `<div class="row">
-        <span style="color:var(--purple)">${icon('lock',16)}</span>
+        <span style="color:var(--mut)">${icon('lock',16)}</span>
         <div><b class="mono">${esc(s.name)}</b><div class="sub">${esc(s.ref)} · added ${fmtWhen(s.at)}</div></div>
         <div class="rgt">
           <span class="mono mut" data-rev="${s.id}" style="letter-spacing:.08em">${s.revealed ? esc(s.value) : '•••• •••• ••••'}</span>
@@ -1024,10 +1338,10 @@ function paintVault(M){
 
 function paintMemory(M){
   M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Memory</h1><span class="chip purple">${icon('book',12)} ${state.memory.length} stored</span></div>
+    <div class="phead"><h1>Memory</h1><span class="chip">${icon('book',12)} ${state.memory.length} stored</span></div>
     <p class="psub">What ${esc(state.agent.name)} remembers across chats. Delete anything, anytime.</p>
     <div class="kv">${state.memory.map(m => `<div class="row">
-      <span style="color:var(--purple)">${icon('book',16)}</span>
+      <span style="color:var(--mut)">${icon('book',16)}</span>
       <div><b style="font-weight:600">${esc(m.text)}</b><div class="sub">${esc(m.src)} · ${fmtWhen(m.at)}</div></div>
       <div class="rgt"><button class="iconbtn" data-act="delmem" data-id="${m.id}">${icon('trash',14)}</button></div></div>`).join('') || '<div class="row mut">Nothing remembered yet.</div>'}</div>
   </div></div>`;
@@ -1056,8 +1370,154 @@ function paintProfile(M){
   </div></div>`;
   $('#pname').addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
-    state.agent.name = v; save(); paintSide(); toast('Renamed — they answer to ' + v + ' now.');
+    state.agent.name = v; save(); paintSide(); paintCanvas(); toast('Renamed — they answer to ' + v + ' now.');
   });
+}
+
+/* ---------------- Settings (profiles / secrets / memory / browser / billing) ---------------- */
+function settingsSecretsBody(v){
+  return `
+    <div class="warnband">${icon('shieldcheck',18)}<div><b>The agent never sees your secrets.</b>Values are masked everywhere in chat and traces; the model receives references like <span class="mono">sec_••••</span> only. Reveal below is for your eyes alone, on this device.</div></div>
+    <div class="kv">
+      ${v.secrets.map(s => `<div class="row">
+        <span style="color:var(--mut)">${icon('lock',16)}</span>
+        <div><b class="mono">${esc(s.name)}</b><div class="sub">${esc(s.ref)} · added ${fmtWhen(s.at)}</div></div>
+        <div class="rgt">
+          <span class="mono mut" data-rev="${s.id}" style="letter-spacing:.08em">${s.revealed ? esc(s.value) : '•••• •••• ••••'}</span>
+          <button class="iconbtn" data-act="reveal" data-id="${s.id}" title="Reveal (only you)">${s.revealed ? icon('eyeoff',14) : icon('eye',14)}</button>
+          <button class="iconbtn" data-act="delsecret" data-id="${s.id}" title="Delete">${icon('trash',14)}</button>
+        </div></div>`).join('') || '<div class="row mut">No secrets yet — the secrets box in chat adds them here.</div>'}
+      <div class="row" style="background:var(--panel)">
+        <input class="field" id="vname" placeholder="name" style="max-width:170px">
+        <input class="field mono" id="vval" type="password" placeholder="value" style="flex:1">
+        <button class="btn small" data-act="addsecret">${icon('plus',14)} Add</button>
+      </div>
+    </div>`;
+}
+function paintSettings(M){
+  const a = state.agent;
+  const u = currentUser();
+  const tab = state.settingsTab || 'profiles';
+  let body = '';
+  if (tab === 'profiles'){
+    body = `
+    <div class="profiletop">
+      <div><span class="uava big">${esc((u.name || 'U').slice(0, 1).toUpperCase())}</span></div>
+      <div class="info">
+        <label class="alabel">Display name</label>
+        <input class="field" id="uname" value="${esc(u.name)}" maxlength="40" style="max-width:280px;font-weight:700">
+        <div class="sub" style="margin-top:6px">${esc(u.email)} · Arche 1.0 · your data is never shared with other users</div>
+      </div>
+    </div>
+    <div class="psec"><h3>${icon('spark',15)} Your agent</h3>
+      <div class="profiletop">
+        <div id="pmascot">${Mascot.svg(a.color,'happy',90,'mascot-bob')}</div>
+        <div class="info">
+          <input class="field" id="pname" value="${esc(a.name)}" maxlength="18" style="max-width:220px;font-weight:700">
+          <div class="swatches" style="justify-content:flex-start;margin-top:14px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
+          <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
+        </div>
+      </div>
+    </div>
+    <div class="psec"><h3 style="color:var(--acc)">${icon('alert',15)} Danger zone</h3>
+      <div class="kv"><div class="row"><div><b>Release this agent</b><div class="sub">Deletes chats, vault, memory and the claim on this device.</div></div>
+      <div class="rgt"><button class="btn soft small" data-act="reset">Release</button></div></div></div>
+    </div>`;
+  } else if (tab === 'theme'){
+    const cur = THEMES.find(t => t.id === (state.theme || 'grey')) || THEMES[0];
+    body = `<p class="psub">Accent color for highlights, selections and card headers. Standard Grey is the default — everything stays neutral until you pick a color.</p>
+    <div class="kv"><div class="row" style="align-items:flex-start"><span style="color:var(--mut)">${icon('star',16)}</span>
+      <div style="flex:1"><b>Accent color</b><div class="sub">Current: ${esc(cur.name)} · applies instantly</div>
+        <div class="swatches" style="justify-content:flex-start;margin-top:12px">${THEMES.map(t => `<button class="swatch ${cur.id === t.id ? 'on' : ''}" data-act="theme" data-v="${t.id}" title="${t.name}"><span style="width:26px;height:26px;border-radius:50%;background:${t.c};display:block"></span></button>`).join('')}</div>
+      </div></div></div>`;
+  } else if (tab === 'secrets'){
+    body = settingsSecretsBody(state.vault);
+  } else if (tab === 'memory'){
+    body = `<div class="kv">${state.memory.map(m => `<div class="row">
+      <span style="color:var(--mut)">${icon('book',16)}</span>
+      <div><b style="font-weight:600">${esc(m.text)}</b><div class="sub">${esc(m.src)} · ${fmtWhen(m.at)}</div></div>
+      <div class="rgt"><button class="iconbtn" data-act="delmem" data-id="${m.id}">${icon('trash',14)}</button></div></div>`).join('') || '<div class="row mut">Nothing remembered yet.</div>'}</div>`;
+  } else if (tab === 'browser'){
+    const bp = state.browserProfile || { profile:'Default', sandbox:true, allowlist:true };
+    body = `<div class="kv">
+      <div class="row"><span style="color:var(--mut)">${icon('globe',16)}</span><div><b>Profile</b><div class="sub">Sandboxed browser identity for this device</div></div>
+      <div class="rgt"><input class="field" id="bprof" value="${esc(bp.profile)}" style="max-width:180px"></div></div>
+      <div class="row"><span style="color:var(--green)">${icon('shieldcheck',16)}</span><div><b> Sandboxed harness</b><div class="sub">Browser, code and computer use stay contained — every step visible in Trace.</div></div>
+      <div class="rgt"><button class="btn ${bp.sandbox ? '' : 'ghost'} small" data-act="btoggle" data-k="sandbox">${bp.sandbox ? 'On' : 'Off'}</button></div></div>
+      <div class="row"><span style="color:var(--mut)">${icon('list',16)}</span><div><b>Allowlisted network</b><div class="sub">Only approved hosts are fetched server-side.</div></div>
+      <div class="rgt"><button class="btn ${bp.allowlist ? '' : 'ghost'} small" data-act="btoggle" data-k="allowlist">${bp.allowlist ? 'On' : 'Off'}</button></div></div>
+    </div>`;
+  } else if (tab === 'billing'){
+    body = `<div id="billbody"><div class="row mut">Loading…</div></div>
+      <div class="kv" style="margin-top:14px"><div class="row" style="background:var(--panel)">
+      <input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" style="flex:1">
+      <button class="btn small" data-act="redeem">Redeem gift</button></div></div>
+      <div class="kv" id="plancards" style="margin-top:14px"></div>`;
+  }
+  M.innerHTML = `<div class="page"><div class="pageinner">
+    <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
+    <p class="psub">User profiles, secrets, memory, browser profile and billing — all scoped to your account, never shared.</p>
+    <div class="seg">
+      <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles">${icon('user',14)} Profiles</button>
+      <button class="${tab === 'theme' ? 'on' : ''}" data-act="stab" data-t="theme">${icon('star',14)} Theme</button>
+      <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets">${icon('key',14)} Secrets</button>
+      <button class="${tab === 'memory' ? 'on' : ''}" data-act="stab" data-t="memory">${icon('book',14)} Memory</button>
+      <button class="${tab === 'browser' ? 'on' : ''}" data-act="stab" data-t="browser">${icon('globe',14)} Browser</button>
+      <button class="${tab === 'billing' ? 'on' : ''}" data-act="stab" data-t="billing">${icon('spark',14)} Billing</button>
+    </div>
+    ${body}
+  </div></div>`;
+  const pn = $('#pname');
+  if (pn) pn.addEventListener('change', e => {
+    const v = e.target.value.trim(); if (!v) return;
+    state.agent.name = v; save(); paintSide(); paintCanvas(); toast('Renamed — they answer to ' + v + ' now.');
+  });
+  const un = $('#uname');
+  if (un) un.addEventListener('change', e => {
+    const v = e.target.value.trim(); if (!v) return;
+    state.userProfile = Object.assign({}, state.userProfile, { name: v }); save(); paintSide(); toast('Profile updated.');
+  });
+  const bp = $('#bprof');
+  if (bp) bp.addEventListener('change', e => {
+    state.browserProfile.profile = e.target.value.trim() || 'Default'; save(); toast('Browser profile saved.');
+  });
+  if (tab === 'billing'){
+    getBilling().then((b) => {
+      const elb = $('#billbody');
+      if (elb && b) elb.innerHTML = `<div class="kv"><div class="row">
+        <span style="color:var(--mut)">${icon('spark',16)}</span>
+        <div><b>${b.plan.toUpperCase()}</b> · ${b.status}<div class="sub">Used $${Number(b.used).toFixed(4)} of $${Number(b.total).toFixed(2)} (plan $${b.credit} + gifts $${b.gifts})</div></div>
+        <div class="rgt"><span class="chip ${b.remaining > 1 ? 'green' : ''}">$${Number(b.remaining).toFixed(2)} left</span></div>
+      </div></div>`;
+      const pc = $('#plancards');
+      if (pc) pc.innerHTML = ['free', 'pro', 'max'].map((id) => {
+        const p = (b && b.plans && b.plans[id]) || { name: id, price: 0, was: null, credit: 0, gift: 0 };
+        const cur = b && b.plan === id;
+        return `<div class="row"><div><b>${p.name}</b> — $${p.price}${p.was ? ` <s class="mut">$${p.was}</s>` : ''}<div class="sub">$${p.credit} credit${p.gift ? ` + $${p.gift} gift card` : ''}</div></div>
+        <div class="rgt">${cur ? '<span class="chip green">current</span>' : id === 'free' ? '<span class="chip">default</span>' : `<button class="btn small" data-act="upgrade" data-p="${id}">Request ${p.name}</button>`}</div></div>`;
+      }).join('');
+    });
+  }
+}
+
+/* ---------------- Apps (real connections only, never faked) ---------------- */
+function paintApps(M){
+  const hasGH = state.vault.secrets.some(s => s.name === 'github_token');
+  M.innerHTML = `<div class="page"><div class="pageinner">
+    <div class="phead"><h1>Apps</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">real connections only</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
+    <p class="psub">Connect apps to extend Arche 1.0. Nothing here is simulated — unconnected apps simply do nothing until you connect them.</p>
+    <div class="kv">
+      <div class="row"><span style="color:var(--ink)">${icon('git',18)}</span>
+        <div><b>GitHub</b><div class="sub">${hasGH ? 'PAT sealed in Secrets · read-only PR reviews' : 'Needs a fine-grained PAT in Secrets (Contents + Pull requests, read-only)'}</div></div>
+        <div class="rgt">${hasGH ? '<span class="chip green">connected</span>' : '<button class="btn small" data-act="goto-secrets">Connect</button>'}</div></div>
+      <div class="row"><span style="color:var(--acc)">${icon('mail',18)}</span>
+        <div><b>Gmail</b><div class="sub">OAuth not configured in this build — inbox stays untouched, nothing simulated</div></div>
+        <div class="rgt"><span class="chip">not connected</span></div></div>
+      <div class="row"><span style="color:var(--mut)">${icon('box',18)}</span>
+        <div><b>More apps</b><div class="sub">New connectors appear here only when a real OAuth or token flow exists</div></div>
+        <div class="rgt"><span class="chip">soon</span></div></div>
+    </div>
+  </div></div>`;
 }
 
 /* ================================================================
@@ -1073,22 +1533,12 @@ document.addEventListener('click', async e => {
   if (act === 'mic'){ toast('Voice input is coming soon.'); return; }
   if (act === 'model'){ state.model = state.model === 'Smart' ? 'Fast' : 'Smart'; save(); b.innerHTML = icon('star',13) + ' ' + state.model + ' ▾'; toast('Model: ' + state.model); return; }
   if (act === 'scroll'){ const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
-  if (act === 'open-app'){ archeStopRotator(); state.onboarded ? renderApp() : openOnboarding(); return; }
+  if (act === 'open-app'){ belnaStopRotator(); state.onboarded ? renderApp() : openOnboarding(); return; }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
   if (act === 'back-home'){ renderLanding(); return; }
-  if (act === 'signin-nav'){ e.preventDefault(); archeStopRotator(); if (window.LingonAuth && window.LingonAuth.signedIn()){ renderApp(); } else { renderAuth(); } return; }
-  if (act === 'actdot'){
-    const a = ARCH_ACTS[+b.dataset.i || 0];
-    const pill = document.getElementById('actpill');
-    const mm = document.getElementById('actmascot');
-    if (a && pill && mm){
-      pill.innerHTML = '<span class="aic">' + icon(a.ic, 16) + '</span><span>' + a.label + '</span>';
-      mm.innerHTML = Mascot.svg('lingon', a.mood, 40);
-      Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (+b.dataset.i || 0)));
-    }
-    return;
-  }
-  if (act === 'claim'){ archeStopRotator(); openOnboarding(); return; }
+  if (act === 'signin-nav'){ e.preventDefault(); belnaStopRotator(); if (window.LingonAuth && window.LingonAuth.signedIn()){ renderApp(); } else { renderAuth(); } return; }
+  if (act === 'actdot'){ belnaPaintHold(+b.dataset.i || 0); return; }
+  if (act === 'claim'){ belnaStopRotator(); openOnboarding(); return; }
   if (act === 'skip-claim'){
     ob = { step:0, name:'Sigge', color:'lingon', pers:'Playful' };
     finalizeOnboarding(); return;
@@ -1107,7 +1557,18 @@ document.addEventListener('click', async e => {
   if (act === 'ob-done'){ finalizeOnboarding(); return; }
 
   /* navigation */
-  if (act === 'nav'){ state.view = b.dataset.view; save(); renderApp(); return; }
+  if (act === 'nav'){ state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp(); return; }
+  if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
+  if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
+  if (act === 'theme'){ state.theme = b.dataset.v || 'grey'; save(); applyTheme(); paintSide(); if ($('#canvas')) paintCanvas(); if (state.view === 'settings' && $('#main')) paintSettings($('#main')); toast('Accent: ' + ((THEMES.find(t => t.id === state.theme) || THEMES[0]).name)); return; }
+  if (act === 'goto-secrets'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); renderApp(); return; }
+  if (act === 'btoggle'){ state.browserProfile[b.dataset.k] = !state.browserProfile[b.dataset.k]; save(); paintSettings($('#main')); return; }
+  if (act === 'agentpanel'){
+    state.canvasTab = 'agent';
+    state.canvasOpen = true; const app = $('#app'); if (app) app.classList.remove('nocanvas');
+    save(); paintCanvas(); return;
+  }
+  if (act === 'agenttab'){ state.agentTab = b.dataset.t; state.canvasTab = 'agent'; save(); paintCanvas(); return; }
   if (act === 'newchat'){ newChat(); return; }
   if (act === 'openchat'){ state.activeChat = b.dataset.id; state.view = 'chat'; save(); renderApp(); return; }
   if (act === 'delchat'){
@@ -1119,6 +1580,32 @@ document.addEventListener('click', async e => {
   if (act === 'togglecanvas'){ state.canvasOpen = !state.canvasOpen; save(); $('#app').classList.toggle('nocanvas', !state.canvasOpen); paintCanvas(); return; }
   if (act === 'ctab'){ state.canvasTab = b.dataset.t; paintCanvas(); return; }
   if (act === 'viewcanvas'){ state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
+  if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'live'; $('#app') && $('#app').classList.remove('nocanvas'); save(); paintCanvas(); return; }
+  if (act === 'takeover'){ liveTakeover(); return; }
+  if (act === 'pcrun'){
+    const code = ($('#pccmd').value || '').trim();
+    if (!code){ toast('Type some JS first.'); return; }
+    const c = chat(); const pcId = pcIdFor(c);
+    if (!pcId){ toast('No computer session in this chat yet.'); return; }
+    $('#pccmd').value = '';
+    try {
+      const j = await window.LingonAuth.api('/api/pc/input', { method: 'POST', body: JSON.stringify({ pcId, code }) });
+      const out = $('#pcout');
+      if (out && j.stdout !== undefined){
+        if (out.querySelector('.mut') && out.children.length <= 1) out.innerHTML = '';
+        String(j.stdout).split('\n').filter(Boolean).forEach(t => out.insertAdjacentHTML('beforeend', `<div class="g">${esc(t)}</div>`));
+        if (!String(j.stdout).trim()) out.insertAdjacentHTML('beforeend', `<div class="mut">ok (no output)</div>`);
+        out.scrollTop = out.scrollHeight;
+      }
+      if (!j.ok) toast(j.error || 'Run failed');
+    } catch (e) { toast(e.message); }
+    return;
+  }
+  if (act === 'closestop-live'){
+    const id = liveIdShown;
+    if (id){ window.LingonAuth.api('/api/live/stop', { method: 'POST', body: JSON.stringify({ liveId: id }) }).catch(() => {}); }
+    liveClose(); state.canvasTab = 'canvas'; save(); paintCanvas(); return;
+  }
   if (act === 'openbrowser'){ toast('For safety, browsing stays contained in the sandbox window above.'); return; }
   if (act === 'artmenu'){ toast('Artifact saved — find it in Vault → Library.'); return; }
   if (act === 'chip'){ sendPrompt(b.dataset.t); return; }
@@ -1152,16 +1639,21 @@ document.addEventListener('click', async e => {
   if (act === 'qopt' && m){ m.card.choice = b.dataset.o; resolveCard(c, m, { choice: b.dataset.o }, 'answered'); return; }
   if (act === 'download' && m){ dl(m.card.name, m.card.content); return; }
 
-  /* vault page */
+  /* vault / settings page */
   if (act === 'vtab'){ state.vaultTab = b.dataset.t; paintVault($('#main')); return; }
-  if (act === 'reveal'){ const s = state.vault.secrets.find(x => x.id === b.dataset.id); s.revealed = !s.revealed; paintVault($('#main')); return; }
-  if (act === 'delsecret'){ state.vault.secrets = state.vault.secrets.filter(x => x.id !== b.dataset.id); save(); paintVault($('#main')); paintSide(); toast('Secret deleted'); return; }
+  const repaintSettings = () => {
+    if (state.view === 'settings' && $('#main')) paintSettings($('#main'));
+    else if ($('#main') && state.view === 'vault') paintVault($('#main'));
+    if ($('#canvas')) paintCanvas();
+  };
+  if (act === 'reveal'){ const s = state.vault.secrets.find(x => x.id === b.dataset.id); if (s) s.revealed = !s.revealed; repaintSettings(); return; }
+  if (act === 'delsecret'){ state.vault.secrets = state.vault.secrets.filter(x => x.id !== b.dataset.id); save(); repaintSettings(); paintSide(); toast('Secret deleted'); return; }
   if (act === 'addsecret'){
     const n = $('#vname').value.trim(), v = $('#vval').value;
     if (!n || !v){ toast('Name and value required.'); return; }
     const ref = 'sec_' + uid().slice(0, 4);
     state.vault.secrets.push({ id: ref, ref, name: n, value: v, at: Date.now() });
-    save(); paintVault($('#main')); paintSide(); toast('Sealed in vault — agent gets ' + ref + ' only'); return;
+    save(); repaintSettings(); paintSide(); toast('Sealed in vault — agent gets ' + ref + ' only'); return;
   }
   if (act === 'toggleapp'){
     toast('No app connections to toggle — Apps is empty by design.');
@@ -1169,6 +1661,13 @@ document.addEventListener('click', async e => {
   }
   if (act === 'signin'){ doAuth('signin'); return; }
   if (act === 'signup'){ doAuth('signup'); return; }
+  if (act === 'pw-go'){ doAuth(authMode === 'signup' ? 'signup' : 'signin'); return; }
+  if (act === 'google'){ authOAuth(); return; }
+  if (act === 'pw-mode'){ const em = ((document.getElementById('aemail') || {}).value || '').trim(); const pe = document.getElementById('pwemail'); if (pe) pe.textContent = em; showAuthPane('authpw'); return; }
+  if (act === 'auth-back'){ showAuthPane('authmain'); return; }
+  if (act === 'auth-mode'){ authMode = authMode === 'signin' ? 'signup' : 'signin'; authPaintMode(); return; }
+  if (act === 'otp-send'){ authOtpSend(); return; }
+  if (act === 'otp-verify'){ authOtpVerify(); return; }
   if (act === 'signout'){
     window.LingonAuth.set(null);
     state.view = 'chat';
@@ -1182,7 +1681,8 @@ document.addEventListener('click', async e => {
       const j = await window.LingonAuth.api('/api/billing/redeem', { method: 'POST', body: JSON.stringify({ code }) });
       billingCache = j.billing;
       toast(`Redeemed $${j.amount} credit.`);
-      paintBilling($('#main'));
+      if (state.view === 'settings') paintSettings($('#main')); else paintBilling($('#main'));
+      paintSide();
     } catch (e) { toast(e.message); }
     return;
   }
@@ -1193,14 +1693,14 @@ document.addEventListener('click', async e => {
     } catch (e) { toast(e.message); }
     return;
   }
-  if (act === 'revoke'){ state.vault.approvals = state.vault.approvals.filter(x => x.id !== b.dataset.id); save(); paintVault($('#main')); toast('Revoked — it will ask again'); return; }
-  if (act === 'pmode'){ state.vault.mode = b.dataset.m; save(); paintVault($('#main')); return; }
-  if (act === 'delmem'){ state.memory = state.memory.filter(x => x.id !== b.dataset.id); save(); paintMemory($('#main')); paintSide(); return; }
+  if (act === 'revoke'){ state.vault.approvals = state.vault.approvals.filter(x => x.id !== b.dataset.id); save(); repaintSettings(); toast('Revoked — it will ask again'); return; }
+  if (act === 'pmode'){ state.vault.mode = b.dataset.m; save(); repaintSettings(); return; }
+  if (act === 'delmem'){ state.memory = state.memory.filter(x => x.id !== b.dataset.id); save(); repaintSettings(); paintSide(); return; }
   if (act === 'dlfile'){ const f = window.__fileRows && window.__fileRows[+b.dataset.i]; if (f) dl(f.name, f.content); return; }
 
-  /* profile */
-  if (act === 'p-color'){ state.agent.color = b.dataset.c; save(); paintProfile($('#main')); paintSide(); return; }
-  if (act === 'p-pers'){ state.agent.pers = b.dataset.p; save(); paintProfile($('#main')); return; }
+  /* profile / appearance (shared by Settings + right slider) */
+  if (act === 'p-color'){ state.agent.color = b.dataset.c; save(); paintSide(); paintCanvas(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
+  if (act === 'p-pers'){ state.agent.pers = b.dataset.p; save(); paintCanvas(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
   if (act === 'reset'){
     if (confirm('Release this agent? This deletes the claim, chats, vault and memory on this device.')){
       localStorage.removeItem(LS); location.reload();
@@ -1217,7 +1717,32 @@ function dl(name, content){
   toast('Downloading ' + name);
 }
 
-/* ---------------- boot ---------------- */
-expirePending();
-if (state.onboarded && state.agent) renderApp(); else renderLanding();
+/* ---------------- boot (OAuth hash callback first) ---------------- */
+async function bootHash(){
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const err = q.get('auth_error');
+    if (err){ window.history.replaceState(null, '', window.location.pathname); setTimeout(() => toast('Sign-in failed: ' + err), 400); return; }
+    const h = window.location.hash || '';
+    const m = h.match(/access_token=([^&]+)/);
+    if (m){
+      const r = h.match(/refresh_token=([^&]+)/);
+      const access_token = decodeURIComponent(m[1]);
+      const refresh_token = r ? decodeURIComponent(r[1]) : '';
+      window.history.replaceState(null, '', window.location.pathname);
+      window.LingonAuth.set({ access_token, refresh_token, user: null });
+      try {
+        const me = await window.LingonAuth.api('/api/auth/me');
+        window.LingonAuth.set({ access_token, refresh_token, user: me.user });
+        try { window.LingonConfig.userId = me.user.id; localStorage.setItem('belna.lastProvider', 'google'); } catch {}
+        setTimeout(() => toast('Signed in as ' + me.user.email), 400);
+      } catch {}
+    }
+  } catch {}
+}
+bootHash().finally(() => {
+  expirePending();
+  applyTheme();
+  if (state.onboarded && state.agent) renderApp(); else renderLanding();
+});
 })();
