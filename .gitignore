@@ -10,3 +10,5 @@ test-results/
 supabase/.temp/
 .DS_Store
 Thumbs.db
+.output/
+.wrangler/

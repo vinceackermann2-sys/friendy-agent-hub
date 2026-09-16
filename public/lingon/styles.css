@@ -131,6 +131,24 @@ svg.ic{ flex:none; display:block; }
   display:inline-flex; align-items:center; justify-content:center; transition:transform .15s;
 }
 .micbtn:hover{ transform:scale(1.06); }
+
+/* ---------- file attach: drag-drop + pills ---------- */
+.promptbox.dragover{ border-color:var(--acc); background:var(--acc-soft); }
+.attach-pills{ display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+.attach-pills:empty{ display:none; }
+.attach-pill{
+  display:inline-flex; align-items:center; gap:5px; background:var(--line2); border:1px solid var(--line);
+  border-radius:10px; padding:4px 10px; font-size:12px; color:var(--ink); max-width:220px;
+}
+.attach-pill.sent{ background:rgba(255,255,255,.18); border-color:rgba(255,255,255,.22); color:inherit; }
+.ap-name{ font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px; }
+.ap-size{ color:var(--mut); font-size:11px; }
+.ap-x{ background:none; border:none; color:var(--mut); cursor:pointer; padding:0 2px; line-height:1; display:flex; }
+.ap-x:hover{ color:var(--acc); }
+.msg-files{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
+.iconbtn[data-act="attach"]{ cursor:pointer; }
+.iconbtn[data-act="attach"]:hover{ color:var(--acc); border-color:var(--acc); }
+
 .landing-thread{ max-width:760px; margin:26px auto 0; text-align:left; }
 .hintline{ margin-top:14px; color:var(--soft); font-size:13px; display:flex; gap:8px; justify-content:center; align-items:center; }
 
@@ -580,25 +598,86 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 }
 .navlinks a{ color:inherit; text-decoration:none; cursor:pointer; }
 .navlinks a:hover{ color:var(--ink); }
-/* mascot circle card inline in the H1 — mascot holds the looping prop in front */
+/* headline mascot circle — hosts the 4-action auto-loop animation
+   (mail → phone → laptop → wallet, 16s CSS loop, no JS timers).
+   Mascot.loop() renders halo + SVG inside; everything below is scoped
+   to .mhold so it never leaks into the rest of the app. */
 .mhold{
+  --body:#E15A46; --dark:#B93F2E; --blush:#F7C2B8; --glow:#F7C2B8;
+  --gold:#E9B94E; --paper:#fffdf8;
   display:inline-flex; align-items:center; justify-content:center; position:relative;
   width:64px; height:64px; border-radius:50%; background:#fff;
   border:1px solid var(--line); box-shadow:var(--shadow);
   vertical-align:middle; margin:0 4px; top:-4px;
+  overflow:hidden; isolation:isolate;
 }
-.mhold .mcore{ display:inline-flex; }
-.mhold .mcore svg{ animation:mascotBob 2.4s ease-in-out infinite; }
-.mhold .hprop{
-  position:absolute; left:-10px; bottom:-6px; width:38px; height:38px; border-radius:12px;
-  background:#fff; color:var(--ink); display:inline-flex; align-items:center; justify-content:center;
-  border:1px solid var(--line); box-shadow:var(--shadow);
+.mhold .mloop-stage{ position:absolute; inset:0; display:grid; place-items:center; overflow:hidden; border-radius:50%; }
+.mhold .mloop-halo{
+  position:absolute; width:92%; aspect-ratio:1; border-radius:50%;
+  background:radial-gradient(circle, color-mix(in srgb, var(--glow) 22%, transparent) 0%, transparent 68%);
+  opacity:.55; animation:mloopHalo 4s ease-in-out infinite; pointer-events:none;
 }
-.mhold.swap .hprop{ animation:propPop .45s ease; }
-@keyframes propPop{ 0%{ transform:scale(.4) rotate(-14deg); opacity:0; } 60%{ transform:scale(1.12) rotate(3deg); opacity:1; } 100%{ transform:scale(1) rotate(0); opacity:1; } }
-@keyframes mascotBob{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-3px); } }
+.mhold .mloop-wrap{ width:96%; max-width:none; animation:mloopFloat 2.8s ease-in-out infinite; }
+.mhold .mloop-wrap svg{ display:block; width:100%; height:auto; overflow:visible; }
+.mhold .body-star{ transform-box:fill-box; transform-origin:center; animation:mloopBreathe 2.8s ease-in-out infinite; }
+.mhold .face-happy, .mhold .face-talk, .mhold .face-focus{ opacity:0; }
+/* 16 second master loop, 4 seconds per scene. */
+.mhold .scene-mail, .mhold .scene-phone, .mhold .scene-laptop, .mhold .scene-money{
+  opacity:0; transform-box:fill-box; transform-origin:center;
+}
+.mhold .scene-mail{ animation:mloopSceneMail 16s linear infinite; }
+.mhold .scene-phone{ animation:mloopScenePhone 16s linear infinite; }
+.mhold .scene-laptop{ animation:mloopSceneLaptop 16s linear infinite; }
+.mhold .scene-money{ animation:mloopSceneMoney 16s linear infinite; }
+.mhold .face-happy{ animation:mloopFaceHappy 16s linear infinite; }
+.mhold .face-talk{ animation:mloopFaceTalk 16s linear infinite; }
+.mhold .face-focus{ animation:mloopFaceFocus 16s linear infinite; }
+.mhold .mail-prop{ transform-box:fill-box; transform-origin:center; animation:mloopMailBob .9s ease-in-out infinite; }
+.mhold .mail-spark{ animation:mloopSpark 1.2s ease-in-out infinite; transform-box:fill-box; transform-origin:center; }
+.mhold .mail-spark.s2{ animation-delay:.35s; }
+.mhold .handset{ transform-box:fill-box; transform-origin:65% 72%; animation:mloopPhoneRock 1.05s ease-in-out infinite; }
+.mhold .phone-base{ transform-box:fill-box; transform-origin:center; animation:mloopPhoneBase 1.8s ease-in-out infinite; }
+.mhold .phone-cord{ stroke-dasharray:3 4; animation:mloopCord .85s linear infinite; }
+.mhold .wave1, .mhold .wave2, .mhold .wave3{ fill:none; stroke:#30343a; stroke-linecap:round; opacity:0; animation:mloopWave 1.25s ease-out infinite; }
+.mhold .wave2{ animation-delay:.2s; } .mhold .wave3{ animation-delay:.4s; }
+.mhold .mouth-talk{ transform-box:fill-box; transform-origin:center; animation:mloopTalk .34s ease-in-out infinite alternate; }
+.mhold .macbook-group{ transform-box:fill-box; transform-origin:center; animation:mloopMacFloat 1.8s ease-in-out infinite; }
+.mhold .macbook-sheen{ animation:mloopSheen 2.2s ease-in-out infinite; }
+.mhold .arm-type-left, .mhold .arm-type-right{ transform-box:fill-box; transform-origin:top center; animation:mloopType .38s ease-in-out infinite alternate; }
+.mhold .arm-type-right{ animation-delay:.19s; }
+.mhold .focus-eye{ transform-box:fill-box; transform-origin:center; animation:mloopBlink 3.2s ease-in-out infinite; }
+.mhold .bill-front{ transform-box:fill-box; transform-origin:20% 80%; animation:mloopBill 1s cubic-bezier(.2,.8,.2,1) infinite; }
+.mhold .bill-back{ transform-box:fill-box; transform-origin:20% 80%; animation:mloopBill 1s cubic-bezier(.2,.8,.2,1) infinite .48s; }
+.mhold .wallet{ transform-box:fill-box; transform-origin:center; animation:mloopWallet 1s ease-in-out infinite; }
+.mhold .coin{ transform-box:fill-box; transform-origin:center; animation:mloopCoin 1.3s ease-in-out infinite; }
+.mhold .coin.c2{ animation-delay:.32s; } .mhold .coin.c3{ animation-delay:.64s; }
+@keyframes mloopHalo{ 0%,100%{ transform:scale(.92); opacity:.32; } 50%{ transform:scale(1.06); opacity:.58; } }
+@keyframes mloopFloat{ 0%,100%{ transform:translateY(0) rotate(-.6deg); } 50%{ transform:translateY(-2px) rotate(.6deg); } }
+@keyframes mloopBreathe{ 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.018); } }
+@keyframes mloopSceneMail{ 0%{opacity:0;transform:translateY(18px) scale(.92)} 2%{opacity:1;transform:translateY(0) scale(1)} 21%{opacity:1;transform:translateY(0) scale(1)} 24.5%{opacity:0;transform:translateY(-12px) scale(.96)} 100%{opacity:0} }
+@keyframes mloopScenePhone{ 0%,24%{opacity:0;transform:translateX(18px) scale(.93)} 27%{opacity:1;transform:translateX(0) scale(1)} 46%{opacity:1;transform:translateX(0) scale(1)} 49.5%{opacity:0;transform:translateX(-16px) scale(.95)} 100%{opacity:0} }
+@keyframes mloopSceneLaptop{ 0%,49%{opacity:0;transform:translateY(18px) scale(.94)} 52%{opacity:1;transform:translateY(0) scale(1)} 71%{opacity:1;transform:translateY(0) scale(1)} 74.5%{opacity:0;transform:translateY(-10px) scale(.96)} 100%{opacity:0} }
+@keyframes mloopSceneMoney{ 0%,74%{opacity:0;transform:translateX(-16px) scale(.94)} 77%{opacity:1;transform:translateX(0) scale(1)} 96%{opacity:1;transform:translateX(0) scale(1)} 99.5%,100%{opacity:0;transform:translateX(12px) scale(.96)} }
+@keyframes mloopFaceHappy{ 0%,24%{opacity:1} 25%,49%{opacity:0} 50%,74%{opacity:0} 75%,100%{opacity:1} }
+@keyframes mloopFaceTalk{ 0%,24%{opacity:0} 26%,49%{opacity:1} 50%,100%{opacity:0} }
+@keyframes mloopFaceFocus{ 0%,49%{opacity:0} 51%,74%{opacity:1} 75%,100%{opacity:0} }
+@keyframes mloopMailBob{ 0%,100%{transform:translateY(0) rotate(-1deg)} 50%{transform:translateY(-4px) rotate(1.5deg)} }
+@keyframes mloopSpark{ 0%,100%{opacity:0;transform:scale(.3) rotate(0)} 35%,65%{opacity:1;transform:scale(1) rotate(15deg)} }
+@keyframes mloopPhoneRock{ 0%,100%{transform:rotate(-4deg) translateY(0)} 50%{transform:rotate(2deg) translateY(-3px)} }
+@keyframes mloopPhoneBase{ 0%,100%{transform:translateY(0)} 50%{transform:translateY(1.5px)} }
+@keyframes mloopCord{ to{ stroke-dashoffset:-14; } }
+@keyframes mloopWave{ 0%{opacity:0;stroke-width:3;transform:scale(.75)} 35%{opacity:.8} 100%{opacity:0;stroke-width:1;transform:scale(1.13)} }
+@keyframes mloopTalk{ from{transform:scaleY(.55)} to{transform:scaleY(1.15)} }
+@keyframes mloopMacFloat{ 0%,100%{transform:translateY(0)} 50%{transform:translateY(-2px)} }
+@keyframes mloopSheen{ 0%,100%{opacity:.38;transform:translateX(-4px)} 50%{opacity:.72;transform:translateX(5px)} }
+@keyframes mloopType{ from{transform:translateY(0) rotate(-2deg)} to{transform:translateY(3px) rotate(3deg)} }
+@keyframes mloopBlink{ 0%,45%,51%,100%{transform:scaleY(1)} 48%{transform:scaleY(.12)} }
+@keyframes mloopBill{ 0%{transform:translate(0,0) rotate(-8deg);opacity:.1} 16%{opacity:1} 55%{transform:translate(14px,-20px) rotate(8deg);opacity:1} 100%{transform:translate(26px,4px) rotate(18deg);opacity:0} }
+@keyframes mloopWallet{ 0%,100%{transform:translateY(0)} 50%{transform:translateY(3px)} }
+@keyframes mloopCoin{ 0%,100%{opacity:0;transform:translateY(6px) scale(.45)} 25%,65%{opacity:1;transform:translateY(-5px) scale(1)} }
 @media (prefers-reduced-motion: reduce){
-  .mhold .mcore svg, .mhold.swap .hprop{ animation:none; }
+  .mhold .mloop-halo, .mhold .mloop-wrap, .mhold .mloop-wrap *{ animation:none !important; }
+  .mhold .scene-mail, .mhold .face-happy{ opacity:1 !important; }
 }
 /* real benchmark comparison table */
 .btable{ width:100%; border-collapse:collapse; font-size:12.5px; }
@@ -609,22 +688,28 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .btable th.star{ color:var(--green); }
 .btable tbody tr:hover td{ background:#FAFAFB; }
 .btable tbody tr:hover td.star{ background:#DDEFE4; }
-/* Belna-branded model card (landing benchmark) */
-.model-card{ padding:0 !important; overflow:hidden; border-radius:22px; border:1px solid var(--line); background:#fff; box-shadow:var(--shadow-lg); position:relative; }
-.model-card::before{ content:''; display:block; height:6px; background:linear-gradient(90deg,#E15A46 0%,#E15A46 38%,#17181A 38%,#17181A 100%); }
-.mc-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:18px 22px 0; }
-.mc-brand{ display:flex; align-items:center; gap:10px; }
-.mc-brand b{ font-size:16px; letter-spacing:-.01em; display:block; line-height:1.1; }
-.mc-brand i{ display:block; font-style:normal; font-size:12px; color:var(--mut); font-weight:600; }
-.mc-title{ font-size:17px; font-weight:800; letter-spacing:-.01em; padding:14px 22px 0; }
-.mc-sub{ font-size:13px !important; margin-top:4px !important; padding:0 22px; }
-.mc-table{ overflow-x:auto; margin:14px 12px 0; border:1px solid var(--line2); border-radius:14px; overflow:hidden; }
-.mc-table .btable th, .mc-table .btable td{ padding:10px 12px; }
-.mc-table .btable thead th{ background:#17181A; color:#fff; font-size:11px; }
-.mc-table .btable thead th.star{ background:#E15A46; color:#fff; }
-.mc-table .btable td.star{ background:#FDEEEC; font-weight:800; color:#17181A; }
-.mc-table .btable tbody tr:hover td.star{ background:#FBDCD8; }
-.mc-foot{ padding:0 22px 20px !important; }
+/* Belna-branded model card (landing benchmark — matches reference image) */
+.model-card{ padding:28px 28px 22px !important; overflow:hidden; border-radius:24px; border:1px solid #ECEDEF; background:#fff; box-shadow:0 12px 40px rgba(16,24,40,.08); position:relative; }
+.mc-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:0; }
+.mc-brand{ display:flex; align-items:center; gap:12px; }
+.mc-brand b{ font-size:22px; letter-spacing:-.01em; display:block; line-height:1.1; font-weight:800; }
+.mc-brand i{ display:block; font-style:normal; font-size:14px; color:#667085; font-weight:500; margin-top:2px; }
+.mc-title{ font-size:clamp(28px,4vw,36px); font-weight:800; letter-spacing:-.02em; color:#0B0D10; padding:0; margin-top:20px; line-height:1.1; }
+.mc-table{ overflow-x:auto; margin:20px 0 0; border:1px solid #EAECF0; border-radius:14px; overflow:hidden; }
+.mc-table .btable{ font-size:15px; }
+.mc-table .btable th, .mc-table .btable td{ padding:15px 20px; text-align:center; border-top:1px solid #EAECF0; white-space:nowrap; }
+.mc-table .btable th:first-child, .mc-table .btable td:first-child{ text-align:left; }
+.mc-table .btable thead th{ background:#F9FAFB; color:#475467; font-size:15px; font-weight:700; text-transform:none; letter-spacing:0; border-top:none; }
+.mc-table .btable thead th:first-child{ color:#98A2B3; font-weight:600; }
+.mc-table .btable thead th.star{ background:#FEF1F0; color:#D92D20; font-weight:800; font-size:17px; }
+.mc-table .btable td{ color:#101828; background:#fff; }
+.mc-table .btable td:first-child{ font-weight:500; }
+.mc-table .btable td.star{ background:#FFF6F5; font-weight:800; color:#0B0D10; font-size:18px; }
+.mc-table .btable tbody tr:hover td{ background:#FCFCFD; }
+.mc-table .btable tbody tr:hover td.star{ background:#FDEDEC; }
+.mc-foot{ display:flex !important; align-items:center; justify-content:space-between; gap:12px; border-top:1px solid #EAECF0; margin-top:20px; padding:16px 2px 2px !important; color:#98A2B3 !important; font-size:14px !important; }
+.mc-foot a{ color:#667085; text-decoration:underline; text-underline-offset:2px; }
+.mc-foot-brand{ display:inline-flex; align-items:center; gap:8px; font-weight:800; letter-spacing:.22em; font-size:14px; color:#0B0D10; }
 /* pricing cards */
 .pcards{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:28px; }
 .pcard{ background:#fff; border:1px solid var(--line); border-radius:20px; box-shadow:var(--shadow); padding:28px 26px; display:flex; flex-direction:column; }
