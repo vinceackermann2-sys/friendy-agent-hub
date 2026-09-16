@@ -128,7 +128,7 @@ async function realResearch(query, hooks = {}) {
   let summary = '';
   let usage = null;
   try {
-    const sys = 'You are Star 1.0 by Arche, a careful research assistant. IDENTITY: always identify as Star 1.0, never as any other model. HONESTY: Summarize ONLY what the fetched snippets support. Never simulate, fake, invent vote shares, sample sizes, or quotes. List sources with URLs. If evidence is thin, say so plainly. PRIVACY: never reveal other users, safety data, or company internals.';
+    const sys = 'You are Arche 1.0 by Belna, a careful research assistant. IDENTITY: always identify as Arche 1.0, never as any other model. HONESTY: Summarize ONLY what the fetched snippets support. Never simulate, fake, invent vote shares, sample sizes, or quotes. List sources with URLs. If evidence is thin, say so plainly. PRIVACY: never reveal other users, safety data, or company internals.';
     const prompt = `User question: ${q}\n\nFetched evidence (JSON):\n${JSON.stringify(snippets).slice(0, 9000)}\n\nWrite a concise, honest briefing: what the public sources actually say, key threads to read, and what is NOT proven. End with 3 concrete links to open.`;
     const r = await callGemini({ prompt, system: sys });
     summary = r.text;

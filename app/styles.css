@@ -414,7 +414,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
   .profiletop{ flex-direction:column; text-align:center; }
 }
 
-/* ============ ARCHE landing redesign (branch redesign/arche-hero) ============ */
+/* ============ BELNA landing redesign (branch redesign/belna-hero) ============ */
 .anav{
   position:sticky; top:0; z-index:50;
   background:rgba(246,246,247,.86); backdrop-filter:blur(10px);
@@ -510,7 +510,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
   .actpill{ min-width:0; width:100%; }
 }
 
-/* ============ ARCHE round 2: headline mascot, tables, cards, full footer ============ */
+/* ============ BELNA round 2: headline mascot, tables, cards, full footer ============ */
 /* ============ right-side agent button + top tabbed slider ============ */
 .agentbtn{
   display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line);

@@ -166,7 +166,7 @@ function render(){
 let authMode = 'signin'; // 'signin' | 'signup'
 function renderAuth(){
   let lastGoogle = false;
-  try { lastGoogle = localStorage.getItem('arche.lastProvider') === 'google'; } catch {}
+  try { lastGoogle = localStorage.getItem('belna.lastProvider') === 'google'; } catch {}
   root.innerHTML = `
   <div class="fadeup authpage">
     <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="faq.html">Open Docs &#8599;</a></div>
@@ -193,7 +193,7 @@ function renderAuth(){
         <button class="btn ghost authbtn" data-act="auth-back">Back</button>
       </div>
       <div class="secnote" id="amsg" style="min-height:18px;justify-content:center;margin-top:14px"></div>
-      <div class="authfoot" id="authfoot">New to Arche? <button data-act="auth-mode">Create an account</button></div>
+      <div class="authfoot" id="authfoot">New to Belna? <button data-act="auth-mode">Create an account</button></div>
       <div><button class="backlink" data-act="back-home">← Back to home</button></div>
     </div>
   </div>`;
@@ -209,12 +209,12 @@ function authPaintMode(){
   const foot = document.getElementById('authfoot');
   if (authMode === 'signup'){
     if (go) go.textContent = 'Create account';
-    if (title) title.textContent = 'Create your Arche account';
+    if (title) title.textContent = 'Create your Belna account';
     if (foot) foot.innerHTML = 'Have an account? <button data-act="auth-mode">Log in</button>';
   } else {
     if (go) go.textContent = 'Log in with password';
     if (title) title.textContent = 'Welcome back';
-    if (foot) foot.innerHTML = 'New to Arche? <button data-act="auth-mode">Create an account</button>';
+    if (foot) foot.innerHTML = 'New to Belna? <button data-act="auth-mode">Create an account</button>';
   }
 }
 async function authOAuth(){
@@ -252,7 +252,7 @@ async function authOtpVerify(){
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Invalid code');
     window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
-    try { window.LingonConfig.userId = j.user.id; localStorage.setItem('arche.lastProvider', 'otp'); } catch {}
+    try { window.LingonConfig.userId = j.user.id; localStorage.setItem('belna.lastProvider', 'otp'); } catch {}
     state.view = 'chat';
     save();
     await syncFromBackend();
@@ -324,39 +324,39 @@ function paintBilling(M){
 /* ================================================================
    LANDING
 ================================================================ */
-/* Arche landing — mascot prop switcher (laptop / briefcase / phone / wallet).
+/* Belna landing — mascot prop switcher (laptop / briefcase / phone / wallet).
    The mascot sits in a circle card inside the headline and cycles the item
    it holds. Dots switch the held item manually. */
-const ARCH_ACTS = [
+const BELNA_ACTS = [
   { ic:'laptop', label:'holding a laptop', mood:'think' },
   { ic:'brief',  label:'holding a briefcase', mood:'idle' },
   { ic:'phone',  label:'answering phones', mood:'happy' },
   { ic:'wallet', label:'counting wallet', mood:'wow' },
 ];
-function archeStopRotator(){ if (window.__actTimer){ clearInterval(window.__actTimer); window.__actTimer = null; } }
-function archePaintHold(i){
-  const a = ARCH_ACTS[i % ARCH_ACTS.length];
+function belnaStopRotator(){ if (window.__actTimer){ clearInterval(window.__actTimer); window.__actTimer = null; } }
+function belnaPaintHold(i){
+  const a = BELNA_ACTS[i % BELNA_ACTS.length];
   const core = document.getElementById('mcore');
   const prop = document.getElementById('hprop');
   const hold = document.getElementById('mhold');
   if (!core || !prop) return;
   core.innerHTML = Mascot.svg('lingon', a.mood, 44);
   prop.innerHTML = icon(a.ic, 15);
-  if (hold){ hold.title = 'Your Arche agent, ' + a.label; hold.setAttribute('aria-label', 'Your Arche agent, ' + a.label); }
-  Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (i % ARCH_ACTS.length)));
+  if (hold){ hold.title = 'Your Belna agent, ' + a.label; hold.setAttribute('aria-label', 'Your Belna agent, ' + a.label); }
+  Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (i % BELNA_ACTS.length)));
 }
-function archeStartRotator(){
-  archeStopRotator();
+function belnaStartRotator(){
+  belnaStopRotator();
   let i = 1;
-  archePaintHold(0);
-  window.__actTimer = setInterval(() => { archePaintHold(i % ARCH_ACTS.length); i++; }, 2400);
+  belnaPaintHold(0);
+  window.__actTimer = setInterval(() => { belnaPaintHold(i % BELNA_ACTS.length); i++; }, 2400);
 }
 
 function renderLanding(){
   root.innerHTML = `
   <div class="fadeup">
     <div class="anav"><nav class="nav">
-      <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} arche</a>
+      <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} belna</a>
       <div class="navlinks"><span data-act="scroll" data-t="#safety">Safe Swedish AI</span><span data-act="scroll" data-t="#agent">Personal Agent</span><a href="models.html">Models</a><a href="pricing.html">Pricing</a><a href="faq.html">FAQ</a></div>
       <div class="anav-cta">
         <button class="btn ghost small hideS" data-act="signin-nav">Sign in</button>
@@ -367,7 +367,7 @@ function renderLanding(){
     <header class="hero ahero">
       <h1>Hi,<br>I can do anything <span class="mhold" id="mhold"><span class="mcore" id="mcore">${Mascot.svg('lingon','think',44)}</span><span class="hprop" id="hprop">${icon('laptop',15)}</span></span> you can.</h1>
       <div class="safe-note" style="margin-top:18px">Safe Swedish AI Agents</div>
-      <div class="actdots">${ARCH_ACTS.map((a, i) => `<button data-act="actdot" data-i="${i}" class="${i === 0 ? 'on' : ''}" title="${a.label}" aria-label="${a.label}"></button>`).join('')}</div>
+      <div class="actdots">${BELNA_ACTS.map((a, i) => `<button data-act="actdot" data-i="${i}" class="${i === 0 ? 'on' : ''}" title="${a.label}" aria-label="${a.label}"></button>`).join('')}</div>
       <div class="promptwrap">
         <form class="promptbox" id="lform">
           <textarea id="lprompt" rows="2" placeholder="Ask your agent anything… e.g. Research which Swedish party people say they'll vote for on social media"></textarea>
@@ -389,7 +389,7 @@ function renderLanding(){
       <h2>Safe Swedish AI</h2>
       <div class="split">
         <div>
-          <p class="lede">Star 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
+          <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
           <div class="checklist">
             <div class="row">${icon('lock',16)}<span><b>Sealed vault.</b> Secrets are encrypted; the agent only ever receives masked references.</span></div>
             <div class="row">${icon('shieldcheck',16)}<span><b>Approvals by default.</b> Sensitive actions pause for your yes — revocable anytime.</span></div>
@@ -402,10 +402,10 @@ function renderLanding(){
           </div>
         </div>
         <div class="panel" style="padding:0;overflow:hidden">
-          <div style="padding:22px 22px 0;display:flex;align-items:center;justify-content:space-between;gap:10px"><b>Star 1.0 vs frontier models</b><span class="chip green">real benchmarks</span></div>
-          <p class="mut" style="font-size:13px;margin-top:6px;padding:0 22px">Star 1.0 runs Kimi K3 open weights inside the Arche harness — same scores, plus privacy.</p>
+          <div style="padding:22px 22px 0;display:flex;align-items:center;justify-content:space-between;gap:10px"><b>Arche 1.0 vs frontier models</b><span class="chip green">real benchmarks</span></div>
+          <p class="mut" style="font-size:13px;margin-top:6px;padding:0 22px">Arche 1.0 runs Kimi K3 open weights inside the Belna harness — same scores, plus privacy.</p>
           <div style="overflow-x:auto;margin-top:12px"><table class="btable">
-            <thead><tr><th>Benchmark</th><th class="star">Star 1.0</th><th>GPT-5.6 Sol</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
+            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
             <tbody>
               <tr><td>GPQA Diamond</td><td class="star">93.5</td><td><b>94.1</b></td><td>92.6</td><td>91.0</td></tr>
               <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td><b>88.8</b></td><td>88.0</td><td>84.6</td></tr>
@@ -465,15 +465,15 @@ function renderLanding(){
         </form>
       </div>
       <div class="hintline">${icon('lock',13)} Sealed vault · approvals · sandboxed harness</div>
-      <p class="fineprint" style="text-align:center;margin-top:14px">Free includes <b>$10</b> of API costs · Pro $30 · Max $50 — <a href="pricing.html">see full pricing</a> · <a href="models.html">meet Star 1.0</a> · <a href="faq.html">FAQ</a></p>
+      <p class="fineprint" style="text-align:center;margin-top:14px">Free includes <b>$10</b> of API costs · Pro $30 · Max $50 — <a href="pricing.html">see full pricing</a> · <a href="models.html">meet Arche 1.0</a> · <a href="faq.html">FAQ</a></p>
     </section>
 
     <footer class="afooter"><div class="fin">
-      <div><div class="abrand">${Mascot.logo(24)} arche</div><p class="mut" style="font-size:13.5px;margin-top:10px;line-height:1.6">Swedish Safe AI Agents.<br>Star 1.0 · Kimi K3 + safety harness.</p></div>
+      <div><div class="abrand">${Mascot.logo(24)} belna</div><p class="mut" style="font-size:13.5px;margin-top:10px;line-height:1.6">Swedish Safe AI Agents.<br>Arche 1.0 · Kimi K3 + safety harness.</p></div>
       <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="pricing.html">Pricing</a><a href="faq.html">FAQ</a></div>
-      <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a><a href="mailto:hej@arche.se">hej@arche.se</a></div>
+      <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a><a href="mailto:hej@belna.se">hej@belna.se</a></div>
       <div><h4>Legal</h4><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a><a href="security.html">Security</a><a href="cookies.html">Cookie Policy</a></div>
-    </div><div class="base"><span>© 2026 Arche — made in Stockholm</span><span>Star 1.0 harness · your vault</span></div></footer>
+    </div><div class="base"><span>© 2026 Belna — made in Stockholm</span><span>Arche 1.0 harness · your vault</span></div></footer>
   </div>`;
   const wire = (formId, inputId, threadTop) => {
     const f = document.getElementById(formId);
@@ -496,7 +496,7 @@ function renderLanding(){
   };
   wire('lform', 'lprompt');
   wire('lform2', 'lprompt2', true);
-  archeStartRotator();
+  belnaStartRotator();
 }
 
 async function landingRun(prompt){
@@ -611,7 +611,7 @@ function finalizeOnboarding(){
 ================================================================ */
 function renderApp(){
   applyTheme();
-  archeStopRotator();
+  belnaStopRotator();
   root.innerHTML = `
   <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'}" id="app">
     <aside class="side" id="side"></aside>
@@ -1021,7 +1021,7 @@ function agentSliderContent(){
   if (t === 'appearance'){
     body = `
       <div class="aslider-sec">
-        <div style="display:flex;gap:12px;align-items:center">${Mascot.svg(a.color,'happy',54)}<div><b>${esc(a.name)}</b><div><span class="chip">Star 1.0</span></div></div></div>
+        <div style="display:flex;gap:12px;align-items:center">${Mascot.svg(a.color,'happy',54)}<div><b>${esc(a.name)}</b><div><span class="chip">Arche 1.0</span></div></div></div>
         <label class="alabel">Agent name</label>
         <input class="field" id="agentname" maxlength="18" value="${esc(a.name)}">
         <label class="alabel">Mascot appearance</label>
@@ -1406,7 +1406,7 @@ function paintSettings(M){
       <div class="info">
         <label class="alabel">Display name</label>
         <input class="field" id="uname" value="${esc(u.name)}" maxlength="40" style="max-width:280px;font-weight:700">
-        <div class="sub" style="margin-top:6px">${esc(u.email)} · Star 1.0 · your data is never shared with other users</div>
+        <div class="sub" style="margin-top:6px">${esc(u.email)} · Arche 1.0 · your data is never shared with other users</div>
       </div>
     </div>
     <div class="psec"><h3>${icon('spark',15)} Your agent</h3>
@@ -1455,7 +1455,7 @@ function paintSettings(M){
       <div class="kv" id="plancards" style="margin-top:14px"></div>`;
   }
   M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Star 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
+    <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
     <p class="psub">User profiles, secrets, memory, browser profile and billing — all scoped to your account, never shared.</p>
     <div class="seg">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles">${icon('user',14)} Profiles</button>
@@ -1505,7 +1505,7 @@ function paintApps(M){
   const hasGH = state.vault.secrets.some(s => s.name === 'github_token');
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Apps</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">real connections only</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">Connect apps to extend Star 1.0. Nothing here is simulated — unconnected apps simply do nothing until you connect them.</p>
+    <p class="psub">Connect apps to extend Arche 1.0. Nothing here is simulated — unconnected apps simply do nothing until you connect them.</p>
     <div class="kv">
       <div class="row"><span style="color:var(--ink)">${icon('git',18)}</span>
         <div><b>GitHub</b><div class="sub">${hasGH ? 'PAT sealed in Secrets · read-only PR reviews' : 'Needs a fine-grained PAT in Secrets (Contents + Pull requests, read-only)'}</div></div>
@@ -1533,12 +1533,12 @@ document.addEventListener('click', async e => {
   if (act === 'mic'){ toast('Voice input is coming soon.'); return; }
   if (act === 'model'){ state.model = state.model === 'Smart' ? 'Fast' : 'Smart'; save(); b.innerHTML = icon('star',13) + ' ' + state.model + ' ▾'; toast('Model: ' + state.model); return; }
   if (act === 'scroll'){ const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
-  if (act === 'open-app'){ archeStopRotator(); state.onboarded ? renderApp() : openOnboarding(); return; }
+  if (act === 'open-app'){ belnaStopRotator(); state.onboarded ? renderApp() : openOnboarding(); return; }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
   if (act === 'back-home'){ renderLanding(); return; }
-  if (act === 'signin-nav'){ e.preventDefault(); archeStopRotator(); if (window.LingonAuth && window.LingonAuth.signedIn()){ renderApp(); } else { renderAuth(); } return; }
-  if (act === 'actdot'){ archePaintHold(+b.dataset.i || 0); return; }
-  if (act === 'claim'){ archeStopRotator(); openOnboarding(); return; }
+  if (act === 'signin-nav'){ e.preventDefault(); belnaStopRotator(); if (window.LingonAuth && window.LingonAuth.signedIn()){ renderApp(); } else { renderAuth(); } return; }
+  if (act === 'actdot'){ belnaPaintHold(+b.dataset.i || 0); return; }
+  if (act === 'claim'){ belnaStopRotator(); openOnboarding(); return; }
   if (act === 'skip-claim'){
     ob = { step:0, name:'Sigge', color:'lingon', pers:'Playful' };
     finalizeOnboarding(); return;
@@ -1734,7 +1734,7 @@ async function bootHash(){
       try {
         const me = await window.LingonAuth.api('/api/auth/me');
         window.LingonAuth.set({ access_token, refresh_token, user: me.user });
-        try { window.LingonConfig.userId = me.user.id; localStorage.setItem('arche.lastProvider', 'google'); } catch {}
+        try { window.LingonConfig.userId = me.user.id; localStorage.setItem('belna.lastProvider', 'google'); } catch {}
         setTimeout(() => toast('Signed in as ' + me.user.email), 400);
       } catch {}
     }

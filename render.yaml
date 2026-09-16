@@ -1,0 +1,32 @@
+# Render blueprint for Belna (belna.se). In the Render dashboard:
+# New → Blueprint → connect the repo/branch. Secrets are entered in the
+# dashboard (never committed). See README "Go live" for the full guide.
+services:
+  - type: web
+    name: belna
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: SITE_URL
+        value: https://belna.se
+      - key: BEHIND_PROXY
+        value: 1
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

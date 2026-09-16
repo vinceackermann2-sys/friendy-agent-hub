@@ -7,5 +7,6 @@ shots/*.png
 uploads/
 playwright-report/
 test-results/
+supabase/.temp/
 .DS_Store
 Thumbs.db

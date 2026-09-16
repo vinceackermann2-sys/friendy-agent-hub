@@ -3,20 +3,75 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lingon — your personal agent</title>
-<meta name="description" content="Claim, name and customize your own personal agent. Sandboxed harness, sealed vault, visual canvas.">
+<title>Belna — Swedish Safe AI Agents | Arche 1.0 Personal AI Agent</title>
+<meta name="description" content="Belna builds Swedish safe AI agents. Arche 1.0 is built on the open-source Kimi K3 model with an agentic harness optimized for privacy and safety. Your personal AI agent: if you can think it, your agent can make it real.">
+<meta name="keywords" content="AI agents, Swedish AI, safe AI agents, personal AI agent, Arche 1.0, Kimi K3, agentic AI Sweden, AI assistant, privacy-first AI">
+<meta name="author" content="Belna">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://belna.se/">
+<meta name="theme-color" content="#F6F6F7">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Belna">
+<meta property="og:title" content="Belna — Swedish Safe AI Agents">
+<meta property="og:description" content="Arche 1.0: Swedish safe AI agents built on open-source Kimi K3. Your personal AI agent — if you can think it, your agent can make it real.">
+<meta property="og:url" content="https://belna.se/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Belna — Swedish Safe AI Agents">
+<meta name="twitter:description" content="Arche 1.0 personal AI agents: open-source Kimi K3 + privacy-first agentic harness. Built in Sweden.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%23E15A46'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "name": "Belna",
+      "url": "https://belna.se/",
+      "slogan": "Swedish Safe AI Agents",
+      "address": { "@type": "PostalAddress", "addressCountry": "SE", "addressLocality": "Stockholm" }
+    },
+    {
+      "@type": "WebSite",
+      "name": "Belna",
+      "url": "https://belna.se/",
+      "description": "Swedish safe AI agents. Arche 1.0 personal AI agent built on open-source Kimi K3."
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "Belna Arche 1.0",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web",
+      "description": "Personal AI agent built on the open-source Kimi K3 model with an agentic harness optimized for privacy and safety.",
+      "offers": [
+        { "@type": "Offer", "name": "Free", "price": "0", "priceCurrency": "USD", "description": "$10 API credit" },
+        { "@type": "Offer", "name": "Pro", "price": "30", "priceCurrency": "USD", "description": "$20 credit + $50 gift card" },
+        { "@type": "Offer", "name": "Max", "price": "50", "priceCurrency": "USD", "description": "$50 credit + $100 gift card" }
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "What is Belna Arche 1.0?", "acceptedAnswer": { "@type": "Answer", "text": "Arche 1.0 is Belna's personal AI agent, built on the open-source Kimi K3 model with an agentic harness optimized for privacy and safety in Sweden." } },
+        { "@type": "Question", "name": "How do Belna AI agents keep me safe?", "acceptedAnswer": { "@type": "Answer", "text": "Secrets stay sealed in your vault as masked references, sensitive actions pause for approval, and code, browser and computer use run in a sandboxed harness with a visible trace." } },
+        { "@type": "Question", "name": "What can my personal AI agent do?", "acceptedAnswer": { "@type": "Answer", "text": "Research, browse, write code, manage files, triage mail, review GitHub pull requests and remember your preferences. If you can think it, your agent can make it real." } },
+        { "@type": "Question", "name": "How much does Belna cost?", "acceptedAnswer": { "@type": "Answer", "text": "Free includes $10 of API costs. Pro is $30 with $20 credit + $50 gift card. Max is $50 with $50 credit + $100 gift card." } }
+      ]
+    }
+  ]
+}
+</script>
 </head>
 <body>
 <div id="root"></div>
+<noscript><main style="max-width:720px;margin:60px auto;padding:0 24px;font-family:system-ui"><h1>Belna — Swedish Safe AI Agents</h1><p>Arche 1.0 is a personal AI agent built on the open-source Kimi K3 model, with an agentic harness optimized for privacy and safety. Enable JavaScript to meet your agent.</p><p><a href="/models.html">Models</a> · <a href="/pricing.html">Pricing</a> · <a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a></p></main></noscript>
 <script src="config.js"></script>
 <script src="auth.js"></script>
 <script src="mascot.js"></script>
-<script src="engine.js"></script>
+<!-- REAL backend only: simulated engine (engine.js) is intentionally NOT loaded so no response can ever be faked. -->
 <script src="engine.real.js"></script>
 <script src="app.js"></script>
 </body>

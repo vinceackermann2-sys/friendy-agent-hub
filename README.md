@@ -28,6 +28,15 @@ your Supabase JWT on every stateful request and derives `user_id` from the
 token — client-supplied ids are ignored. Memories, vault, usage and gifts are
 per-account. Rate limits + security headers are on.
 
+Google sign-in runs through our own OAuth bridge (`GET /api/auth/oauth-url` →
+`accounts.google.com` → `GET /api/auth/google/callback`): the browser only
+ever sees belna.se + Google, never a third-party hosted auth page. The server
+exchanges the code, verifies the email via userinfo, and bridges it into an
+app session server-side. Needs `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` in
+`.env` (see `.env.example`) plus the redirect URI registered in Google Cloud
+console. Passwordless email one-time codes (`/api/auth/otp` → `/api/auth/verify`)
+work with no extra setup.
+
 ## Supabase setup
 
 1. SQL Editor → run `supabase/schema.sql`, then `supabase/schema2.sql`
