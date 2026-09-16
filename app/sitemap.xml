@@ -3,7 +3,6 @@
   <url><loc>https://belna.se/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
   <url><loc>https://belna.se/models.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://belna.se/pricing.html</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://belna.se/faq.html</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://belna.se/terms.html</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://belna.se/privacy.html</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://belna.se/security.html</loc><changefreq>yearly</changefreq><priority>0.4</priority></url>

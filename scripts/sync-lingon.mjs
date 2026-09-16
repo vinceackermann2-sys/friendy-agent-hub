@@ -30,7 +30,7 @@ for (const f of ['app.js', 'auth.js', 'config.js', 'engine.js', 'engine.real.js'
   copy(join('app', f), join('public', 'lingon', f));
 }
 // Static Belna pages served from the site root
-for (const f of ['cookies.html', 'faq.html', 'models.html', 'pricing.html', 'privacy.html', 'security.html', 'terms.html', 'sitemap.xml']) {
+for (const f of ['cookies.html', 'models.html', 'pricing.html', 'privacy.html', 'security.html', 'terms.html', 'sitemap.xml']) {
   copy(join('app', f), join('public', f));
 }
 

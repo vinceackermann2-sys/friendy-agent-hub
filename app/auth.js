@@ -10,7 +10,8 @@ window.LingonAuth = (() => {
   const set = (s) => {
     if (!s) localStorage.removeItem(SKEY);
     else localStorage.setItem(SKEY, JSON.stringify(s));
-    try { window.LingonConfig.userId = (s && s.user && s.user.id) || window.LingonConfig.userId; } catch {}
+    // No demo/local identity: userId is the real Supabase id or null.
+    try { window.LingonConfig.userId = (s && s.user && s.user.id) || null; } catch {}
   };
   const headers = (extra = {}) => {
     const s = get();

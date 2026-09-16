@@ -1,7 +1,7 @@
 /* Lingon REAL smoke — auth + billing + no fakes.
    Requires: npm start on http://127.0.0.1:8000, GEMINI_API_KEY + Supabase set.
    Flow: health → signup test user → auth gate → onboarding → real chat →
-   research (live, no fake stats) → vault masked → Apps empty → billing Free $10.
+   research (live, no fake stats) → vault masked → Apps empty → billing Free 20 credits.
 */
 const { chromium } = require('playwright');
 
@@ -59,7 +59,7 @@ const { chromium } = require('playwright');
 
   // pricing visible, honest harness wording
   const landing = await p.evaluate(() => document.body.innerText);
-  if (!/Free.*\$10/i.test(landing)) errs.push('Pricing Free $10 missing on landing');
+  if (!/Free.*20 credits/i.test(landing)) errs.push('Pricing Free 20 credits missing on landing');
   if (/Codex-style|OpenAI Agents API/.test(landing)) errs.push('Stale Codex wording on landing');
   step('pricing + harness wording honest');
 
@@ -157,7 +157,7 @@ const { chromium } = require('playwright');
   const bill = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
   console.log('BILLING SAMPLE:\n' + bill.slice(0, 600));
   if (!/FREE/i.test(bill)) errs.push('Billing plan missing');
-  if (!/\$10/.test(bill)) errs.push('Free $10 credit missing');
+  if (!/20 credits/i.test(bill)) errs.push('Free 20 credits missing');
   if (!/Redeem gift/i.test(bill)) errs.push('Gift redeem missing');
   step('billing real');
 

@@ -1,13 +1,15 @@
-/* Lingon real backend — Express.
+/* Lingon real backend — Express (edge port; Stripe Checkout lives on the
+   Node backend in server/, this port mirrors the credit ledger).
    Auth: Supabase JWT required on all stateful routes (user_id comes from the
    verified token, never from the client). Health + plans are public.
-   Billing: Free $10 credit; Pro $30 (was $50) → $20 + $50 gift; Max $50
-   (was $100) → $50 + $100 gift. No fake charges — upgrades are requests.
+   Billing: credits (1 credit = $0.50 face, margin built in). Free: 20 starter
+   credits. Pro $30/mo → 60 credits/mo + $50 gift card. Max $50/mo → 100
+   credits/mo + $100 gift card. Gift redeem adds credits.
    Harness: NOT Codex API — our own Gemini tool boundary (see harness.js).
 */
 import { createApp } from './express-shim.js';
 import { callGemini, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK } from './gemini.js';
-import { PLANS, costOf } from './plans.js';
+import { PLANS, costOf, creditsForGiftUsd } from './plans.js';
 import * as store from './store.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
 import { rankMemories, maybeExtract } from './agents/memory.js';
@@ -62,10 +64,15 @@ app.get('/api/health', (req, res) => {
     gemini: isConfigured(),
     model: MODEL_DEFAULT,
     supabase: store.supaConfigured(),
+    google: googleConfigured(),
     harness: 'agents-api-shape (codex pattern, gemini-backed, self-hosted sandbox)',
-    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credit: p.credit, gift: p.gift })),
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval })),
     time: new Date().toISOString(),
   });
+});
+
+app.get('/api/auth/status', (req, res) => {
+  res.json({ google: googleConfigured() });
 });
 
 app.get('/api/plans', (req, res) => {
@@ -124,11 +131,19 @@ app.get('/api/auth/me', async (req, res) => {
 // session server-side (generateLink + verifyOtp), so billing, vault, memories
 // and RLS keep working unchanged.
 const OAUTH_STATE = new Map(); // state -> { next, redirectUri, exp }
+function googleEnv(name) {
+  return String((process.env && (process.env[name] || process.env['LINGON_' + name])) || '').trim();
+}
+function googleConfigured() {
+  return !!(googleEnv('GOOGLE_CLIENT_ID') && googleEnv('GOOGLE_CLIENT_SECRET'));
+}
 function siteOrigin(req) {
-  const env = (process.env.SITE_URL || '').replace(/\/$/, '');
+  const env = googleEnv('SITE_URL').replace(/\/$/, '');
   if (env) return env;
   if (req.headers.origin) return String(req.headers.origin).replace(/\/$/, '');
-  return (req.protocol + '://' + req.get('host')).replace(/\/$/, '');
+  const host = (req.get && req.get('host')) || req.headers.host || '';
+  if (host) return ((req.protocol || 'https') + '://' + host).replace(/\/$/, '');
+  return '';
 }
 function safeNext(n) {
   const s = String(n || '/');
@@ -143,7 +158,7 @@ app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
   try {
     const provider = String(req.query.provider || 'google');
     if (provider !== 'google') return res.status(400).json({ error: 'Unsupported provider.' });
-    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientId = googleEnv('GOOGLE_CLIENT_ID');
     if (!clientId) return res.status(500).json({ error: 'Google sign-in is not configured.' });
     const state = crypto.randomBytes(32).toString('hex');
     const redirectUri = siteOrigin(req) + '/api/auth/google/callback';
@@ -171,8 +186,8 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
     const saved = state ? OAUTH_STATE.get(String(state)) : null;
     if (state) OAUTH_STATE.delete(String(state)); // one-time use (CSRF protection)
     if (!code || !saved || saved.exp < Date.now()) return back('Sign-in expired — please try again.');
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const clientId = googleEnv('GOOGLE_CLIENT_ID');
+    const clientSecret = googleEnv('GOOGLE_CLIENT_SECRET');
     if (!clientId || !clientSecret) return back('Google sign-in is not configured.');
     // code -> tokens, server to server (secret never touches the browser)
     const tok = await fetch('https://oauth2.googleapis.com/token', {
@@ -213,7 +228,7 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
       + '&refresh_token=' + encodeURIComponent(sess.data.session.refresh_token || '');
     res.redirect(saved.next.split('#')[0].split('?')[0] + frag);
   } catch (e) {
-    back(e.message);
+    return back(e.message);
   }
 });
 // Email one-time code (passwordless)
@@ -243,14 +258,37 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
   }
 });
 
-// ---------- billing ----------
+// ---------- billing (credits — users never see raw API costs) ----------
+// NOTE: real Stripe Checkout + webhooks run on the Node backend (server/).
+// This edge port serves the same credit ledger; upgrades here record a
+// request and point at Checkout on the main backend.
 async function billingFor(userId) {
   const sub = await store.getSubscription(userId);
   const plan = PLANS[sub.plan] || PLANS.free;
-  const used = await store.usageTotal(userId);
-  const gifts = await store.giftsCredit(userId);
-  const total = plan.credit + gifts;
-  return { plan: sub.plan, status: sub.status, credit: plan.credit, gifts, used, total, remaining: Math.max(0, total - used), plans: PLANS };
+  await store.ensureFreeGrant(userId);
+  try {
+    const giftsUsd = await store.giftsCredit(userId);
+    const giftGranted = await store.grantsTotalByReason(userId, 'gift_redeem');
+    const expected = creditsForGiftUsd(giftsUsd);
+    if (expected > giftGranted + 1e-9) {
+      await store.addGrant(userId, expected - giftGranted, 'gift_redeem', 'backfill:legacy');
+    }
+  } catch {}
+  const granted = await store.grantsTotal(userId);
+  const usedCredits = await store.creditsUsed(userId);
+  const giftsRedeemedUsd = await store.giftsCredit(userId);
+  const remaining = Math.max(0, granted - usedCredits);
+  return {
+    plan: sub.plan, status: sub.status,
+    credits: Math.round(remaining * 100) / 100,
+    creditsGranted: Math.round(granted * 100) / 100,
+    creditsUsed: Math.round(usedCredits * 100) / 100,
+    giftsRedeemedUsd,
+    currentPeriodEnd: sub.current_period_end || null,
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval, blurb: p.blurb })),
+    credit: plan.credits / 2, gifts: giftsRedeemedUsd, used: usedCredits / 2, total: granted / 2, remaining: remaining / 2,
+    plansLegacy: PLANS,
+  };
 }
 app.get('/api/billing', requireAuth(async (req, res) => {
   res.json(await billingFor(req.user.id));
@@ -258,14 +296,19 @@ app.get('/api/billing', requireAuth(async (req, res) => {
 app.post('/api/billing/redeem', requireAuth(async (req, res) => {
   const r = await store.redeemGift(req.user.id, (req.body || {}).code);
   if (!r.ok) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, amount: r.amount, billing: await billingFor(req.user.id) });
+  res.json({ ok: true, amount: r.amount, credits: r.credits, billing: await billingFor(req.user.id) });
+}));
+app.post('/api/billing/checkout', requireAuth(async (req, res) => {
+  res.status(501).json({ error: 'Checkout runs on the main backend — this edge port records requests only. Use POST /api/billing/upgrade.' });
+}));
+app.post('/api/billing/portal', requireAuth(async (req, res) => {
+  res.status(501).json({ error: 'Customer portal runs on the main backend.' });
 }));
 app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
   const { plan } = req.body || {};
   if (!PLANS[plan] || plan === 'free') return res.status(400).json({ error: 'Choose pro or max.' });
-  // Honest: no Stripe connected → record request, keep Free until paid.
   const r = await store.requestUpgrade(req.user.id, plan);
-  res.json({ ok: true, status: 'requested', request: r.id, note: `Payments aren't connected yet — your ${PLANS[plan].name} request is recorded, no charge made. You stay on Free with your current credit.` });
+  res.json({ ok: true, status: 'requested', request: r.id, note: `Your ${PLANS[plan].name} request is recorded. Complete payment via Stripe Checkout on the main backend to activate — you keep your current credits until then.` });
 }));
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
   // Admin/demo issuance: allowed but audited with from_user. Real customer gifts
@@ -273,13 +316,14 @@ app.post('/api/gifts/create', requireAuth(async (req, res) => {
   const amount = Number((req.body || {}).amount || 0);
   if (![50, 100].includes(amount)) return res.status(400).json({ error: 'Gift amount must be 50 or 100.' });
   const g = await store.createGift(req.user.id, amount);
-  res.json({ gift: { code: g.code, amount_usd: g.amount_usd }, note: 'Share this code — the redeemer gets API credit. redeem via Billing.' });
+  const giftCredits = Number(g.amount_usd) * 2;
+  res.json({ gift: { code: g.code, amount_usd: g.amount_usd, credits: giftCredits }, note: `Share this code — the redeemer gets ${giftCredits} credits. Redeem via Billing.` });
 }));
 
 async function checkCredit(userId) {
   const b = await billingFor(userId);
-  if (b.remaining <= 0.0001) {
-    const e = new Error(`API credit exhausted ($${b.used.toFixed(4)} used of $${b.total.toFixed(2)}). Upgrade or redeem a gift card under Billing.`);
+  if (b.credits <= 0.001) {
+    const e = new Error(`You're out of credits (${b.creditsUsed.toFixed(1)} of ${b.creditsGranted.toFixed(0)} used). Upgrade your plan or redeem a gift card under Billing.`);
     e.code = 'NO_CREDIT';
     throw e;
   }

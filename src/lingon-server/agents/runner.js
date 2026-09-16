@@ -19,13 +19,13 @@ import { compactIfNeeded } from './sessions.js';
 import { realResearch } from '../research.js';
 
 async function ensureCredit(userId) {
-  const sub = await store.getSubscription(userId);
-  const p = PLANS[sub.plan] || PLANS.free;
-  const used = await store.usageTotal(userId);
-  const gifts = await store.giftsCredit(userId);
-  if (used >= p.credit + gifts + 1e-9) {
-    const e = new Error(`API credit exhausted ($${used.toFixed(4)} used of $${(p.credit + gifts).toFixed(2)}). Upgrade or redeem a gift card under Billing.`);
+  await store.ensureFreeGrant(userId);
+  const granted = await store.grantsTotal(userId);
+  const used = await store.creditsUsed(userId);
+  if (used >= granted - 1e-9) {
+    const e = new Error(`You're out of credits (${used.toFixed(1)} of ${granted.toFixed(0)} used). Upgrade your plan or redeem a gift card under Billing.`);
     e.code = 'NO_CREDIT';
+    e.upgrade_required = true;
     throw e;
   }
 }

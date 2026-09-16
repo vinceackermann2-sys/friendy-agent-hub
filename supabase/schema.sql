@@ -90,3 +90,77 @@ do $$ begin
     create policy "own rows" on profiles for all using (true) with check (true);
   end if;
 end $$;
+
+-- ============ billing: Stripe subscriptions, credit ledger, gifts ============
+-- Credits: 1 credit = $0.50 face value. Users only ever see credits.
+create table if not exists subscriptions (
+  user_id text primary key references profiles(id) on delete cascade,
+  plan text not null default 'free',
+  status text not null default 'active',
+  stripe_customer_id text,
+  stripe_subscription_id text,
+  current_period_end timestamptz,
+  gift_issued boolean not null default false,
+  created_at timestamptz default now()
+);
+create index if not exists subs_customer_idx on subscriptions(stripe_customer_id);
+
+-- Every credit grant: free starter, monthly subscription, gift redeem.
+create table if not exists credit_grants (
+  id text primary key,
+  user_id text not null references profiles(id) on delete cascade,
+  credits double precision not null default 0,
+  reason text not null default 'grant',
+  ref text,
+  created_at timestamptz default now()
+);
+create index if not exists grants_user_idx on credit_grants(user_id, created_at desc);
+
+-- Model usage log. credits_charged includes our margin (older rows without it
+-- are honored at face rate: credits = cost_usd * 2).
+create table if not exists api_usage (
+  id text primary key,
+  user_id text not null references profiles(id) on delete cascade,
+  model text,
+  prompt_tokens integer not null default 0,
+  candidates_tokens integer not null default 0,
+  total_tokens integer not null default 0,
+  cost_usd double precision not null default 0,
+  credits_charged double precision,
+  created_at timestamptz default now()
+);
+create index if not exists usage_user_idx on api_usage(user_id, created_at desc);
+
+-- Gift cards keep their dollar face value ($50/$100) and redeem into credits
+-- at 2 credits per $1.
+create table if not exists gift_cards (
+  code text primary key,
+  amount_usd double precision not null,
+  from_user text,
+  to_user text,
+  redeemed_by text,
+  redeemed_at timestamptz,
+  created_at timestamptz default now()
+);
+
+-- Pre-Stripe upgrade requests (kept for history; Stripe is the real flow now).
+create table if not exists upgrade_requests (
+  id text primary key,
+  user_id text not null references profiles(id) on delete cascade,
+  plan text not null,
+  status text not null default 'requested',
+  created_at timestamptz default now()
+);
+
+-- Stripe webhook idempotency (processed event ids).
+create table if not exists stripe_events (
+  id text primary key,
+  created_at timestamptz default now()
+);
+
+alter table subscriptions enable row level security;
+alter table credit_grants enable row level security;
+alter table api_usage enable row level security;
+alter table gift_cards enable row level security;
+alter table upgrade_requests enable row level security;
+alter table stripe_events enable row level security;

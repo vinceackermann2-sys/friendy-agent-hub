@@ -189,7 +189,12 @@ async function delSecret(userId, id) {
   saveLocal(d);
 }
 
-// ---------- billing: subscriptions, usage, gift cards ----------
+// ---------- billing: subscriptions, credit grants, usage, gift cards ----------
+// Credits: 1 credit = $0.50 face. Usage USD is marked up 2.5x into credits
+// (CREDITS_USED = usd * 5). Gifts keep dollar face, redeem at 2 credits/$1.
+const CREDIT_GRANT_FREE = 20;
+function creditsForUsageUsd(usd) { return Number(usd || 0) * 2.5 * 2; }
+function creditsForGift(usd) { return Number(usd || 0) * 2; }
 async function getSubscription(userId) {
   const s = supa();
   if (s) {
@@ -205,14 +210,23 @@ async function getSubscription(userId) {
   const d = loadLocal();
   return (d.subs || []).find((x) => x.userId === userId) || { user_id: userId, plan: 'free', status: 'active' };
 }
-async function setSubscription(userId, plan, status) {
+function subCols(m) {
+  const out = {};
+  for (const k of ['stripe_customer_id', 'stripe_subscription_id', 'current_period_end', 'gift_issued']) {
+    if (m[k] !== undefined) out[k] = m[k];
+  }
+  return out;
+}
+async function setSubscription(userId, plan, status, extra) {
+  const merged = { ...(extra || {}), plan, status: status || 'active' };
   const s = supa();
   if (s) {
     try {
       await ensureProfile(userId);
-      const { error } = await s.from('subscriptions').upsert({ user_id: userId, plan, status: status || 'active' }, { onConflict: 'user_id' });
+      const row = { user_id: userId, plan, status: status || 'active', ...subCols(merged) };
+      const { error } = await s.from('subscriptions').upsert(row, { onConflict: 'user_id' });
       if (error) throw error;
-      return { user_id: userId, plan, status: status || 'active' };
+      return { user_id: userId, plan, status: status || 'active', ...merged };
     } catch (e) {
       console.warn('[store] set subscription fallback:', e.message);
     }
@@ -220,24 +234,131 @@ async function setSubscription(userId, plan, status) {
   const d = loadLocal();
   d.subs = d.subs || [];
   const i = d.subs.findIndex((x) => x.userId === userId);
-  const row = { userId, plan, status: status || 'active' };
-  if (i >= 0) d.subs[i] = row; else d.subs.push(row);
+  const row = { userId, user_id: userId, plan, status: status || 'active', ...merged };
+  if (i >= 0) d.subs[i] = { ...d.subs[i], ...row }; else d.subs.push(row);
   saveLocal(d);
-  return { user_id: userId, plan, status: status || 'active' };
+  return { user_id: userId, plan, status: status || 'active', ...merged };
+}
+async function findUserByStripeCustomer(customerId) {
+  if (!customerId) return null;
+  const s = supa();
+  if (s) {
+    try {
+      const { data } = await s.from('subscriptions').select('user_id').eq('stripe_customer_id', customerId).limit(1).single();
+      if (data) return data.user_id;
+    } catch {}
+  }
+  const d = loadLocal();
+  const r = (d.subs || []).find((x) => x.stripe_customer_id === customerId);
+  return r ? (r.user_id || r.userId) : null;
+}
+async function addGrant(userId, credits, reason, ref) {
+  const row = { id: 'gr_' + uid(), user_id: userId, credits: Number(credits || 0), reason: reason || 'grant', ref: ref || null };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('credit_grants').insert(row);
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] grant fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.grants = d.grants || [];
+  d.grants.unshift({ ...row, userId });
+  saveLocal(d);
+  return row;
+}
+async function grantsTotal(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('credit_grants').select('credits').eq('user_id', userId);
+      if (error) throw error;
+      return (data || []).reduce((n, r) => n + Number(r.credits || 0), 0);
+    } catch {}
+  }
+  const d = loadLocal();
+  return (d.grants || []).filter((r) => r.user_id === userId || r.userId === userId).reduce((n, r) => n + Number(r.credits || 0), 0);
+}
+async function hasGrantRef(userId, ref) {
+  if (!ref) return false;
+  const s = supa();
+  if (s) {
+    try {
+      const { data } = await s.from('credit_grants').select('id').eq('user_id', userId).eq('ref', ref).limit(1);
+      if (data && data.length) return true;
+    } catch {}
+  }
+  const d = loadLocal();
+  return !!((d.grants || []).some((g) => (g.user_id === userId || g.userId === userId) && g.ref === ref));
+}
+async function ensureFreeGrant(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { data, error } = await s.from('credit_grants').select('id').eq('user_id', userId).eq('reason', 'free_starter').limit(1);
+      if (!error) {
+        if (data && data.length) return false;
+        await addGrant(userId, CREDIT_GRANT_FREE, 'free_starter', 'free');
+        return true;
+      }
+    } catch {}
+    // Supabase unreachable or table missing — fall through to the local
+    // fallback below, which grants at most once.
+  }
+  const d = loadLocal();
+  if ((d.grants || []).some((g) => (g.user_id === userId || g.userId === userId) && g.reason === 'free_starter')) return false;
+  await addGrant(userId, CREDIT_GRANT_FREE, 'free_starter', 'free');
+  return true;
+}
+async function stripeEventSeen(eventId) {
+  if (!eventId) return false;
+  const s = supa();
+  if (s) {
+    try {
+      const { data } = await s.from('stripe_events').select('id').eq('id', eventId).limit(1);
+      if (data && data.length) return true;
+    } catch {}
+  }
+  const d = loadLocal();
+  return !!((d.stripeEvents || []).includes(eventId));
+}
+async function markStripeEvent(eventId) {
+  if (!eventId) return;
+  const s = supa();
+  if (s) {
+    try {
+      await s.from('stripe_events').insert({ id: eventId });
+    } catch {}
+  }
+  const d = loadLocal();
+  d.stripeEvents = d.stripeEvents || [];
+  if (!d.stripeEvents.includes(eventId)) d.stripeEvents.push(eventId);
+  saveLocal(d);
 }
 async function logUsage(userId, { model, usage, cost }) {
+  const costUsd = Number(cost || 0);
   const row = {
     id: 'use_' + uid(), user_id: userId, model: model || 'gemini-2.5-flash',
     prompt_tokens: (usage && (usage.promptTokenCount || 0)) || 0,
     candidates_tokens: (usage && (usage.candidatesTokenCount || 0)) || 0,
     total_tokens: (usage && (usage.totalTokenCount || 0)) || 0,
-    cost_usd: Number(cost || 0),
+    cost_usd: costUsd,
+    credits_charged: creditsForUsageUsd(costUsd),
   };
   const s = supa();
   if (s) {
     try {
       await ensureProfile(userId);
-      const { error } = await s.from('api_usage').insert(row);
+      let { error } = await s.from('api_usage').insert(row);
+      if (error && /credits_charged|column/i.test(error.message || '')) {
+        const { credits_charged, ...legacy } = row;
+        ({ error } = await s.from('api_usage').insert(legacy));
+      }
       if (error) throw error;
       return row;
     } catch (e) {
@@ -291,6 +412,12 @@ async function createGift(fromUser, amountUsd) {
 }
 async function redeemGift(userId, code) {
   const c = String(code || '').trim().toUpperCase();
+  const grantRedeem = async (amountUsd) => {
+    const credits = creditsForGift(amountUsd);
+    await ensureFreeGrant(userId);
+    await addGrant(userId, credits, 'gift_redeem', c);
+    return { ok: true, amount: Number(amountUsd), credits };
+  };
   const s = supa();
   if (s) {
     try {
@@ -300,7 +427,7 @@ async function redeemGift(userId, code) {
       if (data.redeemed_by) return { ok: false, error: 'Code already redeemed.' };
       const { error: e2 } = await s.from('gift_cards').update({ redeemed_by: userId, redeemed_at: new Date().toISOString(), to_user: userId }).eq('code', c);
       if (e2) throw e2;
-      return { ok: true, amount: Number(data.amount_usd) };
+      return await grantRedeem(data.amount_usd);
     } catch (e) {
       console.warn('[store] redeem fallback:', e.message);
     }
@@ -312,8 +439,9 @@ async function redeemGift(userId, code) {
   if (g.redeemed_by) return { ok: false, error: 'Code already redeemed.' };
   g.redeemed_by = userId;
   g.to_user = userId;
+  g.redeemed_at = new Date().toISOString();
   saveLocal(d);
-  return { ok: true, amount: Number(g.amount_usd) };
+  return await grantRedeem(g.amount_usd);
 }
 async function giftsCredit(userId) {
   const s = supa();
@@ -418,12 +546,54 @@ async function logToolRun({ userId, sessionId, kind, name, status, detail, ms })
   return row;
 }
 
+async function creditsUsed(userId) {
+  // New rows carry credits_charged (with margin). Pre-migration rows only
+  // have cost_usd — honor them at face rate (x2, no margin) so old balances
+  // carry over exactly instead of shrinking under the new markup.
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('api_usage').select('cost_usd,credits_charged').eq('user_id', userId);
+      if (error) throw error;
+      return (data || []).reduce((n, r) => n + (r.credits_charged != null && r.credits_charged !== undefined
+        ? Number(r.credits_charged || 0)
+        : Number(r.cost_usd || 0) * 2), 0);
+    } catch (e) {
+      console.warn('[store] credits used fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.usage || [])
+    .filter((r) => r.user_id === userId || r.userId === userId)
+    .reduce((n, r) => n + (r.credits_charged != null && r.credits_charged !== undefined
+      ? Number(r.credits_charged || 0)
+      : Number(r.cost_usd || r.cost || 0) * 2), 0);
+}
+async function grantsTotalByReason(userId, reason) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('credit_grants').select('credits').eq('user_id', userId).eq('reason', reason);
+      if (error) throw error;
+      return (data || []).reduce((n, r) => n + Number(r.credits || 0), 0);
+    } catch {}
+  }
+  const d = loadLocal();
+  return (d.grants || [])
+    .filter((r) => (r.user_id === userId || r.userId === userId) && r.reason === reason)
+    .reduce((n, r) => n + Number(r.credits || 0), 0);
+}
+
 export {
   listMemories, addMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret,
   supaConfigured,
-  getSubscription, setSubscription, logUsage, usageTotal,
+  getSubscription, setSubscription, findUserByStripeCustomer,
+  logUsage, usageTotal, creditsUsed, creditsForUsageUsd, creditsForGift,
+  addGrant, grantsTotal, grantsTotalByReason, ensureFreeGrant, hasGrantRef,
+  stripeEventSeen, markStripeEvent,
   createGift, redeemGift, giftsCredit, requestUpgrade,
   logToolRun,
   saveTurn, searchTurns,
+  CREDIT_GRANT_FREE,
 };

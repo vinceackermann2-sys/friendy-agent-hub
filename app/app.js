@@ -81,6 +81,7 @@ function md(src){
 const LS = 'lingon.v1';
 const fresh = () => ({
   onboarded:false, agent:null, view:'chat', activeChat:null,
+  ownerId:null,
   canvasOpen:false, canvasTab:'canvas', model:'Smart', theme:'grey',
   chats:[], pendingPrompt:null,
   vault:{ secrets:[], apps:[], approvals:[], mode:'default' },
@@ -151,10 +152,41 @@ const root = document.getElementById('root');
 const chat = () => state.chats.find(c => c.id === state.activeChat);
 const isActive = c => state.view === 'chat' && state.activeChat === c.id;
 
+/* ---------------- real-account guards (no fake/demo accounts) ----------------
+   The agent (Engine.run / /api/*) only ever runs for a verified Supabase
+   session. Local `lingon.v1` state is scoped per ownerId so one device never
+   leaks chats/agents between real accounts, and no code path can claim or
+   chat without a signed-in user. */
+const signedIn = () => !!(window.LingonAuth && window.LingonAuth.signedIn());
+const currentUserId = () => {
+  try { return (window.LingonAuth && window.LingonAuth.get() && window.LingonAuth.get().user && window.LingonAuth.get().user.id) || null; }
+  catch { return null; }
+};
+function ensureOwnerScope(){
+  const uid = currentUserId();
+  if (!uid) return;
+  if (!state.ownerId){ state.ownerId = uid; save(); return; }
+  if (state.ownerId !== uid){
+    const theme = state.theme;
+    const pending = state.pendingPrompt;
+    state = Object.assign(fresh(), { theme, pendingPrompt: pending || null, ownerId: uid });
+    save();
+  }
+}
+
 function render(){
   applyTheme();
-  if (window.LingonAuth && !window.LingonAuth.signedIn()) return renderAuth();
-  if (state.onboarded && state.agent) renderApp(); else renderLanding();
+  if (!signedIn()) return renderAuth();
+  ensureOwnerScope();
+  if (state.onboarded && state.agent && !state.agent.provisional) return renderApp();
+  if (state.pendingPrompt && (!state.onboarded || !state.agent || (state.agent && state.agent.provisional))){
+    // Signed-in with a saved homepage prompt: message goes to the agent chat
+    // first, then in-chat onboarding runs before the agent starts the task.
+    startPendingPromptFlow();
+    return;
+  }
+  if (state.onboarded && state.agent) return renderApp();
+  return renderLanding();
 }
 
 /* ================================================================
@@ -169,10 +201,11 @@ function renderAuth(){
   try { lastGoogle = localStorage.getItem('belna.lastProvider') === 'google'; } catch {}
   root.innerHTML = `
   <div class="fadeup authpage">
-    <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="faq.html">Open Docs &#8599;</a></div>
+    <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="pricing.html">Open Docs &#8599;</a></div>
     <div class="authcard">
-      <h1>Log in to manage profile and billing</h1>
-      <button class="btn gbtn" data-act="google"><span class="glogo"></span>Continue with Google${lastGoogle ? '<span class="lastused">Last used</span>' : ''}</button>
+      <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : 'Log in to manage profile and billing'}</h1>
+      ${state.pendingPrompt ? `<div class="kv" style="margin-top:16px;text-align:left"><div class="row"><span style="color:var(--mut)">${icon('chatb',16)}</span><div><b style="font-weight:600">${esc(state.pendingPrompt.length > 140 ? state.pendingPrompt.slice(0, 140) + '…' : state.pendingPrompt)}</b><div class="sub">Your message is saved — it will appear in the agent chat right after you sign in, before anything runs.</div></div></div></div>` : ''}
+      <button class="btn gbtn" data-act="google"><span class="glogo" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg></span>Continue with Google${lastGoogle ? '<span class="lastused">Last used</span>' : ''}</button>
       <div class="ordiv"><span></span>OR<span></span></div>
       <div id="authmain">
         <input class="field authfield" id="aemail" type="email" placeholder="Enter Email" autocomplete="email">
@@ -198,6 +231,17 @@ function renderAuth(){
     </div>
   </div>`;
   authPaintMode();
+  paintGoogleState();
+  // Surface OAuth callback errors (?auth_error=…) inline when we land back here.
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const err = q.get('auth_error');
+    if (err) {
+      const m = document.getElementById('amsg');
+      if (m) m.textContent = 'Sign-in failed: ' + err;
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  } catch {}
 }
 function showAuthPane(id){
   ['authmain', 'authotp', 'authpw'].forEach(p => { const n = document.getElementById(p); if (n) n.style.display = p === id ? '' : 'none'; });
@@ -219,13 +263,36 @@ function authPaintMode(){
 }
 async function authOAuth(){
   const msg = document.getElementById('amsg');
+  const btn = document.querySelector('[data-act="google"]');
+  if (btn) btn.disabled = true;
   if (msg) msg.textContent = 'Redirecting to Google…';
   try {
     const r = await fetch('/api/auth/oauth-url?provider=google&next=' + encodeURIComponent('/'));
-    const j = await r.json();
+    const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'Google sign-in unavailable');
+    if (!j.url) throw new Error('Google sign-in unavailable — no redirect URL.');
     window.location.href = j.url;
-  } catch (e){ if (msg) msg.textContent = e.message; }
+  } catch (e){
+    if (btn) btn.disabled = false;
+    if (msg) msg.textContent = e.message === 'Google sign-in is not configured.'
+      ? 'Google sign-in is not enabled on this server yet (missing GOOGLE_CLIENT_ID). Use a one-time code or password instead.'
+      : (e.message || 'Google sign-in unavailable');
+  }
+}
+// Probe whether Google OAuth is configured so the button can explain itself
+// instead of failing silently. Non-fatal — button stays clickable as fallback.
+async function paintGoogleState(){
+  try {
+    const r = await fetch('/api/health');
+    const j = await r.json().catch(() => ({}));
+    const btn = document.querySelector('[data-act="google"]');
+    if (!btn) return;
+    if (j && j.google === false) {
+      btn.title = 'Google sign-in is not enabled on this server yet';
+    } else if (j && j.google === true) {
+      btn.title = 'Continue with Google';
+    }
+  } catch {}
 }
 async function authOtpSend(){
   const msg = document.getElementById('amsg');
@@ -253,11 +320,7 @@ async function authOtpVerify(){
     if (!r.ok) throw new Error(j.error || 'Invalid code');
     window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
     try { window.LingonConfig.userId = j.user.id; localStorage.setItem('belna.lastProvider', 'otp'); } catch {}
-    state.view = 'chat';
-    save();
-    await syncFromBackend();
-    render();
-    toast('Signed in as ' + j.user.email);
+    await afterSignIn(j.user);
   } catch (e){ if (msg) msg.textContent = e.message; }
 }
 
@@ -272,13 +335,36 @@ async function doAuth(kind){
     if (!r.ok) throw new Error(j.error || 'Auth failed');
     window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
     try { window.LingonConfig.userId = j.user.id; } catch {}
+    await afterSignIn(j.user);
+  } catch (e) {
+    if (msg) msg.textContent = e.message;
+  }
+}
+
+/* Central post-auth routing (real accounts only).
+   - Scopes local state to the signed-in user (no cross-account leakage).
+   - If a homepage prompt is pending and the account is new (not onboarded),
+     the message is placed into the agent chat FIRST, then in-chat onboarding
+     (name / appearance / personality) runs BEFORE the agent starts the task.
+   - Otherwise normal render. */
+async function afterSignIn(user){
+  try {
+    ensureOwnerScope();
+    if (user && user.id && state.ownerId !== user.id){ state.ownerId = user.id; }
     state.view = 'chat';
     save();
     await syncFromBackend();
+    if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
+      const p = state.pendingPrompt;
+      toast('Signed in as ' + (user.email || 'you'));
+      await startPendingPromptFlow(p);
+      return;
+    }
     render();
-    toast('Signed in as ' + j.user.email);
-  } catch (e) {
-    if (msg) msg.textContent = e.message;
+    toast('Signed in as ' + (user.email || 'you'));
+  } catch (e){
+    console.error(e);
+    render();
   }
 }
 
@@ -293,10 +379,40 @@ async function getBilling(){
     return billingCache;
   } catch { return billingCache; }
 }
+function fmtC(n){ return (Math.round(Number(n || 0) * 100) / 100).toString(); }
+function planCards(b){
+  const ids = ['free', 'pro', 'max'];
+  const list = Array.isArray(b && b.plans) ? b.plans : ids.map((id) => (b && b.plans && b.plans[id]) || { id, name: id });
+  const byId = {};
+  list.forEach((p) => { if (p && p.id) byId[p.id] = p; });
+  return ids.map((id) => {
+    const p = byId[id] || { name: id, price: 0, was: null, credits: 0, giftUsd: 0 };
+    const cur = b && b.plan === id;
+    const per = p.interval === 'month' ? '/mo' : '';
+    const giftTxt = p.giftUsd ? ` + $${p.giftUsd} gift card` : '';
+    const btn = cur
+      ? '<span class="chip green">current</span>'
+      : id === 'free'
+        ? '<span class="chip">default</span>'
+        : `<button class="btn small" data-act="checkout" data-p="${id}">Get ${esc(p.name)}</button>`;
+    return `<div class="row"><div><b>${esc(p.name)}</b> — $${p.price}${per}${p.was ? ` <s class="mut">$${p.was}</s>` : ''}<div class="sub">${fmtC(p.credits)} credits${per === '/mo' ? ' monthly' : ''}${giftTxt}</div></div>
+    <div class="rgt">${btn}</div></div>`;
+  }).join('');
+}
+function billSummary(b){
+  const manage = b && b.plan !== 'free'
+    ? ` <button class="btn ghost small" data-act="portal" style="margin-left:8px">Manage subscription</button>`
+    : '';
+  return `<div class="kv"><div class="row">
+      <span style="color:var(--mut)">${icon('spark',16)}</span>
+      <div><b>${esc((b.plan || 'free').toUpperCase())}</b> · ${esc(b.status || '')}<div class="sub">${fmtC(b.creditsUsed)} of ${fmtC(b.creditsGranted)} credits used</div></div>
+      <div class="rgt"><span class="chip ${Number(b.credits) > 5 ? 'green' : ''}">${fmtC(b.credits)} credits left</span>${manage}</div>
+    </div></div>`;
+}
 function paintBilling(M){
   M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Billing</h1><span class="chip">real credits</span></div>
-    <p class="psub">Free includes <b>$10</b> of API costs. Pro <b>$30</b> <s>$50</s> → $20 credit + $50 gift card. Max <b>$50</b> <s>$100</s> → $50 credit + $100 gift card. Gift codes add real credit when redeemed. Upgrades are requests until payments connect — no charge is made.</p>
+    <div class="phead"><h1>Billing</h1><span class="chip">credits</span></div>
+    <p class="psub">Free starts with <b>20 credits</b>. Pro <b>$30/mo</b> → 60 credits monthly + $50 gift card. Max <b>$50/mo</b> → 100 credits monthly + $100 gift card. Gift codes add credits when redeemed.</p>
     <div id="billbody"><div class="row mut">Loading…</div></div>
     <div class="kv" style="margin-top:14px"><div class="row" style="background:var(--panel)">
       <input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" style="flex:1">
@@ -306,34 +422,36 @@ function paintBilling(M){
   </div></div>`;
   getBilling().then((b) => {
     const el = $('#billbody');
-    if (el && b) el.innerHTML = `<div class="kv"><div class="row">
-      <span style="color:var(--mut)">${icon('spark',16)}</span>
-      <div><b>${b.plan.toUpperCase()}</b> · ${b.status}<div class="sub">Used $${Number(b.used).toFixed(4)} of $${Number(b.total).toFixed(2)} (plan $${b.credit} + gifts $${b.gifts})</div></div>
-      <div class="rgt"><span class="chip ${b.remaining > 1 ? 'green' : ''}">$${Number(b.remaining).toFixed(2)} left</span></div>
-    </div></div>`;
+    if (el && b) el.innerHTML = billSummary(b);
     const pc = $('#plancards');
-    if (pc) pc.innerHTML = ['free', 'pro', 'max'].map((id) => {
-      const p = (b && b.plans && b.plans[id]) || { name: id, price: 0, was: null, credit: 0, gift: 0 };
-      const cur = b && b.plan === id;
-      return `<div class="row"><div><b>${p.name}</b> — $${p.price}${p.was ? ` <s class="mut">$${p.was}</s>` : ''}<div class="sub">$${p.credit} credit${p.gift ? ` + $${p.gift} gift card` : ''}</div></div>
-      <div class="rgt">${cur ? '<span class="chip green">current</span>' : id === 'free' ? '<span class="chip">default</span>' : `<button class="btn small" data-act="upgrade" data-p="${id}">Request ${p.name}</button>`}</div></div>`;
-    }).join('');
+    if (pc && b) pc.innerHTML = planCards(b);
   });
 }
 
 /* ================================================================
    LANDING
 ================================================================ */
-/* Belna landing — mascot prop switcher (laptop / briefcase / phone / wallet).
-   The mascot sits in a circle card inside the headline and cycles the item
-   it holds. Dots switch the held item manually. */
+/* Belna landing — mascot prop loop (briefcase / laptop / phone / wallet).
+   The mascot sits in a circle card inside the headline and auto-loops the
+   item it holds — no manual pills/dots. The prop badge overlaps the mascot
+   like an object held in front, with a pop on every switch. */
 const BELNA_ACTS = [
-  { ic:'laptop', label:'holding a laptop', mood:'think' },
   { ic:'brief',  label:'holding a briefcase', mood:'idle' },
+  { ic:'laptop', label:'holding a laptop', mood:'think' },
   { ic:'phone',  label:'answering phones', mood:'happy' },
   { ic:'wallet', label:'counting wallet', mood:'wow' },
 ];
+/* Typewriter examples for the hero prompt box. */
+const BELNA_PROMPTS = [
+  'Ask Belna to do my taxes...',
+  'Ask Belna to organize my schedule...',
+  'Ask Belna to plan my move to Gothenburg...',
+  'Ask Belna to research anything with sources...',
+  'Ask Belna to build me a landing page...',
+];
 function belnaStopRotator(){ if (window.__actTimer){ clearInterval(window.__actTimer); window.__actTimer = null; } }
+function belnaStopTypewriter(){ if (window.__typeTimer){ clearTimeout(window.__typeTimer); window.__typeTimer = null; } }
+function belnaStopLandingFx(){ belnaStopRotator(); belnaStopTypewriter(); }
 function belnaPaintHold(i){
   const a = BELNA_ACTS[i % BELNA_ACTS.length];
   const core = document.getElementById('mcore');
@@ -341,9 +459,14 @@ function belnaPaintHold(i){
   const hold = document.getElementById('mhold');
   if (!core || !prop) return;
   core.innerHTML = Mascot.svg('lingon', a.mood, 44);
-  prop.innerHTML = icon(a.ic, 15);
-  if (hold){ hold.title = 'Your Belna agent, ' + a.label; hold.setAttribute('aria-label', 'Your Belna agent, ' + a.label); }
-  Array.from(document.querySelectorAll('.actdots button')).forEach((d, k) => d.classList.toggle('on', k === (i % BELNA_ACTS.length)));
+  prop.innerHTML = icon(a.ic, 16);
+  if (hold){
+    hold.title = 'Your Belna agent, ' + a.label;
+    hold.setAttribute('aria-label', 'Your Belna agent, ' + a.label);
+    hold.classList.remove('swap');
+    void hold.offsetWidth;
+    hold.classList.add('swap');
+  }
 }
 function belnaStartRotator(){
   belnaStopRotator();
@@ -351,13 +474,46 @@ function belnaStartRotator(){
   belnaPaintHold(0);
   window.__actTimer = setInterval(() => { belnaPaintHold(i % BELNA_ACTS.length); i++; }, 2400);
 }
+function belnaStartTypewriter(){
+  belnaStopTypewriter();
+  const ta = document.getElementById('lprompt');
+  const ta2 = document.getElementById('lprompt2');
+  if (!ta && !ta2) return;
+  const CARET = '▏';
+  let pi = 0, ci = 0, del = false;
+  const setPh = txt => {
+    if (ta && document.activeElement !== ta && !ta.value) ta.placeholder = txt;
+    if (ta2 && document.activeElement !== ta2 && !ta2.value) ta2.placeholder = txt;
+  };
+  const tick = () => {
+    // Pause while the user focuses either box; resume once they leave it empty.
+    if ((ta && document.activeElement === ta) || (ta2 && document.activeElement === ta2)) {
+      window.__typeTimer = setTimeout(tick, 1200);
+      return;
+    }
+    const full = BELNA_PROMPTS[pi % BELNA_PROMPTS.length];
+    if (!del){
+      ci++;
+      setPh(full.slice(0, ci) + (ci < full.length ? CARET : ''));
+      if (ci >= full.length){ del = true; window.__typeTimer = setTimeout(tick, 1700); return; }
+      window.__typeTimer = setTimeout(tick, 34 + Math.random() * 46);
+    } else {
+      ci--;
+      setPh(full.slice(0, Math.max(ci, 0)) + CARET);
+      if (ci <= 0){ del = false; pi++; window.__typeTimer = setTimeout(tick, 380); return; }
+      window.__typeTimer = setTimeout(tick, 15);
+    }
+  };
+  setPh(CARET);
+  window.__typeTimer = setTimeout(tick, 550);
+}
 
 function renderLanding(){
   root.innerHTML = `
   <div class="fadeup">
     <div class="anav"><nav class="nav">
       <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} belna</a>
-      <div class="navlinks"><span data-act="scroll" data-t="#safety">Safe Swedish AI</span><span data-act="scroll" data-t="#agent">Personal Agent</span><a href="models.html">Models</a><a href="pricing.html">Pricing</a><a href="faq.html">FAQ</a></div>
+      <div class="navlinks"><a href="#agent" data-act="scroll" data-t="#agent">Product</a><a href="models.html">Models</a><a href="pricing.html">Pricing</a></div>
       <div class="anav-cta">
         <button class="btn ghost small hideS" data-act="signin-nav">Sign in</button>
         <button class="btn small" data-act="open-app">Get started</button>
@@ -365,12 +521,11 @@ function renderLanding(){
     </nav></div>
 
     <header class="hero ahero">
-      <h1>Hi,<br>I can do anything <span class="mhold" id="mhold"><span class="mcore" id="mcore">${Mascot.svg('lingon','think',44)}</span><span class="hprop" id="hprop">${icon('laptop',15)}</span></span> you can.</h1>
-      <div class="safe-note" style="margin-top:18px">Safe Swedish AI Agents</div>
-      <div class="actdots">${BELNA_ACTS.map((a, i) => `<button data-act="actdot" data-i="${i}" class="${i === 0 ? 'on' : ''}" title="${a.label}" aria-label="${a.label}"></button>`).join('')}</div>
+      <h1>Bring anything <span class="mhold" id="mhold"><span class="mcore" id="mcore">${Mascot.svg('lingon','think',44)}</span><span class="hprop" id="hprop">${icon('laptop',16)}</span></span> to life.</h1>
+      <div class="safe-note" style="margin-top:18px">Your personal AI agent</div>
       <div class="promptwrap">
         <form class="promptbox" id="lform">
-          <textarea id="lprompt" rows="2" placeholder="Ask your agent anything… e.g. Research which Swedish party people say they'll vote for on social media"></textarea>
+          <textarea id="lprompt" rows="2" placeholder="Ask Belna to do my taxes..."></textarea>
           <div class="pb-row">
             <span class="iconbtn" style="cursor:default">${icon('plus',17)}</span>
             <span style="display:flex;gap:10px;align-items:center">
@@ -381,30 +536,26 @@ function renderLanding(){
           </div>
         </form>
       </div>
-      <div class="landing-thread" id="lthread"></div>
     </header>
 
     <section class="asection" id="safety" aria-label="Safe Swedish AI">
-      <div class="kicker">Safe Swedish AI</div>
       <h2>Safe Swedish AI</h2>
       <div class="split">
         <div>
           <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
-          <div class="checklist">
-            <div class="row">${icon('lock',16)}<span><b>Sealed vault.</b> Secrets are encrypted; the agent only ever receives masked references.</span></div>
-            <div class="row">${icon('shieldcheck',16)}<span><b>Approvals by default.</b> Sensitive actions pause for your yes — revocable anytime.</span></div>
-            <div class="row">${icon('box',16)}<span><b>Sandboxed harness.</b> Browser, code and computer use run contained, every step visible.</span></div>
-            <div class="row">${icon('eye',16)}<span><b>Swedish-built transparency.</b> Full trace of tool calls, sources cited, nothing hidden.</span></div>
-          </div>
           <div style="display:flex;gap:10px;margin-top:22px;flex-wrap:wrap">
             <button class="btn small" data-act="open-app">${icon('spark',14)} Get started</button>
             <a class="btn ghost small" href="models.html">Explore models</a>
           </div>
         </div>
-        <div class="panel" style="padding:0;overflow:hidden">
-          <div style="padding:22px 22px 0;display:flex;align-items:center;justify-content:space-between;gap:10px"><b>Arche 1.0 vs frontier models</b><span class="chip green">real benchmarks</span></div>
-          <p class="mut" style="font-size:13px;margin-top:6px;padding:0 22px">Arche 1.0 runs Kimi K3 open weights inside the Belna harness — same scores, plus privacy.</p>
-          <div style="overflow-x:auto;margin-top:12px"><table class="btable">
+        <div class="panel model-card">
+          <div class="mc-head">
+            <span class="mc-brand">${Mascot.logo(28)}<span><b>Arche 1.0</b><i>by Belna · Safe Swedish AI</i></span></span>
+            <span class="chip green">real benchmarks</span>
+          </div>
+          <div class="mc-title">Arche 1.0 vs frontier models</div>
+          <p class="mut mc-sub">Kimi K3 open weights inside the Belna harness — same scores, plus privacy.</p>
+          <div class="mc-table"><table class="btable">
             <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
             <tbody>
               <tr><td>GPQA Diamond</td><td class="star">93.5</td><td><b>94.1</b></td><td>92.6</td><td>91.0</td></tr>
@@ -414,23 +565,16 @@ function renderLanding(){
               <tr><td>SWE-Marathon</td><td class="star"><b>42.0</b></td><td>39.0</td><td>35.0</td><td>40.0</td></tr>
             </tbody>
           </table></div>
-          <p class="fineprint" style="padding:0 22px 20px">Scores: Moonshot AI Kimi K3 technical results (max reasoning effort); competitor scores as reported in the same release. Full table on the <a href="models.html">models page</a>.</p>
+          <p class="fineprint mc-foot">Scores: Moonshot AI Kimi K3 technical results (max reasoning effort); competitor scores as reported in the same release. Full table on the <a href="models.html">models page</a>.</p>
         </div>
       </div>
     </section>
 
     <section class="asection" id="agent" aria-label="Your personal AI Agent">
-      <div class="kicker">Personal AI Agent</div>
       <h2>Your personal AI Agent.</h2>
       <div class="split">
         <div>
           <p class="lede">If you can think it, your Agent can make it real life.</p>
-          <div class="checklist">
-            <div class="row">${icon('search',16)}<span><b>Research anything</b> — live sources, cited briefings, honest caveats.</span></div>
-            <div class="row">${icon('code',16)}<span><b>Build pages, decks &amp; tools</b> — live on your canvas, files handed over.</span></div>
-            <div class="row">${icon('phone',16)}<span><b>Calls, mail &amp; admin</b> — triage, drafts and follow-ups in your tone.</span></div>
-            <div class="row">${icon('book',16)}<span><b>Remembers you</b> — preferences and projects, inspectable anytime.</span></div>
-          </div>
           <div style="display:flex;gap:10px;margin-top:22px;flex-wrap:wrap">
             <button class="btn small" data-act="open-app">${icon('spark',14)} Claim your agent</button>
             <button class="btn ghost small" data-act="scroll" data-t="#cta">Try a prompt</button>
@@ -464,18 +608,16 @@ function renderLanding(){
           </div>
         </form>
       </div>
-      <div class="hintline">${icon('lock',13)} Sealed vault · approvals · sandboxed harness</div>
-      <p class="fineprint" style="text-align:center;margin-top:14px">Free includes <b>$10</b> of API costs · Pro $30 · Max $50 — <a href="pricing.html">see full pricing</a> · <a href="models.html">meet Arche 1.0</a> · <a href="faq.html">FAQ</a></p>
     </section>
 
     <footer class="afooter"><div class="fin">
       <div><div class="abrand">${Mascot.logo(24)} belna</div><p class="mut" style="font-size:13.5px;margin-top:10px;line-height:1.6">Swedish Safe AI Agents.<br>Arche 1.0 · Kimi K3 + safety harness.</p></div>
-      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="pricing.html">Pricing</a><a href="faq.html">FAQ</a></div>
-      <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a><a href="mailto:hej@belna.se">hej@belna.se</a></div>
+      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="pricing.html">Pricing</a></div>
+      <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a></div>
       <div><h4>Legal</h4><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a><a href="security.html">Security</a><a href="cookies.html">Cookie Policy</a></div>
     </div><div class="base"><span>© 2026 Belna — made in Stockholm</span><span>Arche 1.0 harness · your vault</span></div></footer>
   </div>`;
-  const wire = (formId, inputId, threadTop) => {
+  const wire = (formId, inputId) => {
     const f = document.getElementById(formId);
     const p = document.getElementById(inputId);
     if (f && p){
@@ -483,46 +625,191 @@ function renderLanding(){
         e.preventDefault();
         const v = p.value.trim();
         if (!v) return;
-        if (formId === 'lform2'){
-          const t = document.getElementById('lthread');
-          if (t){ t.scrollIntoView({ behavior:'smooth', block:'center' }); }
-          const first = document.getElementById('lprompt');
-          if (first){ first.value = v; p.value = ''; document.getElementById('lform').requestSubmit(); return; }
-        }
+        p.value = '';
         landingRun(v);
       });
       p.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); f.requestSubmit(); } });
     }
   };
   wire('lform', 'lprompt');
-  wire('lform2', 'lprompt2', true);
+  wire('lform2', 'lprompt2');
   belnaStartRotator();
+  belnaStartTypewriter();
 }
 
 async function landingRun(prompt){
+  // Homepage prompt never starts a chat on the homepage itself.
+  // It is saved and handed off: signed-out → sign up / log in screen,
+  // signed-in → agent chat (with in-chat onboarding first when needed).
   if (!prompt) return;
-  const th = $('#lthread'); th.innerHTML = '';
-  th.appendChild(el(`<div class="msg user"><div class="bub">${esc(prompt)}</div></div>`));
-  const an = el(`<div class="msg agent"><div class="ava">${Mascot.svg('lingon','think',30)}</div><div class="body"><div class="md"><span class="tdots"><i></i><i></i><i></i></span></div></div></div>`);
-  th.appendChild(an);
-  await sleep(700);
-  const body = an.querySelector('.md');
-  const text = Engine.preview(prompt);
-  const m = { text:'' };
-  for (const tok of text.split(/(\s+)/)){
-    m.text += tok; body.innerHTML = md(m.text);
-    await sleep(14);
-  }
-  an.querySelector('.ava').innerHTML = Mascot.svg('lingon','happy',30);
-  const card = el(`
-  <div class="acard" style="margin-top:16px">
-    <div class="hd"><div class="aic red">${Mascot.svg('lingon','wave',26)}</div>
-      <div><b>I'd love to do this for real</b><div class="sub">Claim me — name me, make me yours — and I'll run this with the full harness.</div></div></div>
-    <div class="ft" style="padding-top:12px"><button class="btn ghost small" data-act="skip-claim">Use a sample agent</button><button class="btn" data-act="claim">${icon('spark',15)} Claim your agent</button></div>
-  </div>`);
-  th.appendChild(card);
+  prompt = String(prompt).trim().slice(0, 2000);
+  if (!prompt) return;
+  // Homepage prompt always requires a real account — no demo/sample agents.
+  // Save first so sign-up / log-in can place it into the agent chat.
   state.pendingPrompt = prompt; save();
-  card.scrollIntoView({ behavior:'smooth', block:'center' });
+  if (!signedIn()){
+    renderAuth();
+    toast('Sign up or log in — your message is saved and will be sent in the agent chat.');
+    try { const mm = document.getElementById('amsg'); if (mm) mm.textContent = 'Sign up or log in to send your message to your agent.'; } catch {}
+    return;
+  }
+  ensureOwnerScope();
+  if (!state.onboarded || !state.agent || state.agent.provisional){
+    await startPendingPromptFlow(prompt);
+    return;
+  }
+  // Already onboarded: open a chat and run for real.
+  const c = { id: uid(), title: prompt.length > 42 ? prompt.slice(0, 42) + '…' : prompt, messages:[], trace:[], artifact:null, createdAt:Date.now() };
+  state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat';
+  state.pendingPrompt = null; save();
+  renderApp();
+  await sendPromptDirect(c, prompt);
+}
+
+/* Pending homepage prompt → real account chat → in-chat onboarding → run.
+   The user's message is placed in the agent chat FIRST (visible), then
+   onboarding (name / appearance / personality) runs IN THE CHAT before the
+   agent starts the actual request. No Engine work happens before onboarding. */
+async function startPendingPromptFlow(pendingOverride){
+  if (!signedIn()){
+    if (typeof pendingOverride === 'string' && pendingOverride) { state.pendingPrompt = pendingOverride; save(); }
+    renderAuth();
+    return;
+  }
+  ensureOwnerScope();
+  const pendingText = (typeof pendingOverride === 'string' && pendingOverride) ? pendingOverride : state.pendingPrompt;
+  if (!pendingText){ render(); return; }
+  if (!state.agent || state.agent.provisional){
+    if (!state.agent) state.agent = { name: 'Your agent', color: 'lingon', pers: 'Playful', provisional: true, claimedAt: Date.now() };
+    else if (!state.agent.provisional && !state.onboarded){ state.agent.provisional = true; }
+  }
+  const title = pendingText.length > 42 ? pendingText.slice(0, 42) + '…' : pendingText;
+  let c = chat();
+  if (!c || (c.messages && c.messages.length > 0) || c.onboarding){
+    c = { id: uid(), title, messages: [], trace: [], artifact: null, createdAt: Date.now(), onboarding: true };
+    state.chats.unshift(c); state.activeChat = c.id;
+  } else {
+    c.title = title; c.onboarding = true;
+  }
+  if (!c.messages.some(mm => mm.kind === 'text' && mm.role === 'user' && mm.text === pendingText)){
+    c.messages.push({ id: uid(), role: 'user', kind: 'text', text: pendingText });
+  }
+  state.pendingPrompt = pendingText;
+  state.view = 'chat'; save();
+  renderApp();
+  await runInChatOnboarding(c);
+}
+
+function pendingQuestion(c){
+  if (!c) return null;
+  for (let i = (c.messages || []).length - 1; i >= 0; i--){
+    const mm = c.messages[i];
+    if (mm.kind === 'card' && mm.card && mm.card.type === 'question' && mm.card.status === 'pending') return { c, m: mm };
+  }
+  return null;
+}
+
+async function runInChatOnboarding(c){
+  if (!signedIn()){
+    c.onboarding = false;
+    const firstUser = (c.messages || []).find(mm => mm.role === 'user' && mm.kind === 'text');
+    if (firstUser) state.pendingPrompt = firstUser.text;
+    save(); renderAuth();
+    toast('Sign in required — your message is saved.');
+    return;
+  }
+  c.busy = true; c.onboarding = true; save();
+  const rt = makeRT(c);
+  try {
+    const short = c.messages.find(mm => mm.role === 'user' && mm.kind === 'text');
+    const rawShort = short ? String(short.text) : '';
+    const shortTxt = rawShort.length > 90 ? rawShort.slice(0, 90) + '…' : rawShort;
+    await rt.say(`Got it — I’ve put “${shortTxt}” in our chat and I’ll run it for real in a moment. First, let’s claim your agent (30 seconds) so it’s truly yours. No demo accounts — this stays tied to your signed-in account.`, { mood: 'happy' });
+    await rt.say(`What should I call myself? Pick a suggestion or just type a name below.`, { mood: 'think' });
+    const nameQ = rt.card({ type: 'question', q: 'Choose your agent’s name (or type your own below)', options: ['Sigge', 'Nova', 'Astrid', 'Mio'], status: 'pending' });
+    nameQ.msg.card.onboarding = true;
+    const nameAns = await nameQ.wait();
+    let nm = String((nameAns && nameAns.choice) || '').trim().slice(0, 18) || 'Sigge';
+    state.agent.name = nm; save(); paintSide(); try { paintCanvas(); } catch {}
+    await rt.say(`Love it — I’m ${nm}.`, { mood: 'happy' });
+    await rt.say(`How should I look? Pick a color — you can change it anytime in Settings → Profiles.`, { mood: 'think' });
+    const colorNames = Mascot.keys.map(k => Mascot.PALETTE[k].name);
+    const colQ = rt.card({ type: 'question', q: `Pick ${nm}’s look (or type a color name)`, options: colorNames.slice(0, 4), status: 'pending' });
+    colQ.msg.card.onboarding = true;
+    const colAns = await colQ.wait();
+    const choiceStr = String((colAns && colAns.choice) || '');
+    let colorKey = Mascot.keys.find(k => Mascot.PALETTE[k].name.toLowerCase() === choiceStr.toLowerCase())
+      || Mascot.keys.find(k => k === choiceStr.toLowerCase())
+      || Mascot.keys.find(k => Mascot.PALETTE[k].name.toLowerCase().includes(choiceStr.toLowerCase()));
+    if (!colorKey || !Mascot.PALETTE[colorKey]) colorKey = 'lingon';
+    state.agent.color = colorKey; save(); paintSide(); try { paintCanvas(); } catch {}
+    await rt.say(`Looking sharp.`, { mood: 'happy' });
+    const perQ = rt.card({ type: 'question', q: `Pick a character for ${nm} (or type your own)`, options: PERS.slice(), status: 'pending' });
+    perQ.msg.card.onboarding = true;
+    const perAns = await perQ.wait();
+    let pers = String((perAns && perAns.choice) || 'Playful');
+    const pm = PERS.find(p => p.toLowerCase() === pers.toLowerCase());
+    pers = pm || 'Playful';
+    const uidNow = currentUserId();
+    state.agent = { name: nm, color: colorKey, pers, claimedAt: Date.now(), ownerId: uidNow };
+    state.ownerId = uidNow || state.ownerId;
+    state.onboarded = true;
+    try { state.memory.unshift({ id: uid(), text: `Agent claimed and named “${nm}” — ${Mascot.PALETTE[colorKey].name.toLowerCase()}, ${pers.toLowerCase()}.`, src: 'onboarding', at: Date.now() }); } catch {}
+    const pendingText = state.pendingPrompt
+      || ((c.messages || []).find(mm => mm.role === 'user' && mm.kind === 'text') || {}).text
+      || '';
+    state.pendingPrompt = null;
+    // Keep c.onboarding=true + c.busy=true through the Done message so any
+    // text typed in that window is preserved in-thread (not dropped), then
+    // flip onboarding off and start the user's request immediately while
+    // still holding busy — no gap where a second run can slip in.
+    save();
+    paintSide(); try { paintCanvas(); } catch {}
+    await rt.say(`Done — I’m ${nm}, all yours. Now running your request for real (no demos, no fakes).`, { mood: 'happy' });
+    c.onboarding = false;
+    save();
+    if (pendingText){
+      if (state.view !== 'chat') state.view = 'chat';
+      paintSide(); paintMain();
+      const rt2 = makeRT(c);
+      try { await Engine.run(rt2, pendingText); }
+      catch (e2){ console.error(e2); try { await rt2.say('Something went wrong on my end — please try again in a moment.'); } catch {} }
+      c.busy = false; save(); paintMain(); paintSide();
+    } else {
+      c.busy = false; save();
+      runGreet(c);
+    }
+  } catch (e){
+    console.error(e);
+    c.onboarding = false; c.busy = false; save();
+    try { paintMain(); paintSide(); } catch {}
+  }
+}
+
+/* Run Engine on text already present in the thread (no duplicate user bubble).
+   Real accounts only. */
+async function runAgentOn(c, text){
+  if (!c || !text) return;
+  if (!signedIn()){ state.pendingPrompt = text; save(); renderAuth(); return; }
+  let waited = 0;
+  while (c.busy && waited < 8000){ await sleep(200); waited += 200; }
+  if (c.busy){ toast(`${(state.agent && state.agent.name) || 'Agent'} is mid-task — one thing at a time.`); return; }
+  c.busy = true; save();
+  if (state.view !== 'chat') state.view = 'chat';
+  paintSide(); paintMain();
+  const rt = makeRT(c);
+  try { await Engine.run(rt, text); }
+  catch (e){ console.error(e); await rt.say('Something went wrong on my end — please try again in a moment.'); }
+  c.busy = false; save(); paintMain(); paintSide();
+}
+/* Direct send for an already-created chat (message not yet in thread). */
+async function sendPromptDirect(c, text){
+  if (!c || !text) return;
+  if (!signedIn()){ state.pendingPrompt = text; save(); renderAuth(); return; }
+  c.messages.push({ id: uid(), role: 'user', kind: 'text', text });
+  if (c.title === 'New chat' || !c.title) c.title = text.length > 42 ? text.slice(0, 42) + '…' : text;
+  save(); paintSide(); paintMain();
+  await runAgentOn(c, text);
 }
 
 /* ================================================================
@@ -545,6 +832,9 @@ function applyTheme(){
 }
 
 function openOnboarding(){
+  // Real accounts only — no demo/sample onboarding without sign-in.
+  if (!signedIn()){ renderAuth(); toast('Sign up or log in first — your agent belongs to a real account.'); return; }
+  ensureOwnerScope();
   ob = { step:0, name:'', color:'lingon', pers:'Playful' };
   const back = el('<div class="modalback"><div class="modal" id="modal"></div></div>');
   document.body.appendChild(back);
@@ -594,8 +884,19 @@ function confetti(){
   }
 }
 function finalizeOnboarding(){
+  // Real accounts only — never create demo/sample agents.
+  if (!signedIn()){
+    const back0 = $('.modalback'); if (back0) back0.remove();
+    renderAuth();
+    toast('Sign up or log in first — no demo accounts.');
+    return;
+  }
+  ensureOwnerScope();
+  if (!ob) ob = { name: '', color: 'lingon', pers: 'Playful' };
+  const uidNow = currentUserId();
   state.onboarded = true;
-  state.agent = { name: ob.name.trim() || 'Sigge', color: ob.color, pers: ob.pers, claimedAt: Date.now() };
+  state.agent = { name: (ob.name || '').trim() || 'Sigge', color: ob.color || 'lingon', pers: ob.pers || 'Playful', claimedAt: Date.now(), ownerId: uidNow };
+  state.ownerId = uidNow || state.ownerId;
   state.memory.unshift({ id: uid(), text: `Agent claimed and named “${state.agent.name}” — ${Mascot.PALETTE[state.agent.color].name.toLowerCase()}, ${state.agent.pers.toLowerCase()}.`, src:'onboarding', at: Date.now() });
   const c = { id: uid(), title:'First chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
   state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat';
@@ -610,8 +911,12 @@ function finalizeOnboarding(){
    APP SHELL
 ================================================================ */
 function renderApp(){
+  // Real accounts only — never render the agent UI signed-out.
+  if (!signedIn()){ renderAuth(); return; }
+  ensureOwnerScope();
+  if (!state.agent) state.agent = { name: 'Your agent', color: 'lingon', pers: 'Playful', provisional: true, claimedAt: Date.now() };
   applyTheme();
-  belnaStopRotator();
+  belnaStopLandingFx();
   root.innerHTML = `
   <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'}" id="app">
     <aside class="side" id="side"></aside>
@@ -624,9 +929,10 @@ function renderApp(){
 function currentUser(){
   let sess = null;
   try { sess = window.LingonAuth && window.LingonAuth.get(); } catch {}
-  const email = (sess && sess.user && sess.user.email) || 'you@example.com';
-  const name = (state.userProfile && state.userProfile.name) || email.split('@')[0];
-  return { email, name };
+  // No fake fallback identity — unauthenticated callers get an explicit guest.
+  const email = (sess && sess.user && sess.user.email) || '';
+  const name = (state.userProfile && state.userProfile.name) || (email ? email.split('@')[0] : 'Guest');
+  return { email: email || 'signed-out', name };
 }
 function artifactRows(){
   const rows = [];
@@ -682,8 +988,8 @@ function paintSide(){
     getBilling().then(b => {
       const box = $('#usagecard');
       if (!box) return;
-      if (b) box.innerHTML = `<div class="urow"><span class="chip ${b.remaining > 1 ? 'green' : ''}">$${Number(b.remaining).toFixed(2)} left</span><span class="uplan">${esc(String(b.plan).toUpperCase())} plan</span></div><div class="ubar"><i style="width:${Math.min(100, Math.max(0, (b.total ? (b.total - b.remaining) / b.total * 100 : 0)))}%"></i></div>`;
-      else box.innerHTML = `<div class="urow"><span class="chip green">$10.00 left</span><span class="uplan">FREE plan</span></div><div class="ubar"><i style="width:4%"></i></div>`;
+      if (b) box.innerHTML = `<div class="urow"><span class="chip ${Number(b.credits) > 5 ? 'green' : ''}">${fmtC(b.credits)} credits left</span><span class="uplan">${esc(String(b.plan).toUpperCase())} plan</span></div><div class="ubar"><i style="width:${Math.min(100, Math.max(0, (b.creditsGranted ? b.creditsUsed / b.creditsGranted * 100 : 0)))}%"></i></div>`;
+      else box.innerHTML = `<div class="urow"><span class="chip green">20 credits left</span><span class="uplan">FREE plan</span></div><div class="ubar"><i style="width:4%"></i></div>`;
     }).catch(() => {});
   } catch {}
 }
@@ -983,9 +1289,27 @@ function resolveCard(c, m, payload, status){
   const f = waits[key]; if (f){ delete waits[key]; f(payload); }
 }
 
-/* ---------------- send / chats ---------------- */
+/* ---------------- send / chats (real accounts only) ---------------- */
 async function sendPrompt(text){
+  if (!signedIn()){ state.pendingPrompt = text; save(); renderAuth(); toast('Sign up or log in — your message is saved and will be sent after.'); return; }
+  ensureOwnerScope();
+  if (!state.onboarded || !state.agent || state.agent.provisional){
+    state.pendingPrompt = text; save();
+    await startPendingPromptFlow(text);
+    return;
+  }
   const c = chat(); if (!c) return;
+  // Typed answers during in-chat onboarding resolve the pending question
+  // instead of starting a new agent run.
+  if (c.onboarding){
+    const pq = pendingQuestion(c);
+    c.messages.push({ id: uid(), role: 'user', kind: 'text', text });
+    save();
+    if (state.view !== 'chat'){ state.view = 'chat'; }
+    paintSide(); paintMain();
+    if (pq) resolveCard(pq.c, pq.m, { choice: String(text).trim().slice(0, 60) || text }, 'answered');
+    return;
+  }
   let waited = 0;
   while (c.busy && waited < 8000){ await sleep(200); waited += 200; }
   if (c.busy){ toast(`${state.agent.name} is mid-task — one thing at a time.`); return; }
@@ -1002,11 +1326,20 @@ async function sendPrompt(text){
 }
 
 function runGreet(c){
+  if (!signedIn()){ renderAuth(); return; }
   c.busy = true; save();
   Engine.greet(makeRT(c)).finally(() => { c.busy = false; save(); });
 }
 
 function newChat(){
+  if (!signedIn()){ renderAuth(); toast('Sign up or log in to start a chat.'); return; }
+  ensureOwnerScope();
+  if (!state.onboarded || !state.agent || state.agent.provisional){
+    // New accounts finish in-chat onboarding first — no empty demo chats.
+    if (state.pendingPrompt) startPendingPromptFlow();
+    else openOnboarding();
+    return;
+  }
   const c = { id: uid(), title:'New chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
   state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat'; save();
   renderApp();
@@ -1484,18 +1817,9 @@ function paintSettings(M){
   if (tab === 'billing'){
     getBilling().then((b) => {
       const elb = $('#billbody');
-      if (elb && b) elb.innerHTML = `<div class="kv"><div class="row">
-        <span style="color:var(--mut)">${icon('spark',16)}</span>
-        <div><b>${b.plan.toUpperCase()}</b> · ${b.status}<div class="sub">Used $${Number(b.used).toFixed(4)} of $${Number(b.total).toFixed(2)} (plan $${b.credit} + gifts $${b.gifts})</div></div>
-        <div class="rgt"><span class="chip ${b.remaining > 1 ? 'green' : ''}">$${Number(b.remaining).toFixed(2)} left</span></div>
-      </div></div>`;
+      if (elb && b) elb.innerHTML = billSummary(b);
       const pc = $('#plancards');
-      if (pc) pc.innerHTML = ['free', 'pro', 'max'].map((id) => {
-        const p = (b && b.plans && b.plans[id]) || { name: id, price: 0, was: null, credit: 0, gift: 0 };
-        const cur = b && b.plan === id;
-        return `<div class="row"><div><b>${p.name}</b> — $${p.price}${p.was ? ` <s class="mut">$${p.was}</s>` : ''}<div class="sub">$${p.credit} credit${p.gift ? ` + $${p.gift} gift card` : ''}</div></div>
-        <div class="rgt">${cur ? '<span class="chip green">current</span>' : id === 'free' ? '<span class="chip">default</span>' : `<button class="btn small" data-act="upgrade" data-p="${id}">Request ${p.name}</button>`}</div></div>`;
-      }).join('');
+      if (pc && b) pc.innerHTML = planCards(b);
     });
   }
 }
@@ -1532,16 +1856,43 @@ document.addEventListener('click', async e => {
 
   if (act === 'mic'){ toast('Voice input is coming soon.'); return; }
   if (act === 'model'){ state.model = state.model === 'Smart' ? 'Fast' : 'Smart'; save(); b.innerHTML = icon('star',13) + ' ' + state.model + ' ▾'; toast('Model: ' + state.model); return; }
-  if (act === 'scroll'){ const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
-  if (act === 'open-app'){ belnaStopRotator(); state.onboarded ? renderApp() : openOnboarding(); return; }
+  if (act === 'scroll'){ e.preventDefault(); const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
+  if (act === 'open-app'){
+    belnaStopLandingFx();
+    if (!signedIn()){ renderAuth(); toast('Sign up or log in to meet your agent.'); return; }
+    ensureOwnerScope();
+    if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); }
+    else if (state.pendingPrompt){ await startPendingPromptFlow(); }
+    else { openOnboarding(); }
+    return;
+  }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
-  if (act === 'back-home'){ renderLanding(); return; }
-  if (act === 'signin-nav'){ e.preventDefault(); belnaStopRotator(); if (window.LingonAuth && window.LingonAuth.signedIn()){ renderApp(); } else { renderAuth(); } return; }
-  if (act === 'actdot'){ belnaPaintHold(+b.dataset.i || 0); return; }
-  if (act === 'claim'){ belnaStopRotator(); openOnboarding(); return; }
+  if (act === 'back-home'){ belnaStopLandingFx(); renderLanding(); return; }
+  if (act === 'signin-nav'){
+    e.preventDefault(); belnaStopLandingFx();
+    if (signedIn()){
+      ensureOwnerScope();
+      if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); }
+      else if (state.pendingPrompt){ await startPendingPromptFlow(); }
+      else { renderLanding(); }
+    } else { renderAuth(); }
+    return;
+  }
+  if (act === 'claim'){
+    belnaStopLandingFx();
+    if (!signedIn()){ renderAuth(); toast('Sign in first, then claim your agent — your message is saved.'); return; }
+    ensureOwnerScope();
+    if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); if (state.pendingPrompt){ const p = state.pendingPrompt; state.pendingPrompt = null; save(); sendPrompt(p); } }
+    else if (state.pendingPrompt){ await startPendingPromptFlow(); }
+    else { openOnboarding(); }
+    return;
+  }
+  // No demo/sample-agent path: every agent requires a real signed-in account.
   if (act === 'skip-claim'){
-    ob = { step:0, name:'Sigge', color:'lingon', pers:'Playful' };
-    finalizeOnboarding(); return;
+    if (!signedIn()){ renderAuth(); toast('Sign up or log in — demo accounts are disabled.'); return; }
+    ensureOwnerScope();
+    if (state.pendingPrompt){ await startPendingPromptFlow(); return; }
+    openOnboarding(); return;
   }
 
   /* onboarding */
@@ -1557,7 +1908,10 @@ document.addEventListener('click', async e => {
   if (act === 'ob-done'){ finalizeOnboarding(); return; }
 
   /* navigation */
-  if (act === 'nav'){ state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp(); return; }
+  if (act === 'nav'){
+    if (!signedIn()){ renderAuth(); return; }
+    state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp(); return;
+  }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
   if (act === 'theme'){ state.theme = b.dataset.v || 'grey'; save(); applyTheme(); paintSide(); if ($('#canvas')) paintCanvas(); if (state.view === 'settings' && $('#main')) paintSettings($('#main')); toast('Accent: ' + ((THEMES.find(t => t.id === state.theme) || THEMES[0]).name)); return; }
@@ -1570,7 +1924,10 @@ document.addEventListener('click', async e => {
   }
   if (act === 'agenttab'){ state.agentTab = b.dataset.t; state.canvasTab = 'agent'; save(); paintCanvas(); return; }
   if (act === 'newchat'){ newChat(); return; }
-  if (act === 'openchat'){ state.activeChat = b.dataset.id; state.view = 'chat'; save(); renderApp(); return; }
+  if (act === 'openchat'){
+    if (!signedIn()){ renderAuth(); return; }
+    state.activeChat = b.dataset.id; state.view = 'chat'; save(); renderApp(); return;
+  }
   if (act === 'delchat'){
     e.stopPropagation();
     state.chats = state.chats.filter(x => x.id !== b.dataset.id);
@@ -1608,12 +1965,15 @@ document.addEventListener('click', async e => {
   }
   if (act === 'openbrowser'){ toast('For safety, browsing stays contained in the sandbox window above.'); return; }
   if (act === 'artmenu'){ toast('Artifact saved — find it in Vault → Library.'); return; }
-  if (act === 'chip'){ sendPrompt(b.dataset.t); return; }
+  if (act === 'chip'){
+    if (!signedIn()){ state.pendingPrompt = b.dataset.t; save(); renderAuth(); return; }
+    sendPrompt(b.dataset.t); return;
+  }
   if (act === 'copycode'){ const t = $('#codebox'); if (t) navigator.clipboard && navigator.clipboard.writeText(t.textContent); toast('Copied'); return; }
 
-  /* card resolutions */
-  if (act === 'approve' && m){ resolveCard(c, m, { ok:true }, 'approved'); return; }
-  if (act === 'deny' && m){ resolveCard(c, m, { ok:false }, 'denied'); return; }
+  /* card resolutions (real accounts only — no anonymous approvals) */
+  if (act === 'approve' && m){ if (!signedIn()){ renderAuth(); return; } resolveCard(c, m, { ok:true }, 'approved'); return; }
+  if (act === 'deny' && m){ if (!signedIn()){ renderAuth(); return; } resolveCard(c, m, { ok:false }, 'denied'); return; }
   if (act === 'always' && m){
     state.vault.approvals.push({ id: uid(), key: m.card.key, label: m.card.title, at: Date.now() });
     save(); resolveCard(c, m, { ok:true, always:true }, 'always'); return;
@@ -1636,7 +1996,7 @@ document.addEventListener('click', async e => {
     m.card.ref = ref; m.card.nameVal = name;
     save(); resolveCard(c, m, { ok:true }, 'saved'); paintSide(); return;
   }
-  if (act === 'qopt' && m){ m.card.choice = b.dataset.o; resolveCard(c, m, { choice: b.dataset.o }, 'answered'); return; }
+  if (act === 'qopt' && m){ if (!signedIn()){ renderAuth(); return; } m.card.choice = b.dataset.o; resolveCard(c, m, { choice: b.dataset.o }, 'answered'); return; }
   if (act === 'download' && m){ dl(m.card.name, m.card.content); return; }
 
   /* vault / settings page */
@@ -1675,20 +2035,36 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'redeem'){
-    const code = ($('#giftcode').value || '').trim();
+    const code = (($('#giftcode') || {}).value || '').trim();
     if (!code){ toast('Paste a gift code first.'); return; }
     try {
       const j = await window.LingonAuth.api('/api/billing/redeem', { method: 'POST', body: JSON.stringify({ code }) });
       billingCache = j.billing;
-      toast(`Redeemed $${j.amount} credit.`);
+      toast(`Redeemed ${fmtC(j.credits)} credits ($${j.amount} gift).`);
       if (state.view === 'settings') paintSettings($('#main')); else paintBilling($('#main'));
       paintSide();
+    } catch (e) { toast(e.message); }
+    return;
+  }
+  if (act === 'checkout'){
+    try {
+      const j = await window.LingonAuth.api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan: b.dataset.p }) });
+      if (j.url) { window.location.href = j.url; return; }
+      toast(j.note || 'Checkout started.');
+    } catch (e) { toast(e.message); }
+    return;
+  }
+  if (act === 'portal'){
+    try {
+      const j = await window.LingonAuth.api('/api/billing/portal', { method: 'POST', body: JSON.stringify({}) });
+      if (j.url) { window.location.href = j.url; return; }
     } catch (e) { toast(e.message); }
     return;
   }
   if (act === 'upgrade'){
     try {
       const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: JSON.stringify({ plan: b.dataset.p }) });
+      if (j.url) { window.location.href = j.url; return; }
       toast(j.note || 'Request recorded.');
     } catch (e) { toast(e.message); }
     return;
@@ -1719,10 +2095,11 @@ function dl(name, content){
 
 /* ---------------- boot (OAuth hash callback first) ---------------- */
 async function bootHash(){
+  // returns 'error' | 'google' | 'none' so boot can route correctly
   try {
     const q = new URLSearchParams(window.location.search);
     const err = q.get('auth_error');
-    if (err){ window.history.replaceState(null, '', window.location.pathname); setTimeout(() => toast('Sign-in failed: ' + err), 400); return; }
+    if (err){ window.history.replaceState(null, '', window.location.pathname); return 'error:' + err; }
     const h = window.location.hash || '';
     const m = h.match(/access_token=([^&]+)/);
     if (m){
@@ -1735,14 +2112,76 @@ async function bootHash(){
         const me = await window.LingonAuth.api('/api/auth/me');
         window.LingonAuth.set({ access_token, refresh_token, user: me.user });
         try { window.LingonConfig.userId = me.user.id; localStorage.setItem('belna.lastProvider', 'google'); } catch {}
-        setTimeout(() => toast('Signed in as ' + me.user.email), 400);
-      } catch {}
+        try { await syncFromBackend(); } catch {}
+        // Route Google sign-ins through the same post-auth flow so a homepage
+        // prompt lands in the agent chat with in-chat onboarding first.
+        try { ensureOwnerScope(); if (me.user && me.user.id) { state.ownerId = me.user.id; state.view = 'chat'; save(); } } catch {}
+        if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
+          setTimeout(() => { toast('Signed in as ' + me.user.email); startPendingPromptFlow(); }, 400);
+        } else {
+          setTimeout(() => toast('Signed in as ' + me.user.email), 400);
+        }
+        return 'google';
+      } catch {
+        window.LingonAuth.set(null);
+        return 'error:Could not complete sign-in. Please try again.';
+      }
     }
   } catch {}
+  return 'none';
 }
-bootHash().finally(() => {
+bootHash().then((st) => {
   expirePending();
   applyTheme();
-  if (state.onboarded && state.agent) renderApp(); else renderLanding();
+  if (st && String(st).startsWith('error:')) {
+    const msg = String(st).slice(6);
+    // Land on the auth card so the failure is visible in context.
+    renderAuth();
+    const m = document.getElementById('amsg');
+    if (m) m.textContent = 'Sign-in failed: ' + msg;
+    else setTimeout(() => toast('Sign-in failed: ' + msg), 400);
+    return;
+  }
+  if (st === 'google'){
+    // afterSignIn routing already kicked off in bootHash (incl. pending prompt
+    // → chat + in-chat onboarding). Just ensure correct view if no pending.
+    if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
+      // startPendingPromptFlow already running via timeout above; ensure render fallback
+      if (!document.getElementById('app')) renderApp();
+    } else {
+      render();
+    }
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const f = q.get('billing');
+      if (f) {
+        window.history.replaceState(null, '', window.location.pathname);
+        if (f === 'success') setTimeout(() => toast('Payment complete — your monthly credits are on the way. See Billing.'), 800);
+        else if (f === 'cancelled') setTimeout(() => toast('Checkout cancelled — no charge made.'), 800);
+        else if (f === 'portal') setTimeout(() => toast('Subscription updated.'), 800);
+      }
+    } catch {}
+    return;
+  }
+  // No OAuth callback: signed-in users with a pending homepage prompt go
+  // straight to chat + in-chat onboarding (message first, then setup).
+  if (signedIn()){
+    ensureOwnerScope();
+    if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
+      startPendingPromptFlow();
+      return;
+    }
+  }
+  render();
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const f = q.get('billing');
+    if (f) {
+      window.history.replaceState(null, '', window.location.pathname);
+      if (f === 'success') setTimeout(() => toast('Payment complete — your monthly credits are on the way. See Billing.'), 800);
+      else if (f === 'cancelled') setTimeout(() => toast('Checkout cancelled — no charge made.'), 800);
+      else if (f === 'portal') setTimeout(() => toast('Subscription updated.'), 800);
+    }
+  } catch {}
 });
 })();
