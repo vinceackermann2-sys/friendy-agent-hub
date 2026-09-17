@@ -286,7 +286,10 @@ function ensureOwnerScope(){
 
 function render(){
   applyTheme();
-  if (!signedIn()) return renderAuth();
+  if (!signedIn()) {
+    const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
+    return state.pendingPrompt || appRoute ? renderAuth() : renderLanding();
+  }
   ensureOwnerScope();
   if (state.onboarded && state.agent && !state.agent.provisional) return renderApp();
   if (state.pendingPrompt && (!state.onboarded || !state.agent || (state.agent && state.agent.provisional))){
