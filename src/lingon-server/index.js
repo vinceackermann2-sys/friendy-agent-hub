@@ -311,8 +311,10 @@ app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
   res.json({ ok: true, status: 'requested', request: r.id, note: `Your ${PLANS[plan].name} request is recorded. Complete payment via Stripe Checkout on the main backend to activate — you keep your current credits until then.` });
 }));
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
-  // Admin/demo issuance: allowed but audited with from_user. Real customer gifts
-  // are issued automatically after payment once Stripe is connected.
+  // SECURITY: manual gift issuance mints real, redeemable credits, so it is
+  // restricted to staff. Without an explicit admin allowlist nobody may issue.
+  // Customer gifts are created server-side after a confirmed Stripe payment.
+  if (!isAdmin(req.user)) return res.status(403).json({ error: 'Gift codes can only be issued by staff. Buy a gift card via Billing.' });
   const amount = Number((req.body || {}).amount || 0);
   if (![50, 100].includes(amount)) return res.status(400).json({ error: 'Gift amount must be 50 or 100.' });
   const g = await store.createGift(req.user.id, amount);
