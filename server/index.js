@@ -442,9 +442,23 @@ app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
   const r = await store.requestUpgrade(req.user.id, plan);
   res.json({ ok: true, status: 'requested', request: r.id, note: `Payments aren't connected yet — your ${PLANS[plan].name} request is recorded, no charge made. You keep your current credits.` });
 }));
+/* Staff allowlist for privileged actions (gift-code issuance).
+   Set LINGON_ADMIN_USER_IDS and/or LINGON_ADMIN_EMAILS (comma-separated).
+   Empty config = nobody is admin (deny by default). */
+function adminList(name) {
+  return String(process.env[name] || '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+}
+function isAdmin(user) {
+  if (!user) return false;
+  const ids = adminList('LINGON_ADMIN_USER_IDS');
+  const emails = adminList('LINGON_ADMIN_EMAILS');
+  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && emails.includes(String(user.email).toLowerCase()));
+}
+
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
-  // Admin/demo issuance: allowed but audited with from_user. Real customer gifts
-  // are issued automatically after payment once Stripe is connected.
+  // SECURITY: manual gift issuance mints real, redeemable credits, so it is
+  // restricted to staff. Without an explicit admin allowlist nobody may issue.
+  if (!isAdmin(req.user)) return res.status(403).json({ error: 'Gift codes can only be issued by staff. Buy a gift card via Billing.' });
   const amount = Number((req.body || {}).amount || 0);
   if (![50, 100].includes(amount)) return res.status(400).json({ error: 'Gift amount must be 50 or 100.' });
   const g = await store.createGift(req.user.id, amount);

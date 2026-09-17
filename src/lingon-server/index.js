@@ -310,6 +310,19 @@ app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
   const r = await store.requestUpgrade(req.user.id, plan);
   res.json({ ok: true, status: 'requested', request: r.id, note: `Your ${PLANS[plan].name} request is recorded. Complete payment via Stripe Checkout on the main backend to activate — you keep your current credits until then.` });
 }));
+/* Staff allowlist for privileged actions (gift-code issuance).
+   Set LINGON_ADMIN_USER_IDS and/or LINGON_ADMIN_EMAILS (comma-separated).
+   Empty config = nobody is admin (deny by default). */
+function adminList(name) {
+  return String(process.env[name] || '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+}
+function isAdmin(user) {
+  if (!user) return false;
+  const ids = adminList('LINGON_ADMIN_USER_IDS');
+  const emails = adminList('LINGON_ADMIN_EMAILS');
+  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && emails.includes(String(user.email).toLowerCase()));
+}
+
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
   // SECURITY: manual gift issuance mints real, redeemable credits, so it is
   // restricted to staff. Without an explicit admin allowlist nobody may issue.
