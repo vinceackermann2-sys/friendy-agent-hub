@@ -76,14 +76,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Belna — Swedish Safe AI Agents" },
+      {
+        name: "description",
+        content:
+          "Belna builds Swedish safe AI agents with privacy and safety at the core. Arche 1.0 is your personal AI agent.",
+      },
+      { name: "author", content: "Belna" },
+      { property: "og:title", content: "Belna — Swedish Safe AI Agents" },
+      {
+        property: "og:description",
+        content:
+          "Belna builds Swedish safe AI agents with privacy and safety at the core. Arche 1.0 is your personal AI agent.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
