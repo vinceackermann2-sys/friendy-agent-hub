@@ -9,7 +9,9 @@ const SCRIPTS = [
   "/lingon/app.js",
 ];
 
-export const lingonHeadLinks = [
+export const lingonHeadLinks: Array<
+  React.DetailedHTMLProps<React.LinkHTMLAttributes<HTMLLinkElement>, HTMLLinkElement>
+> = [
   { rel: "stylesheet", href: "/lingon/styles.css" },
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },

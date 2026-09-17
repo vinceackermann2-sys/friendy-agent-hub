@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
+import { Route as AppRouteImport } from './routes/app'
 import { Route as CookiesRouteImport } from './routes/cookies'
 import { Route as ModelsRouteImport } from './routes/models'
 import { Route as PricingRouteImport } from './routes/pricing'
@@ -28,6 +29,11 @@ const IndexRoute = IndexRouteImport.update({
 const SplatRoute = SplatRouteImport.update({
   id: '/$',
   path: '/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppRoute = AppRouteImport.update({
+  id: '/app',
+  path: '/app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CookiesRoute = CookiesRouteImport.update({
@@ -74,6 +80,7 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/app': typeof AppRoute
   '/cookies': typeof CookiesRoute
   '/models': typeof ModelsRoute
   '/pricing': typeof PricingRoute
@@ -86,6 +93,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/app': typeof AppRoute
   '/cookies': typeof CookiesRoute
   '/models': typeof ModelsRoute
   '/pricing': typeof PricingRoute
@@ -99,6 +107,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/app': typeof AppRoute
   '/cookies': typeof CookiesRoute
   '/models': typeof ModelsRoute
   '/pricing': typeof PricingRoute
@@ -113,6 +122,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/$'
+    | '/app'
     | '/cookies'
     | '/models'
     | '/pricing'
@@ -125,6 +135,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/$'
+    | '/app'
     | '/cookies'
     | '/models'
     | '/pricing'
@@ -137,6 +148,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/$'
+    | '/app'
     | '/cookies'
     | '/models'
     | '/pricing'
@@ -150,6 +162,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SplatRoute: typeof SplatRoute
+  AppRoute: typeof AppRoute
   CookiesRoute: typeof CookiesRoute
   ModelsRoute: typeof ModelsRoute
   PricingRoute: typeof PricingRoute
@@ -174,6 +187,13 @@ declare module '@tanstack/react-router' {
       path: '/$'
       fullPath: '/$'
       preLoaderRoute: typeof SplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app': {
+      id: '/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cookies': {
@@ -238,6 +258,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
+  AppRoute: AppRoute,
   CookiesRoute: CookiesRoute,
   ModelsRoute: ModelsRoute,
   PricingRoute: PricingRoute,
