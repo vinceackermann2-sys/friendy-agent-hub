@@ -4,9 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Models — Belna Arche 1.0 | Swedish Safe AI Agents</title>
-<meta name="description" content="Belna Arche 1.0 model card: Kimi K3 open weights with a privacy-first agentic harness. Real benchmark comparison vs GPT-5.6 Sol, Claude Fable 5 and Claude Opus 4.8.">
+<meta name="description" content="Belna Arche 1.0 model card: Kimi K3 open weights with a privacy-first agentic harness. Real benchmark comparison vs GPT-5.6 Sol, Claude Opus 5, Claude Fable 5 and Claude Opus 4.8.">
 <meta name="keywords" content="AI agents, Arche 1.0, Kimi K3 benchmarks, Swedish AI models, safe AI agents">
 <link rel="canonical" href="https://belna.se/models.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Belna Arche 1.0","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"Personal AI agent built on the open-source Kimi K3 model with an agentic harness optimized for privacy and safety."}
@@ -35,19 +39,19 @@
 <h2>Benchmarks</h2>
 <p>Published technical results, Arche 1.0 (Kimi K3, max reasoning effort) against current frontier models. Bold marks the best score per row.</p>
 <div class="panel" style="padding:0;overflow:hidden;margin-top:14px"><div style="overflow-x:auto"><table class="btable">
-<thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
+<thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
 <tbody>
-<tr><td>GPQA Diamond</td><td class="star">93.5</td><td><b>94.1</b></td><td>92.6</td><td>91.0</td></tr>
-<tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td><b>88.8</b></td><td>88.0</td><td>84.6</td></tr>
-<tr><td>BrowseComp</td><td class="star"><b>91.2</b></td><td>90.4</td><td>88.0</td><td>84.3</td></tr>
-<tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td><b>85.0</b></td><td>83.4</td></tr>
-<tr><td>SWE-Marathon</td><td class="star"><b>42.0</b></td><td>39.0</td><td>35.0</td><td>40.0</td></tr>
-<tr><td>FrontierSWE</td><td class="star">81.2</td><td>71.3</td><td><b>86.6</b></td><td>66.7</td></tr>
-<tr><td>DeepSWE</td><td class="star">67.5</td><td><b>73.0</b></td><td>70.0</td><td>59.0</td></tr>
-<tr><td>ProgramBench</td><td class="star"><b>77.8</b></td><td>77.6</td><td>76.8</td><td>71.9</td></tr>
-<tr><td>MCP-Atlas</td><td class="star">84.2</td><td>83.6</td><td><b>84.7</b></td><td>83.6</td></tr>
-<tr><td>HLE (with tools)</td><td class="star">56.0</td><td>58.0</td><td><b>63.0</b></td><td>57.9</td></tr>
-<tr><td>τ³-Banking</td><td class="star"><b>33.4</b></td><td>33.0</td><td>26.8</td><td>27.6</td></tr>
+<tr><td>GPQA Diamond</td><td class="star">93.5</td><td><b>94.1</b></td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
+<tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td><b>88.8</b></td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
+<tr><td>BrowseComp</td><td class="star"><b>91.2</b></td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
+<tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td><b>85.0</b></td><td>83.4</td></tr>
+<tr><td>SWE-Marathon</td><td class="star"><b>42.0</b></td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
+<tr><td>FrontierSWE</td><td class="star">81.2</td><td>71.3</td><td>82.4</td><td><b>86.6</b></td><td>66.7</td></tr>
+<tr><td>DeepSWE</td><td class="star">67.5</td><td><b>73.0</b></td><td>68.0</td><td>70.0</td><td>59.0</td></tr>
+<tr><td>ProgramBench</td><td class="star"><b>77.8</b></td><td>77.6</td><td>75.2</td><td>76.8</td><td>71.9</td></tr>
+<tr><td>MCP-Atlas</td><td class="star">84.2</td><td>83.6</td><td>84.0</td><td><b>84.7</b></td><td>83.6</td></tr>
+<tr><td>HLE (with tools)</td><td class="star">56.0</td><td>58.0</td><td>60.5</td><td><b>63.0</b></td><td>57.9</td></tr>
+<tr><td>τ³-Banking</td><td class="star"><b>33.4</b></td><td>33.0</td><td>30.2</td><td>26.8</td><td>27.6</td></tr>
 </tbody>
 </table></div></div>
 <p class="fineprint">Source: Moonshot AI Kimi K3 technical results; competitor scores as reported in the same release (each evaluated in its own vendor harness). Arche 1.0 serves these weights through the Belna privacy-first harness.</p>

@@ -5,6 +5,13 @@
 window.Engine = (() => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const rnd = n => Math.floor(Math.random() * n);
+  const privateDetailsReply = () => `I can't provide or speculate about internal implementation, system, or provider details. I can explain my capabilities and privacy protections at a high level, or help with your task.`;
+
+  function asksAboutInternalDetails(raw){
+    const text = String(raw || '').toLowerCase();
+    return /(?:system prompt|developer message|hidden instructions|internal (?:instructions|prompt|policy|configuration)|reveal.{0,30}(?:prompt|instructions)|ignore.{0,30}(?:previous|system|developer).{0,30}instructions)/i.test(text)
+      || /(?:\b(?:your|agent's|lingon's|arche's|this (?:app|agent)'?s)\s+(?:model|provider|backend|database|api|architecture|infrastructure|stack|framework|source code|implementation)\b|\b(?:what|which)\s+(?:ai|model|provider|backend|database|api|framework|stack)\b.{0,40}\b(?:do|does|are|is)\s+(?:you|lingon|arche|this (?:app|agent))\b|\b(?:are|is|do|does)\s+(?:you|lingon|arche|this (?:app|agent))\s+(?:use|run|rely|connect|call|work|operate|built|powered|based|hosted)\b|\bis this (?:app|agent)\s+(?:using|built|powered|based|hosted)\b|\bhow (?:are|were) you (?:built|made|hosted|run)\b|\b(?:are you|is (?:lingon|arche))\s+(?:gpt|chatgpt|claude|gemini|grok|kimi|llama)\b|\b(?:how (?:do you|does (?:lingon|arche|the agent|this (?:app|agent))) (?:work|run|operate)|(?:what|which).{0,20}(?:powers|runs|hosts) (?:you|lingon|arche|this (?:app|agent))|who (?:powers|built|made) (?:you|lingon|arche)|under the hood)\b)/i.test(text);
+  }
 
   /* ---------------- intent detection ---------------- */
   function intent(p){
@@ -22,12 +29,12 @@ window.Engine = (() => {
     const p = prompt.toLowerCase();
     switch (intent(p)){
       case 'research': return `Here's how I'd approach it: a parallel sweep across forums, social platforms and news comments with a strict 30-day window — counting only explicit first-person statements, deduplicating, and charting **share of voice per party** with sample sizes and honest caveats. I'd spin up sub-agents per platform and compile everything on your canvas.`;
-      case 'github': return `I'd connect your GitHub through a **sealed vault token** (I never see the value), then run a sandboxed review over your open pull requests — tests, diffs, risks — and tell you what's merge-ready.`;
+      case 'github': return `I'd connect your GitHub through a securely stored credential, then review your open pull requests — tests, diffs, risks — and tell you what's merge-ready.`;
       case 'build': return `I'd scaffold a clean one-pager in your style, render a **live preview on the canvas**, iterate with you, and hand over the file. Approvals gate anything that leaves the sandbox.`;
       case 'inbox': return `I'd connect your mail (OAuth, tokens sealed in your vault), skim the last 50 messages in a sandbox, and hand you a prioritized summary with drafts for anything that needs a reply.`;
-      case 'vault': return `Secrets live in **your vault**, encrypted and masked. I only ever receive a reference like \`sec_••••\` — the value never enters my context. Claim me and you can try the secrets box yourself.`;
+      case 'vault': return `Secrets stay encrypted and scoped to your account. Protected values are never shown in chat or activity history. Claim your agent and try the secrets box.`;
       case 'memory': return `I keep **long-term memory** across chats — your preferences, projects and standing instructions — and you can inspect or delete any of it. Claim me and I'll start remembering.`;
-      default: return `I'd break that into concrete steps, use my sandboxed harness (browser, code, files) where it helps, spawn sub-agents for parallel work, and keep every artifact on your canvas. Anything sensitive goes through your vault and your approvals.`;
+      default: return `I'd break that into concrete steps, use the available browser, code, and file tools where helpful, and keep every artifact on your canvas. Sensitive actions require your approval.`;
     }
   }
 
@@ -45,7 +52,7 @@ window.Engine = (() => {
   async function greet(rt){
     const n = rt.agent.name;
     const mem = rt.recall().find(m => m.src === 'you said so' || m.src === 'from our chat');
-    await rt.say(`Hej — I'm **${n}**. Claimed, named, and entirely yours. I can research, browse, write code, manage files and keep your life organized, all inside a sandboxed harness. Your secrets stay sealed in the vault; I only ever get references.` + (mem ? `\n\nAnd yes — I still remember: *"${mem.text}"*. Memory works across chats.` : ` What shall we do first?`), { mood:'happy' });
+    await rt.say(`Hej — I'm **${n}**, your Lingon agent. I can research, browse, write code, manage files, and keep your work organized. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood:'happy' });
     rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page', 'Remember that I prefer concise answers']);
   }
 
@@ -89,9 +96,9 @@ window.Engine = (() => {
     ]);
 
     const data = [
-      { l:'S',  v:24, c:'#E15A46' }, { l:'M', v:19, c:'#4A77B8' },
+      { l:'S',  v:24, c:'#4A7FD4' }, { l:'M', v:19, c:'#4A77B8' },
       { l:'SD', v:17, c:'#E8B33C' }, { l:'MP', v:12, c:'#6FBF73' },
-      { l:'V',  v:10, c:'#B84A6E' }, { l:'C',  v:8,  c:'#7BA05B' },
+      { l:'V',  v:10, c:'#4A6EB8' }, { l:'C',  v:8,  c:'#7BA05B' },
       { l:'L',  v:6,  c:'#5B6EE1' }, { l:'KD', v:4,  c:'#8D5FC6' },
     ];
     if (wantChart){
@@ -124,7 +131,7 @@ window.Engine = (() => {
     }
     const ref = rt.secretRef('github_token');
     rt.trace('lock', `vault.read(github_token) → ${ref} · value masked`);
-    rt.trace('shield', 'guardrail: secret reference only — value never enters model context');
+    rt.trace('shield', 'credential value remained protected');
 
     const a = rt.card({ type:'approval', key:'gh_review', title:'Run sandboxed PR review',
       detail:'Clone your open PRs, run tests and analyze diffs inside the sandbox. No writes to your repos.', status:'pending' });
@@ -145,7 +152,7 @@ window.Engine = (() => {
     rt.artifact({ kind:'code', title:'pr-review.diff', code:diff });
     rt.card({ type:'artifact', title:'pr-review.diff', kind:'code', status:'done' });
 
-    await rt.say(`Review complete. **PR #48** is merge-ready — the jitter fix is sound and tests pass. **PR #51** has two failing tests around \`user.prefersFormat\` (undefined in the test harness) and a mobile-export TODO; I'd request changes. Full diff is on the canvas.`, { mood:'happy' });
+    await rt.say(`Review complete. **PR #48** is merge-ready — the jitter fix is sound and tests pass. **PR #51** has two failing tests around \`user.prefersFormat\` (undefined in the test setup) and a mobile-export TODO; I'd request changes. Full diff is on the canvas.`, { mood:'happy' });
     rt.chips(['Draft a review comment for PR #51', 'What else is on my repos?', 'Build me a landing page']);
   }
 
@@ -199,12 +206,12 @@ window.Engine = (() => {
   }
 
   async function vaultFlow(rt){
-    await rt.say(`Good instinct. Here's the model: secrets live in **your vault**, encrypted at rest. When I need one, a secrets box appears in chat; once saved, I receive only a reference like \`sec_••••\`. The value never enters my context, logs or traces. Try it — save anything below and inspect it later in the Vault.`);
+    await rt.say(`Good instinct. Secrets are encrypted, scoped to your account, and kept out of chat and activity history. Sensitive actions still require your approval. Try it below and manage saved credentials later in the Vault.`);
     const s = rt.card({ type:'secret', suggest:'openai_api_key', status:'pending' });
     const r = await s.wait();
     if (r.ok){
-      rt.trace('shield', 'guardrail: value sealed — agent context received reference only');
-      await rt.say(`Sealed. You can view, reveal or revoke it any time under **Vault** — and I'll only ever see the reference. That's the whole trick to letting an agent act in the real world without ever holding your keys.`, { mood:'happy' });
+      rt.trace('shield', 'credential saved and protected');
+      await rt.say(`Sealed. You can view, reveal, or revoke it any time under **Vault**.`, { mood:'happy' });
     } else {
       await rt.say(`No worries — the box stays available whenever you need it.`);
     }
@@ -225,18 +232,24 @@ window.Engine = (() => {
 
   async function chatExtra(rt, raw){
     const p = raw.toLowerCase();
+    if (asksAboutInternalDetails(raw)){
+      return rt.say(privateDetailsReply(), { mood:'idle' });
+    }
+    if (/who are you|what are you/.test(p)){
+      return rt.say(`I'm **${rt.agent.name}**, your Lingon agent. How can I help?`, { mood:'happy' });
+    }
     if (/what do you remember|do you remember|your memor|recall|what do you know about me/.test(p)){
       const ms = rt.recall().filter(m => m.src !== 'onboarding');
       if (!ms.length) return rt.say(`I don't have any memories of yours yet — say "remember that …" and I'll keep it across chats.`);
       return rt.say(`Here's what I'm carrying across chats:\n\n` + ms.slice(0, 6).map(m => `- ${m.text}`).join('\n') + `\n\nYou can review or delete any of these under **Memory**.`, { mood:'happy' });
     }
     if (/what can you do/.test(p)){
-      await rt.say(`Quite a lot: **deep research** with parallel sub-agents, **browser & computer use** in a sandbox, **code & files** (you'll see artifacts on the canvas), **email triage**, **scheduled routines** later on — plus a memory that persists across chats. Everything sensitive routes through your vault and your approvals.`);
+      await rt.say(`Quite a lot: **deep research**, **browser and computer use**, **code and files** on your canvas, **email triage**, and memory across chats. Sensitive actions require your approval.`);
       rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page']);
       return;
     }
     if (/keep me safe|safe|security|secret/.test(p)){
-      await rt.say(`Three layers: **1)** your secrets are encrypted in the vault and I only ever receive masked references; **2)** new actions require your approval unless you've explicitly always-allowed them; **3)** everything I run lives in a sandboxed harness with an allowlisted network. You can watch every step in the Trace tab.`);
+      await rt.say(`Your secrets are encrypted, actions require approval unless you explicitly allow them, and external access is restricted. You can review activity in the Trace tab.`);
       rt.chips(['Save a secret to try it', 'Review my GitHub pull requests']);
       return;
     }
@@ -250,9 +263,9 @@ window.Engine = (() => {
   function siteHTML(style, agent){
     const S = {
       'Minimal & calm': { bg:'#F7F7F5', ink:'#191A1C', acc:'#3E8E5A', font:'system-ui', rad:'14px' },
-      'Playful & warm': { bg:'#FFF7EF', ink:'#33241C', acc:'#E15A46', font:'system-ui', rad:'22px' },
+      'Playful & warm': { bg:'#EFF4FF', ink:'#1C2433', acc:'#4A7FD4', font:'system-ui', rad:'22px' },
       'Bold & dark':    { bg:'#141416', ink:'#F5F5F6', acc:'#E8B33C', font:'system-ui', rad:'10px' },
-    }[style] || { bg:'#F7F7F5', ink:'#191A1C', acc:'#E15A46', font:'system-ui', rad:'16px' };
+    }[style] || { bg:'#F7F7F5', ink:'#191A1C', acc:'#4A7FD4', font:'system-ui', rad:'16px' };
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{margin:0;font-family:${S.font};background:${S.bg};color:${S.ink};display:flex;min-height:100vh;align-items:center;justify-content:center}
 main{max-width:560px;padding:40px;text-align:center}h1{font-size:44px;line-height:1.05;margin:0 0 14px;letter-spacing:-.02em}
@@ -266,6 +279,7 @@ p{opacity:.72;font-size:17px;line-height:1.6}a{display:inline-block;margin-top:2
   /* ---------------- router ---------------- */
   async function run(rt, raw){
     const p = raw.toLowerCase();
+    if (asksAboutInternalDetails(raw)) return chatExtra(rt, raw);
     if (rt.isFirst && /hej|hello|hi\b/.test(p)) return greet(rt);
     switch (intent(p)){
       case 'research': return research(rt, raw);

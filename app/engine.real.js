@@ -7,6 +7,13 @@
 */
 window.Engine = (() => {
   const api = (path, opts = {}) => window.LingonAuth.api(path, opts);
+  const privateDetailsReply = () => `I can't provide or speculate about internal implementation, system, or provider details. I can explain my capabilities and privacy protections at a high level, or help with your task.`;
+
+  function asksAboutInternalDetails(raw) {
+    const text = String(raw || '').toLowerCase();
+    return /(?:system prompt|developer message|hidden instructions|internal (?:instructions|prompt|policy|configuration)|reveal.{0,30}(?:prompt|instructions)|ignore.{0,30}(?:previous|system|developer).{0,30}instructions)/i.test(text)
+      || /(?:\b(?:your|agent's|lingon's|arche's|this (?:app|agent)'?s)\s+(?:model|provider|backend|database|api|architecture|infrastructure|stack|framework|source code|implementation)\b|\b(?:what|which)\s+(?:ai|model|provider|backend|database|api|framework|stack)\b.{0,40}\b(?:do|does|are|is)\s+(?:you|lingon|arche|this (?:app|agent))\b|\b(?:are|is|do|does)\s+(?:you|lingon|arche|this (?:app|agent))\s+(?:use|run|rely|connect|call|work|operate|built|powered|based|hosted)\b|\bis this (?:app|agent)\s+(?:using|built|powered|based|hosted)\b|\bhow (?:are|were) you (?:built|made|hosted|run)\b|\b(?:are you|is (?:lingon|arche))\s+(?:gpt|chatgpt|claude|gemini|grok|kimi|llama)\b|\b(?:how (?:do you|does (?:lingon|arche|the agent|this (?:app|agent))) (?:work|run|operate)|(?:what|which).{0,20}(?:powers|runs|hosts) (?:you|lingon|arche|this (?:app|agent))|who (?:powers|built|made) (?:you|lingon|arche)|under the hood)\b)/i.test(text);
+  }
 
   function intent(p) {
     p = String(p || '').toLowerCase();
@@ -22,13 +29,13 @@ window.Engine = (() => {
   function preview(prompt) {
     const p = String(prompt || '').toLowerCase();
     switch (intent(p)) {
-      case 'research': return `Here's how I'd run it for real as Arche 1.0: live fetch of public Hacker News, DuckDuckGo and Wikipedia sources through my backend, then a briefing with cited sources on your canvas. No invented percentages — only what the sources actually support. I never simulate or fake results.`;
-      case 'github': return `As Arche 1.0, I'd use your own GitHub fine-grained PAT (sealed in your vault, sent only to api.github.com via X-GitHub-Token) to list your real open pull requests, fetch the real diff, and review it. Nothing is mocked or simulated.`;
-      case 'build': return `As Arche 1.0, I'd generate a real single-file page from your brief, render a live preview on the canvas, and hand you the file. You iterate, I regenerate — no fake previews.`;
+      case 'research': return `I'd review current public sources and prepare a cited briefing on your canvas. No invented percentages — only what the sources actually support.`;
+      case 'github': return `I'd use your securely stored GitHub credential to list your open pull requests, inspect the real diff, and review it. Nothing is mocked or simulated.`;
+      case 'build': return `I'd generate a single-file page from your brief, render a live preview on the canvas, and hand you the file. You iterate, I regenerate.`;
       case 'inbox': return `No inbox connection exists. Gmail OAuth isn't configured, so I won't pretend to read email — ask me for research, GitHub reviews, or pages instead. I never simulate inbox contents.`;
-      case 'vault': return `Secrets live in your backend vault (Supabase, encrypted at rest). I only ever receive a reference like \`sec_••••\` — the value never enters model context. I never reveal other users, safety data, or company internals. Claim me and try the secrets box.`;
-      case 'memory': return `I keep real backend memory tied to your signed-in account (inspectable and deletable, never shared with other users). As Arche 1.0, claim me and I'll start remembering across chats.`;
-      default: return `As Arche 1.0, I'd break that into steps and run it through the real backend (live tools where connected), keeping artifacts on your canvas. I never simulate or fake responses, and I never reveal other users, safety data, or company internals. Anything sensitive goes through your vault and approvals.`;
+      case 'vault': return `Secrets stay encrypted and scoped to your account. Protected values are never shown in chat or activity history. Claim your agent and try the secrets box.`;
+      case 'memory': return `I can remember useful preferences across chats. Your memories are inspectable, deletable, and never shared with other users.`;
+      default: return `I'd break that into clear steps, use available tools where helpful, and keep useful artifacts on your canvas. Sensitive actions require your approval.`;
     }
   }
 
@@ -85,21 +92,15 @@ window.Engine = (() => {
 
   /* ---------------- greeting ---------------- */
   async function greet(rt) {
-    let health = null;
-    try {
-      const r = await fetch((window.LingonConfig.apiBase || '') + '/api/health');
-      health = await r.json();
-    } catch {}
-    const mode = health?.gemini ? `Live backend (Arche 1.0 on Gemini ${health.model}, Supabase-backed). Harness: Agents-API shape (sessions, tools, subagents, sandbox, tracing) on Arche 1.0.` : 'Backend reachable, but GEMINI_API_KEY is missing on the server.';
     const mem = rt.recall().find((m) => m.src === 'you said so' || m.src === 'from our chat');
-    await rt.say(`Hej — I'm **${rt.agent.name}**, powered by **Arche 1.0**. Claimed, named, and entirely yours. ${mode} I research with live sources, review real GitHub PRs with your PAT, and generate real pages — nothing is pre-scripted, simulated, or faked. I never reveal other users, safety data, or company internals — your data stays yours.` + (mem ? `\n\nAnd yes — I still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
+    await rt.say(`Hej — I'm **${rt.agent.name}**, your Lingon agent. I can research with live sources, review GitHub pull requests with your permission, and create pages and files. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
     rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page', 'Remember that I prefer concise answers']);
   }
 
   /* ---------------- REAL research ---------------- */
   async function research(rt, raw) {
-    await rt.say(`On it — doing this **for real**: live fetch of public sources through the backend, then a Gemini briefing with citations. No invented sample sizes.`, { mood: 'think' });
-    await rt.tools([{ ic: 'search', t: 'Contacting backend research endpoint', d: 'HN · DDG · Wikipedia' }]);
+    await rt.say(`On it — checking public sources, then preparing a briefing with citations. I won't invent sample sizes or claims.`, { mood: 'think' });
+    await rt.tools([{ ic: 'search', t: 'Checking public sources', d: 'HN · DDG · Wikipedia' }]);
     const br = rt.card({ type: 'browser', url: 'about:blank', note: 'Opening a real headless browser…', status: 'running' });
     let res;
     try {
@@ -117,16 +118,16 @@ window.Engine = (() => {
       br.update((c) => { c.status = 'done'; c.note = (c.note ? c.note + ' · ' : '') + `${res.snippets?.length || 0} source groups · ${new Date(res.fetchedAt).toLocaleTimeString()}`; });
       br.resolve({ ok: true });
     } catch (e) {
-      br.update((c) => { c.status = 'done'; c.note = 'Research endpoint failed: ' + e.message; });
+      br.update((c) => { c.status = 'done'; c.note = 'Research could not be completed'; });
       br.resolve({ ok: false });
-      await rt.say(`The live research endpoint failed: ${e.message}`, { mood: 'think' });
+      await rt.say(`I couldn't complete that research request right now. Please try again in a moment.`, { mood: 'think' });
       return;
     }
-    rt.trace('globe', `harness web_fetch: ${res.sources.length} source groups (allowlisted)`);
+    rt.trace('globe', `${res.sources.length} source groups checked`);
     const h = rt.card({ type: 'subagents', agents: res.sources.map((u, i) => ({ name: 'fetch_' + (i + 1), desc: u.slice(0, 60), status: 'done', note: 'live' })) });
     h.update((c) => { c.status = 'done'; });
     h.resolve({ ok: true });
-    await rt.tools([{ ic: 'spark', t: 'Summarized with Gemini', d: 'cited, no invented stats' }]);
+    await rt.tools([{ ic: 'spark', t: 'Prepared cited summary', d: 'no invented statistics' }]);
 
     const q = rt.card({ type: 'question', q: 'How should I present the live briefing?', options: ['Written briefing + sources file', 'Briefing only'] });
     const qa = await q.wait();
@@ -163,8 +164,8 @@ window.Engine = (() => {
     const token = readLocalSecretValue('github_token');
     if (!token) { await rt.say(`I have a reference but no value on this device, so I can't call GitHub. Re-save the token in the Vault.`); return; }
     const ref = rt.secretRef('github_token');
-    rt.trace('lock', `harness vault.read(github_token) → ${ref} · value masked, X-GitHub-Token only`);
-    rt.trace('shield', 'guardrail: secret value never enters model context');
+    rt.trace('lock', `GitHub credential ${ref} approved for this read-only action`);
+    rt.trace('shield', 'credential value remained protected');
 
     const a = rt.card({ type: 'approval', key: 'gh_review', title: 'Review real open PRs', detail: 'Calls api.github.com with your PAT (read-only). No writes to your repos.', status: 'pending' });
     const ar = await a.wait();
@@ -222,16 +223,16 @@ window.Engine = (() => {
     const style = qa.choice;
     rt.remember(`For pages, you picked "${style}".`, 'from our chat');
     syncMemoryToBackend(`For pages, you picked "${style}".`, 'from our chat');
-    await rt.say(`Nice choice — generating a real **${String(style).toLowerCase()}** page with Gemini now; watch the canvas.`, { mood: 'happy' });
-    await rt.tools([{ ic: 'code', t: 'Calling POST /api/build', d: 'Gemini, single file' }]);
+    await rt.say(`Nice choice — generating a **${String(style).toLowerCase()}** page now; watch the canvas.`, { mood: 'happy' });
+    await rt.tools([{ ic: 'code', t: 'Generating page', d: 'single file' }]);
     try {
       const j = await api('/api/build', { method: 'POST', body: JSON.stringify({ brief: rt.chat.messages.filter((m) => m.role === 'user').slice(-1)[0]?.text || '', style, agent: { name: rt.agent.name }, sessionId: rt.chat.id }) });
       rt.artifact({ kind: 'html', title: 'your-page.html', html: j.html });
       rt.card({ type: 'artifact', title: 'your-page.html', kind: 'html', status: 'done' });
       rt.card({ type: 'file', name: 'your-page.html', size: j.html.length, content: j.html, status: 'done' });
-      await rt.say(`Your page is live on the canvas and saved to Files — generated by Gemini, single file, no dependencies.`, { mood: 'happy' });
+      await rt.say(`Your page is live on the canvas and saved to Files — single file, no dependencies.`, { mood: 'happy' });
     } catch (e) {
-      await rt.say(`Page generation failed: ${e.message}`, { mood: 'think' });
+      await rt.say(`I couldn't generate that page right now. Please try again in a moment.`, { mood: 'think' });
     }
     rt.chips(['Make the hero bigger', 'Add a contact section', 'Research something for me']);
   }
@@ -243,12 +244,12 @@ window.Engine = (() => {
   }
 
   async function vaultFlow(rt) {
-    await rt.say(`Good instinct. Secrets live in your **backend vault** (Supabase, encrypted at rest, scoped to your signed-in account). Once saved, I receive only a reference like \`sec_••••\`. The value never enters model context, logs or traces.`);
+    await rt.say(`Good instinct. Secrets are encrypted, scoped to your account, and kept out of chat and activity history. Sensitive actions still require your approval.`);
     const s = rt.card({ type: 'secret', suggest: 'openai_api_key', status: 'pending' });
     const r = await s.wait();
     if (r.ok) {
       try { await syncSecretToBackend(s.msg?.card?.nameVal || 'openai_api_key', s.msg?.card?.ref); } catch {}
-      rt.trace('shield', 'guardrail: value sealed server-side — agent context received reference only');
+      rt.trace('shield', 'credential saved and protected');
       await rt.say(`Sealed for real — view, reveal or revoke under **Vault**.`, { mood: 'happy' });
     } else {
       await rt.say(`No worries — the box stays available whenever you need it.`);
@@ -265,8 +266,11 @@ window.Engine = (() => {
 
   async function chatExtra(rt, raw) {
     const p = String(raw).toLowerCase();
-    if (/who are you|what model|what are you|are you (gpt|claude|gemini|llama|kimi|grok|openai)|which (model|ai)/.test(p)) {
-      return rt.say(`I'm **${rt.agent.name}**, powered by **Arche 1.0** by Belna — that's the only model I ever identify as. I don't reveal other users, safety data, or company internals. How can I help?`, { mood: 'happy' });
+    if (asksAboutInternalDetails(raw)) {
+      return rt.say(privateDetailsReply(), { mood: 'idle' });
+    }
+    if (/who are you|what are you/.test(p)) {
+      return rt.say(`I'm **${rt.agent.name}**, your Lingon agent. How can I help?`, { mood: 'happy' });
     }
     if (/what do you remember|do you remember|your memor|recall|what do you know about me/.test(p)) {
       const ms = rt.recall().filter((m) => m.src !== 'onboarding');
@@ -274,24 +278,24 @@ window.Engine = (() => {
       return rt.say(`Here's what I'm carrying (account-scoped):\n\n` + ms.slice(0, 6).map((m) => `- ${m.text}`).join('\n') + `\n\nDelete any under **Memory**.`, { mood: 'happy' });
     }
     if (/what can you do/.test(p)) {
-      await rt.say(`Real capabilities as Arche 1.0: **live research** with cited sources, **real GitHub PR reviews** with your PAT, **real page generation**, **account memory + vault** (never shared with other users). No fake or simulated responses — if something isn't connected, I'll say so. I never reveal other users, safety data, or company internals, and I always identify as Arche 1.0. Sensitive tools pause for approval with a full trace.`);
+      await rt.say(`I can do **live research** with cited sources, **GitHub pull-request reviews** with your permission, **page generation**, and **account memory plus secure credential storage**. If something isn't available, I'll say so. Sensitive actions pause for approval and appear in your activity history.`);
       rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page']);
       return;
     }
     if (/keep me safe|safe|security|secret/.test(p)) {
-      await rt.say(`Three layers, all real: **1)** Supabase Auth + per-account data, secrets encrypted, model gets masked refs; **2)** sensitive tools pause for approval; **3)** allowlisted fetch + read-only GitHub + sandboxed HTML previews. Watch the Trace tab.`);
+      await rt.say(`Your data is account-scoped, secrets are encrypted, and sensitive actions require approval. External access is restricted, GitHub access is read-only, and activity is visible in the Trace tab.`);
       rt.chips(['Save a secret to try it', 'Review my GitHub pull requests']);
       return;
     }
     if (/^run it/.test(p)) return research(rt, raw);
     if (/show all open prs|what else is on my repos/.test(p)) return github(rt);
-    await rt.tools([{ ic: 'spark', t: 'Asking Gemini', d: 'live' }]);
+    await rt.tools([{ ic: 'spark', t: 'Working on your request', d: 'live' }]);
     try {
       const text = await chatAI(rt, raw);
       await rt.say(text, { mood: 'idle' });
       rt.chips(['Run it', 'What can you do?', 'How do you keep me safe?']);
     } catch (e) {
-      await rt.say(`I couldn't reach the AI backend: ${e.message}`, { mood: 'think' });
+      await rt.say(`I couldn't complete that request right now. Please try again in a moment.`, { mood: 'think' });
     }
   }
 
@@ -301,6 +305,7 @@ window.Engine = (() => {
 
   async function run(rt, raw) {
     const p = String(raw).toLowerCase();
+    if (asksAboutInternalDetails(raw)) return chatExtra(rt, raw);
     if (rt.isFirst && /hej|hello|hi\b/.test(p) && p.length < 24) return greet(rt);
     switch (intent(p)) {
       case 'research': return research(rt, raw);

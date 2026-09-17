@@ -2,7 +2,7 @@
 window.Mascot = (() => {
 
   const PALETTE = {
-    lingon:   { name:'Lingon red',  body:'#E15A46', dark:'#B93F2E', glow:'#F7C2B8', blush:'#F7C2B8' },
+    lingon:   { name:'Lingon blue', body:'#4A7FD4', dark:'#2E5BA8', glow:'#B8D4F7', blush:'#B8D4F7' },
     blueberry:{ name:'Blueberry',   body:'#5B6EE1', dark:'#4353C6', glow:'#C3CBF7', blush:'#C3CBF7' },
     moss:     { name:'Moss',        body:'#7BA05B', dark:'#5F8344', glow:'#D3E4C2', blush:'#D3E4C2' },
     sun:      { name:'Sunbeam',     body:'#E8B33C', dark:'#C6922A', glow:'#F7DFAE', blush:'#F7DFAE' },
@@ -63,7 +63,7 @@ window.Mascot = (() => {
   function logo(size = 26){
     return `
 <svg width="${size}" height="${size}" viewBox="0 0 120 120" fill="none" aria-hidden="true">
-  <path d="${STAR}" fill="#E15A46" stroke="#E15A46" stroke-width="18" stroke-linejoin="round"/>
+  <path d="${STAR}" fill="#4A7FD4" stroke="#4A7FD4" stroke-width="18" stroke-linejoin="round"/>
   <ellipse cx="48" cy="48" rx="9" ry="6" fill="#fff" opacity=".3"/>
   ${spark(92, 22, 8, '#5F9E63')}
 </svg>`;
@@ -256,5 +256,80 @@ window.Mascot = (() => {
 </span>`;
   }
 
-  return { svg, logo, loop, PALETTE, keys: Object.keys(PALETTE) };
+  /* 3/4 laptop pose used by the landing-page comparison section. */
+  function laptop(){
+    const c = PALETTE.lingon;
+    return `
+<svg class="mascot-laptop" viewBox="0 0 500 500" fill="none" role="img" aria-label="Belna agent working on a laptop">
+  <defs>
+    <filter id="work-floor-shadow" x="30" y="340" width="440" height="120" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <radialGradient id="work-star" cx="38%" cy="27%" r="72%">
+      <stop offset="0%" stop-color="#CFE2FA"/>
+      <stop offset="40%" stop-color="${c.body}"/>
+      <stop offset="84%" stop-color="${c.dark}"/>
+      <stop offset="100%" stop-color="#183B78"/>
+    </radialGradient>
+    <linearGradient id="work-depth" x1="90" y1="120" x2="300" y2="390" gradientUnits="userSpaceOnUse">
+      <stop stop-color="${c.dark}"/><stop offset="1" stop-color="#183B78"/>
+    </linearGradient>
+    <radialGradient id="work-arm" cx="35%" cy="22%" r="76%">
+      <stop stop-color="#CFE2FA"/><stop offset=".45" stop-color="${c.body}"/><stop offset=".84" stop-color="${c.dark}"/><stop offset="1" stop-color="#183B78"/>
+    </radialGradient>
+    <linearGradient id="work-lid" x1="310" y1="205" x2="442" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/><stop offset=".38" stop-color="#E2E8F0"/><stop offset="1" stop-color="#AAB5C5"/>
+    </linearGradient>
+  </defs>
+
+  <ellipse cx="250" cy="411" rx="166" ry="24" fill="#15284B" opacity=".12" filter="url(#work-floor-shadow)"/>
+  <ellipse cx="242" cy="405" rx="132" ry="17" fill="#15284B" opacity=".09"/>
+
+  <g class="work-body">
+    <path d="M215 82C230 82 250 142 260 152C275 162 335 182 348 195C362 210 325 255 320 272C315 290 332 352 318 368C305 382 248 360 230 360C212 360 160 392 142 382C125 372 135 308 128 290C120 272 75 235 82 218C90 200 148 190 162 178C178 165 200 82 215 82Z" fill="url(#work-depth)"/>
+    <path d="M220 85C235 85 252 142 264 152C280 165 342 182 355 198C368 212 328 255 322 272C316 290 335 352 320 365C305 378 250 355 232 355C215 355 162 388 146 378C130 368 140 306 132 288C125 270 80 232 88 215C96 198 152 188 166 175C182 162 205 85 220 85Z" fill="url(#work-star)" stroke="${c.dark}" stroke-width="3" stroke-linejoin="round"/>
+    <ellipse cx="219" cy="126" rx="25" ry="14" fill="#fff" opacity=".3" transform="rotate(-18 219 126)"/>
+    <g class="work-brows" stroke="#1C2430" stroke-width="7" stroke-linecap="round">
+      <path d="M195 208Q208 215 220 220"/><path d="M268 220Q280 215 293 208"/>
+    </g>
+    <g fill="#1C2430">
+      <ellipse cx="218" cy="242" rx="11" ry="15"/><ellipse cx="282" cy="242" rx="11" ry="15"/>
+    </g>
+    <g fill="#fff"><circle cx="221" cy="236" r="4.5"/><circle cx="285" cy="236" r="4.5"/></g>
+    <g fill="${c.blush}" opacity=".9"><ellipse cx="198" cy="256" rx="16" ry="11"/><ellipse cx="302" cy="256" rx="16" ry="11"/></g>
+    <path d="M238 258Q250 268 262 258" stroke="#1C2430" stroke-width="4.5" stroke-linecap="round"/>
+
+    <g class="work-hand-right">
+      <ellipse cx="286" cy="324" rx="16" ry="7" fill="#000" opacity=".2"/>
+      <path d="M262 284C272 292 292 302 302 314C308 322 298 328 285 325C272 322 258 302 255 288Z" fill="url(#work-arm)" stroke="${c.dark}" stroke-width="2.5"/>
+      <ellipse cx="282" cy="305" rx="10" ry="5" fill="#fff" opacity=".3" transform="rotate(-15 282 305)"/>
+    </g>
+  </g>
+
+  <g class="work-laptop">
+    <polygon points="190,340 305,362 440,314 325,296" fill="#15284B" opacity=".13"/>
+    <polygon points="195,335 305,355 435,310 325,295" fill="#E2E8F0"/>
+    <polygon points="195,335 305,355 305,361 195,341" fill="#8794A8"/>
+    <polygon points="305,355 435,310 435,315 305,361" fill="#BAC4D2"/>
+    <polygon points="230,328 295,340 395,308 335,298" fill="#1E293B" opacity=".2"/>
+    <polygon points="255,333 285,338 315,328 288,324" fill="#0F172A" opacity=".22"/>
+    <polygon points="305,355 435,310 445,185 315,225" fill="url(#work-lid)" stroke="#8794A8" stroke-width="1.5" stroke-linejoin="round"/>
+    <line x1="315" y1="225" x2="445" y2="185" stroke="#fff" stroke-width="2" opacity=".9"/>
+    <polygon points="310,348 428,306 436,192 320,229" fill="#fff" opacity=".12"/>
+    <g transform="translate(374 266) rotate(-17)">
+      <path d="M0-13L4-4L14-3L7 4L9 14L0 9L-9 14L-7 4L-14-3L-4-4Z" fill="${c.body}" opacity=".82"/>
+    </g>
+  </g>
+
+  <g class="work-body">
+    <g class="work-hand-left">
+      <ellipse cx="198" cy="350" rx="38" ry="11" fill="#000" opacity=".16"/>
+      <path d="M152 278C142 312 155 348 198 350C232 352 246 336 238 318C230 298 195 292 178 280Z" fill="url(#work-arm)" stroke="${c.dark}" stroke-width="2.5"/>
+      <ellipse cx="188" cy="315" rx="26" ry="11" fill="#fff" opacity=".3" transform="rotate(-18 188 315)"/>
+    </g>
+  </g>
+</svg>`;
+  }
+
+  return { svg, logo, loop, laptop, PALETTE, keys: Object.keys(PALETTE) };
 })();

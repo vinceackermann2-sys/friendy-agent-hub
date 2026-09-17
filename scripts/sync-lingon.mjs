@@ -34,11 +34,11 @@ for (const f of ['cookies.html', 'models.html', 'pricing.html', 'privacy.html', 
   copy(join('app', f), join('public', f));
 }
 
-// Backend identity strings must match between server/ (Node) and
-// src/lingon-server/ (edge port) so chat + research identify the same way.
+// Backend confidentiality policy must match between server/ (Node) and
+// src/lingon-server/ (edge port) so chat + research behave the same way.
 for (const [srcFile, edgeFile, marker] of [
-  ['server/index.js', 'src/lingon-server/index.js', 'Arche 1.0 by Belna'],
-  ['server/research.js', 'src/lingon-server/research.js', 'Arche 1.0 by Belna'],
+  ['server/index.js', 'src/lingon-server/index.js', 'INTERNAL CONFIDENTIALITY'],
+  ['server/research.js', 'src/lingon-server/research.js', 'Never discuss internal implementation'],
 ]) {
   const src = readFileSync(join(root, srcFile), 'utf8');
   const edge = readFileSync(join(root, edgeFile), 'utf8');
@@ -46,7 +46,7 @@ for (const [srcFile, edgeFile, marker] of [
   if (!edge.includes(marker)) {
     console.error(`sync-lingon: WARN ${edgeFile} missing "${marker}" — port the change from ${srcFile}`);
   } else {
-    console.log(`sync-lingon: branding OK in ${edgeFile}`);
+    console.log(`sync-lingon: policy OK in ${edgeFile}`);
   }
 }
 

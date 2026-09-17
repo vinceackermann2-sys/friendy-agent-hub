@@ -31,10 +31,12 @@ async function callGemini({ prompt, system, history, model, json }) {
       });
     }
   }
-  const fullPrompt = (system ? system + '\n\n' : '') + prompt;
-  contents.push({ role: 'user', parts: [{ text: fullPrompt.slice(0, 12000) }] });
+  contents.push({ role: 'user', parts: [{ text: String(prompt).slice(0, 12000) }] });
 
   const body = { contents };
+  if (system) {
+    body.system_instruction = { parts: [{ text: String(system).slice(0, 12000) }] };
+  }
   if (json) {
     body.generationConfig = { responseMimeType: 'application/json' };
   }
