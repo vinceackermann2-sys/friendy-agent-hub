@@ -52,27 +52,35 @@ function getOrCreate(userId, chatId) {
   return s;
 }
 
-function run(s, { code, input, who, trace }) {
+/* SECURITY: arbitrary code execution is disabled.
+   This used to evaluate caller-supplied JS with node:vm, which Node documents
+   as NOT a security mechanism: code in the context can walk the constructor
+   chain of any injected function to reach the host realm, grab `process`,
+   read every secret in process.env and spawn OS commands. Re-enabling requires
+   a real isolation boundary (unprivileged container / WASM interpreter with no
+   secrets and no network), not node:vm. */
+const CODE_DISABLED = 'Code execution is disabled on this deployment.';
+
+function run(s, { who, trace } = {}) {
   s.lastActive = Date.now();
-  s.lines.length = 0;
-  if (input !== undefined) s.context.input = JSON.parse(JSON.stringify(input));
-  const t0 = Date.now();
-  broadcast(s, { state: who === 'user' ? 'user' : 'working', run: String(code).slice(0, 120) });
-  let ok = true, error = '';
-  try {
-    const result = vm.runInContext(String(code).slice(0, 4000), s.context, { timeout: 3000 });
-    s.context.last = result === undefined ? s.context.last : JSON.parse(JSON.stringify(result ?? null));
-  } catch (e) {
-    ok = false;
-    error = e.message;
-  }
-  const stdout = s.lines.join('\n').slice(0, 2000);
-  const stamped = stdout.split('\n').filter(Boolean).map((t) => ({ t, cls: ok ? 'g' : 'p' }));
+  const line = { t: CODE_DISABLED, cls: 'p' };
+  s.log.push({ ...line, who });
+  s.log = s.log.slice(-40);
+  broadcast(s, { out: [line], ok: false, state: s.userControl ? 'user' : 'idle' });
+  trace && trace(entry('alert', 'pc run refused: code execution disabled'));
+  return { ok: false, error: CODE_DISABLED, stdout: '', pcId: s.pcId, log: s.log.slice(-14) };
+}
+
+/* Append precomputed, server-generated output lines to the session terminal.
+   No caller-supplied code is ever evaluated. */
+function report(s, { lines = [], who = 'agent', trace } = {}) {
+  s.lastActive = Date.now();
+  const stamped = lines.filter(Boolean).map((t) => ({ t: String(t).slice(0, 300), cls: 'g' }));
   s.log.push(...stamped.map((L) => ({ ...L, who })));
   s.log = s.log.slice(-40);
-  broadcast(s, { out: stamped, ok, state: s.userControl ? 'user' : 'idle' });
-  trace && trace(entry('term', `pc ${who} run: ${stamped.length} output lines in ${Date.now() - t0}ms`));
-  return { ok, error, stdout, pcId: s.pcId, log: s.log.slice(-14) };
+  broadcast(s, { out: stamped, ok: true, state: s.userControl ? 'user' : 'idle' });
+  trace && trace(entry('term', `pc ${who} output: ${stamped.length} lines`));
+  return { ok: true, error: '', stdout: stamped.map((L) => L.t).join('\n').slice(0, 2000), pcId: s.pcId, log: s.log.slice(-14) };
 }
 
 function takeOver(s, on) {
