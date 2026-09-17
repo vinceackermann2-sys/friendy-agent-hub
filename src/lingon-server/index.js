@@ -474,16 +474,15 @@ app.get('/api/github/prs', rateLimit(30, 60000), requireAuth(async (req, res) =>
     // Real computer use: stats are computed by EXECUTED sandboxed code over
     // the live API data — the terminal card below shows its actual stdout.
     const toolTrace = [];
-    const statsRun = await TOOLS.code_run.run({
-      input: { repos: repos.map((r) => r.full_name), prs },
-      code: `const byRepo = {};
-for (const pr of input.prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
-console.log('repos checked: ' + input.repos.length);
-console.log('open PRs: ' + input.prs.length);
-for (const [repo, n] of Object.entries(byRepo).slice(0, 5)) console.log(repo + ': ' + n + ' open');
-if (!input.prs.length) console.log('nothing to review');`,
-    }, { trace: (e) => toolTrace.push(e), githubPat: null, userId: req.user.id });
-    res.json({ repos: repos.map((r) => r.full_name), prs, stdout: statsRun.stdout, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
+    const byRepo = {};
+    for (const pr of prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
+    const stdout = [
+      `repos checked: ${repos.length}`,
+      `open PRs: ${prs.length}`,
+      ...Object.entries(byRepo).slice(0, 5).map(([repo, n]) => `${repo}: ${n} open`),
+      ...(prs.length ? [] : ['nothing to review']),
+    ].join('\n');
+    res.json({ repos: repos.map((r) => r.full_name), prs, stdout, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
