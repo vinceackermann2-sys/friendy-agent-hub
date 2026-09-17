@@ -17,6 +17,9 @@ import { Route as ModelsRouteImport } from './routes/models'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as ResearchRouteImport } from './routes/research'
+import { Route as Research100mRouteImport } from './routes/research-100m'
+import { Route as ResearchArche10RouteImport } from './routes/research-arche-1-0'
+import { Route as ResearchStlmSlaRouteImport } from './routes/research-stlm-sla'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
@@ -61,6 +64,21 @@ const ResearchRoute = ResearchRouteImport.update({
   path: '/research',
   getParentRoute: () => rootRouteImport,
 } as any)
+const Research100mRoute = Research100mRouteImport.update({
+  id: '/research-100m',
+  path: '/research-100m',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResearchArche10Route = ResearchArche10RouteImport.update({
+  id: '/research-arche-1-0',
+  path: '/research-arche-1-0',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResearchStlmSlaRoute = ResearchStlmSlaRouteImport.update({
+  id: '/research-stlm-sla',
+  path: '/research-stlm-sla',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SecurityRoute = SecurityRouteImport.update({
   id: '/security',
   path: '/security',
@@ -86,6 +104,9 @@ export interface FileRoutesByFullPath {
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/research': typeof ResearchRoute
+  '/research-100m': typeof Research100mRoute
+  '/research-arche-1-0': typeof ResearchArche10Route
+  '/research-stlm-sla': typeof ResearchStlmSlaRoute
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
   '/api/$': typeof ApiSplatRoute
@@ -99,6 +120,9 @@ export interface FileRoutesByTo {
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/research': typeof ResearchRoute
+  '/research-100m': typeof Research100mRoute
+  '/research-arche-1-0': typeof ResearchArche10Route
+  '/research-stlm-sla': typeof ResearchStlmSlaRoute
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
   '/api/$': typeof ApiSplatRoute
@@ -113,6 +137,9 @@ export interface FileRoutesById {
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
   '/research': typeof ResearchRoute
+  '/research-100m': typeof Research100mRoute
+  '/research-arche-1-0': typeof ResearchArche10Route
+  '/research-stlm-sla': typeof ResearchStlmSlaRoute
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
   '/api/$': typeof ApiSplatRoute
@@ -128,6 +155,9 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/privacy'
     | '/research'
+    | '/research-100m'
+    | '/research-arche-1-0'
+    | '/research-stlm-sla'
     | '/security'
     | '/terms'
     | '/api/$'
@@ -141,6 +171,9 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/privacy'
     | '/research'
+    | '/research-100m'
+    | '/research-arche-1-0'
+    | '/research-stlm-sla'
     | '/security'
     | '/terms'
     | '/api/$'
@@ -154,6 +187,9 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/privacy'
     | '/research'
+    | '/research-100m'
+    | '/research-arche-1-0'
+    | '/research-stlm-sla'
     | '/security'
     | '/terms'
     | '/api/$'
@@ -168,6 +204,9 @@ export interface RootRouteChildren {
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
   ResearchRoute: typeof ResearchRoute
+  Research100mRoute: typeof Research100mRoute
+  ResearchArche10Route: typeof ResearchArche10Route
+  ResearchStlmSlaRoute: typeof ResearchStlmSlaRoute
   SecurityRoute: typeof SecurityRoute
   TermsRoute: typeof TermsRoute
   ApiSplatRoute: typeof ApiSplatRoute
@@ -231,6 +270,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResearchRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/research-100m': {
+      id: '/research-100m'
+      path: '/research-100m'
+      fullPath: '/research-100m'
+      preLoaderRoute: typeof Research100mRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/research-arche-1-0': {
+      id: '/research-arche-1-0'
+      path: '/research-arche-1-0'
+      fullPath: '/research-arche-1-0'
+      preLoaderRoute: typeof ResearchArche10RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/research-stlm-sla': {
+      id: '/research-stlm-sla'
+      path: '/research-stlm-sla'
+      fullPath: '/research-stlm-sla'
+      preLoaderRoute: typeof ResearchStlmSlaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/security': {
       id: '/security'
       path: '/security'
@@ -264,6 +324,9 @@ const rootRouteChildren: RootRouteChildren = {
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,
   ResearchRoute: ResearchRoute,
+  Research100mRoute: Research100mRoute,
+  ResearchArche10Route: ResearchArche10Route,
+  ResearchStlmSlaRoute: ResearchStlmSlaRoute,
   SecurityRoute: SecurityRoute,
   TermsRoute: TermsRoute,
   ApiSplatRoute: ApiSplatRoute,

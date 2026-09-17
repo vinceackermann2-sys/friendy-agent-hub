@@ -26,11 +26,11 @@ function copy(src, dest) {
 }
 
 // Frontend JS/CSS served by the TanStack route from /lingon/*
-for (const f of ['app.js', 'auth.js', 'config.js', 'engine.js', 'engine.real.js', 'mascot.js', 'styles.css']) {
+for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'mascot.js', 'styles.css']) {
   copy(join('app', f), join('public', 'lingon', f));
 }
 // Static Belna pages served from the site root
-for (const f of ['cookies.html', 'models.html', 'pricing.html', 'privacy.html', 'security.html', 'terms.html', 'sitemap.xml']) {
+for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'security.html', 'terms.html', 'sitemap.xml']) {
   copy(join('app', f), join('public', f));
 }
 

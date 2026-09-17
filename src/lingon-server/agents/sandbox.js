@@ -7,22 +7,58 @@
 */
 import { ALLOW_HOSTS, hostAllowed } from '../harness.js';
 
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
+
+function blocked(url) {
+  const e = new Error(`host blocked by sandbox allowlist: ${url}`);
+  e.code = 'HOST_BLOCKED';
+  return e;
+}
+
 async function fetchAllowlisted(url, opts = {}, timeoutMs = 9000) {
-  if (!hostAllowed(url)) {
-    const e = new Error(`host blocked by sandbox allowlist: ${url}`);
-    e.code = 'HOST_BLOCKED';
-    throw e;
-  }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, {
-      ...opts,
-      signal: ctrl.signal,
-      headers: { 'User-Agent': 'Lingon/1.0 (+agents-harness)', Accept: 'application/json,text/html', ...(opts.headers || {}) },
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status} for ${new URL(url).hostname}`);
-    return r;
+    let current = new URL(url);
+    if (!hostAllowed(current.href)) throw blocked(current.href);
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      const r = await fetch(current, {
+        ...opts,
+        redirect: 'manual',
+        signal: ctrl.signal,
+        headers: { 'User-Agent': 'Lingon/1.0 (+agents-harness)', Accept: 'application/json,text/html', ...(opts.headers || {}) },
+      });
+      if (REDIRECT_CODES.has(r.status)) {
+        const location = r.headers.get('location');
+        if (!location || redirects === 3) throw new Error('sandbox redirect limit exceeded');
+        const next = new URL(location, current);
+        if (!hostAllowed(next.href) || next.origin !== current.origin) throw blocked(next.href);
+        current = next;
+        continue;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status} for ${current.hostname}`);
+      if (!r.body) return r;
+      const reader = r.body.getReader();
+      const chunks = [];
+      let size = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_RESPONSE_BYTES) {
+          await reader.cancel();
+          const e = new Error(`response exceeds sandbox limit (${MAX_RESPONSE_BYTES} bytes)`);
+          e.code = 'BODY_TOO_LARGE';
+          throw e;
+        }
+        chunks.push(value);
+      }
+      const body = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+      return new Response(body, { status: r.status, statusText: r.statusText, headers: r.headers });
+    }
   } finally {
     clearTimeout(t);
   }

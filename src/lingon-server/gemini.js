@@ -2,7 +2,7 @@
    The API key never leaves the server. Frontend calls /api/* only.
    Quota failover: if the primary model returns 429/quota errors, we retry
    once on GEMINI_FALLBACK_MODEL and report which model answered. */
-const MODEL_DEFAULT = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL_DEFAULT = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const MODEL_FALLBACK = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash-lite';
 
 function key() {
@@ -23,7 +23,7 @@ async function callGemini({ prompt, system, history, model, json }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(k)}`;
   const contents = [];
   if (Array.isArray(history)) {
-    for (const h of history.slice(-12)) {
+    for (const h of history.slice(-20)) {
       if (!h || !h.text) continue;
       contents.push({
         role: h.role === 'agent' ? 'model' : 'user',

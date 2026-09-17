@@ -7,7 +7,7 @@
 */
 const { entry } = require('./tracing');
 
-const sessions = new Map(); // pcId -> { pcId, userId, chatId, context, log[], userControl, viewers:Set, lastActive }
+const sessions = new Map(); // pcId -> { pcId, userId, chatId, log[], viewers:Set, lastActive }
 const IDLE_MS = 600000;
 let sweepTimer = null;
 
@@ -33,16 +33,7 @@ function getOrCreate(userId, chatId) {
   const pcId = 'pc_' + String(chatId || 'unsorted').slice(0, 24);
   let s = sessions.get(pcId);
   if (s && s.userId === userId) { s.lastActive = Date.now(); return s; }
-  const lines = [];
-  const sandbox = {
-    input: null,
-    last: null,
-    console: { log: (...a) => {
-      const line = a.map(String).join(' ');
-      lines.push(line);
-    } },
-  };
-  s = { pcId, userId, chatId, context: sandbox, lines, log: [], userControl: false, viewers: new Set(), lastActive: Date.now() };
+  s = { pcId, userId, chatId, log: [], viewers: new Set(), lastActive: Date.now() };
   sessions.set(pcId, s);
   if (!sweepTimer) sweepTimer = setInterval(sweep, 60000);
   return s;
@@ -62,7 +53,7 @@ function run(s, { who, trace } = {}) {
   const line = { t: CODE_DISABLED, cls: 'p' };
   s.log.push({ ...line, who });
   s.log = s.log.slice(-40);
-  broadcast(s, { out: [line], ok: false, state: s.userControl ? 'user' : 'idle' });
+  broadcast(s, { out: [line], ok: false, state: 'idle' });
   trace && trace(entry('alert', 'pc run refused: code execution disabled'));
   return { ok: false, error: CODE_DISABLED, stdout: '', pcId: s.pcId, log: s.log.slice(-14) };
 }
@@ -71,19 +62,25 @@ function run(s, { who, trace } = {}) {
    No caller-supplied code is ever evaluated. */
 function report(s, { lines = [], who = 'agent', trace } = {}) {
   s.lastActive = Date.now();
-  const stamped = lines.filter(Boolean).map((t) => ({ t: String(t).slice(0, 300), cls: 'g' }));
+  const t0 = Date.now();
+  broadcast(s, { state: 'working' });
+  const safeLines = (Array.isArray(lines) ? lines : [])
+    .map(String)
+    .join('\n')
+    .slice(0, 2000)
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.slice(0, 300));
+  const stamped = safeLines.map((t) => ({ t, cls: 'g' }));
   s.log.push(...stamped.map((L) => ({ ...L, who })));
   s.log = s.log.slice(-40);
-  broadcast(s, { out: stamped, ok: true, state: s.userControl ? 'user' : 'idle' });
-  trace && trace(entry('term', `pc ${who} output: ${stamped.length} lines`));
-  return { ok: true, error: '', stdout: stamped.map((L) => L.t).join('\n').slice(0, 2000), pcId: s.pcId, log: s.log.slice(-14) };
+  broadcast(s, { out: stamped, ok: true, state: 'idle' });
+  trace && trace(entry('term', `pc ${who} output: ${stamped.length} lines in ${Date.now() - t0}ms`));
+  return { ok: true, error: '', stdout: safeLines.join('\n'), pcId: s.pcId, log: s.log.slice(-14) };
 }
 
-function takeOver(s, on) {
-  s.userControl = !!on;
-  s.lastActive = Date.now();
-  broadcast(s, { state: s.userControl ? 'user' : 'idle' });
-  return { userControl: s.userControl };
+function publish(s, lines, trace) {
+  return report(s, { lines, who: 'agent', trace });
 }
 
 function owned(pcId, userId) {
@@ -91,4 +88,4 @@ function owned(pcId, userId) {
   return s && s.userId === userId ? s : null;
 }
 
-module.exports = { getOrCreate, run, report, takeOver, owned, broadcast };
+module.exports = { getOrCreate, run, report, publish, owned, broadcast };

@@ -766,15 +766,8 @@ footer.afooter{ max-width:none; margin-left:0; margin-right:0; display:block; }
 .afooter .fin, .afooter .base{ max-width:none; padding-left:40px; padding-right:40px; }
 @media (max-width: 900px){ .pcards{ grid-template-columns:1fr; } .spec{ grid-template-columns:1fr; } }
 
-/* ============ AUTH — Account & Credit Usage card ============ */
+/* ============ AUTH card ============ */
 .authpage{ min-height:100svh; display:flex; flex-direction:column; }
-.auth-top{
-  width:100%; max-width:1120px; margin:0 auto; padding:28px 24px;
-  display:flex; justify-content:space-between; align-items:center;
-  font-size:18px; font-weight:600;
-}
-.auth-top a{ color:inherit; text-decoration:none; font-weight:500; font-size:16px; }
-.auth-top a:hover{ color:var(--ink); }
 .authcard{
   width:min(660px,93vw); margin:5vh auto 48px; background:#fff;
   border:1px solid var(--line); border-radius:28px; box-shadow:var(--shadow-lg);
@@ -787,8 +780,8 @@ footer.afooter{ max-width:none; margin-left:0; margin-right:0; display:block; }
 }
 .gbtn:hover{ background:#000; }
 .glogo{
-  width:20px; height:20px; border-radius:50%; flex:none;
-  background:#fff; display:inline-flex; align-items:center; justify-content:center; overflow:hidden;
+   width:20px; height:20px; border-radius:50%; flex:none;
+   display:inline-flex; align-items:center; justify-content:center; overflow:hidden;
 }
 .glogo svg{ width:20px; height:20px; display:block; border-radius:50%; }
 .lastused{ color:#9A9CA3; font-weight:500; font-size:14px; margin-left:10px; }

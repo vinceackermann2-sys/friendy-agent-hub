@@ -19,7 +19,8 @@ const ALLOW_HOSTS = new Set([
 
 function hostAllowed(url) {
   try {
-    return ALLOW_HOSTS.has(new URL(url).hostname);
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && ALLOW_HOSTS.has(parsed.hostname);
   } catch {
     return false;
   }

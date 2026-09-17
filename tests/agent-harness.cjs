@@ -1,0 +1,46 @@
+const assert = require("node:assert/strict");
+const { currentTimeAnswer, runtimeClock } = require("../server/agents/runner");
+const { hostAllowed } = require("../server/harness");
+const { fetchAllowlisted } = require("../server/agents/sandbox");
+
+async function main() {
+  const now = new Date("2026-09-17T12:34:56.000Z");
+  const answer = currentTimeAnswer("What year is it?", now);
+  assert.match(answer, /September 17, 2026/);
+  assert.match(answer, /12:34:56 UTC/);
+  assert.match(currentTimeAnswer("What's today's date?", now), /2026/);
+  assert.equal(currentTimeAnswer("What is the time complexity?", now), null);
+  assert.match(runtimeClock(now), /authoritative current date is Thursday, September 17, 2026/);
+
+  assert.equal(hostAllowed("https://en.wikipedia.org/wiki/Lingonberry"), true);
+  assert.equal(hostAllowed("http://en.wikipedia.org/wiki/Lingonberry"), false);
+  assert.equal(hostAllowed("https://example.com/"), false);
+
+  const realFetch = global.fetch;
+  try {
+    global.fetch = async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://api.github.com/user" },
+      });
+    await assert.rejects(
+      fetchAllowlisted("https://en.wikipedia.org/wiki/Lingonberry"),
+      (error) => error && error.code === "HOST_BLOCKED",
+    );
+
+    global.fetch = async () => new Response(new Uint8Array(2 * 1024 * 1024 + 1));
+    await assert.rejects(
+      fetchAllowlisted("https://en.wikipedia.org/wiki/Lingonberry"),
+      (error) => error && error.code === "BODY_TOO_LARGE",
+    );
+  } finally {
+    global.fetch = realFetch;
+  }
+
+  console.log("agent harness: ok");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

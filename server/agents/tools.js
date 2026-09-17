@@ -71,13 +71,20 @@ const TOOLS = {
       const u = String(url || '');
       if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
       if (process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
-      const { chromium } = require('playwright');
+      const puppeteer = require('puppeteer');
       const t0 = Date.now();
-      const browser = await chromium.launch({ headless: true });
+      const browser = await puppeteer.launch({ headless: true });
       try {
-        const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 900 });
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+          const target = request.url();
+          if (target === 'about:blank' || target.startsWith('data:') || hostAllowed(target)) request.continue().catch(() => {});
+          else request.abort('blockedbyclient').catch(() => {});
+        });
         await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await page.waitForTimeout(1200);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         const data = await page.evaluate(() => ({
           title: document.title,
           text: document.body ? document.body.innerText.slice(0, 4000) : '',

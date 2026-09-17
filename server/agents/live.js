@@ -32,13 +32,20 @@ function ensureSweep() {
 
 async function start({ userId, trace }) {
   if (process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
-  const { chromium } = require('playwright');
+  const puppeteer = require('puppeteer');
   const id = 'live_' + uid();
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const browser = await puppeteer.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 900 });
+  await page.setRequestInterception(true);
+  page.on('request', (request) => {
+    const target = request.url();
+    if (target === 'about:blank' || target.startsWith('data:') || hostAllowed(target)) request.continue().catch(() => {});
+    else request.abort('blockedbyclient').catch(() => {});
+  });
   const s = { id, browser, page, cdp: null, userId, url: 'about:blank', title: '', working: false, userControl: false, viewers: new Set(), lastActive: Date.now(), fail: false };
   try {
-    s.cdp = await page.context().newCDPSession(page);
+    s.cdp = await page.createCDPSession();
     s.cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
       s.lastActive = Date.now();
       const msg = JSON.stringify({ frame: data });
@@ -76,7 +83,7 @@ async function navigate(s, url, trace) {
     // the user navigated it. Honest handoff, not theater.
     for (let i = 0; i < 6 && s.userControl; i++) await new Promise((r) => setTimeout(r, 1000));
     if (s.userControl) trace && trace(entry('alert', 'user still holds control — agent continues with the current page'));
-    await s.page.waitForTimeout(800);
+    await new Promise((resolve) => setTimeout(resolve, 800));
     s.url = s.page.url();
     s.title = await s.page.title().catch(() => '');
     trace && trace(entry('globe', `live navigate: ${new URL(s.url).hostname} · “${String(s.title).slice(0, 60)}”`));

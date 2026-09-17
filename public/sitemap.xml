@@ -5,6 +5,9 @@
   <url><loc>https://belna.se/models</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://belna.se/pricing</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://belna.se/research</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://belna.se/research-arche-1-0</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://belna.se/research-100m</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://belna.se/research-stlm-sla</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://belna.se/terms</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://belna.se/privacy</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://belna.se/security</loc><changefreq>yearly</changefreq><priority>0.4</priority></url>
