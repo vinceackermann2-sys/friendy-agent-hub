@@ -76,23 +76,15 @@ const TOOLS = {
   },
   code_run: {
     name: 'code_run', type: 'code', approval: false,
-    description: 'Execute read-only JS (no I/O, no require, 3s timeout) over provided JSON; returns real stdout.',
-    run: async ({ code, input }, ctx) => {
-      const lines = [];
-      const sandbox = {
-        input: JSON.parse(JSON.stringify(input ?? null)),
-        console: { log: (...a) => lines.push(a.map(String).join(' ')) },
-      };
-      const t0 = Date.now();
-      try {
-        const fn = new Function('input', 'console', String(code).slice(0, 4000));
-        fn(sandbox.input, sandbox.console);
-      } catch (e) {
-        ctx.trace(entry('alert', `code_run error: ${e.message}`));
-        return { ok: false, error: e.message, stdout: lines.join('\n').slice(0, 2000) };
-      }
-      ctx.trace(entry('term', `code_run: executed in ${Date.now() - t0}ms (${lines.length} output lines)`));
-      return { ok: true, stdout: lines.join('\n').slice(0, 2000) };
+    description: 'Disabled: arbitrary JS execution is not available (no real isolation boundary on this runtime).',
+    // SECURITY: previously ran user/model-supplied JS via new Function (and
+    // node:vm on the Node build). Neither is a security boundary — the code
+    // could reach the host realm, process.env secrets and OS commands.
+    // Executing untrusted code requires a real isolate (separate unprivileged
+    // container/WASM interpreter with no secrets), which this runtime lacks.
+    run: async (_args, ctx) => {
+      ctx.trace(entry('alert', 'code_run: disabled — untrusted code execution is not permitted'));
+      throw Object.assign(new Error('code execution is disabled on this deployment'), { code: 'DISABLED' });
     },
   },
   build_page: {
