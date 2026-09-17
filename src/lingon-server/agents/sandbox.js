@@ -19,6 +19,9 @@ function blocked(url) {
 async function fetchAllowlisted(url, opts = {}, timeoutMs = 9000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const abort = () => ctrl.abort();
+  if (opts.signal?.aborted) abort();
+  else opts.signal?.addEventListener('abort', abort, { once: true });
   try {
     let current = new URL(url);
     if (!hostAllowed(current.href)) throw blocked(current.href);
@@ -61,6 +64,7 @@ async function fetchAllowlisted(url, opts = {}, timeoutMs = 9000) {
     }
   } finally {
     clearTimeout(t);
+    opts.signal?.removeEventListener('abort', abort);
   }
 }
 

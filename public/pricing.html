@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pricing — Belna Swedish Safe AI Agents</title>
-<meta name="description" content="Belna pricing in credits: Free with 20 starter credits, Pro $30/mo with 60 credits monthly + $50 gift card, Max $50/mo with 100 credits monthly + $100 gift card. Secure payment via Stripe, gift codes, no hidden charges.">
+<meta name="description" content="Belna pricing in credits: Free with 20 starter credits, Pro $30/mo (-40%) with 60 credits monthly + free $50 gift card, Max $50/mo (-50%) with 100 credits monthly + free $100 gift card. Add extra credits with the slider. Secure payment via Stripe, gift codes, no hidden charges.">
 <link rel="canonical" href="https://belna.se/pricing.html">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,28 +13,59 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Back home</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 <main class="legal" style="max-width:960px">
 <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Pricing</div>
 <h1>Simple pricing in credits</h1>
 <p class="mut" style="font-size:16px;line-height:1.6">One credit for every answer, search or build — no tokens to count, no per-model math. Gift codes add credits. Secure monthly billing via Stripe, cancel anytime.</p>
 <div class="pcards">
 <div class="pcard"><div class="pname">Free</div><div class="pprice">$0</div><p class="pdesc">20 starter credits. Sign in and start.</p>
-<ul><li><span>✓</span>Arche 1.0 Smart + Fast</li><li><span>✓</span>Chat, research, builds, canvas</li><li><span>✓</span>Sealed vault + approvals</li><li><span>✓</span>Real usage metering</li></ul>
+<ul><li><span>✓</span>Have your own agent</li></ul>
 <a class="btn ghost" href="/#cta">Start free</a></div>
-<div class="pcard pop"><span class="poptag">MOST POPULAR</span><div class="pname">Pro</div><div class="pprice">$30 <s>$50</s><span class="mut" style="font-size:14px">/mo</span></div><p class="pdesc">60 credits every month + $50 gift card (100 credits) — use it or gift it.</p>
-<ul><li><span>✓</span>Everything in Free</li><li><span>✓</span>60 credits monthly</li><li><span>✓</span>$50 gift card included</li><li><span>✓</span>Priority harness capacity</li></ul>
-<a class="btn" href="/#cta">Get Pro</a></div>
-<div class="pcard"><div class="pname">Max</div><div class="pprice">$50 <s>$100</s><span class="mut" style="font-size:14px">/mo</span></div><p class="pdesc">100 credits every month + $100 gift card (200 credits) — use it or gift it.</p>
-<ul><li><span>✓</span>Everything in Pro</li><li><span>✓</span>100 credits monthly</li><li><span>✓</span>$100 gift card included</li><li><span>✓</span>Highest harness capacity</li></ul>
-<a class="btn ghost" href="/#cta">Get Max</a></div>
+<div class="pcard pop"><span class="poptag">MOST POPULAR</span><div class="pname">Pro</div><div class="pprice">$30 <s>$50</s> <span class="pct-off">-40%</span><span class="mut" style="font-size:14px">/mo</span></div><p class="pdesc">60 credits every month.</p>
+<ul><li><span>✓</span>Everything in Free</li><li><span>✓</span>60 credits monthly</li><li><span>✓</span>Priority harness capacity</li></ul>
+<div class="credit-add" data-base-price="30" data-base-credits="60">
+<div class="credit-add-top"><label>Add extra credits</label><span class="credit-add-val">+0 credits</span></div>
+<input type="range" min="0" max="200" step="10" value="0" class="credit-slider" aria-label="Add extra credits to Pro">
+<div class="credit-add-sub">Top up on top of the plan · $0.50 / credit · <span class="credit-add-total">Total 60 credits · $30/mo</span></div>
 </div>
+<a class="btn" href="/#cta">Get Pro</a><div class="gift-note">+ FREE $50 gift card</div>
+<div class="giftcard"><div class="giftcard-left"><span class="gift-ico">🎁</span><span class="gift-label">gift card</span></div><div class="giftcard-right"><div class="gift-brand">belna</div><div class="gift-amt">$50 · 100 credits</div><div class="gift-sub">use it or gift it</div></div></div></div>
+<div class="pcard"><div class="pname">Max</div><div class="pprice">$50 <s>$100</s> <span class="pct-off">-50%</span><span class="mut" style="font-size:14px">/mo</span></div><p class="pdesc">100 credits every month.</p>
+<ul><li><span>✓</span>Everything in Pro</li><li><span>✓</span>100 credits monthly</li><li><span>✓</span>Highest harness capacity</li></ul>
+<div class="credit-add" data-base-price="50" data-base-credits="100">
+<div class="credit-add-top"><label>Add extra credits</label><span class="credit-add-val">+0 credits</span></div>
+<input type="range" min="0" max="200" step="10" value="0" class="credit-slider" aria-label="Add extra credits to Max">
+<div class="credit-add-sub">Top up on top of the plan · $0.50 / credit · <span class="credit-add-total">Total 100 credits · $50/mo</span></div>
+</div>
+<a class="btn ghost" href="/#cta">Get Max</a><div class="gift-note">+ FREE $100 gift card</div>
+<div class="giftcard"><div class="giftcard-left"><span class="gift-ico">🎁</span><span class="gift-label">gift card</span></div><div class="giftcard-right"><div class="gift-brand">belna</div><div class="gift-amt">$100 · 200 credits</div><div class="gift-sub">use it or gift it</div></div></div></div>
+</div>
+<script>
+(function(){
+  document.querySelectorAll('.credit-add').forEach(function(box){
+    var slider = box.querySelector('.credit-slider');
+    var val = box.querySelector('.credit-add-val');
+    var total = box.querySelector('.credit-add-total');
+    if(!slider) return;
+    var basePrice = parseFloat(box.dataset.basePrice || '0');
+    var baseCredits = parseFloat(box.dataset.baseCredits || '0');
+    function paint(){
+      var extra = parseFloat(slider.value || '0');
+      var extraCost = extra * 0.5;
+      if(val) val.textContent = '+' + extra + ' credits' + (extra ? ' (+$' + (extraCost.toFixed(extraCost % 1 ? 2 : 0)) + '/mo)' : '');
+      if(total) total.textContent = 'Total ' + (baseCredits + extra) + ' credits · $' + (basePrice + extraCost).toFixed((basePrice + extraCost) % 1 ? 2 : 0) + '/mo';
+    }
+    slider.addEventListener('input', paint);
+    paint();
+  });
+})();
+</script>
 <h2>How credits work</h2>
 <p>Every answer, search or build uses a small number of credits based on the work involved. Your balance is always visible under Billing. When credits run out you get an upgrade prompt — the agent never silently stops. Gift codes add credits when redeemed under Billing.</p>
 <h2>Subscriptions &amp; gifts</h2>
 <p>Pro and Max are monthly subscriptions billed securely through Stripe — upgrade inside the app under Billing, manage or cancel anytime from the same page. The gift card is issued after your first paid month: a $50 card with Pro (100 credits), a $100 card with Max (200 credits). Share the code or redeem it yourself.</p>
-<p><a href="/">Home</a> · <a href="/models">Models</a> · <a href="/research">Research</a> · <a href="/terms">Terms</a></p>
 </main>
-<footer class="afooter"><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/#safety">Safe Swedish AI</a><a href="/#agent">Personal Agent</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
 </body>
 </html>

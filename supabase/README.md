@@ -1,7 +1,7 @@
 # Supabase free backend (5 min)
 
 1. Go to https://supabase.com/dashboard → your project `alikzitdkdiatimjygdz`.
-2. SQL Editor → New query → paste the full contents of `supabase/schema.sql` in this repo → Run.
+2. SQL Editor → New query → run `supabase/schema.sql`, `schema2.sql`, `schema3.sql`, and `schema4.sql` in order.
    You must see “Success”. This creates profiles / agents / chats / messages /
    memories / vault_secrets / vault_apps / approvals.
 3. Project Settings → API → copy (new dashboard names):

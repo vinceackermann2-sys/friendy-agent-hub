@@ -70,11 +70,11 @@
 </style>
 </head>
 <body>
-<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Back home</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
 <main class="legal" style="max-width:960px">
 <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Research · Small-scale programme</div>
-<p class="mut" style="font-size:13.5px;margin-top:8px">August 21, 2026 · 10 min read · Code included</p>
+<p class="mut" style="font-size:13.5px;margin-top:8px">10 min read · Code included</p>
 <h1 style="font-size:clamp(28px,5vw,38px)">Small models that actually reason: STLM and Mini-SLA</h1>
 <p class="mut" style="font-size:16.5px;line-height:1.6;max-width:700px">Not every insight needs a supercomputer. On a <b>single consumer GPU, in minutes</b>, we trained two tiny architectures — one that pins words to meaning, one that separates memory from thinking — and raced each against a <b>matched Transformer baseline</b> on the same data and seed. Both small models predict text better, and one of them solves negation with no help at all.</p>
 
@@ -379,15 +379,8 @@ opt = torch.optim.AdamW(model.parameters(), lr=<span class="s">2e-4</span>)
 <span class="c"># - 50 grammar pairs: hit when P(correct) is above P(broken)</span>
 <span class="c"># - 30 meaning pairs: Pearson and Spearman over embedding similarity</span></pre></div>
 
-<div class="panel" style="margin-top:28px;text-align:center">
-<b style="font-size:19px">Train it, beat it, tell us</b>
-<p class="mut" style="margin-top:8px">The code above reproduces our runs end to end on a single consumer GPU. If your variant beats SLA on autonomous negation <i>and</i> keeps its perplexity — we want to hear about it at <a href="mailto:hej@belna.se">hej@belna.se</a>.</p>
-<p style="margin-top:16px"><a class="btn" href="/#cta">Try Arche 1.0 while it trains →</a></p>
-</div>
-
-<p style="margin-top:28px;text-align:center"><a href="/">Home</a> · <a href="research.html">Research</a> · <a href="pricing.html">Pricing</a></p>
 </main>
 
-<footer class="afooter"><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="research.html">Research</a> · <a href="pricing.html">Pricing</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/#safety">Safe Swedish AI</a><a href="/#agent">Personal Agent</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
 </body>
 </html>

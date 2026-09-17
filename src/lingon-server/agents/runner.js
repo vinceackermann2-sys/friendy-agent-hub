@@ -51,7 +51,7 @@ async function ensureCredit(userId) {
   }
 }
 
-async function modelAnswer({ agent, task, history, replyTo, systemExtra, model }) {
+async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, signal }) {
   const direct = currentTimeAnswer(task);
   if (direct) return { text: direct, usage: null, model: 'server-clock', compacted: false, compactUsage: null, direct: true };
   const { history: h2, compacted, costUsage } = await compactIfNeeded({ history, model });
@@ -59,7 +59,7 @@ async function modelAnswer({ agent, task, history, replyTo, systemExtra, model }
   const replyContext = replyTo && replyTo.text
     ? `[The user is replying to this ${replyTo.role === 'user' ? 'user' : 'assistant'} message: ${String(replyTo.text).slice(0, 500)}]\n\n`
     : '';
-  const r = await callGemini({ prompt: replyContext + task, system, history: h2, model });
+  const r = await callGemini({ prompt: replyContext + task, system, history: h2, model, signal });
   return { text: r.text, usage: r.usage, model: r.model || model, compacted, compactUsage: costUsage || null };
 }
 
@@ -70,9 +70,9 @@ async function logModelUsage(userId, model, usages) {
 }
 
 /* Research run: parallel subagent fetch (3 sources) + real browser open + summary. */
-async function runResearch({ userId, sessionId, query, trace, push }) {
+async function runResearch({ userId, sessionId, query, trace, push, signal }) {
   push(entry('search', 'research task accepted'));
-  const r = await realResearch(query, { userId, onTrace: (e) => push(e) });
+  const r = await realResearch(query, { userId, signal, onTrace: (e) => push(e) });
   push(entry('globe', `${r.sources.length} source groups checked`));
   await fanOut({
     userId, sessionId, max: 3,

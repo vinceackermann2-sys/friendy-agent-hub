@@ -70,11 +70,11 @@
 </style>
 </head>
 <body>
-<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Back home</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
 <main class="legal" style="max-width:960px">
 <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Research · 100M programme</div>
-<p class="mut" style="font-size:13.5px;margin-top:8px">August 28, 2026 · 12 min read · Code included</p>
+<p class="mut" style="font-size:13.5px;margin-top:8px">12 min read · Code included</p>
 <h1 style="font-size:clamp(28px,5vw,38px)">Can a hybrid architecture beat the Transformer?</h1>
 <p class="mut" style="font-size:16.5px;line-height:1.6;max-width:700px">The Transformer — the design behind nearly every LLM — re-reads everything it has seen for every new word. That works brilliantly, but it gets expensive. We built two alternatives that carry a <b>running memory</b> alongside attention, trained each at <b>100 million parameters on 2 billion tokens</b>, and raced them against an identical Transformer. Here is what happened, what it means, and every line of code to repeat it.</p>
 
@@ -512,15 +512,8 @@ N_EXPERTS, TOP_K, STATE = <span class="s">8</span>, <span class="s">2</span>, <s
 
 <p class="fineprint" style="margin-top:14px">Post-training follows the same recipe for every run: supervised fine-tuning on 100K assistant examples, then preference optimization on 10K pairs — same tokenizer, same seeds. Evaluate with NLL and perplexity on a held-out slice before trusting any downstream quiz.</p>
 
-<div class="panel" style="margin-top:28px;text-align:center">
-<b style="font-size:19px">Train it, beat it, tell us</b>
-<p class="mut" style="margin-top:8px">The code above reproduces our runs end to end. If your variant beats TAM v3 on loss <i>and</i> downstream — we want to hear about it at <a href="mailto:hej@belna.se">hej@belna.se</a>.</p>
-<p style="margin-top:16px"><a class="btn" href="/#cta">Try Arche 1.0 while it trains →</a></p>
-</div>
-
-<p style="margin-top:28px;text-align:center"><a href="/">Home</a> · <a href="research.html">Research</a> · <a href="pricing.html">Pricing</a></p>
 </main>
 
-<footer class="afooter"><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="research.html">Research</a> · <a href="pricing.html">Pricing</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/#safety">Safe Swedish AI</a><a href="/#agent">Personal Agent</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
 </body>
 </html>

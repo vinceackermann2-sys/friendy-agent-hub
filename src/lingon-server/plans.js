@@ -10,8 +10,8 @@ const CREDITS_PER_USD = 1 / CREDIT_VALUE_USD;
 
 const PLANS = {
   free: { id: 'free', name: 'Free', price: 0, was: null, credits: 20, giftUsd: 0, interval: null, blurb: '20 credits to start. No card.' },
-  pro: { id: 'pro', name: 'Pro', price: 30, was: 50, credits: 60, giftUsd: 50, interval: 'month', blurb: '60 credits monthly + $50 gift card (100 credits).' },
-  max: { id: 'max', name: 'Max', price: 50, was: 100, credits: 100, giftUsd: 100, interval: 'month', blurb: '100 credits monthly + $100 gift card (200 credits).' },
+  pro: { id: 'pro', name: 'Pro', price: 30, was: 50, credits: 60, giftUsd: 50, interval: 'month', blurb: '60 credits monthly.' },
+  max: { id: 'max', name: 'Max', price: 50, was: 100, credits: 100, giftUsd: 100, interval: 'month', blurb: '100 credits monthly.' },
 };
 
 const RATE_IN = 0.30 / 1e6;

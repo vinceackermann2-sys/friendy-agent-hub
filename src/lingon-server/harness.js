@@ -8,8 +8,10 @@
    - web_fetch      (no approval, allowlisted hosts, 9s timeout)
    - github_prs     (needs approval + per-request user PAT, read-only)
    - github_diff    (needs approval + per-request user PAT, read-only)
-   - build_page     (no approval, output is sandboxed iframe HTML)
-   - memory_write   (no approval, user-scoped)
+    - build_page     (no approval, output is sandboxed iframe HTML)
+    - memory_write   (no approval, user-scoped)
+    - trigger_create (approval required, user-scoped automation watcher)
+    - trigger_list   (no approval, user-scoped)
 */
 const ALLOW_HOSTS = new Set([
   'hn.algolia.com', 'api.duckduckgo.com', 'en.wikipedia.org',
@@ -32,6 +34,8 @@ const TOOL_POLICY = {
   github_diff: { approval: true, desc: 'Read-only GitHub diff with user PAT' },
   build_page: { approval: false, desc: 'Gemini-generated sandboxed HTML' },
   memory_write: { approval: false, desc: 'User-scoped memory write' },
+  trigger_create: { approval: true, desc: 'Create a user-scoped schedule, app, or sub-agent trigger' },
+  trigger_list: { approval: false, desc: 'List the user’s own trigger watchers' },
 };
 
 function traceLine(tool, detail) {

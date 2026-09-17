@@ -39,8 +39,9 @@ work with no extra setup.
 
 ## Supabase setup
 
-1. SQL Editor → run `supabase/schema.sql`, then `supabase/schema2.sql`
-   (billing: subscriptions / api_usage / gift_cards / upgrade_requests + hardened RLS).
+1. SQL Editor → run `supabase/schema.sql`, then `supabase/schema2.sql`,
+   `supabase/schema3.sql`, and `supabase/schema4.sql` in order. The fourth
+   migration adds owner-scoped triggers, automation runs, and automation chats.
 2. API settings → URL + publishable + secret into `.env` (already done here).
 3. Restart `npm start` → `/api/health` shows `"supabase": true`.
 
@@ -63,9 +64,12 @@ sensitive tools, full trace. Vault → Apps shows empty — no fake OAuth.
 ## What is real vs honest
 
 - Chat / build / research: real Gemini `gemini-2.5-flash`, usage-logged.
+- Agent chat: the main agent stays responsive while cancellable sub-agents do
+  task work; unrelated tasks are isolated in automatically opened chats.
 - Research: live HN / DuckDuckGo / Wikipedia fetch + cited briefing, no invented stats.
 - GitHub: real PR list + diff + Gemini review. PAT per-request, never logged/sent to model.
 - Memory + vault: Supabase per-account, encrypted at rest. `sec_••••` only in traces.
+- Triggers + sub-agents: durable schedule/app/sub-agent watchers. Every run is an isolated chat, usage-metered and visible in Trace.
 - Gmail/apps: honestly empty — no fake connections.
 
 ## Tests

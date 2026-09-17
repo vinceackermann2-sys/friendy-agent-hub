@@ -16,11 +16,11 @@ async function fanOut({ userId, sessionId, items, max = 3, runOne, trace }) {
       try {
         results[idx] = await runOne(item, idx);
         trace(entry('box', `subagent ${item.name || 'worker' + wid} done · ${Date.now() - t0}ms`));
-        persistRun({ userId, sessionId, kind: 'subagent', name: item.name || String(idx), status: 'done', detail: item.desc || '', ms: Date.now() - t0 });
+        await persistRun({ userId, sessionId, kind: 'subagent', name: item.name || String(idx), status: 'done', detail: item.desc || '', ms: Date.now() - t0 });
       } catch (e) {
         results[idx] = { error: e.message };
         trace(entry('alert', `subagent failed: ${e.message}`));
-        persistRun({ userId, sessionId, kind: 'subagent', name: item.name || String(idx), status: 'error', detail: e.message, ms: Date.now() - t0 });
+        await persistRun({ userId, sessionId, kind: 'subagent', name: item.name || String(idx), status: 'error', detail: e.message, ms: Date.now() - t0 });
       }
     }
   }

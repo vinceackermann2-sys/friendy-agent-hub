@@ -8,6 +8,7 @@ import { fetchAllowlisted } from './sandbox.js';
 import { entry } from './tracing.js';
 import { hostAllowed } from './sandbox.js';
 import * as store from '../store.js';
+import { normalizeSubAgent, nextRunAt } from './triggers.js';
 
 const TOOLS = {
   web_search: {
@@ -18,7 +19,7 @@ const TOOLS = {
       for (const u of urls.slice(0, 4)) {
         const t0 = Date.now();
         try {
-          const r = await fetchAllowlisted(u);
+          const r = await fetchAllowlisted(u, { signal: ctx.signal });
           const text = (await r.text()).slice(0, 12000);
           out.push({ url: u, ok: true, text });
           ctx.trace(entry('globe', `web_search: ${new URL(u).hostname} · ${Date.now() - t0}ms`));
@@ -36,7 +37,7 @@ const TOOLS = {
     run: async (_, ctx) => {
       if (!ctx.githubPat) throw Object.assign(new Error('GitHub token required.'), { code: 'NO_PAT' });
       const gh = async (url, accept = 'application/vnd.github+json') => {
-        const r = await fetchAllowlisted(url, { headers: { Authorization: `Bearer ${ctx.githubPat}`, Accept: accept } });
+        const r = await fetchAllowlisted(url, { headers: { Authorization: `Bearer ${ctx.githubPat}`, Accept: accept }, signal: ctx.signal });
         if (!r.ok) throw new Error(`GitHub ${r.status}`);
         return accept.includes('diff') ? r.text() : r.json();
       };
@@ -58,7 +59,7 @@ const TOOLS = {
     run: async ({ repo, number }, ctx) => {
       if (!ctx.githubPat) throw Object.assign(new Error('GitHub token required.'), { code: 'NO_PAT' });
       const r = await fetchAllowlisted(`https://api.github.com/repos/${repo}/pulls/${number}`, {
-        headers: { Authorization: `Bearer ${ctx.githubPat}`, Accept: 'application/vnd.github.diff' },
+        headers: { Authorization: `Bearer ${ctx.githubPat}`, Accept: 'application/vnd.github.diff' }, signal: ctx.signal,
       });
       const diff = (await r.text()).slice(0, 30000);
       ctx.trace(entry('git', `github_diff: ${repo}#${number} (${diff.length} chars)`));
@@ -68,9 +69,10 @@ const TOOLS = {
   browser_open: {
     name: 'browser_open', type: 'browser', approval: false,
     description: 'Open one allowlisted URL (headless browsing is unavailable in this runtime).',
-    run: async ({ url }) => {
+    run: async ({ url }, ctx) => {
       const u = String(url || '');
       if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
+      if (ctx.signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
       throw Object.assign(new Error('browser tool unavailable in this runtime'), { code: 'DISABLED' });
     },
   },
@@ -113,6 +115,32 @@ const TOOLS = {
       return turns.map((t) => ({ role: t.role, text: String(t.text).slice(0, 600) }));
     },
   },
+  trigger_list: {
+    name: 'trigger_list', type: 'function', approval: false,
+    description: 'List the user’s schedule, connected-app, and sub-agent watchers.',
+    run: async (_, ctx) => {
+      const agents = await store.listSubAgents(ctx.userId);
+      ctx.trace(entry('clock', `trigger_list: ${agents.length} automation watchers`));
+      return agents.map(({ id, name, enabled, trigger, lastStatus, nextRunAt }) => ({ id, name, enabled, trigger, lastStatus, nextRunAt }));
+    },
+  },
+  trigger_create: {
+    name: 'trigger_create', type: 'function', approval: true,
+    description: 'Create an isolated automation chat with a schedule, connected-app, or sub-agent trigger.',
+    run: async (args, ctx) => {
+      const input = normalizeSubAgent(args || {});
+      const existing = await store.listSubAgents(ctx.userId);
+      if (existing.length >= 25) throw Object.assign(new Error('Sub-agent limit reached.'), { code: 'BAD_INPUT' });
+      if (input.trigger.type === 'subagent' && !existing.some((agent) => agent.id === input.trigger.sourceAgentId)) throw Object.assign(new Error('Source sub-agent not found.'), { code: 'BAD_INPUT' });
+      if (input.trigger.type === 'app') {
+        const secrets = await store.listSecrets(ctx.userId);
+        if (input.trigger.app !== 'github' || !secrets.some((secret) => secret.name === 'github_token')) throw Object.assign(new Error('Connected app required.'), { code: 'BAD_INPUT' });
+      }
+      const agent = await store.createSubAgent(ctx.userId, input, nextRunAt(input.trigger));
+      ctx.trace(entry('clock', `trigger_create: ${agent.name}`));
+      return agent;
+    },
+  },
 };
 
 // Tool search: load only relevant definitions for the task (token saving).
@@ -123,6 +151,7 @@ function pickTools(task) {
   if (/(github|\bpr\b|pull request|repo|diff|code review)/.test(t)) { names.add('github_prs'); names.add('github_diff'); }
   if (/(build|landing|page|site|website|dashboard)/.test(t)) names.add('build_page');
   if (/(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous)/.test(t)) names.add('history_search');
+  if (/(trigger|watch|schedule|recurring|every (?:hour|day|week)|sub.?agent|automation)/.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
   if (names.size === 1) names.add('web_search'); // default research capability
   return [...names].map((n) => TOOLS[n]);
 }

@@ -12,7 +12,7 @@ function isConfigured() {
   return key().length > 10;
 }
 
-async function callGemini({ prompt, system, history, model, json }) {
+async function callGemini({ prompt, system, history, model, json, signal }) {
   const k = key();
   if (!k) {
     const e = new Error('GEMINI_API_KEY is not configured on the server (.env).');
@@ -45,6 +45,9 @@ async function callGemini({ prompt, system, history, model, json }) {
     const u = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(k)}`;
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 60000);
+    const abort = () => ctrl.abort();
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
     try {
       const r = await fetch(u, {
         method: 'POST',
@@ -67,6 +70,7 @@ async function callGemini({ prompt, system, history, model, json }) {
       return { text, raw: data, usage: data?.usageMetadata || null, model: modelName };
     } finally {
       clearTimeout(t);
+      signal?.removeEventListener('abort', abort);
     }
   }
 

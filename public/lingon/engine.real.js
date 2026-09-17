@@ -7,6 +7,7 @@
 */
 window.Engine = (() => {
   const api = (path, opts = {}) => window.LingonAuth.api(path, opts);
+  const taskRouting = window.LingonTaskRouting;
   const privateDetailsReply = () => `I can't provide or speculate about internal implementation, system, or provider details. I can explain my capabilities and privacy protections at a high level, or help with your task.`;
 
   function asksAboutInternalDetails(raw) {
@@ -22,6 +23,7 @@ window.Engine = (() => {
     if (/(github|pull request|\bpr\b|\brepo\b|code review|merge request)/.test(p)) return 'github';
     if (/(email|inbox|gmail|newsletter)/.test(p)) return 'inbox';
     if (/(secret|password|token|api key|credential|vault)/.test(p)) return 'vault';
+    if (/(sub.?agent|automation|automate|trigger|watch(?:er)?|schedule|recurring|every (?:minute|hour|day|week|month)|remind me)/.test(p)) return 'automation';
     if (/(remember|don't forget|dont forget|keep in mind|preference)/.test(p)) return 'memory';
     if (/(build|create|make|design|code).*(website|landing|page|site|dashboard|app|chart|graph|deck)/.test(p) || /(website|landing page|one-pager)/.test(p)) return 'build';
     return 'chat';
@@ -50,14 +52,20 @@ window.Engine = (() => {
     }));
   }
 
-  async function chatAI(rt, prompt) {
+  async function chatAI(rt, prompt, options = {}) {
     const memories = rt.recall().slice(0, 10);
     const history = historyFor(rt, prompt);
     const current = (rt.chat.messages || []).filter((m) => m.kind === 'text').slice(-1)[0];
     try {
       const j = await api('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({ prompt, history, replyTo: current?.replyTo, agent: { name: rt.agent.name, pers: rt.agent.pers }, memories, sessionId: rt.chat.id }),
+        body: JSON.stringify({
+          prompt, history, replyTo: current?.replyTo,
+          agent: { name: rt.agent.name, pers: rt.agent.pers }, memories,
+          sessionId: rt.chat.id, activeTask: options.activeTask || undefined,
+          delegated: !!options.delegated,
+        }),
+        signal: options.signal,
       });
       if (Array.isArray(j.trace)) j.trace.forEach((t) => rt.trace(t.ic || 'spark', t.t));
       // ChatGPT-style: surface automatic saves like "Memory updated".
@@ -105,13 +113,13 @@ window.Engine = (() => {
   }
 
   /* ---------------- REAL research ---------------- */
-  async function research(rt, raw) {
+  async function research(rt, raw, task) {
     await rt.say(`On it — checking public sources, then preparing a briefing with citations. I won't invent sample sizes or claims.`, { mood: 'think' });
     await rt.tools([{ ic: 'search', t: 'Checking public sources', d: 'HN · DDG · Wikipedia' }]);
     const br = rt.card({ type: 'browser', url: 'about:blank', note: 'Opening a real headless browser…', status: 'running' });
     let res;
     try {
-      res = await api('/api/research', { method: 'POST', body: JSON.stringify({ query: raw, sessionId: rt.chat.id }) });
+      res = await api('/api/research', { method: 'POST', body: JSON.stringify({ query: raw, sessionId: rt.chat.id, delegated: true }), signal: task?.signal });
       if (res.opened) br.update((c) => {
         c.url = res.opened.url;
         c.note = `Rendered “${(res.opened.title || '').slice(0, 70)}” in headless Chromium`;
@@ -125,6 +133,7 @@ window.Engine = (() => {
       br.update((c) => { c.status = 'done'; c.note = (c.note ? c.note + ' · ' : '') + `${res.snippets?.length || 0} source groups · ${new Date(res.fetchedAt).toLocaleTimeString()}`; });
       br.resolve({ ok: true });
     } catch (e) {
+      if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
       br.update((c) => { c.status = 'done'; c.note = 'Research could not be completed'; });
       br.resolve({ ok: false });
       await rt.say(`I couldn't complete that research request right now. Please try again in a moment.`, { mood: 'think' });
@@ -137,7 +146,7 @@ window.Engine = (() => {
     await rt.tools([{ ic: 'spark', t: 'Prepared cited summary', d: 'no invented statistics' }]);
 
     const q = rt.card({ type: 'question', q: 'How should I present the live briefing?', options: ['Written briefing + sources file', 'Briefing only'] });
-    const qa = await q.wait();
+    const qa = await q.wait(task?.signal);
     const wantFile = /file/i.test(qa.choice);
     try {
       const ls = JSON.parse(localStorage.getItem('lingon.v1') || '{}');
@@ -159,12 +168,12 @@ window.Engine = (() => {
   }
 
   /* ---------------- REAL github (PAT, no fake OAuth) ---------------- */
-  async function github(rt) {
+  async function github(rt, task) {
     // No fake "Connect GitHub OAuth" — real flow is PAT in vault → read-only API.
     if (!rt.hasSecret('github_token')) {
       await rt.say(`To review real PRs I need a GitHub fine-grained PAT (Contents + Pull requests, read-only). Paste it in the **secrets box** — sealed in your vault, sent only to api.github.com via a dedicated header, never to the model.`);
       const s = rt.card({ type: 'secret', suggest: 'github_token', status: 'pending' });
-      const r = await s.wait();
+      const r = await s.wait(task?.signal);
       if (!r.ok) { await rt.say(`Skipped — I won't touch your repos without a token, and I won't fake a review.`); return; }
       try { await syncSecretToBackend('github_token', s.msg?.card?.ref); } catch {}
     }
@@ -175,14 +184,14 @@ window.Engine = (() => {
     rt.trace('shield', 'credential value remained protected');
 
     const a = rt.card({ type: 'approval', key: 'gh_review', title: 'Review real open PRs', detail: 'Calls api.github.com with your PAT (read-only). No writes to your repos.', status: 'pending' });
-    const ar = await a.wait();
+    const ar = await a.wait(task?.signal);
     if (!ar.ok) { await rt.say(`Understood — I won't call GitHub.`); return; }
 
       const t = rt.card({ type: 'computer', status: 'running', lines: [] });
       t.update((c) => c.lines.push({ t: 'Read-only GitHub statistics from live API data', cls: 'p' }));
     let data;
     try {
-      const j = await api(`/api/github/prs?sessionId=${encodeURIComponent(rt.chat.id)}`, { headers: { 'X-GitHub-Token': token } });
+      const j = await api(`/api/github/prs?sessionId=${encodeURIComponent(rt.chat.id)}`, { headers: { 'X-GitHub-Token': token }, signal: task?.signal });
       data = j;
       (j.trace || []).forEach((x) => rt.trace(x.ic, x.t));
       // Real stdout from the executed sandbox — not composed client-side.
@@ -191,6 +200,7 @@ window.Engine = (() => {
       }
       if (j.pcId) t.update((c) => { c.pcId = j.pcId; });
     } catch (e) {
+      if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
       t.update((c) => { c.lines.push({ t: '✗ GitHub call failed: ' + e.message, cls: 'p' }); c.status = 'done'; });
       t.resolve({ ok: false });
       await rt.say(`GitHub call failed: ${e.message}\n\nMost common cause is an expired or narrowly-scoped token.`, { mood: 'think' });
@@ -205,7 +215,7 @@ window.Engine = (() => {
     const first = data.prs[0];
     let diff = '';
     try {
-      const j = await api(`/api/github/diff?repo=${encodeURIComponent(first.repo)}&number=${encodeURIComponent(first.number)}`, { headers: { 'X-GitHub-Token': token } });
+      const j = await api(`/api/github/diff?repo=${encodeURIComponent(first.repo)}&number=${encodeURIComponent(first.number)}`, { headers: { 'X-GitHub-Token': token }, signal: task?.signal });
       diff = (j.diff || '').slice(0, 8000);
     } catch {}
     if (diff) {
@@ -214,7 +224,7 @@ window.Engine = (() => {
     }
     let review = '';
     try {
-      review = await chatAI(rt, `Review this real GitHub PR for ${first.repo} #${first.number} "${first.title}" (${first.url}). Be concrete and honest; flag risks. Diff (may be truncated):\n${diff.slice(0, 6000)}`);
+      review = await chatAI(rt, `Review this real GitHub PR for ${first.repo} #${first.number} "${first.title}" (${first.url}). Be concrete and honest; flag risks. Diff (may be truncated):\n${diff.slice(0, 6000)}`, { signal: task?.signal, delegated: true });
     } catch (e) {
       review = `Found **${data.prs.length} open PRs**. Newest: **${first.repo} #${first.number}** — ${first.title} (${first.url}). AI review is unavailable (${e.message}).`;
     }
@@ -224,21 +234,22 @@ window.Engine = (() => {
   }
 
   /* ---------------- REAL build ---------------- */
-  async function build(rt) {
+  async function build(rt, task) {
     const q = rt.card({ type: 'question', q: 'What vibe should the page have?', options: ['Minimal & calm', 'Playful & warm', 'Bold & dark'] });
-    const qa = await q.wait();
+    const qa = await q.wait(task?.signal);
     const style = qa.choice;
     rt.remember(`For pages, you picked "${style}".`, 'from our chat');
     syncMemoryToBackend(`For pages, you picked "${style}".`, 'from our chat');
     await rt.say(`Nice choice — generating a **${String(style).toLowerCase()}** page now; watch the canvas.`, { mood: 'happy' });
     await rt.tools([{ ic: 'code', t: 'Generating page', d: 'single file' }]);
     try {
-      const j = await api('/api/build', { method: 'POST', body: JSON.stringify({ brief: rt.chat.messages.filter((m) => m.role === 'user').slice(-1)[0]?.text || '', style, agent: { name: rt.agent.name }, sessionId: rt.chat.id }) });
+      const j = await api('/api/build', { method: 'POST', body: JSON.stringify({ brief: task?.prompt || rt.chat.messages.filter((m) => m.role === 'user').slice(-1)[0]?.text || '', style, agent: { name: rt.agent.name }, sessionId: rt.chat.id, delegated: true }), signal: task?.signal });
       rt.artifact({ kind: 'html', title: 'your-page.html', html: j.html });
       rt.card({ type: 'artifact', title: 'your-page.html', kind: 'html', status: 'done' });
       rt.card({ type: 'file', name: 'your-page.html', size: j.html.length, content: j.html, status: 'done' });
       await rt.say(`Your page is live on the canvas and saved to Files — single file, no dependencies.`, { mood: 'happy' });
     } catch (e) {
+      if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
       await rt.say(`I couldn't generate that page right now. Please try again in a moment.`, { mood: 'think' });
     }
     rt.chips(['Make the hero bigger', 'Add a contact section', 'Research something for me']);
@@ -271,7 +282,13 @@ window.Engine = (() => {
     await rt.say(`Noted and saved to your account memory — it shapes future chats, and you can delete it under **Memory** anytime.`, { mood: 'happy' });
   }
 
-  async function chatExtra(rt, raw) {
+  async function automationFlow(rt, raw) {
+    await rt.say(`I'll set this up as an isolated sub-agent chat. Choose whether it should run on a schedule, a connected-app event, or after another sub-agent completes.`, { mood: 'think' });
+    rt.trace('clock', 'trigger setup opened · awaiting owner confirmation');
+    rt.openSubAgents(raw);
+  }
+
+  async function chatExtra(rt, raw, task) {
     const p = String(raw).toLowerCase();
     if (asksAboutInternalDetails(raw)) {
       return rt.say(privateDetailsReply(), { mood: 'idle' });
@@ -298,16 +315,40 @@ window.Engine = (() => {
     if (/show all open prs|what else is on my repos/.test(p)) return github(rt);
     await rt.tools([{ ic: 'spark', t: 'Working on your request', d: 'live' }]);
     try {
-      const text = await chatAI(rt, raw);
+      const text = await chatAI(rt, raw, { signal: task?.signal, delegated: !!task });
       await rt.say(text, { mood: 'idle' });
       rt.chips(['Run it', 'What can you do?', 'How do you keep me safe?']);
     } catch (e) {
+      if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
       await rt.say(`I couldn't complete that request right now. Please try again in a moment.`, { mood: 'think' });
     }
   }
 
   async function chat(rt, raw) {
     await chatExtra(rt, raw);
+  }
+
+  async function respondWhileWorking(rt, raw, activeTask) {
+    try {
+      const text = await chatAI(rt, raw, { activeTask: {
+        kind: activeTask.kind,
+        prompt: activeTask.prompt,
+        startedAt: activeTask.startedAt,
+        updates: activeTask.updates || [],
+      } });
+      await rt.say(text, { mood: 'idle' });
+    } catch (e) {
+      await rt.say(`I'm still here and the delegated work is continuing. I couldn't answer that follow-up just now, but you can send another message or interrupt the task.`, { mood: 'think' });
+    }
+  }
+
+  async function runTask(rt, raw, task) {
+    switch (task?.kind || taskRouting.taskKind(raw)) {
+      case 'research': return research(rt, raw, task);
+      case 'github': return github(rt, task);
+      case 'build': return build(rt, task);
+      default: return chatExtra(rt, raw, task);
+    }
   }
 
   async function run(rt, raw) {
@@ -321,9 +362,15 @@ window.Engine = (() => {
       case 'inbox': return inbox(rt);
       case 'vault': return vaultFlow(rt);
       case 'memory': return memoryFlow(rt, raw);
+      case 'automation': return automationFlow(rt, raw);
       default: return chatExtra(rt, raw);
     }
   }
 
-  return { run, preview, greet, intent };
+  return {
+    run, runTask, respondWhileWorking, preview, greet, intent,
+    isTask: taskRouting.isTask,
+    routeMessage: taskRouting.routeMessage,
+    taskKind: taskRouting.taskKind,
+  };
 })();

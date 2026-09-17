@@ -14,7 +14,7 @@ function loadLocal() {
   try {
     return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   } catch {
-    return { memories: [], secrets: [], apps: [], approvals: [], chats: [] };
+    return { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [] };
   }
 }
 function saveLocal(d) {
@@ -487,26 +487,246 @@ async function requestUpgrade(userId, plan) {
   return row;
 }
 
-// ---------- conversation history (Strawberry-style transcripts, per-user) ----------
-async function saveTurn(userId, chatId, role, text) {
-  const row = { id: 'msg_' + uid(), chat_id: chatId || 'unsorted', user_id: userId, role, kind: 'text', text: String(text || '').slice(0, 6000) };
+function fromSubAgentRow(row) {
+  return {
+    id: row.id,
+    userId: row.user_id || row.userId,
+    chatId: row.chat_id || row.chatId,
+    name: row.name,
+    prompt: row.prompt,
+    enabled: row.enabled !== false,
+    trigger: { type: row.trigger_type || row.trigger?.type, ...(row.trigger_config || row.trigger || {}) },
+    nextRunAt: row.next_run_at || row.nextRunAt || null,
+    lastRunAt: row.last_run_at || row.lastRunAt || null,
+    lastStatus: row.last_status || row.lastStatus || null,
+    lastError: row.last_error || row.lastError || null,
+    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+  };
+}
+
+async function listSubAgents(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('sub_agents').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+      if (error) throw error;
+      return (data || []).map(fromSubAgentRow);
+    } catch (e) { console.warn('[store] sub-agents fallback:', e.message); }
+  }
+  const d = loadLocal();
+  return (d.subAgents || []).filter((row) => row.userId === userId).map(fromSubAgentRow);
+}
+
+async function getSubAgent(userId, id) {
+  const agents = await listSubAgents(userId);
+  return agents.find((row) => row.id === id) || null;
+}
+
+async function createSubAgent(userId, input, nextRunAt) {
+  const now = new Date().toISOString();
+  const agent = {
+    id: 'sub_' + uid(), userId, chatId: 'auto_' + uid(), name: input.name,
+    prompt: input.prompt, enabled: input.enabled, trigger: input.trigger,
+    nextRunAt: nextRunAt || null, lastRunAt: null, lastStatus: null, lastError: null, createdAt: now,
+  };
   const s = supa();
   if (s) {
     try {
       await ensureProfile(userId);
-      await s.from('chats').upsert({ id: row.chat_id, user_id: userId, title: row.chat_id.slice(0, 42) }, { onConflict: 'id' });
+      const { error } = await s.from('sub_agents').insert({
+        id: agent.id, user_id: userId, chat_id: agent.chatId, name: agent.name, prompt: agent.prompt,
+        enabled: agent.enabled, trigger_type: agent.trigger.type, trigger_config: agent.trigger,
+        next_run_at: agent.nextRunAt,
+      });
+      if (error) throw error;
+      return agent;
+    } catch (e) { console.warn('[store] create sub-agent fallback:', e.message); }
+  }
+  const d = loadLocal();
+  d.subAgents = d.subAgents || [];
+  d.subAgents.unshift(agent);
+  saveLocal(d);
+  return agent;
+}
+
+async function updateSubAgent(userId, id, input, nextRunAt) {
+  const patch = {
+    name: input.name, prompt: input.prompt, enabled: input.enabled,
+    trigger_type: input.trigger.type, trigger_config: input.trigger,
+    next_run_at: nextRunAt || null, updated_at: new Date().toISOString(),
+  };
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('sub_agents').update(patch).eq('id', id).eq('user_id', userId).select('*').maybeSingle();
+      if (error) throw error;
+      if (data) return fromSubAgentRow(data);
+    } catch (e) { console.warn('[store] update sub-agent fallback:', e.message); }
+  }
+  const d = loadLocal();
+  d.subAgents = d.subAgents || [];
+  const idx = d.subAgents.findIndex((row) => row.id === id && row.userId === userId);
+  if (idx < 0) return null;
+  d.subAgents[idx] = { ...d.subAgents[idx], ...input, nextRunAt: nextRunAt || null };
+  saveLocal(d);
+  return fromSubAgentRow(d.subAgents[idx]);
+}
+
+async function deleteSubAgent(userId, id) {
+  const s = supa();
+  if (s) {
+    try {
+      const { error } = await s.from('sub_agents').delete().eq('id', id).eq('user_id', userId);
+      if (error) throw error;
+    } catch (e) { console.warn('[store] delete sub-agent fallback:', e.message); }
+  }
+  const d = loadLocal();
+  d.subAgents = (d.subAgents || []).filter((row) => row.id !== id || row.userId !== userId);
+  saveLocal(d);
+}
+
+async function listDueSubAgents(now, limit = 5) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('sub_agents').select('*').eq('enabled', true).eq('trigger_type', 'schedule').not('next_run_at', 'is', null).lte('next_run_at', now).order('next_run_at').limit(limit);
+      if (error) throw error;
+      return (data || []).map(fromSubAgentRow);
+    } catch (e) { console.warn('[store] due sub-agents fallback:', e.message); }
+  }
+  const when = new Date(now).getTime();
+  const d = loadLocal();
+  return (d.subAgents || []).filter((row) => row.enabled && row.trigger?.type === 'schedule' && row.nextRunAt && new Date(row.nextRunAt).getTime() <= when).slice(0, limit).map(fromSubAgentRow);
+}
+
+async function markSubAgentRun(userId, id, status, errorText, nextRunAt) {
+  const patch = { last_run_at: new Date().toISOString(), last_status: status, last_error: errorText ? String(errorText).slice(0, 500) : null, next_run_at: nextRunAt || null, updated_at: new Date().toISOString() };
+  const s = supa();
+  if (s) {
+    try {
+      const { error } = await s.from('sub_agents').update(patch).eq('id', id).eq('user_id', userId);
+      if (error) throw error;
+      return;
+    } catch (e) { console.warn('[store] mark sub-agent fallback:', e.message); }
+  }
+  const d = loadLocal();
+  const row = (d.subAgents || []).find((item) => item.id === id && item.userId === userId);
+  if (row) Object.assign(row, { lastRunAt: patch.last_run_at, lastStatus: status, lastError: patch.last_error, nextRunAt: patch.next_run_at });
+  saveLocal(d);
+}
+
+async function beginAutomationRun(userId, subAgentId, chatId, dedupeKey, event) {
+  const row = { id: 'arun_' + uid(), user_id: userId, sub_agent_id: subAgentId, chat_id: chatId, dedupe_key: dedupeKey, status: 'running', event: event || {} };
+  const s = supa();
+  if (s) {
+    try {
+      const { error } = await s.from('automation_runs').insert(row);
+      if (error?.code === '23505') return null;
+      if (error) throw error;
+      return { id: row.id };
+    } catch (e) { console.warn('[store] automation run fallback:', e.message); }
+  }
+  const d = loadLocal();
+  d.automationRuns = d.automationRuns || [];
+  if (d.automationRuns.some((item) => item.dedupe_key === dedupeKey)) return null;
+  d.automationRuns.unshift({ ...row, started_at: new Date().toISOString() });
+  saveLocal(d);
+  return { id: row.id };
+}
+
+async function finishAutomationRun(userId, id, status, result, errorText) {
+  const patch = { status, result: result || null, error: errorText ? String(errorText).slice(0, 1000) : null, finished_at: new Date().toISOString() };
+  const s = supa();
+  if (s) {
+    try {
+      const { error } = await s.from('automation_runs').update(patch).eq('id', id).eq('user_id', userId);
+      if (error) throw error;
+      return;
+    } catch (e) { console.warn('[store] finish automation fallback:', e.message); }
+  }
+  const d = loadLocal();
+  const row = (d.automationRuns || []).find((item) => item.id === id && (item.user_id === userId || item.userId === userId));
+  if (row) Object.assign(row, patch);
+  saveLocal(d);
+}
+
+async function listAutomationRuns(userId, limit = 30) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('automation_runs').select('*').eq('user_id', userId).order('started_at', { ascending: false }).limit(limit);
+      if (error) throw error;
+      return data || [];
+    } catch (e) { console.warn('[store] automation runs fallback:', e.message); }
+  }
+  return (loadLocal().automationRuns || []).filter((row) => row.user_id === userId || row.userId === userId).slice(0, limit);
+}
+
+// ---------- conversation history (Strawberry-style transcripts, per-user) ----------
+async function saveTurn(userId, chatId, role, text, options = {}) {
+  const row = { id: 'msg_' + uid(), chat_id: chatId || 'unsorted', user_id: userId, role, kind: 'text', text: String(text || '').slice(0, 6000), metadata: options.metadata || {} };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { data: existing, error: findError } = await s.from('chats').select('user_id').eq('id', row.chat_id).maybeSingle();
+      if (findError) throw findError;
+      if (existing && existing.user_id !== userId) throw Object.assign(new Error('Chat belongs to another account.'), { code: 'FORBIDDEN' });
+      if (!existing) {
+        const { error: chatError } = await s.from('chats').insert({ id: row.chat_id, user_id: userId, title: String(options.title || row.chat_id).slice(0, 60), source: options.source || 'user', sub_agent_id: options.subAgentId || null, updated_at: new Date().toISOString() });
+        if (chatError) throw chatError;
+      } else {
+        const chatPatch = { updated_at: new Date().toISOString() };
+        if (options.title) chatPatch.title = String(options.title).slice(0, 60);
+        if (options.source) chatPatch.source = options.source;
+        if (options.subAgentId) chatPatch.sub_agent_id = options.subAgentId;
+        const { error: chatError } = await s.from('chats').update(chatPatch).eq('id', row.chat_id).eq('user_id', userId);
+        if (chatError) throw chatError;
+      }
       const { error } = await s.from('messages').insert(row);
       if (error) throw error;
       return row;
     } catch (e) {
+      if (e.code === 'FORBIDDEN') throw e;
       console.warn('[store] save turn fallback:', e.message);
     }
   }
   const d = loadLocal();
+  d.chats = d.chats || [];
+  const existingChat = d.chats.find((item) => item.id === row.chat_id && item.userId === userId);
+  if (existingChat) Object.assign(existingChat, { title: options.title || existingChat.title, source: options.source || existingChat.source || 'user', subAgentId: options.subAgentId || existingChat.subAgentId || null, updatedAt: Date.now() });
+  else d.chats.unshift({ id: row.chat_id, userId, title: options.title || row.chat_id.slice(0, 42), source: options.source || 'user', subAgentId: options.subAgentId || null, createdAt: Date.now(), updatedAt: Date.now() });
   d.turns = d.turns || [];
   d.turns.unshift({ ...row, at: Date.now() });
   saveLocal(d);
   return row;
+}
+async function listChatMessages(userId, chatId, limit = 100) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('messages').select('id,role,kind,text,metadata,created_at').eq('user_id', userId).eq('chat_id', chatId).order('created_at', { ascending: true }).limit(limit);
+      if (error) throw error;
+      return data || [];
+    } catch (e) { console.warn('[store] chat messages fallback:', e.message); }
+  }
+  return (loadLocal().turns || []).filter((row) => (row.user_id === userId || row.userId === userId) && row.chat_id === chatId).sort((a, b) => Number(a.at || 0) - Number(b.at || 0)).slice(-limit);
+}
+
+async function listAutomationChats(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('chats').select('*').eq('user_id', userId).eq('source', 'automation').order('updated_at', { ascending: false }).limit(50);
+      if (error) throw error;
+      const chats = [];
+      for (const row of data || []) chats.push({ ...row, messages: await listChatMessages(userId, row.id, 100) });
+      return chats;
+    } catch (e) { console.warn('[store] automation chats fallback:', e.message); }
+  }
+  const d = loadLocal();
+  const chats = (d.chats || []).filter((row) => row.userId === userId && row.source === 'automation').sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+  return chats.map((row) => ({ ...row, messages: (d.turns || []).filter((turn) => (turn.user_id === userId || turn.userId === userId) && turn.chat_id === row.id).sort((a, b) => Number(a.at || 0) - Number(b.at || 0)) }));
 }
 async function searchTurns(userId, query, limit = 6) {
   const q = String(query || '').toLowerCase().split(/[^a-zåäö0-9]+/).filter((w) => w.length > 3);
@@ -604,6 +824,8 @@ module.exports = {
   stripeEventSeen, markStripeEvent,
   createGift, redeemGift, giftsCredit, requestUpgrade,
   logToolRun,
-  saveTurn, searchTurns,
+  saveTurn, searchTurns, listChatMessages, listAutomationChats,
+  listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent,
+  listDueSubAgents, markSubAgentRun, beginAutomationRun, finishAutomationRun, listAutomationRuns,
   CREDIT_GRANT_FREE,
 };

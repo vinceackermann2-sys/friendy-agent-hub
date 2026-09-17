@@ -528,7 +528,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .faq details{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
 .faq summary{ font-weight:700; font-size:14.5px; cursor:pointer; }
 .faq p{ color:var(--mut); font-size:14px; line-height:1.6; margin-top:8px; }
-.afooter{ border-top:1px solid var(--line); margin-top:80px; background:#fff; }
+.afooter{ border-top:1px solid var(--line); margin-top:80px; background:var(--bg); }
 .afooter .fin{ max-width:1120px; margin:0 auto; padding:44px 24px 30px; display:grid; grid-template-columns:1.4fr 1fr 1fr 1fr; gap:24px; }
 .afooter h4{ font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--soft); margin-bottom:12px; }
 .afooter .fin a{ display:block; font-size:14px; color:#3C3F44; text-decoration:none; margin:8px 0; font-weight:600; }
@@ -756,6 +756,29 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .pcard li .ic{ color:var(--green); margin-top:2px; flex:none; }
 .pcard .btn{ margin-top:auto; width:100%; }
 .poptag{ position:absolute; top:-13px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; font-size:11.5px; font-weight:800; border-radius:999px; padding:4px 14px; letter-spacing:.06em; }
+/* pricing extras: discount %, credit top-up slider, gift card */
+.pct-off{ display:inline-block; vertical-align:middle; font-size:12px; font-weight:800; letter-spacing:.02em; background:var(--green-soft); color:var(--green); border-radius:999px; padding:3px 9px; margin-left:6px; }
+.credit-add{ background:var(--panel); border:1px solid var(--line2); border-radius:14px; padding:12px 14px; margin:0 0 14px; }
+.credit-add-top{ display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:13px; font-weight:700; margin-bottom:8px; }
+.credit-add-top label{ color:var(--ink); }
+.credit-add-val{ color:var(--green); font-weight:800; white-space:nowrap; }
+.credit-slider{ width:100%; accent-color:var(--ink); height:22px; cursor:pointer; }
+.credit-add-sub{ font-size:12px; color:var(--mut); margin-top:6px; line-height:1.5; }
+.credit-add-total{ font-weight:700; color:var(--ink); }
+.gift-note{ text-align:center; font-size:13px; font-weight:800; color:var(--green); margin:10px 0 8px; }
+.giftcard{ display:flex; gap:12px; align-items:center; border-radius:16px; padding:14px 16px; color:#fff; background:linear-gradient(135deg,#17181A 0%,#2B3A55 55%,#4A7FD4 100%); border:1px solid #101216; box-shadow:var(--shadow); position:relative; overflow:hidden; margin-top:2px; }
+.giftcard::after{ content:''; position:absolute; right:-34px; top:-34px; width:120px; height:120px; border-radius:50%; background:rgba(255,255,255,.12); }
+.giftcard::before{ content:''; position:absolute; right:26px; bottom:-46px; width:110px; height:110px; border-radius:50%; background:rgba(95,158,99,.28); }
+.giftcard-left{ display:flex; flex-direction:column; align-items:center; gap:4px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:10px 12px; min-width:76px; z-index:1; }
+.gift-ico{ font-size:22px; line-height:1; }
+.gift-label{ font-size:10px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; opacity:.85; }
+.giftcard-right{ z-index:1; min-width:0; }
+.gift-brand{ font-weight:800; letter-spacing:.22em; font-size:13px; opacity:.9; }
+.gift-amt{ font-size:19px; font-weight:800; letter-spacing:-.01em; margin-top:2px; }
+.gift-sub{ font-size:12px; opacity:.82; margin-top:2px; }
+#plancards .credit-add{ margin:10px 0 10px; }
+#plancards .giftcard{ margin-top:10px; }
+#plancards .gift-note{ text-align:left; margin:8px 0 6px; }
 /* model spec sheet */
 .spec{ display:grid; grid-template-columns:1fr 1fr; gap:10px 22px; margin-top:16px; }
 .spec div{ font-size:13.5px; }

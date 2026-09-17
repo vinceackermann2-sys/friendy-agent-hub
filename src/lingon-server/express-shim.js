@@ -127,6 +127,7 @@ export function createApp() {
         params: {},
         ip: headers['cf-connecting-ip'] || headers['x-forwarded-for'] || 'ip',
         protocol: url.protocol.replace(':', ''),
+        signal: request.signal,
         get: (k) => headers[String(k).toLowerCase()],
       };
 

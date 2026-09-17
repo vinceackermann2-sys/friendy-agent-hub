@@ -23,7 +23,10 @@ in `localStorage`.
    (your prompt is carried into your first real chat).
 2. **Onboarding** — claim → name (dice for suggestions) → color + personality →
    safety briefing. Confetti on claim.
-3. **Chat** — streaming answers, tool traces, and cards for:
+3. **Chat** — an always-available main agent delegates actionable work to
+   cancellable sub-agents. Follow-ups can redirect or stop the active worker;
+   unrelated tasks automatically open in a new chat. Includes streaming answers,
+   tool traces, and cards for:
    approvals (approve / always-allow / deny), connect-app, **secrets box**,
    questions, sub-agents, browser use, sandboxed computer use, files, artifacts,
    memory saves, suggestion chips.
@@ -37,6 +40,9 @@ in `localStorage`.
    memories in answers, lists them on demand ("what do you remember?"), and remembers
    your choices; inspectable and deletable anytime.
 7. **Profile** — rename, recolor, re-personality your agent; release it anytime.
+8. **Sub Agents** — isolated automation chats in the right-side agent panel. A
+   sub-agent can run on a schedule, on a real connected-app event, or after
+   another sub-agent completes; chained handoffs are bounded by the harness.
 
 ## Safety model (the point of the app)
 
