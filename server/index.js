@@ -687,17 +687,15 @@ app.get('/api/github/prs', rateLimit(30, 60000), requireAuth(async (req, res) =>
     const toolTrace = [];
     const sessionId = String(req.query.sessionId || req.body?.sessionId || 'unsorted');
     const pcs = pc.getOrCreate(req.user.id, sessionId);
-    const statsRun = pc.run(pcs, {
-      input: { repos: repos.map((r) => r.full_name), prs },
-      who: 'agent',
-      trace: (e) => toolTrace.push(e),
-      code: `const byRepo = {};
-for (const pr of input.prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
-console.log('repos checked: ' + input.repos.length);
-console.log('open PRs: ' + input.prs.length);
-for (const [repo, n] of Object.entries(byRepo).slice(0, 5)) console.log(repo + ': ' + n + ' open');
-if (!input.prs.length) console.log('nothing to review');`,
-    }, { trace: (e) => toolTrace.push(e) });
+    const byRepo = {};
+    for (const pr of prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
+    const statsLines = [
+      `repos checked: ${repos.length}`,
+      `open PRs: ${prs.length}`,
+      ...Object.entries(byRepo).slice(0, 5).map(([repo, n]) => `${repo}: ${n} open`),
+      ...(prs.length ? [] : ['nothing to review']),
+    ];
+    const statsRun = pc.report(pcs, { lines: statsLines, who: 'agent', trace: (e) => toolTrace.push(e) });
     res.json({ repos: repos.map((r) => r.full_name), prs, stdout: statsRun.stdout, pcId: statsRun.pcId, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -795,19 +793,16 @@ app.post('/api/live/stop', requireAuth(async (req, res) => {
 }));
 
 // ---------- live computer: shared sandbox terminal ----------
+// SECURITY: user-supplied code is never executed — node:vm is not a sandbox.
 app.post('/api/pc/run', rateLimit(30, 60000), requireAuth(async (req, res) => {
-  const { sessionId, code, input } = req.body || {};
-  if (!code) return res.status(400).json({ error: 'code required' });
-  const s = pc.getOrCreate(req.user.id, String(sessionId || 'unsorted'));
-  const r = await pc.run(s, { code: String(code), input, who: 'agent' });
-  res.json(r);
+  res.status(501).json({ error: 'Code execution is disabled on this deployment.' });
 }));
 app.post('/api/pc/input', rateLimit(30, 60000), requireAuth(async (req, res) => {
   const { pcId, code } = req.body || {};
   const s = pc.owned(String(pcId || ''), req.user.id);
   if (!s) return res.status(404).json({ error: 'computer session not found (expired?)' });
   if (!s.userControl) return res.status(409).json({ error: 'Agent holds the computer — take over first.' });
-  res.json(pc.run(s, { code: String(code || ''), who: 'user' }));
+  res.status(501).json({ error: 'Code execution is disabled on this deployment.' });
 }));
 
 // ---------- static frontend ----------
