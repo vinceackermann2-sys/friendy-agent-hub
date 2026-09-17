@@ -442,9 +442,23 @@ app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
   const r = await store.requestUpgrade(req.user.id, plan);
   res.json({ ok: true, status: 'requested', request: r.id, note: `Payments aren't connected yet — your ${PLANS[plan].name} request is recorded, no charge made. You keep your current credits.` });
 }));
+/* Staff allowlist for privileged actions (gift-code issuance).
+   Set LINGON_ADMIN_USER_IDS and/or LINGON_ADMIN_EMAILS (comma-separated).
+   Empty config = nobody is admin (deny by default). */
+function adminList(name) {
+  return String(process.env[name] || '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+}
+function isAdmin(user) {
+  if (!user) return false;
+  const ids = adminList('LINGON_ADMIN_USER_IDS');
+  const emails = adminList('LINGON_ADMIN_EMAILS');
+  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && emails.includes(String(user.email).toLowerCase()));
+}
+
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
-  // Admin/demo issuance: allowed but audited with from_user. Real customer gifts
-  // are issued automatically after payment once Stripe is connected.
+  // SECURITY: manual gift issuance mints real, redeemable credits, so it is
+  // restricted to staff. Without an explicit admin allowlist nobody may issue.
+  if (!isAdmin(req.user)) return res.status(403).json({ error: 'Gift codes can only be issued by staff. Buy a gift card via Billing.' });
   const amount = Number((req.body || {}).amount || 0);
   if (![50, 100].includes(amount)) return res.status(400).json({ error: 'Gift amount must be 50 or 100.' });
   const g = await store.createGift(req.user.id, amount);
@@ -687,17 +701,15 @@ app.get('/api/github/prs', rateLimit(30, 60000), requireAuth(async (req, res) =>
     const toolTrace = [];
     const sessionId = String(req.query.sessionId || req.body?.sessionId || 'unsorted');
     const pcs = pc.getOrCreate(req.user.id, sessionId);
-    const statsRun = pc.run(pcs, {
-      input: { repos: repos.map((r) => r.full_name), prs },
-      who: 'agent',
-      trace: (e) => toolTrace.push(e),
-      code: `const byRepo = {};
-for (const pr of input.prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
-console.log('repos checked: ' + input.repos.length);
-console.log('open PRs: ' + input.prs.length);
-for (const [repo, n] of Object.entries(byRepo).slice(0, 5)) console.log(repo + ': ' + n + ' open');
-if (!input.prs.length) console.log('nothing to review');`,
-    }, { trace: (e) => toolTrace.push(e) });
+    const byRepo = {};
+    for (const pr of prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
+    const statsLines = [
+      `repos checked: ${repos.length}`,
+      `open PRs: ${prs.length}`,
+      ...Object.entries(byRepo).slice(0, 5).map(([repo, n]) => `${repo}: ${n} open`),
+      ...(prs.length ? [] : ['nothing to review']),
+    ];
+    const statsRun = pc.report(pcs, { lines: statsLines, who: 'agent', trace: (e) => toolTrace.push(e) });
     res.json({ repos: repos.map((r) => r.full_name), prs, stdout: statsRun.stdout, pcId: statsRun.pcId, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -795,19 +807,16 @@ app.post('/api/live/stop', requireAuth(async (req, res) => {
 }));
 
 // ---------- live computer: shared sandbox terminal ----------
+// SECURITY: user-supplied code is never executed — node:vm is not a sandbox.
 app.post('/api/pc/run', rateLimit(30, 60000), requireAuth(async (req, res) => {
-  const { sessionId, code, input } = req.body || {};
-  if (!code) return res.status(400).json({ error: 'code required' });
-  const s = pc.getOrCreate(req.user.id, String(sessionId || 'unsorted'));
-  const r = await pc.run(s, { code: String(code), input, who: 'agent' });
-  res.json(r);
+  res.status(501).json({ error: 'Code execution is disabled on this deployment.' });
 }));
 app.post('/api/pc/input', rateLimit(30, 60000), requireAuth(async (req, res) => {
   const { pcId, code } = req.body || {};
   const s = pc.owned(String(pcId || ''), req.user.id);
   if (!s) return res.status(404).json({ error: 'computer session not found (expired?)' });
   if (!s.userControl) return res.status(409).json({ error: 'Agent holds the computer — take over first.' });
-  res.json(pc.run(s, { code: String(code || ''), who: 'user' }));
+  res.status(501).json({ error: 'Code execution is disabled on this deployment.' });
 }));
 
 // ---------- static frontend ----------

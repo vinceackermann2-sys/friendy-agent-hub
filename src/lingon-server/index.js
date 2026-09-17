@@ -310,9 +310,24 @@ app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
   const r = await store.requestUpgrade(req.user.id, plan);
   res.json({ ok: true, status: 'requested', request: r.id, note: `Your ${PLANS[plan].name} request is recorded. Complete payment via Stripe Checkout on the main backend to activate — you keep your current credits until then.` });
 }));
+/* Staff allowlist for privileged actions (gift-code issuance).
+   Set LINGON_ADMIN_USER_IDS and/or LINGON_ADMIN_EMAILS (comma-separated).
+   Empty config = nobody is admin (deny by default). */
+function adminList(name) {
+  return String(process.env[name] || '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+}
+function isAdmin(user) {
+  if (!user) return false;
+  const ids = adminList('LINGON_ADMIN_USER_IDS');
+  const emails = adminList('LINGON_ADMIN_EMAILS');
+  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && emails.includes(String(user.email).toLowerCase()));
+}
+
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
-  // Admin/demo issuance: allowed but audited with from_user. Real customer gifts
-  // are issued automatically after payment once Stripe is connected.
+  // SECURITY: manual gift issuance mints real, redeemable credits, so it is
+  // restricted to staff. Without an explicit admin allowlist nobody may issue.
+  // Customer gifts are created server-side after a confirmed Stripe payment.
+  if (!isAdmin(req.user)) return res.status(403).json({ error: 'Gift codes can only be issued by staff. Buy a gift card via Billing.' });
   const amount = Number((req.body || {}).amount || 0);
   if (![50, 100].includes(amount)) return res.status(400).json({ error: 'Gift amount must be 50 or 100.' });
   const g = await store.createGift(req.user.id, amount);
@@ -474,16 +489,15 @@ app.get('/api/github/prs', rateLimit(30, 60000), requireAuth(async (req, res) =>
     // Real computer use: stats are computed by EXECUTED sandboxed code over
     // the live API data — the terminal card below shows its actual stdout.
     const toolTrace = [];
-    const statsRun = await TOOLS.code_run.run({
-      input: { repos: repos.map((r) => r.full_name), prs },
-      code: `const byRepo = {};
-for (const pr of input.prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
-console.log('repos checked: ' + input.repos.length);
-console.log('open PRs: ' + input.prs.length);
-for (const [repo, n] of Object.entries(byRepo).slice(0, 5)) console.log(repo + ': ' + n + ' open');
-if (!input.prs.length) console.log('nothing to review');`,
-    }, { trace: (e) => toolTrace.push(e), githubPat: null, userId: req.user.id });
-    res.json({ repos: repos.map((r) => r.full_name), prs, stdout: statsRun.stdout, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
+    const byRepo = {};
+    for (const pr of prs) byRepo[pr.repo] = (byRepo[pr.repo] || 0) + 1;
+    const stdout = [
+      `repos checked: ${repos.length}`,
+      `open PRs: ${prs.length}`,
+      ...Object.entries(byRepo).slice(0, 5).map(([repo, n]) => `${repo}: ${n} open`),
+      ...(prs.length ? [] : ['nothing to review']),
+    ].join('\n');
+    res.json({ repos: repos.map((r) => r.full_name), prs, stdout, trace: [{ ic: 'git', t: `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)` }, ...toolTrace] });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
