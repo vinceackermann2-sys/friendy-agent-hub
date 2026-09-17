@@ -98,24 +98,14 @@ const TOOLS = {
   },
   code_run: {
     name: 'code_run', type: 'code', approval: false,
-    description: 'Execute read-only JS (no I/O, no require, 3s timeout) over provided JSON; returns real stdout.',
-    run: async ({ code, input }, ctx) => {
-      const vm = require('node:vm');
-      const lines = [];
-      const sandbox = {
-        input: JSON.parse(JSON.stringify(input ?? null)),
-        console: { log: (...a) => lines.push(a.map(String).join(' ')) },
-      };
-      const t0 = Date.now();
-      try {
-        vm.createContext(sandbox);
-        vm.runInContext(String(code).slice(0, 4000), sandbox, { timeout: 3000 });
-      } catch (e) {
-        ctx.trace(entry('alert', `code_run error: ${e.message}`));
-        return { ok: false, error: e.message, stdout: lines.join('\n').slice(0, 2000) };
-      }
-      ctx.trace(entry('term', `code_run: executed in ${Date.now() - t0}ms (${lines.length} output lines)`));
-      return { ok: true, stdout: lines.join('\n').slice(0, 2000) };
+    description: 'Disabled: arbitrary JS execution is not available (node:vm is not a security boundary).',
+    // SECURITY: node:vm is explicitly NOT a sandbox — code inside the context
+    // can reach the outer realm via the constructor chain of any injected
+    // function, obtain `process`, read every secret in process.env and run OS
+    // commands. Re-enable only behind a real isolation boundary.
+    run: async (_args, ctx) => {
+      ctx.trace(entry('alert', 'code_run: disabled — untrusted code execution is not permitted'));
+      throw Object.assign(new Error('code execution is disabled on this deployment'), { code: 'DISABLED' });
     },
   },
   build_page: {
