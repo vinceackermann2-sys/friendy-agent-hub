@@ -17,7 +17,8 @@ window.Engine = (() => {
 
   function intent(p) {
     p = String(p || '').toLowerCase();
-    if (/(research|investigate|find out|analy[sz]e|forum|reddit|social media|poll|part(y|ies)|sentiment|opinion)/.test(p)) return 'research';
+    if (/\b(?:what|which) (?:is )?(?:the )?(?:current )?(?:date|day|month|year|time)\b|\b(?:today'?s date|date today|current date|current time|current year)\b/.test(p)) return 'chat';
+    if (/(research|investigate|find out|analy[sz]e|forum|reddit|social media|poll|part(y|ies)|sentiment|opinion|\bnews\b|\blatest\b|\bcurrent\b|\brecent\b|up[- ]to[- ]date)/.test(p)) return 'research';
     if (/(github|pull request|\bpr\b|\brepo\b|code review|merge request)/.test(p)) return 'github';
     if (/(email|inbox|gmail|newsletter)/.test(p)) return 'inbox';
     if (/(secret|password|token|api key|credential|vault)/.test(p)) return 'vault';
@@ -39,18 +40,24 @@ window.Engine = (() => {
     }
   }
 
-  function historyFor(rt) {
-    const msgs = (rt.chat.messages || []).filter((m) => m.kind === 'text').slice(-8);
-    return msgs.map((m) => ({ role: m.role === 'user' ? 'user' : 'agent', text: m.text }));
+  function historyFor(rt, prompt) {
+    let msgs = (rt.chat.messages || []).filter((m) => m.kind === 'text');
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === 'user' && String(last.text) === String(prompt)) msgs = msgs.slice(0, -1);
+    return msgs.slice(-32).map((m) => ({
+      role: m.role === 'user' ? 'user' : 'agent',
+      text: m.replyTo ? `[Replying to ${m.replyTo.role}: ${m.replyTo.text}]\n${m.text}` : m.text,
+    }));
   }
 
   async function chatAI(rt, prompt) {
     const memories = rt.recall().slice(0, 10);
-    const history = historyFor(rt);
+    const history = historyFor(rt, prompt);
+    const current = (rt.chat.messages || []).filter((m) => m.kind === 'text').slice(-1)[0];
     try {
       const j = await api('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({ prompt, history, agent: { name: rt.agent.name, pers: rt.agent.pers }, memories, sessionId: rt.chat.id }),
+        body: JSON.stringify({ prompt, history, replyTo: current?.replyTo, agent: { name: rt.agent.name, pers: rt.agent.pers }, memories, sessionId: rt.chat.id }),
       });
       if (Array.isArray(j.trace)) j.trace.forEach((t) => rt.trace(t.ic || 'spark', t.t));
       // ChatGPT-style: surface automatic saves like "Memory updated".
@@ -171,8 +178,8 @@ window.Engine = (() => {
     const ar = await a.wait();
     if (!ar.ok) { await rt.say(`Understood — I won't call GitHub.`); return; }
 
-    const t = rt.card({ type: 'computer', status: 'running', lines: [] });
-    t.update((c) => c.lines.push({ t: '$ code_run stats.js < live GitHub API data (sandboxed, read-only)', cls: 'p' }));
+      const t = rt.card({ type: 'computer', status: 'running', lines: [] });
+      t.update((c) => c.lines.push({ t: 'Read-only GitHub statistics from live API data', cls: 'p' }));
     let data;
     try {
       const j = await api(`/api/github/prs?sessionId=${encodeURIComponent(rt.chat.id)}`, { headers: { 'X-GitHub-Token': token } });

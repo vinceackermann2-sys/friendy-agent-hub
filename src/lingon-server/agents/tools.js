@@ -74,27 +74,6 @@ const TOOLS = {
       throw Object.assign(new Error('browser tool unavailable in this runtime'), { code: 'DISABLED' });
     },
   },
-  code_run: {
-    name: 'code_run', type: 'code', approval: false,
-    description: 'Execute read-only JS (no I/O, no require, 3s timeout) over provided JSON; returns real stdout.',
-    run: async ({ code, input }, ctx) => {
-      const lines = [];
-      const sandbox = {
-        input: JSON.parse(JSON.stringify(input ?? null)),
-        console: { log: (...a) => lines.push(a.map(String).join(' ')) },
-      };
-      const t0 = Date.now();
-      try {
-        const fn = new Function('input', 'console', String(code).slice(0, 4000));
-        fn(sandbox.input, sandbox.console);
-      } catch (e) {
-        ctx.trace(entry('alert', `code_run error: ${e.message}`));
-        return { ok: false, error: e.message, stdout: lines.join('\n').slice(0, 2000) };
-      }
-      ctx.trace(entry('term', `code_run: executed in ${Date.now() - t0}ms (${lines.length} output lines)`));
-      return { ok: true, stdout: lines.join('\n').slice(0, 2000) };
-    },
-  },
   build_page: {
     name: 'build_page', type: 'function', approval: false,
     description: 'Generate a single-file HTML page via the model (sandboxed preview).',

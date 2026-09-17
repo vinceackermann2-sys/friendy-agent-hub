@@ -1,14 +1,16 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 
 /**
- * Catch-all route: redirects clean URLs (/pricing, /models, etc.)
- * to their static HTML counterparts (/pricing.html, /models.html).
+ * Catch-all route: redirects clean URLs (/pricing, /research, etc.)
+ * to their static HTML counterparts (/pricing.html, /research.html).
  * Unknown paths fall through to TanStack's 404 component.
  */
 const PAGES = new Set([
-  "models",
   "pricing",
   "research",
+  "research-arche-1-0",
+  "research-100m",
+  "research-stlm-sla",
   "terms",
   "privacy",
   "security",

@@ -343,7 +343,7 @@ async function markStripeEvent(eventId) {
 async function logUsage(userId, { model, usage, cost }) {
   const costUsd = Number(cost || 0);
   const row = {
-    id: 'use_' + uid(), user_id: userId, model: model || 'gemini-2.5-flash',
+    id: 'use_' + uid(), user_id: userId, model: model || 'gemini-3.5-flash',
     prompt_tokens: (usage && (usage.promptTokenCount || 0)) || 0,
     candidates_tokens: (usage && (usage.candidatesTokenCount || 0)) || 0,
     total_tokens: (usage && (usage.totalTokenCount || 0)) || 0,

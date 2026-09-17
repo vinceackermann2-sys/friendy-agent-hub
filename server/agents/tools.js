@@ -71,13 +71,20 @@ const TOOLS = {
       const u = String(url || '');
       if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
       if (process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
-      const { chromium } = require('playwright');
+      const puppeteer = require('puppeteer');
       const t0 = Date.now();
-      const browser = await chromium.launch({ headless: true });
+      const browser = await puppeteer.launch({ headless: true });
       try {
-        const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 900 });
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+          const target = request.url();
+          if (target === 'about:blank' || target.startsWith('data:') || hostAllowed(target)) request.continue().catch(() => {});
+          else request.abort('blockedbyclient').catch(() => {});
+        });
         await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await page.waitForTimeout(1200);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         const data = await page.evaluate(() => ({
           title: document.title,
           text: document.body ? document.body.innerText.slice(0, 4000) : '',
@@ -94,28 +101,6 @@ const TOOLS = {
       } finally {
         await browser.close().catch(() => {});
       }
-    },
-  },
-  code_run: {
-    name: 'code_run', type: 'code', approval: false,
-    description: 'Execute read-only JS (no I/O, no require, 3s timeout) over provided JSON; returns real stdout.',
-    run: async ({ code, input }, ctx) => {
-      const vm = require('node:vm');
-      const lines = [];
-      const sandbox = {
-        input: JSON.parse(JSON.stringify(input ?? null)),
-        console: { log: (...a) => lines.push(a.map(String).join(' ')) },
-      };
-      const t0 = Date.now();
-      try {
-        vm.createContext(sandbox);
-        vm.runInContext(String(code).slice(0, 4000), sandbox, { timeout: 3000 });
-      } catch (e) {
-        ctx.trace(entry('alert', `code_run error: ${e.message}`));
-        return { ok: false, error: e.message, stdout: lines.join('\n').slice(0, 2000) };
-      }
-      ctx.trace(entry('term', `code_run: executed in ${Date.now() - t0}ms (${lines.length} output lines)`));
-      return { ok: true, stdout: lines.join('\n').slice(0, 2000) };
     },
   },
   build_page: {

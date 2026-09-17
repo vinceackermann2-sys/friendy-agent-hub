@@ -17,6 +17,13 @@ const fmtWhen = ts => {
   if (d < 86400e3) return Math.floor(d / 3600e3) + 'h';
   return new Date(ts).toLocaleDateString();
 };
+async function copyText(text){
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(String(text || ''));
+  const t = document.createElement('textarea');
+  t.value = String(text || ''); t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0';
+  document.body.appendChild(t); t.select();
+  try { document.execCommand('copy'); } finally { t.remove(); }
+}
 
 /* ---------------- icons ---------------- */
 const IC = {
@@ -57,6 +64,7 @@ const IC = {
   star:'<path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1Z"/>',
   user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   refresh:'<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 15-3.5L23 10M20.5 15a9 9 0 0 1-15 3.5L1 14"/>',
+  menu:'<path d="M4 7h16M4 12h16M4 17h16"/>',
   alert:'<path d="M10.3 3.8L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
   chatb:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>',
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
@@ -152,6 +160,7 @@ const fresh = () => ({
   userProfile:null, browserProfile:{ profile:'Default', sandbox:true, allowlist:true },
 });
 let state;
+let mobileNavOpen = false;
 try { state = Object.assign(fresh(), JSON.parse(localStorage.getItem(LS) || 'null')) || fresh(); }
 catch (e) { state = fresh(); }
 if (!state.vault) state.vault = fresh().vault;
@@ -286,7 +295,7 @@ function ensureOwnerScope(){
 
 function render(){
   applyTheme();
-  if (!signedIn()) return renderAuth();
+  if (!signedIn()) return renderLanding();
   ensureOwnerScope();
   if (state.onboarded && state.agent && !state.agent.provisional) return renderApp();
   if (state.pendingPrompt && (!state.onboarded || !state.agent || (state.agent && state.agent.provisional))){
@@ -303,16 +312,15 @@ function render(){
    AUTH (real Supabase Auth via backend proxy)
 ================================================================ */
 /* ================================================================
-   AUTH — Account & Credit Usage card: Google, one-time code, password
+   AUTH — Sign-in / Sign-up card: Google, one-time code, password
 ================================================================ */
 let authMode = 'signin'; // 'signin' | 'signup'
 function renderAuth(){
   let lastGoogle = false;
   try { lastGoogle = localStorage.getItem('belna.lastProvider') === 'google'; } catch {}
-  root.innerHTML = `
-  <div class="fadeup authpage">
-    <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="pricing.html">Open Docs &#8599;</a></div>
-    <div class="authcard">
+   root.innerHTML = `
+   <div class="fadeup authpage">
+     <div class="authcard">
       <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : 'Log in to manage profile and billing'}</h1>
       ${state.pendingPrompt ? `<div class="kv" style="margin-top:16px;text-align:left"><div class="row"><span style="color:var(--mut)">${icon('chatb',16)}</span><div><b style="font-weight:600">${esc(state.pendingPrompt.length > 140 ? state.pendingPrompt.slice(0, 140) + '…' : state.pendingPrompt)}</b><div class="sub">Your message is saved — it will appear in the agent chat right after you sign in, before anything runs.</div></div></div></div>` : ''}
       <button class="btn gbtn" data-act="google"><span class="glogo" aria-hidden="true"><svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" overflow="hidden" viewBox="0 0 268.152 273.883"><defs><linearGradient id="google__a"><stop offset="0" stop-color="#0fbc5c"/><stop offset="1" stop-color="#0cba65"/></linearGradient><linearGradient id="google__g"><stop offset=".231" stop-color="#0fbc5f"/><stop offset=".312" stop-color="#0fbc5f"/><stop offset=".366" stop-color="#0fbc5e"/><stop offset=".458" stop-color="#0fbc5d"/><stop offset=".54" stop-color="#12bc58"/><stop offset=".699" stop-color="#28bf3c"/><stop offset=".771" stop-color="#38c02b"/><stop offset=".861" stop-color="#52c218"/><stop offset=".915" stop-color="#67c30f"/><stop offset="1" stop-color="#86c504"/></linearGradient><linearGradient id="google__h"><stop offset=".142" stop-color="#1abd4d"/><stop offset=".248" stop-color="#6ec30d"/><stop offset=".312" stop-color="#8ac502"/><stop offset=".366" stop-color="#a2c600"/><stop offset=".446" stop-color="#c8c903"/><stop offset=".54" stop-color="#ebcb03"/><stop offset=".616" stop-color="#f7cd07"/><stop offset=".699" stop-color="#fdcd04"/><stop offset=".771" stop-color="#fdce05"/><stop offset=".861" stop-color="#ffce0a"/></linearGradient><linearGradient id="google__f"><stop offset=".316" stop-color="#ff4c3c"/><stop offset=".604" stop-color="#ff692c"/><stop offset=".727" stop-color="#ff7825"/><stop offset=".885" stop-color="#ff8d1b"/><stop offset="1" stop-color="#ff9f13"/></linearGradient><linearGradient id="google__b"><stop offset=".231" stop-color="#ff4541"/><stop offset=".312" stop-color="#ff4540"/><stop offset=".458" stop-color="#ff4640"/><stop offset=".54" stop-color="#ff473f"/><stop offset=".699" stop-color="#ff5138"/><stop offset=".771" stop-color="#ff5b33"/><stop offset=".861" stop-color="#ff6c29"/><stop offset="1" stop-color="#ff8c18"/></linearGradient><linearGradient id="google__d"><stop offset=".408" stop-color="#fb4e5a"/><stop offset="1" stop-color="#ff4540"/></linearGradient><linearGradient id="google__c"><stop offset=".132" stop-color="#0cba65"/><stop offset=".21" stop-color="#0bb86d"/><stop offset=".297" stop-color="#09b479"/><stop offset=".396" stop-color="#08ad93"/><stop offset=".477" stop-color="#0aa6a9"/><stop offset=".568" stop-color="#0d9cc6"/><stop offset=".667" stop-color="#1893dd"/><stop offset=".769" stop-color="#258bf1"/><stop offset=".859" stop-color="#3086ff"/></linearGradient><linearGradient id="google__e"><stop offset=".366" stop-color="#ff4e3a"/><stop offset=".458" stop-color="#ff8a1b"/><stop offset=".54" stop-color="#ffa312"/><stop offset=".616" stop-color="#ffb60c"/><stop offset=".771" stop-color="#ffcd0a"/><stop offset=".861" stop-color="#fecf0a"/><stop offset=".915" stop-color="#fecf08"/><stop offset="1" stop-color="#fdcd01"/></linearGradient><linearGradient xlink:href="#google__a" id="google__s" x1="219.7" x2="254.467" y1="329.535" y2="329.535" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__b" id="google__m" cx="109.627" cy="135.862" r="71.46" fx="109.627" fy="135.862" gradientTransform="matrix(-1.93688 1.043 1.45573 2.55542 290.525 -400.634)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__c" id="google__n" cx="45.259" cy="279.274" r="71.46" fx="45.259" fy="279.274" gradientTransform="matrix(-3.5126 -4.45809 -1.69255 1.26062 870.8 191.554)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__d" id="google__l" cx="304.017" cy="118.009" r="47.854" fx="304.017" fy="118.009" gradientTransform="matrix(2.06435 0 0 2.59204 -297.679 -151.747)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__e" id="google__o" cx="181.001" cy="177.201" r="71.46" fx="181.001" fy="177.201" gradientTransform="matrix(-.24858 2.08314 2.96249 .33417 -255.146 -331.164)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__f" id="google__p" cx="207.673" cy="108.097" r="41.102" fx="207.673" fy="108.097" gradientTransform="matrix(-1.2492 1.34326 -3.89684 -3.4257 880.501 194.905)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__g" id="google__r" cx="109.627" cy="135.862" r="71.46" fx="109.627" fy="135.862" gradientTransform="matrix(-1.93688 -1.043 1.45573 -2.55542 290.525 838.683)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__h" id="google__j" cx="154.87" cy="145.969" r="71.46" fx="154.87" fy="145.969" gradientTransform="matrix(-.0814 -1.93722 2.92674 -.11625 -215.135 632.86)" gradientUnits="userSpaceOnUse"/><filter id="google__q" width="1.097" height="1.116" x="-.048" y="-.058" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="1.701"/></filter><filter id="google__k" width="1.033" height="1.02" x="-.017" y="-.01" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation=".242"/></filter><clipPath id="google__i" clipPathUnits="userSpaceOnUse"><path d="M371.378 193.24H237.083v53.438h77.167c-1.241 7.563-4.026 15.003-8.105 21.786-4.674 7.773-10.451 13.69-16.373 18.196-17.74 13.498-38.42 16.258-52.783 16.258-36.283 0-67.283-23.286-79.285-54.928-.484-1.149-.805-2.335-1.197-3.507a81.115 81.115 0 0 1-4.101-25.448c0-9.226 1.569-18.057 4.43-26.398 11.285-32.897 42.985-57.467 80.179-57.467 7.481 0 14.685.884 21.517 2.648a77.668 77.668 0 0 1 33.425 18.25l40.834-39.712c-24.839-22.616-57.219-36.32-95.844-36.32-30.878 0-59.386 9.553-82.748 25.7-18.945 13.093-34.483 30.625-44.97 50.985-9.753 18.879-15.094 39.8-15.094 62.294 0 22.495 5.35 43.633 15.103 62.337v.126c10.302 19.857 25.368 36.954 43.678 49.988 15.997 11.386 44.68 26.551 84.031 26.551 22.63 0 42.687-4.051 60.375-11.644 12.76-5.478 24.065-12.622 34.301-21.804 13.525-12.132 24.117-27.139 31.347-44.404 7.23-17.265 11.097-36.79 11.097-57.957 0-9.858-.998-19.87-2.689-28.968Z"/></clipPath></defs><g clip-path="url(#google__i)" transform="matrix(.95792 0 0 .98525 -90.174 -78.856)"><path fill="url(#google__j)" d="M92.076 219.958c.148 22.14 6.501 44.983 16.117 63.424v.127c6.949 13.392 16.445 23.97 27.26 34.452l65.327-23.67c-12.36-6.235-14.246-10.055-23.105-17.026-9.054-9.066-15.802-19.473-20.004-31.677h-.17l.17-.127c-2.765-8.058-3.037-16.613-3.14-25.503Z" filter="url(#google__k)"/><path fill="url(#google__l)" d="M237.083 79.025c-6.456 22.526-3.988 44.421 0 57.161 7.457.006 14.64.888 21.45 2.647a77.662 77.662 0 0 1 33.424 18.25l41.88-40.726c-24.81-22.59-54.667-37.297-96.754-37.332Z" filter="url(#google__k)"/><path fill="url(#google__m)" d="M236.943 78.847c-31.67 0-60.91 9.798-84.871 26.359a145.533 145.533 0 0 0-24.332 21.15c-1.904 17.744 14.257 39.551 46.262 39.37 15.528-17.936 38.495-29.542 64.056-29.542l.07.002-1.044-57.335c-.048 0-.093-.004-.14-.004Z" filter="url(#google__k)"/><path fill="url(#google__n)" d="m341.475 226.379-28.268 19.285c-1.24 7.562-4.028 15.002-8.107 21.786-4.674 7.772-10.45 13.69-16.373 18.196-17.702 13.47-38.328 16.244-52.687 16.255-14.842 25.102-17.444 37.675 1.043 57.934 22.877-.016 43.157-4.117 61.046-11.796 12.931-5.551 24.388-12.792 34.761-22.097 13.706-12.295 24.442-27.503 31.769-45 7.327-17.497 11.245-37.282 11.245-58.734Z" filter="url(#google__k)"/><path fill="#3086ff" d="M234.996 191.21v57.498h136.006c1.196-7.874 5.152-18.064 5.152-26.5 0-9.858-.996-21.899-2.687-30.998Z" filter="url(#google__k)"/><path fill="url(#google__o)" d="M128.39 124.327c-8.394 9.119-15.564 19.326-21.249 30.364-9.753 18.879-15.094 41.83-15.094 64.324 0 .317.026.627.029.944 4.32 8.224 59.666 6.649 62.456 0-.004-.31-.039-.613-.039-.924 0-9.226 1.57-16.026 4.43-24.367 3.53-10.289 9.056-19.763 16.123-27.926 1.602-2.031 5.875-6.397 7.121-9.016.475-.997-.862-1.557-.937-1.908-.083-.393-1.876-.077-2.277-.37-1.275-.929-3.8-1.414-5.334-1.845-3.277-.921-8.708-2.953-11.725-5.06-9.536-6.658-24.417-14.612-33.505-24.216Z" filter="url(#google__k)"/><path fill="url(#google__p)" d="M162.099 155.857c22.112 13.301 28.471-6.714 43.173-12.977l-25.574-52.664a144.74 144.74 0 0 0-26.543 14.504c-12.316 8.512-23.192 18.9-32.176 30.72Z" filter="url(#google__q)"/><path fill="url(#google__r)" d="M171.099 290.222c-29.683 10.641-34.33 11.023-37.062 29.29a144.806 144.806 0 0 0 16.792 13.984c15.996 11.386 46.766 26.551 86.118 26.551.046 0 .09-.004.137-.004v-59.157l-.094.002c-14.736 0-26.512-3.843-38.585-10.527-2.977-1.648-8.378 2.777-11.123.799-3.786-2.729-12.9 2.35-16.183-.938Z" filter="url(#google__k)"/><path fill="url(#google__s)" d="M219.7 299.023v59.996c5.506.64 11.236 1.028 17.247 1.028 6.026 0 11.855-.307 17.52-.872v-59.748a105.119 105.119 0 0 1-17.477 1.461c-5.932 0-11.7-.686-17.29-1.865Z" filter="url(#google__k)" opacity=".5"/></g></svg></span>Continue with Google${lastGoogle ? '<span class="lastused">Last used</span>' : ''}</button>
@@ -645,7 +653,7 @@ function renderLanding(){
   <div class="fadeup">
     <div class="anav"><nav class="nav">
       <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} belna</a>
-      <div class="navlinks"><a href="#agent" data-act="scroll" data-t="#agent">Product</a><a href="models.html">Models</a><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div>
+      <div class="navlinks"><a href="#agent" data-act="scroll" data-t="#agent">Product</a><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div>
       <div class="anav-cta">
         <button class="btn ghost small hideS" data-act="signin-nav">Sign in</button>
         <button class="btn small" data-act="open-app">Get started</button>
@@ -679,31 +687,67 @@ function renderLanding(){
             <span class="compare-kicker">Other AI apps</span>
             <h2>You get more threads,<br><span>more work and more costs.</span></h2>
           </div>
-          <div class="thread-cloud" aria-hidden="true">
-            <div class="thread-col tc-one">
-              <span>${icon('chatb',14)} Budget spreadsheet...</span>
-              <span>${icon('chatb',14)} Newsletter cleanup</span>
-              <span>${icon('chatb',14)} Email to landlord</span>
-              <span>${icon('chatb',14)} Same doc, next section</span>
-              <span>${icon('chatb',14)} Untitled</span>
-              <span>${icon('chatb',14)} Follow up on refund</span>
-            </div>
-            <div class="thread-col tc-two">
-              <span>${icon('chatb',14)} Budget spreadsheet...</span>
-              <span>${icon('chatb',14)} Find that document</span>
-              <span>${icon('chatb',14)} Summarize this PDF</span>
-              <span>${icon('chatb',14)} Draft client follow-up</span>
-              <span>${icon('chatb',14)} What did we decide?</span>
-              <span>${icon('chatb',14)} Meeting prep</span>
-            </div>
-            <div class="thread-col tc-three">
-              <span>${icon('chatb',14)} Weekly status update</span>
-              <span>${icon('chatb',14)} New chat</span>
-              <span>${icon('chatb',14)} Trip planning</span>
-              <span>${icon('chatb',14)} Quick question</span>
-              <span>${icon('chatb',14)} Another new chat</span>
-              <span>${icon('chatb',14)} Where was that file?</span>
-            </div>
+           <div class="thread-cloud" aria-hidden="true">
+             <div class="thread-col tc-one">
+               <div class="thread-track">
+                 <div class="thread-set">
+                   <span>${icon('chatb',14)} Budget spreadsheet...</span>
+                   <span>${icon('chatb',14)} Newsletter cleanup</span>
+                   <span>${icon('chatb',14)} Email to landlord</span>
+                   <span>${icon('chatb',14)} Same doc, next section</span>
+                   <span>${icon('chatb',14)} Untitled</span>
+                   <span>${icon('chatb',14)} Follow up on refund</span>
+                 </div>
+                 <div class="thread-set">
+                   <span>${icon('chatb',14)} Budget spreadsheet...</span>
+                   <span>${icon('chatb',14)} Newsletter cleanup</span>
+                   <span>${icon('chatb',14)} Email to landlord</span>
+                   <span>${icon('chatb',14)} Same doc, next section</span>
+                   <span>${icon('chatb',14)} Untitled</span>
+                   <span>${icon('chatb',14)} Follow up on refund</span>
+                 </div>
+               </div>
+             </div>
+             <div class="thread-col tc-two">
+               <div class="thread-track">
+                 <div class="thread-set">
+                   <span>${icon('chatb',14)} Budget spreadsheet...</span>
+                   <span>${icon('chatb',14)} Find that document</span>
+                   <span>${icon('chatb',14)} Summarize this PDF</span>
+                   <span>${icon('chatb',14)} Draft client follow-up</span>
+                   <span>${icon('chatb',14)} What did we decide?</span>
+                   <span>${icon('chatb',14)} Meeting prep</span>
+                 </div>
+                 <div class="thread-set">
+                   <span>${icon('chatb',14)} Budget spreadsheet...</span>
+                   <span>${icon('chatb',14)} Find that document</span>
+                   <span>${icon('chatb',14)} Summarize this PDF</span>
+                   <span>${icon('chatb',14)} Draft client follow-up</span>
+                   <span>${icon('chatb',14)} What did we decide?</span>
+                   <span>${icon('chatb',14)} Meeting prep</span>
+                 </div>
+               </div>
+             </div>
+             <div class="thread-col tc-three">
+               <div class="thread-track">
+                 <div class="thread-set">
+                   <span>${icon('chatb',14)} Weekly status update</span>
+                   <span>${icon('chatb',14)} New chat</span>
+                   <span>${icon('chatb',14)} Trip planning</span>
+                   <span>${icon('chatb',14)} Quick question</span>
+                   <span>${icon('chatb',14)} Another new chat</span>
+                   <span>${icon('chatb',14)} Where was that file?</span>
+                 </div>
+                 <div class="thread-set">
+                   <span>${icon('chatb',14)} Weekly status update</span>
+                   <span>${icon('chatb',14)} New chat</span>
+                   <span>${icon('chatb',14)} Trip planning</span>
+                   <span>${icon('chatb',14)} Quick question</span>
+                   <span>${icon('chatb',14)} Another new chat</span>
+                   <span>${icon('chatb',14)} Where was that file?</span>
+                 </div>
+               </div>
+             </div>
           </div>
         </article>
 
@@ -718,11 +762,10 @@ function renderLanding(){
             <span class="orbit-ring orbit-three"></span>
             <span class="orbit-agent oa-one">${Mascot.svg('lingon','happy',64)}</span>
             <span class="orbit-agent oa-two">${Mascot.svg('blueberry','think',58)}</span>
-            <span class="orbit-agent oa-three">${Mascot.svg('moss','happy',54)}</span>
-            <span class="orbit-agent oa-four">${Mascot.svg('rose','idle',50)}</span>
-            <div class="compare-mascot">${Mascot.laptop()}</div>
-            <span class="work-status"><i></i> Working across your tasks</span>
-          </div>
+             <span class="orbit-agent oa-three">${Mascot.svg('moss','happy',54)}</span>
+             <span class="orbit-agent oa-four">${Mascot.svg('rose','idle',50)}</span>
+             <div class="compare-mascot">${Mascot.laptop()}</div>
+           </div>
         </article>
       </div>
     </section>
@@ -749,7 +792,7 @@ function renderLanding(){
               <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
             </tbody>
           </table></div>
-          <div class="fineprint mc-foot"><span>Methodology and full results at <a href="models.html">belna.se</a> →</span><span class="mc-foot-brand">${Mascot.logo(20)} BELNA</span></div>
+          <div class="fineprint mc-foot"><span>Full results and methodology in <a href="research-arche-1-0.html">Research → Arche 1.0</a></span><span class="mc-foot-brand">${Mascot.logo(20)} BELNA</span></div>
         </div>
       </div>
     </section>
@@ -793,7 +836,7 @@ function renderLanding(){
 
     <footer class="afooter"><div class="fin">
       <div><div class="abrand">${Mascot.logo(24)} belna</div></div>
-      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div>
+      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div>
       <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a></div>
       <div><h4>Legal</h4><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a><a href="security.html">Security</a><a href="cookies.html">Cookie Policy</a></div>
     </div><div class="base"><span>© 2026 Belna — made in Stockholm</span></div></footer>
@@ -1101,7 +1144,9 @@ function renderApp(){
   applyTheme();
   belnaStopLandingFx();
   root.innerHTML = `
-  <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'}" id="app">
+  <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''}" id="app">
+    <button class="mobile-nav-toggle" data-act="togglemenu" aria-label="${mobileNavOpen ? 'Close navigation' : 'Open navigation'}" aria-expanded="${mobileNavOpen}">${icon(mobileNavOpen ? 'x' : 'menu',20)}</button>
+    <button class="side-scrim" data-act="togglemenu" aria-label="Close navigation"></button>
     <aside class="side" id="side"></aside>
     <main class="main" id="main"></main>
     <aside class="canvas" id="canvas"></aside>
@@ -1239,6 +1284,7 @@ function paintChat(M){
       ${c.messages.map(m => msgNode(c, m).outerHTML).join('')}
     </div></div>
     <div class="composerwrap"><div class="composer">
+      ${c.replyingTo ? `<div class="reply-draft"><span><b>Replying to ${c.replyingTo.role === 'user' ? 'yourself' : esc(state.agent.name)}</b><small>${esc(c.replyingTo.text)}</small></span><button type="button" class="iconbtn" data-act="cancelreply" data-chat="${c.id}" title="Cancel reply" aria-label="Cancel reply">${icon('x',14)}</button></div>` : ''}
       <form class="promptbox" id="cform">
         <textarea id="cprompt" rows="1" placeholder="Ask ${esc(state.agent.name)} anything…"></textarea>
         <div class="attach-pills"></div>
@@ -1257,13 +1303,34 @@ function paintChat(M){
   wirePromptBox($('#cform'), $('#cprompt'));
 }
 
+const REACTIONS = [
+  { emoji:'👍', label:'Thumbs up' },
+  { emoji:'👎', label:'Thumbs down' },
+  { emoji:'❤️', label:'Heart' },
+  { emoji:'💩', label:'Poop' },
+];
+function replyPreviewHTML(m){
+  if (!m.replyTo) return '';
+  const who = m.replyTo.role === 'user' ? 'You' : state.agent.name;
+  return `<div class="reply-preview"><b>${esc(who)}</b><span>${esc(m.replyTo.text)}</span></div>`;
+}
+function messageActionsHTML(c, m){
+  const active = new Set(Array.isArray(m.reactions) ? m.reactions : []);
+  const attrs = `data-chat="${c.id}" data-msg="${m.id}"`;
+  const chosen = REACTIONS.filter((r) => active.has(r.emoji)).map((r) => `<button class="reaction-pill on" data-act="reactmsg" ${attrs} data-emoji="${r.emoji}" title="Remove ${r.label}" aria-label="Remove ${r.label}">${r.emoji}</button>`).join('');
+  return `${chosen ? `<div class="message-reactions">${chosen}</div>` : ''}<div class="message-actions" aria-label="Message actions">
+    <button data-act="replymsg" ${attrs} title="Reply">${icon('chatb',13)}<span>Reply</span></button>
+    <button data-act="copymsg" ${attrs} title="Copy">${icon('copy',13)}<span>Copy</span></button>
+    <span class="reaction-options">${REACTIONS.map((r) => `<button class="reaction-choice ${active.has(r.emoji) ? 'on' : ''}" data-act="reactmsg" ${attrs} data-emoji="${r.emoji}" title="${r.label}" aria-label="${r.label}">${r.emoji}</button>`).join('')}</span>
+  </div>`;
+}
 function msgNode(c, m){
   if (m.kind === 'text' && m.role === 'user'){
     const filesHtml = (m.files && m.files.length) ? `<div class="msg-files">${m.files.map(f => `<span class="attach-pill sent">${icon('file',12)}<span class="ap-name">${esc(f.name.length > 24 ? f.name.slice(0,21)+'…' : f.name)}</span><span class="ap-size">${fmtBytes(f.size)}</span></span>`).join('')}</div>` : '';
-    return el(`<div class="msg user" data-mid="${m.id}"><div class="bub">${filesHtml}${esc(m.text)}</div></div>`);
+    return el(`<div class="msg user" data-mid="${m.id}"><div class="message-stack"><div class="bub">${replyPreviewHTML(m)}${filesHtml}${esc(m.text)}</div>${messageActionsHTML(c, m)}</div></div>`);
   }
   if (m.kind === 'text')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body"><div class="md">${md(m.text)}</div></div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body message-stack"><div class="bub md">${replyPreviewHTML(m)}${md(m.text)}</div>${messageActionsHTML(c, m)}</div></div>`);
   if (m.kind === 'tools')
     return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body"><div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
   if (m.kind === 'chips')
@@ -1345,7 +1412,7 @@ function cardNode(c, m){
     <div class="stack">${cd.liveId ? `<button class="btn" data-act="watchlive">Watch live</button>` : ''}<button class="btn ghost" data-act="viewcanvas">Follow in canvas</button></div></div>`;
 
   if (cd.type === 'computer') return `<div class="acard">
-    ${hd(icon('term',20),'var(--ink)','#fff','Sandboxed computer use','Agents sandbox · allowlisted network, no writes outside run')}
+    ${hd(icon('term',20),'var(--ink)','#fff','Read-only tool output','Computed from the approved API response')}
     <div class="bd"><div class="term">${cd.lines.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}${cd.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div></div></div>`;
 
   if (cd.type === 'file') return `<div class="acard"><div class="filrow">
@@ -1495,7 +1562,8 @@ async function sendPrompt(text, files){
   // instead of starting a new agent run.
   if (c.onboarding){
     const pq = pendingQuestion(c);
-    c.messages.push({ id: uid(), role: 'user', kind: 'text', text, files: files && files.length ? files : undefined });
+    c.messages.push({ id: uid(), role: 'user', kind: 'text', text, files: files && files.length ? files : undefined, replyTo: c.replyingTo || undefined });
+    c.replyingTo = null;
     save();
     if (state.view !== 'chat'){ state.view = 'chat'; }
     paintSide(); paintMain();
@@ -1507,7 +1575,8 @@ async function sendPrompt(text, files){
   if (c.busy){ toast(`${state.agent.name} is mid-task — one thing at a time.`); return; }
   c.busy = true;
   if (c.messages.filter(m => m.role === 'user').length === 0) c.title = text.length > 42 ? text.slice(0, 42) + '…' : text;
-  c.messages.push({ id: uid(), role:'user', kind:'text', text, files: files && files.length ? files : undefined });
+  c.messages.push({ id: uid(), role:'user', kind:'text', text, files: files && files.length ? files : undefined, replyTo: c.replyingTo || undefined });
+  c.replyingTo = null;
   save();
   if (state.view !== 'chat'){ state.view = 'chat'; }
   paintSide(); paintMain();
@@ -1626,9 +1695,8 @@ function paintLive(body, c){
         <img id="liveimg" alt="Live browser"${poster ? ` src="${poster}"` : ''}>
         <div class="bigcursor" id="bigcursor"></div>
       </div>
-      <div class="pctitle">${icon('term',13)} Computer — live sandbox terminal</div>
+      <div class="pctitle">${icon('term',13)} Read-only tool output</div>
       <div class="term mini" id="pcout" style="margin-top:6px">${terms.length ? terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('') : '<div class="mut">No runs yet in this chat.</div>'}</div>
-      <div class="pcinput" id="pcinput" style="display:none"><input class="field mono" id="pccmd" placeholder="Type JS — runs for real in the sandbox (e.g. console.log(input.prs.length))"><button class="btn small" data-act="pcrun">Run</button></div>
       <div class="controlbar">
         <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
         <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">streaming the real page</div></div>
@@ -1711,17 +1779,15 @@ function liveState(s, m){
 }
 async function liveTakeover(){
   const c = chat();
-  const id = liveIdShown, pcId = pcIdFor(c);
-  if (!id && !pcId){ toast('No live session in this chat yet.'); return; }
+  const id = liveIdShown;
+  if (!id){ toast('No live browser session in this chat yet.'); return; }
   const want = !liveControl;
   try {
-    if (id) await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
-    if (pcId) await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ pcId, on: want }) });
+    await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
     liveControl = want;
-    const pi = $('#pcinput'); if (pi) pi.style.display = want ? 'flex' : 'none';
     pcConnect();
     liveState(want ? 'user' : 'idle');
-    toast(want ? 'You drive browser + computer — the agent waits.' : 'Agent drives again.');
+    toast(want ? 'You drive the browser — the agent waits.' : 'Agent drives again.');
   } catch (e) { toast(e.message); }
 }
 async function liveSend(ev){
@@ -1747,6 +1813,7 @@ function paintCanvas(){
       <button class="agent ${top === 'agent' ? 'on' : ''}" data-act="ctab" data-t="agent" title="Agent panel">${Mascot.svg(state.agent.color,'idle',22)}<span>${esc(state.agent.name)}</span></button>
       <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
       <button class="${top === 'trace' ? 'on' : ''}" data-act="ctab" data-t="trace">${icon('list',14)} Trace <span class="cnt">${(c && c.trace || []).length}</span></button>
+      <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
     </div>
     <div class="cbody" id="cbody"></div>`;
   initCanvasResize();
@@ -2193,9 +2260,10 @@ document.addEventListener('click', async e => {
   if (act === 'ob-done'){ finalizeOnboarding(); return; }
 
   /* navigation */
+  if (act === 'togglemenu'){ mobileNavOpen = !mobileNavOpen; renderApp(); return; }
   if (act === 'nav'){
     if (!signedIn()){ renderAuth(); return; }
-    state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp(); return;
+    mobileNavOpen = false; state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp(); return;
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
@@ -2208,10 +2276,10 @@ document.addEventListener('click', async e => {
     save(); paintCanvas(); return;
   }
   if (act === 'agenttab'){ state.agentTab = b.dataset.t; state.canvasTab = 'agent'; save(); paintCanvas(); return; }
-  if (act === 'newchat'){ newChat(); return; }
+  if (act === 'newchat'){ mobileNavOpen = false; newChat(); return; }
   if (act === 'openchat'){
     if (!signedIn()){ renderAuth(); return; }
-    state.activeChat = b.dataset.id; state.view = 'chat'; save(); renderApp(); return;
+    mobileNavOpen = false; state.activeChat = b.dataset.id; state.view = 'chat'; save(); renderApp(); return;
   }
   if (act === 'delchat'){
     e.stopPropagation();
@@ -2224,25 +2292,6 @@ document.addEventListener('click', async e => {
   if (act === 'viewcanvas'){ state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
   if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = true; $('#app') && $('#app').classList.remove('nocanvas'); save(); paintCanvas(); return; }
   if (act === 'takeover'){ liveTakeover(); return; }
-  if (act === 'pcrun'){
-    const code = ($('#pccmd').value || '').trim();
-    if (!code){ toast('Type some JS first.'); return; }
-    const c = chat(); const pcId = pcIdFor(c);
-    if (!pcId){ toast('No computer session in this chat yet.'); return; }
-    $('#pccmd').value = '';
-    try {
-      const j = await window.LingonAuth.api('/api/pc/input', { method: 'POST', body: JSON.stringify({ pcId, code }) });
-      const out = $('#pcout');
-      if (out && j.stdout !== undefined){
-        if (out.querySelector('.mut') && out.children.length <= 1) out.innerHTML = '';
-        String(j.stdout).split('\n').filter(Boolean).forEach(t => out.insertAdjacentHTML('beforeend', `<div class="g">${esc(t)}</div>`));
-        if (!String(j.stdout).trim()) out.insertAdjacentHTML('beforeend', `<div class="mut">ok (no output)</div>`);
-        out.scrollTop = out.scrollHeight;
-      }
-      if (!j.ok) toast(j.error || 'Run failed');
-    } catch (e) { toast(e.message); }
-    return;
-  }
   if (act === 'closestop-live'){
     const id = liveIdShown;
     if (id){ window.LingonAuth.api('/api/live/stop', { method: 'POST', body: JSON.stringify({ liveId: id }) }).catch(() => {}); }
@@ -2254,7 +2303,31 @@ document.addEventListener('click', async e => {
     if (!signedIn()){ state.pendingPrompt = b.dataset.t; save(); renderAuth(); return; }
     sendPrompt(b.dataset.t); return;
   }
-  if (act === 'copycode'){ const t = $('#codebox'); if (t) navigator.clipboard && navigator.clipboard.writeText(t.textContent); toast('Copied'); return; }
+  if (act === 'replymsg' && c && m){
+    const draft = ($('#cprompt') || {}).value || '';
+    c.replyingTo = { id:m.id, role:m.role === 'user' ? 'user' : 'agent', text:String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, 220) };
+    save(); paintChat($('#main'));
+    if ($('#cprompt')) { $('#cprompt').value = draft; $('#cprompt').focus(); }
+    return;
+  }
+  if (act === 'cancelreply' && c){
+    const draft = ($('#cprompt') || {}).value || '';
+    c.replyingTo = null; save(); paintChat($('#main'));
+    if ($('#cprompt')) { $('#cprompt').value = draft; $('#cprompt').focus(); }
+    return;
+  }
+  if (act === 'copymsg' && m){
+    try { await copyText(m.text); toast('Message copied'); } catch { toast('Could not copy message'); }
+    return;
+  }
+  if (act === 'reactmsg' && c && m){
+    const emoji = b.dataset.emoji;
+    if (!REACTIONS.some((r) => r.emoji === emoji)) return;
+    const reactions = new Set(Array.isArray(m.reactions) ? m.reactions : []);
+    reactions.has(emoji) ? reactions.delete(emoji) : reactions.add(emoji);
+    m.reactions = [...reactions]; save(); replaceNode(c, m); return;
+  }
+  if (act === 'copycode'){ const t = $('#codebox'); if (t) await copyText(t.textContent); toast('Copied'); return; }
 
   /* card resolutions (real accounts only — no anonymous approvals) */
   if (act === 'approve' && m){ if (!signedIn()){ renderAuth(); return; } resolveCard(c, m, { ok:true }, 'approved'); return; }

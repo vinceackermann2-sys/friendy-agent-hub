@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Research — TAM v3 &amp; Cortex-S at 100M Parameters | Belna</title>
-<meta name="description" content="Belna research: TAM v3 and Cortex-S hybrid architectures trained at 100M parameters on 2B tokens and compared head-to-head with a matched Transformer LLM. Full results, benchmarks, and verdict.">
-<meta name="keywords" content="TAM, Temporal Associative Memory, Cortex-S, Transformer comparison, 100M parameters, hybrid attention, recurrent state, AI research, Belna">
+<title>Research — Belna Swedish Safe AI Agents</title>
+<meta name="description" content="Belna research: Arche 1.0 on open Kimi K3 weights, plus TAM v3 and Cortex-S hybrid architectures trained at 100M parameters and compared head-to-head with the Transformer. Full results and reproducible training code.">
+<meta name="keywords" content="Belna research, Arche 1.0, Kimi K3, TAM v3, Cortex-S, Transformer comparison, 100M parameters, AI research Sweden">
 <link rel="canonical" href="https://belna.se/research.html">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,239 +13,152 @@
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <style>
-/* research page extras */
-.rcard{background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:28px;margin-top:18px}
-.rcard h3{font-size:17px;font-weight:800;margin-bottom:10px;display:flex;align-items:center;gap:10px}
-.rcard p{color:var(--mut);font-size:14.5px;line-height:1.65}
-.arch-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
-.arch-box{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}
-.arch-box h4{font-size:14px;font-weight:800;margin-bottom:6px}
-.arch-box p{font-size:13.5px;color:var(--mut);line-height:1.6}
-.arch-box .num{font-size:28px;font-weight:800;color:var(--ink);display:block;margin-bottom:4px}
-.stat-row{display:flex;gap:16px;flex-wrap:wrap;margin-top:18px}
-.stat-pill{flex:1;min-width:140px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center}
-.stat-pill .val{font-size:28px;font-weight:800;display:block}
-.stat-pill .lab{font-size:12px;color:var(--mut);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
-.stat-pill.win{background:#EDF3FE;border-color:#C6D8F5}
-.stat-pill.win .val{color:#1D5BBF}
-.stat-pill.lose .val{color:var(--mut)}
-.rtable{width:100%;border-collapse:collapse;font-size:14px}
-.rtable th,.rtable td{padding:12px 16px;text-align:center;border-top:1px solid var(--line2)}
-.rtable th:first-child,.rtable td:first-child{text-align:left}
-.rtable thead th{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--soft);border-top:none;background:var(--panel)}
-.rtable thead th.hl{background:#EDF3FE;color:#1D5BBF}
-.rtable td.hl{background:#F5F8FE;font-weight:700}
-.rtable tbody tr:hover td{background:#FAFAFB}
-.rtable tbody tr:hover td.hl{background:#E5ECFB}
-.rtable .win{font-weight:800;color:#1D5BBF}
-.rtable .dim{color:var(--soft)}
-.verdict-box{background:#15284b;color:#fff;border-radius:20px;padding:32px;margin-top:24px}
-.verdict-box h3{font-size:20px;font-weight:800;margin-bottom:12px;color:#fff}
-.verdict-box p{color:#aac9df;font-size:14.5px;line-height:1.65}
-.verdict-box .vlist{list-style:none;margin:14px 0;display:flex;flex-direction:column;gap:8px}
-.verdict-box .vlist li{display:flex;gap:10px;align-items:flex-start;font-size:14px;color:#d0e3f5}
-.verdict-box .vlist .ic{color:#7fb3e0;flex:none;margin-top:2px}
-.tag-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-.tag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:700;background:var(--line2);color:var(--mut)}
-.tag.blue{background:#EDF3FE;color:#1D5BBF}
-.tag.green{background:var(--green-soft);color:var(--green)}
-.how-row{display:grid;grid-template-columns:auto 1fr auto;gap:0;align-items:center;margin:24px 0 6px}
-.how-arrow{width:100%;height:2px;background:var(--line);position:relative}
-.how-arrow::after{content:'';position:absolute;right:0;top:-4px;border:5px solid transparent;border-left-color:var(--line)}
-.how-node{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 16px;font-size:13px;font-weight:700;white-space:nowrap;text-align:center}
-.how-node small{display:block;font-weight:500;color:var(--mut);font-size:11.5px;margin-top:2px}
-@media(max-width:760px){
-  .arch-grid{grid-template-columns:1fr}
-  .stat-row{flex-direction:column}
-  .how-row{grid-template-columns:1fr;gap:8px}
-  .how-arrow{display:none}
-}
+/* research index: blog list + active-model tabs */
+.bloglist{margin-top:8px}
+.post{padding:44px 0;border-top:1px solid var(--line)}
+.post:first-of-type{margin-top:8px}
+.post-date{font-size:13.5px;color:var(--mut);font-weight:500}
+.post-title{font-size:clamp(26px,4vw,34px);font-weight:800;letter-spacing:-.02em;margin-top:10px;line-height:1.15}
+.post-title a{color:var(--ink);text-decoration:none}
+.post-title a:hover{text-decoration:underline;text-underline-offset:4px}
+.post-excerpt{color:var(--mut);font-size:16px;line-height:1.6;margin-top:12px;max-width:640px}
+.read-link{display:inline-flex;align-items:center;gap:8px;margin-top:18px;font-size:14px;font-weight:700;color:var(--ink);text-decoration:none}
+.read-link .arr{transition:transform .15s ease}
+.read-link:hover .arr{transform:translateX(4px)}
+/* tabbed active-models slider */
+.mtabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:22px;border-bottom:1px solid var(--line);padding-bottom:0}
+.mtab{border:none;background:none;font-family:inherit;font-size:14px;font-weight:800;color:var(--mut);padding:12px 16px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.mtab:hover{color:var(--ink)}
+.mtab.on{color:var(--ink);border-bottom-color:var(--ink)}
+.mpanel{display:none;margin-top:0;background:#fff;border:1px solid var(--line);border-top:none;border-radius:0 0 20px 20px;box-shadow:var(--shadow);padding:30px;animation:fadeUp .25s ease both}
+.mpanel.on{display:block}
+.mstatus{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:800;border-radius:999px;padding:5px 13px}
+.mstatus.live{background:var(--green-soft);color:var(--green)}
+.mstatus.preview{background:#EDF3FE;color:#1D5BBF}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block}
+.mpanel h3{font-size:24px;font-weight:800;margin-top:14px;letter-spacing:-.01em}
+.mpanel p{color:var(--mut);font-size:15px;line-height:1.65;margin-top:10px;max-width:620px}
+.mspecs{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+@media(max-width:600px){.mpanel{padding:22px 20px}.post{padding:34px 0}}
 </style>
 </head>
 <body>
-<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="models.html">Models</a><a href="pricing.html">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Back home</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Back home</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
-<main class="legal" style="max-width:960px">
-<div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Research</div>
-<h1 style="font-size:clamp(28px,5vw,38px)">Can a hybrid architecture beat the Transformer?</h1>
-<p class="mut" style="font-size:16.5px;line-height:1.6;max-width:700px">We trained two hybrid architectures — <b>TAM v3</b> and <b>Cortex-S</b> — at <b>100 million parameters</b> on <b>2 billion tokens</b> and compared them head-to-head against a matched standard Transformer, on identical data, hardware, and seeds.</p>
+<main class="legal" style="max-width:880px">
+<h1>Research</h1>
+<p class="mut" style="font-size:16.5px;line-height:1.6">Results, models, and notes from the Belna team.</p>
 
-<div class="tag-row">
-<span class="tag blue">100M parameters</span>
-<span class="tag blue">2B tokens</span>
-<span class="tag">H100 GPU</span>
-<span class="tag">bfloat16</span>
-<span class="tag green">Open research</span>
+<div class="bloglist">
+  <article class="post">
+    <div class="post-date">September 10, 2026</div>
+    <h2 class="post-title"><a href="research-arche-1-0.html">Arche 1.0: frontier intelligence you can hand real work</a></h2>
+    <p class="post-excerpt">Our flagship agent pairs open Kimi K3 weights with a privacy-first harness — and holds its own against the biggest frontier models on agentic benchmarks. Here's what it can do, how it scores, and how the safety layer works.</p>
+    <a class="read-link" href="research-arche-1-0.html">Read article <span class="arr">→</span></a>
+  </article>
+
+  <article class="post">
+    <div class="post-date">August 28, 2026</div>
+    <h2 class="post-title"><a href="research-100m.html#tam-v3">TAM v3 at 100M parameters: a hybrid that beats the Transformer on loss</a></h2>
+    <p class="post-excerpt">Temporal Associative Memory adds a learned recurrent world-state alongside attention. Trained on 2B tokens against a matched Transformer, it wins on loss at every scale — with full training code so you can replicate it.</p>
+    <a class="read-link" href="research-100m.html#tam-v3">Read article <span class="arr">→</span></a>
+  </article>
+
+  <article class="post">
+    <div class="post-date">August 21, 2026</div>
+    <h2 class="post-title"><a href="research-stlm-sla.html#stlm">STLM: a 23M-parameter model where words have coordinates</a></h2>
+    <p class="post-excerpt">Pin every word to meaning axes like hot–cold and true–false, and a tiny model starts to reason: perplexity 80.89 vs 111.45 against its baseline, 35/35 on negation, embeddings where opposites are genuinely opposite.</p>
+    <a class="read-link" href="research-stlm-sla.html#stlm">Read article <span class="arr">→</span></a>
+  </article>
+
+  <article class="post" style="border-bottom:1px solid var(--line)">
+    <div class="post-date">August 13, 2026</div>
+    <h2 class="post-title"><a href="research-100m.html#cortex-s">Cortex-S: a second hybrid confirms the signal</a></h2>
+    <p class="post-excerpt">Sparse mixture-of-experts meets persistent recurrent state. A completely independent design, the same 2B-token protocol — and the same result: lower loss than the Transformer. Safety bounds included, training code included.</p>
+    <a class="read-link" href="research-100m.html#cortex-s">Read article <span class="arr">→</span></a>
+  </article>
+
+  <article class="post" style="border-bottom:1px solid var(--line)">
+    <div class="post-date">August 5, 2026</div>
+    <h2 class="post-title"><a href="research-stlm-sla.html#sla">Mini-SLA: one layer, an explicit memory, and negation solved</a></h2>
+    <p class="post-excerpt">A single Transformer layer looped four times around a memory database with a symbolic router. At 11.3M parameters it halves its baseline's perplexity (63.89 vs 111.45) — and cracks all 35 negation probes with zero help at inference.</p>
+    <a class="read-link" href="research-stlm-sla.html#sla">Read article <span class="arr">→</span></a>
+  </article>
 </div>
 
-<!-- ──────── ARCHITECTURE ──────── -->
-<h2 style="margin-top:40px">The architectures</h2>
-<p>Both TAM and Cortex-S add a <b>learned recurrent state</b> alongside standard attention — letting the model carry information across tokens without paying the cost of full quadratic attention at every layer.</p>
+<h2 style="margin-top:56px">Active models</h2>
+<p>Everything running in production or under active investigation — switch tabs to explore.</p>
 
-<div class="arch-grid">
-<div class="arch-box">
-<h4>TAM v3 — Temporal Associative Memory</h4>
-<p>Each block runs <b>reduced-width causal attention</b> and a <b>diagonal affine scan</b> (recurrent world-state) in parallel. A learned scalar gate mixes the two:</p>
-<p style="margin-top:8px;font-family:ui-monospace,monospace;font-size:12.5px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 14px">output = 2 × ((1−g) × attention + g × world_state)</p>
-<p style="margin-top:8px">The scan is parallel-associative, so training stays fast. The gate learns to route ~55% through the world-state branch and ~45% through attention.</p>
-</div>
-<div class="arch-box">
-<h4>Cortex-S — Safe Recurrent MoE</h4>
-<p><b>Sparse Mixture-of-Experts</b> (8 experts, top-2 routing) with <b>persistent recurrent state</b> (128 per layer). Full attention runs only every 6th layer — the rest use the recurrent pathway.</p>
-<p style="margin-top:8px">Includes a <b>deterministic safety kernel boundary</b> — the architecture's compute is always auditable and bounded.</p>
-</div>
+<div class="mtabs" role="tablist" aria-label="Active models">
+  <button class="mtab on" data-mtab="arche" role="tab" aria-selected="true">Arche 1.0</button>
+  <button class="mtab" data-mtab="stlm" role="tab" aria-selected="false">STLM</button>
+  <button class="mtab" data-mtab="sla" role="tab" aria-selected="false">Mini-SLA</button>
+  <button class="mtab" data-mtab="tam" role="tab" aria-selected="false">TAM v3 · 100M</button>
+  <button class="mtab" data-mtab="cortex" role="tab" aria-selected="false">Cortex-S · 100M</button>
 </div>
 
-<div class="rcard" style="margin-top:24px">
-<h3>🔬 Matched experimental design</h3>
-<p>Every variable is controlled so the only difference is the architecture itself:</p>
-<div class="arch-grid" style="margin-top:14px">
-<div class="arch-box"><span class="num">101.8M</span><p><b>Parameters</b> — matched within 0.003%<br>TAM: 101,806,616 · Transformer: 101,803,520</p></div>
-<div class="arch-box"><span class="num">2B</span><p><b>Tokens</b> — identical byte-for-byte<br>FineWeb-Edu, FineMath, StackV2, Cosmopedia, ArXiv</p></div>
-<div class="arch-box"><span class="num">H100</span><p><b>Hardware</b> — pinned GPU class<br>bfloat16 precision, torch.compile, AdamW</p></div>
-<div class="arch-box"><span class="num">8100</span><p><b>Same seed</b> — identical initialization<br>Same optimizer, LR schedule, batch size</p></div>
-</div>
+<div class="mpanel on" data-mpanel="arche">
+  <span class="mstatus live"><span class="dot"></span>Live in production</span>
+  <h3>Arche 1.0</h3>
+  <p>The personal agent that does the work — 300 clicks across 4 apps replaced by one sentence. Open Kimi K3 foundation, 1M-token context, Smart and Fast modes, wrapped in the Belna harness with approvals, a sealed vault, and a visible trace.</p>
+  <div class="mspecs"><span class="chip green">Live</span><span class="chip">Kimi K3 open weights</span><span class="chip">1M context</span><span class="chip">Smart + Fast</span></div>
+  <p style="margin-top:20px"><a class="btn small" href="research-arche-1-0.html">Read the Arche 1.0 story →</a></p>
 </div>
 
-<!-- ──────── MAIN RESULTS ──────── -->
-<h2 style="margin-top:48px">Results at 100M / 2B tokens</h2>
-<p>The headline numbers from the full pretraining run.</p>
-
-<div class="stat-row">
-<div class="stat-pill win"><span class="val">14.86</span><span class="lab">TAM v3 Perplexity</span></div>
-<div class="stat-pill lose"><span class="val">15.05</span><span class="lab">Transformer Perplexity</span></div>
-<div class="stat-pill win"><span class="val">2.698</span><span class="lab">TAM v3 NLL</span></div>
-<div class="stat-pill lose"><span class="val">2.712</span><span class="lab">Transformer NLL</span></div>
+<div class="mpanel" data-mpanel="stlm">
+  <span class="mstatus preview"><span class="dot"></span>Research preview</span>
+  <h3>STLM</h3>
+  <p>Our 23.5M-parameter model that pins words to meaning: topology coordinates learned jointly with language modeling on WikiText-2. Lower perplexity than its baseline (80.89 vs 111.45), a 0.957 meaning correlation, and 35/35 on negation with axis guidance.</p>
+  <div class="mspecs"><span class="chip acc">23.5M params</span><span class="chip">PPL 80.89 vs 111.45</span><span class="chip">Negation 35/35</span></div>
+  <p style="margin-top:20px"><a class="btn small" href="research-stlm-sla.html#stlm">Read the STLM story →</a></p>
 </div>
 
-<div class="rcard">
-<h3>Full pretraining + post-training comparison</h3>
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Metric</th><th class="hl">TAM v3</th><th>Transformer</th><th>Winner</th></tr></thead>
-<tbody>
-<tr><td>Pretrain NLL ↓</td><td class="hl win">2.6984</td><td>2.7116</td><td><span class="tag blue" style="font-size:11px">TAM</span></td></tr>
-<tr><td>Pretrain perplexity ↓</td><td class="hl win">14.86</td><td>15.05</td><td><span class="tag blue" style="font-size:11px">TAM</span></td></tr>
-<tr><td>SFT assistant NLL ↓</td><td class="hl win">1.7839</td><td>1.7947</td><td><span class="tag blue" style="font-size:11px">TAM</span></td></tr>
-<tr><td>DPO reward accuracy ↑</td><td class="hl">62.0%</td><td class="win">62.6%</td><td><span class="tag" style="font-size:11px">TFM</span></td></tr>
-<tr><td>Final mixture NLL ↓</td><td class="hl win">2.8439</td><td>2.8647</td><td><span class="tag blue" style="font-size:11px">TAM</span></td></tr>
-<tr><td>Throughput (tok/s) ↑</td><td class="hl dim">~254.8k</td><td class="win">~319.9k</td><td><span class="tag" style="font-size:11px">TFM</span></td></tr>
-<tr><td>Wall-clock time ↓</td><td class="hl dim">~9,196s</td><td class="win">~6,917s</td><td><span class="tag" style="font-size:11px">TFM</span></td></tr>
-</tbody>
-</table></div>
-<p class="fineprint" style="margin-top:14px">NLL = negative log-likelihood (lower is better). PPL = perplexity (lower is better). Both post-trained with SFT on SmolSmolTalk (100K examples) + DPO on UltraFeedback (10K pairs). Training on 6-source data mixture at context length 512.</p>
+<div class="mpanel" data-mpanel="sla">
+  <span class="mstatus preview"><span class="dot"></span>Research preview</span>
+  <h3>Mini-SLA</h3>
+  <p>One Transformer layer, looped four times around an explicit 10-slot memory with a symbolic negation router. At 11.3M params it beats its matched baseline on perplexity (63.89 vs 111.45) — and solves negation 35/35 with no help at inference.</p>
+  <div class="mspecs"><span class="chip acc">11.3M params</span><span class="chip">PPL 63.89 vs 111.45</span><span class="chip">Autonomous negation 35/35</span></div>
+  <p style="margin-top:20px"><a class="btn small" href="research-stlm-sla.html#sla">Read the SLA story →</a></p>
 </div>
 
-<!-- ──────── SCALING ──────── -->
-<h2 style="margin-top:48px">Scaling trend: TAM wins at every scale</h2>
-<p>TAM v3 was screened at 25M and 50M parameters (3 seeds each, 10M tokens) before the full 100M/2B run. It won on loss at every tested scale.</p>
-
-<div class="rcard">
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Scale</th><th class="hl">TAM v3 NLL</th><th>Transformer NLL</th><th>TAM wins</th><th>Throughput ratio</th></tr></thead>
-<tbody>
-<tr><td><b>25M</b><span class="dim" style="display:block;font-size:12px">10M tokens · 3 seeds</span></td><td class="hl win">7.162</td><td>7.207</td><td><b>3 / 3</b></td><td>~86%</td></tr>
-<tr><td><b>50M</b><span class="dim" style="display:block;font-size:12px">10M tokens · 3 seeds</span></td><td class="hl win">6.889</td><td>7.064</td><td><b>3 / 3</b></td><td>~82%</td></tr>
-<tr><td><b>100M</b><span class="dim" style="display:block;font-size:12px">2B tokens · 1 seed</span></td><td class="hl win">2.698</td><td>2.712</td><td><b>1 / 1</b></td><td>~80%</td></tr>
-</tbody>
-</table></div>
-<p class="fineprint" style="margin-top:14px">The NLL gap widened from 25M to 50M — a promising signal. At 100M the gap narrowed slightly due to the much larger token budget (2B vs 10M), but TAM still wins on loss.</p>
+<div class="mpanel" data-mpanel="tam">
+  <span class="mstatus preview"><span class="dot"></span>Research preview</span>
+  <h3>TAM v3</h3>
+  <p>Our 101.8M-parameter hybrid: reduced-width attention running in parallel with a recurrent world-state, mixed by a learned gate. Lower loss and perplexity than a matched Transformer at 25M, 50M, and 100M — plus a real memory advantage at 256-token contexts.</p>
+  <div class="mspecs"><span class="chip acc">101.8M params</span><span class="chip">2B tokens</span><span class="chip">NLL 2.698 · PPL 14.86</span></div>
+  <p style="margin-top:20px"><a class="btn small" href="research-100m.html#tam-v3">Read the 100M paper →</a></p>
 </div>
 
-<!-- ──────── DOWNSTREAM ──────── -->
-<h2 style="margin-top:48px">Downstream benchmarks (100M / 2B)</h2>
-<p>Standard multiple-choice evaluation after post-training. The Transformer wins most downstream tasks despite losing on raw loss — a known "NLL ≠ capability" phenomenon at small scale.</p>
-
-<div class="rcard">
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Benchmark</th><th class="hl">TAM v3</th><th>Transformer</th><th>Delta</th></tr></thead>
-<tbody>
-<tr><td>ARC-Easy</td><td class="hl">31.5%</td><td class="win">35.5%</td><td class="dim">−4.0 pp</td></tr>
-<tr><td>ARC-Challenge</td><td class="hl win">26.0%</td><td>25.5%</td><td>+0.5 pp</td></tr>
-<tr><td>PIQA</td><td class="hl">54.0%</td><td class="win">58.0%</td><td class="dim">−4.0 pp</td></tr>
-<tr><td>HellaSwag</td><td class="hl">27.5%</td><td class="win">29.5%</td><td class="dim">−2.0 pp</td></tr>
-<tr><td>OpenBookQA</td><td class="hl">28.5%</td><td class="win">29.5%</td><td class="dim">−1.0 pp</td></tr>
-<tr><td>GSM8K</td><td class="hl">2.0%</td><td>2.0%</td><td class="dim">0.0 pp</td></tr>
-<tr style="font-weight:700;border-top:2px solid var(--line)"><td>Five-MCQ mean</td><td class="hl">33.5%</td><td class="win">35.6%</td><td class="dim">−2.1 pp</td></tr>
-</tbody>
-</table></div>
+<div class="mpanel" data-mpanel="cortex">
+  <span class="mstatus preview"><span class="dot"></span>Research preview</span>
+  <h3>Cortex-S</h3>
+  <p>An independent cross-check: 8-expert sparse MoE with persistent recurrent state and full attention only every 6th layer. Same data, same hardware, same seed discipline — and it also beats the Transformer on loss, with auditable, bounded compute.</p>
+  <div class="mspecs"><span class="chip acc">101.8M params</span><span class="chip">2B tokens</span><span class="chip">NLL 2.709 · PPL 15.02</span></div>
+  <p style="margin-top:20px"><a class="btn small" href="research-100m.html#cortex-s">Read the 100M paper →</a></p>
 </div>
 
-<!-- ──────── STATE/MEMORY ──────── -->
-<h2 style="margin-top:48px">Synthetic state &amp; memory probes</h2>
-<p>Four tasks (delayed recall, associative recall, state tracking, needle retrieval) tested at seven context lengths with 96 paired trials each. TAM shows its strongest advantage at <b>256 tokens</b> — exactly where the recurrent state branch is most useful.</p>
+<p class="fineprint" style="margin-top:22px">Every paper ships its full training code inline — no hidden repositories. Replicate, remix, improve.</p>
 
-<div class="rcard">
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Context length</th><th class="hl">TAM − Transformer</th><th>95% CI</th><th>Signal</th></tr></thead>
-<tbody>
-<tr><td>128</td><td class="hl dim">−2.08 pp</td><td class="dim">−7.03 to +2.60</td><td></td></tr>
-<tr style="background:#F5F8FE"><td><b>256</b></td><td class="hl win">+7.81 pp</td><td>+2.60 to +13.54</td><td><span class="tag blue" style="font-size:11px">Significant</span></td></tr>
-<tr><td>384</td><td class="hl">+2.86 pp</td><td class="dim">−2.60 to +8.33</td><td></td></tr>
-<tr><td>512</td><td class="hl dim">−0.52 pp</td><td class="dim">−5.73 to +4.69</td><td></td></tr>
-<tr><td>640</td><td class="hl dim">−1.04 pp</td><td class="dim">−6.51 to +4.69</td><td></td></tr>
-<tr><td>768</td><td class="hl dim">−0.78 pp</td><td class="dim">−6.25 to +4.69</td><td></td></tr>
-<tr><td>1000</td><td class="hl">+1.04 pp</td><td class="dim">−4.43 to +6.51</td><td></td></tr>
-<tr style="font-weight:700;border-top:2px solid var(--line)"><td>Aggregate</td><td class="hl">+1.04 pp</td><td>−1.00 to +3.05</td><td></td></tr>
-</tbody>
-</table></div>
-<p class="fineprint" style="margin-top:14px">At 256 tokens, TAM's state tracking was +11.5 pp and needle retrieval +12.5 pp over the Transformer (CI: +2.1 to +22.9). The advantage fades at longer contexts where full attention already captures the dependencies.</p>
-</div>
-
-<!-- ──────── CORTEX-S ──────── -->
-<h2 style="margin-top:48px">Cortex-S: a second architecture confirms the signal</h2>
-<p>A separate sparse MoE + recurrent design, trained on the same frozen 2B corpus.</p>
-
-<div class="stat-row">
-<div class="stat-pill win"><span class="val">15.015</span><span class="lab">Cortex-S Perplexity</span></div>
-<div class="stat-pill lose"><span class="val">15.054</span><span class="lab">Transformer Perplexity</span></div>
-</div>
-
-<div class="rcard">
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Metric</th><th class="hl">Cortex-S</th><th>Transformer</th></tr></thead>
-<tbody>
-<tr><td>Parameters</td><td class="hl">101,778,112</td><td>101,803,520</td></tr>
-<tr><td>Final NLL ↓</td><td class="hl win">2.7091</td><td>2.7116</td></tr>
-<tr><td>Final perplexity ↓</td><td class="hl win">15.015</td><td>15.054</td></tr>
-<tr><td>Architecture</td><td class="hl">Sparse MoE + recurrent</td><td>Standard causal attention</td></tr>
-</tbody>
-</table></div>
-<p class="fineprint" style="margin-top:14px">Cortex-S uses 8 experts (top-2 routing), 24 layers with full attention only every 6th layer, and persistent state of size 128 per layer. A deterministic safety kernel bounds every inference step.</p>
-</div>
-
-<!-- ──────── VERDICT ──────── -->
-<div class="verdict-box" style="margin-top:48px">
-<h3>Honest verdict</h3>
-<p>TAM v3 is <b>not a breakthrough</b> — but the signal is real.</p>
-<ul class="vlist">
-<li><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg><span><b>Lower NLL/PPL at every scale tested</b> (25M, 50M, 100M) — the recurrent state genuinely helps language modelling.</span></li>
-<li><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg><span><b>Significant state/memory advantage at 256 tokens</b> — the world-state branch carries information that attention alone drops.</span></li>
-<li><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg><span><b>Two independent architectures</b> (TAM + Cortex-S) both beat the Transformer on loss — this is not a fluke of one design.</span></li>
-</ul>
-<p style="margin-top:16px;color:#7fb3e0"><b>But:</b></p>
-<ul class="vlist">
-<li><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e0a07f" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg><span>The Transformer is <b>~33% faster</b> in wall-clock time. Per-FLOP, the Transformer may still win.</span></li>
-<li><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e0a07f" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg><span>The NLL advantage <b>did not translate to downstream MCQ benchmarks</b> — the Transformer wins 4 out of 5.</span></li>
-<li><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e0a07f" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg><span><b>No broad long-context advantage</b> beyond 512 tokens — persistent state alone is not enough.</span></li>
-</ul>
-<p style="margin-top:18px;color:#d0e3f5"><b>Next step:</b> TAM v4 (persistent cross-chunk state, novelty write gate, dynamic routing) will be tested at small scale before committing GPU budget. Scaling TAM v3 past 100M is not justified.</p>
-</div>
-
-<h2 style="margin-top:48px">Training protocol</h2>
-<div class="rcard">
-<div class="arch-grid">
-<div class="arch-box"><h4>Data</h4><p>FineWeb-Edu (45%), FineMath (17.5%), StackV2 (15%), Cosmopedia (15%), ArXiv (7.5%) — 2B tokens, GPT-2 tokenizer, context 512</p></div>
-<div class="arch-box"><h4>Optimizer</h4><p>AdamW, β₁=0.9, β₂=0.95, LR 3×10⁻⁴ cosine, weight decay 0.1, gradient clip 1.0</p></div>
-<div class="arch-box"><h4>Batch</h4><p>Micro-batch 64 × gradient accumulation 2 = effective batch 128, bfloat16 mixed precision</p></div>
-<div class="arch-box"><h4>Post-training</h4><p>SFT on SmolSmolTalk (100K examples), then DPO on UltraFeedback (10K preference pairs)</p></div>
-</div>
-</div>
-
-<p style="margin-top:32px;text-align:center"><a class="btn small" href="https://github.com/vinceackermann2-sys/tam-research" target="_blank" rel="noopener">View full research on GitHub →</a></p>
-
-<p style="margin-top:20px;text-align:center"><a href="/">Home</a> · <a href="models.html">Models</a> · <a href="pricing.html">Pricing</a></p>
+<p style="margin-top:32px;text-align:center"><a href="/">Home</a> · <a href="research.html">Research</a> · <a href="pricing.html">Pricing</a></p>
 </main>
 
-<footer class="afooter"><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="models.html">Models</a> · <a href="privacy.html">Privacy</a></span></div></footer>
+<footer class="afooter"><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="research.html">Research</a> · <a href="pricing.html">Pricing</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></span></div></footer>
+
+<script>
+(function(){
+  var tabs = document.querySelectorAll('[data-mtab]');
+  var panels = document.querySelectorAll('[data-mpanel]');
+  tabs.forEach(function(tab){
+    tab.addEventListener('click', function(){
+      tabs.forEach(function(t){ t.classList.remove('on'); t.setAttribute('aria-selected','false'); });
+      panels.forEach(function(p){ p.classList.remove('on'); });
+      tab.classList.add('on');
+      tab.setAttribute('aria-selected','true');
+      var panel = document.querySelector('[data-mpanel="' + tab.getAttribute('data-mtab') + '"]');
+      if (panel) panel.classList.add('on');
+    });
+  });
+})();
+</script>
 </body>
 </html>
