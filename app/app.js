@@ -311,7 +311,7 @@ function renderAuth(){
   try { lastGoogle = localStorage.getItem('belna.lastProvider') === 'google'; } catch {}
   root.innerHTML = `
   <div class="fadeup authpage">
-    <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="pricing.html">Open Docs &#8599;</a></div>
+    <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="/pricing">Open Docs &#8599;</a></div>
     <div class="authcard">
       <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : 'Log in to manage profile and billing'}</h1>
       ${state.pendingPrompt ? `<div class="kv" style="margin-top:16px;text-align:left"><div class="row"><span style="color:var(--mut)">${icon('chatb',16)}</span><div><b style="font-weight:600">${esc(state.pendingPrompt.length > 140 ? state.pendingPrompt.slice(0, 140) + '…' : state.pendingPrompt)}</b><div class="sub">Your message is saved — it will appear in the agent chat right after you sign in, before anything runs.</div></div></div></div>` : ''}
@@ -645,7 +645,7 @@ function renderLanding(){
   <div class="fadeup">
     <div class="anav"><nav class="nav">
       <a class="abrand" href="#" data-act="top">${Mascot.logo(26)} belna</a>
-      <div class="navlinks"><a href="#agent" data-act="scroll" data-t="#agent">Product</a><a href="models.html">Models</a><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div>
+      <div class="navlinks"><a href="#agent" data-act="scroll" data-t="#agent">Product</a><a href="/models">Models</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div class="anav-cta">
         <button class="btn ghost small hideS" data-act="signin-nav">Sign in</button>
         <button class="btn small" data-act="open-app">Get started</button>
@@ -749,7 +749,7 @@ function renderLanding(){
               <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
             </tbody>
           </table></div>
-          <div class="fineprint mc-foot"><span>Methodology and full results at <a href="models.html">belna.se</a> →</span><span class="mc-foot-brand">${Mascot.logo(20)} BELNA</span></div>
+          <div class="fineprint mc-foot"><span>Methodology and full results at <a href="/models">belna.se</a> →</span><span class="mc-foot-brand">${Mascot.logo(20)} BELNA</span></div>
         </div>
       </div>
     </section>
@@ -793,9 +793,9 @@ function renderLanding(){
 
     <footer class="afooter"><div class="fin">
       <div><div class="abrand">${Mascot.logo(24)} belna</div></div>
-      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="models.html">Models</a><a href="research.html">Research</a><a href="pricing.html">Pricing</a></div>
+      <div><h4>Product</h4><a href="#safety">Safe Swedish AI</a><a href="#agent">Personal Agent</a><a href="/models">Models</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div><h4>Company</h4><a href="#" data-act="open-app">Get started</a><a href="#" data-act="signin-nav">Sign in</a></div>
-      <div><h4>Legal</h4><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a><a href="security.html">Security</a><a href="cookies.html">Cookie Policy</a></div>
+      <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div>
     </div><div class="base"><span>© 2026 Belna — made in Stockholm</span></div></footer>
   </div>`;
   const wire = (formId, inputId) => {
