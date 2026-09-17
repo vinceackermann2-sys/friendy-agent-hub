@@ -42,6 +42,7 @@ work with no extra setup.
 1. SQL Editor → run `supabase/schema.sql`, then `supabase/schema2.sql`,
    `supabase/schema3.sql`, and `supabase/schema4.sql` in order. The fourth
    migration adds owner-scoped triggers, automation runs, and automation chats.
+   For an already linked project, deploy tracked updates with `npx supabase db push`.
 2. API settings → URL + publishable + secret into `.env` (already done here).
 3. Restart `npm start` → `/api/health` shows `"supabase": true`.
 
