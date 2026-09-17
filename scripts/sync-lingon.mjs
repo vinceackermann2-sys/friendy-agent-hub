@@ -26,7 +26,7 @@ function copy(src, dest) {
 }
 
 // Frontend JS/CSS served by the TanStack route from /lingon/*
-for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'mascot.js', 'styles.css', 'task-routing.cjs']) {
+for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'mascot.js', 'styles.css', 'task-routing.js']) {
   copy(join('app', f), join('public', 'lingon', f));
 }
 // Static Belna pages served from the site root

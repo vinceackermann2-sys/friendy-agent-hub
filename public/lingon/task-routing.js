@@ -2,7 +2,7 @@
   const api = factory();
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (root) root.LingonTaskRouting = api;
-})(typeof window !== "undefined" ? window : null, function createTaskRouting() {
+})(typeof window !== "undefined" ? window : globalThis, function createTaskRouting() {
   const TASK_VERBS =
     /\b(research|investigate|analy[sz]e|review|build|create|make|design|write|draft|plan|compare|summari[sz]e|find|prepare|calculate|implement|fix|generate)\b/i;
   const ADJUSTMENT =

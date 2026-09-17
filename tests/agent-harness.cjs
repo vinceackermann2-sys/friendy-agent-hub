@@ -4,9 +4,10 @@ const { hostAllowed } = require("../server/harness");
 const { fetchAllowlisted } = require("../server/agents/sandbox");
 const { eventMatches, nextRunAt, normalizeSubAgent } = require("../server/agents/triggers");
 const { pickTools } = require("../server/agents/tools");
-const { routeMessage, taskKind } = require("../app/task-routing.cjs");
 
 async function main() {
+  await import("../app/task-routing.js");
+  const { routeMessage, taskKind } = globalThis.LingonTaskRouting;
   const now = new Date("2026-09-17T12:34:56.000Z");
   const answer = currentTimeAnswer("What year is it?", now);
   assert.match(answer, /September 17, 2026/);
