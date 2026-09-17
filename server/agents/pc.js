@@ -1,13 +1,10 @@
-/* Live computer sessions — a REAL shared sandbox terminal.
-   - One persistent node:vm context per (user, chat). No I/O, no require,
-     3s timeout per execution — same bounds as the one-shot code_run tool.
-   - Every execution streams its stdout lines to WS viewers AND persists them
-     in session.log (mirrored in the Live tab computer pane + chat cards).
-   - `input` and `last` stay bound in the context, so the user can take over
-     and run their own lines against the same live data the agent just used.
-   - Idle sessions are reaped (10 min); contexts never touch disk/network.
+/* Live computer sessions — read-only shared terminal view.
+   - Arbitrary code execution is DISABLED (see run() below): node:vm is not a
+     security boundary, so user-supplied JS is never evaluated here.
+   - Server-generated output lines are streamed to WS viewers and persisted in
+     session.log (mirrored in the Live tab computer pane + chat cards).
+   - Idle sessions are reaped (10 min).
 */
-const vm = require('node:vm');
 const { entry } = require('./tracing');
 
 const sessions = new Map(); // pcId -> { pcId, userId, chatId, context, log[], userControl, viewers:Set, lastActive }
@@ -45,7 +42,6 @@ function getOrCreate(userId, chatId) {
       lines.push(line);
     } },
   };
-  vm.createContext(sandbox);
   s = { pcId, userId, chatId, context: sandbox, lines, log: [], userControl: false, viewers: new Set(), lastActive: Date.now() };
   sessions.set(pcId, s);
   if (!sweepTimer) sweepTimer = setInterval(sweep, 60000);
@@ -95,4 +91,4 @@ function owned(pcId, userId) {
   return s && s.userId === userId ? s : null;
 }
 
-module.exports = { getOrCreate, run, takeOver, owned, broadcast };
+module.exports = { getOrCreate, run, report, takeOver, owned, broadcast };
