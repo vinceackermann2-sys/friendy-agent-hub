@@ -291,6 +291,12 @@ async function refreshSubAgents(repaint = true) {
     ]);
     state.subAgents = Array.isArray(agents.subAgents) ? agents.subAgents : [];
     state.triggerOptions = options || state.triggerOptions;
+    if (state.subAgentComposer) {
+      const nameInput = $('#subname');
+      const promptInput = $('#subprompt');
+      if (nameInput) state.subAgentDraftName = nameInput.value;
+      if (promptInput) state.subAgentDraft = promptInput.value;
+    }
     save();
     if (repaint && state.canvasOpen && state.canvasTab === 'agent' && state.agentTab === 'subagents') paintCanvas();
   } catch (e) { toast(e.message || 'Could not load sub-agents.'); }
@@ -577,9 +583,25 @@ function giftCardHtml(p){
   const amt = Number(p.giftUsd || 0);
   if (!amt) return '';
   const credits = amt * 2;
+  const uid = 'gc' + amt;
   return `<div class="gift-note">+ FREE $${amt} gift card</div>`
-    + `<div class="giftcard"><div class="giftcard-left"><span class="gift-ico">${icon('gift',22)}</span><span class="gift-label">gift card</span></div>`
-    + `<div class="giftcard-right"><div class="gift-brand">belna</div><div class="gift-amt">$${amt} · ${credits} credits</div><div class="gift-sub">use it or gift it</div></div></div>`;
+    + `<div class="giftcard">`
+    + `<svg class="giftcard-bg" viewBox="0 0 600 260" preserveAspectRatio="xMaxYMid slice" xmlns="http://www.w3.org/2000/svg">`
+    + `<defs><filter id="gcB${uid}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter>`
+    + `<filter id="gcG${uid}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="8" flood-color="#fff" flood-opacity=".6"/></filter></defs>`
+    + `<g filter="url(#gcB${uid})">`
+    + `<circle cx="510" cy="130" r="150" fill="#B8D4F7"/><circle cx="390" cy="130" r="95" fill="#4A7FD4" opacity=".9"/>`
+    + `<circle cx="410" cy="55" r="85" fill="#2E5BA8" opacity=".85"/><circle cx="410" cy="205" r="85" fill="#2E5BA8" opacity=".85"/>`
+    + `<circle cx="460" cy="35" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="460" cy="225" r="95" fill="#4A7FD4" opacity=".9"/>`
+    + `<circle cx="500" cy="130" r="120" fill="#3B6DD9" opacity=".9"/>`
+    + `<circle cx="530" cy="55" r="100" fill="#2E5BA8" opacity=".9"/><circle cx="530" cy="205" r="100" fill="#4A7FD4" opacity=".9"/>`
+    + `<circle cx="560" cy="130" r="110" fill="#B8D4F7" opacity=".85"/></g>`
+    + `<g transform="translate(500,130)">`
+    + `<path d="M0,-130 Q0,0 130,0 Q0,0 0,130 Q0,0 -130,0 Q0,0 0,-130Z" fill="#fff" opacity=".95" filter="url(#gcG${uid})"/>`
+    + `<path d="M0,-125 Q0,0 125,0 Q0,0 0,125 Q0,0 -125,0 Q0,0 0,-125Z" fill="#fff"/></g></svg>`
+    + `<div class="giftcard-content"><div class="giftcard-meta"><span class="gift-label">gift card</span><span class="gift-brand">belna</span></div>`
+    + `<div class="gift-amt">$${amt}</div>`
+    + `<div class="gift-sub">${credits} credits · use it or gift it</div></div></div>`;
 }
 function creditSliderHtml(p){
   const id = String(p.id || '');
@@ -1491,7 +1513,6 @@ function paintChat(M){
       ${c.source === 'automation' ? `<span class="chip">${icon('clock',12)} sub-agent</span>` : ''}
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
-      <button class="trigger-head" data-act="open-subagents" title="Open Sub Agents">${icon('clock',15)}<span>Sub Agents</span></button>
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('panel',16)}</button>
     </div>
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
@@ -1892,7 +1913,7 @@ function agentSliderContent(){
     const arts = artifactRows();
     body = `<div class="aslider-sec"><label class="alabel">Artifacts &amp; files (${arts.length})</label>
       <div class="kv">${arts.map(r => `<div class="row"><span style="color:var(--mut)">${icon(r.kind === 'file' ? 'file' : 'spark',15)}</span><div><b>${esc(r.title)}</b><div class="sub">${esc(r.kind)} · from “${esc(r.chat)}”</div></div></div>`).join('') || '<div class="row mut">No artifacts or files yet.</div>'}</div>
-      <div class="secnote">${icon('shieldcheck',14)} Everything here was really generated — never simulated.</div></div>`;
+      </div>`;
   } else if (t === 'approvals') {
     const ap = approvalRows();
     body = `<div class="aslider-sec"><label class="alabel">Approval history (${ap.length + state.vault.approvals.length})</label>
@@ -2117,7 +2138,7 @@ function paintCanvas(){
     const an = $('#agentname');
     if (an) an.addEventListener('change', e => {
       const v = e.target.value.trim(); if (!v) return;
-      state.agent.name = v; save(); paintSide(); paintCanvas();
+      state.agent.name = v; save(); paintSide(); paintMain(); paintCanvas();
       toast('Renamed — they answer to ' + v + ' now.');
     });
     return;
@@ -2181,7 +2202,7 @@ function initCanvasResize(){
     function onMove(e2){
       if (!dragging) return;
       const delta = startX - e2.clientX;
-      const newW = Math.min(900, Math.max(340, startW + delta));
+      const newW = Math.min(1200, Math.max(420, startW + delta));
       cv.style.width = newW + 'px';
     }
     function onUp(){
@@ -2786,8 +2807,8 @@ document.addEventListener('click', async e => {
   if (act === 'dlfile'){ const f = window.__fileRows && window.__fileRows[+b.dataset.i]; if (f) dl(f.name, f.content); return; }
 
   /* profile / appearance (shared by Settings + right slider) */
-  if (act === 'p-color'){ state.agent.color = b.dataset.c; save(); paintSide(); paintCanvas(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
-  if (act === 'p-pers'){ state.agent.pers = b.dataset.p; save(); paintCanvas(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
+  if (act === 'p-color'){ state.agent.color = b.dataset.c; save(); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
+  if (act === 'p-pers'){ state.agent.pers = b.dataset.p; save(); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
   if (act === 'reset'){
     if (confirm('Release this agent? This deletes the claim, chats, vault and memory on this device.')){
       localStorage.removeItem(LS); location.reload();

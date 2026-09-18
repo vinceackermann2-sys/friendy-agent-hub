@@ -11,6 +11,9 @@
     "start": "node server/index.js",
     "preview": "vite preview",
     "test": "node tests/agent-harness.cjs && node tests/agent-confidentiality.cjs",
+    "smoke:real": "node tests/smoke.real.js",
+    "test:agent-chat": "node tests/agent-chat.real.cjs",
+    "test:memory": "node tests/memory-auto.js",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
@@ -85,6 +88,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "playwright": "^1.63.0",
     "eslint": "^9.32.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",

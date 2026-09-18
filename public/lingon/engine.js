@@ -227,7 +227,6 @@ window.Engine = (() => {
   async function chat(rt, raw){
     const mem = recallRelevant(rt, raw);
     await rt.say((mem ? `From my memory: *"${mem.text}"* — kept in mind while I work. ` : '') + preview(raw) + ` Want me to run it for real? I have the sandbox warmed up.`, { mood:'idle' });
-    rt.chips(['Run it', 'What can you do?', 'How do you keep me safe?']);
   }
 
   async function chatExtra(rt, raw){

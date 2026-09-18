@@ -501,8 +501,9 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
     // Conversation transcript (Strawberry-style): persist both turns so past
     // chats are searchable per-user, cross-device.
     try {
-      await store.saveTurn(req.user.id, sessionId || 'unsorted', 'user', String(prompt));
-      await store.saveTurn(req.user.id, sessionId || 'unsorted', 'agent', safeText);
+      const transcriptId = sessionId || `unsorted_${req.user.id}`;
+      await store.saveTurn(req.user.id, transcriptId, 'user', String(prompt));
+      await store.saveTurn(req.user.id, transcriptId, 'agent', safeText);
       push(entry('file', 'history: turns persisted to your transcript'));
     } catch {}
     try {

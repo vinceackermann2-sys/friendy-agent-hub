@@ -3,7 +3,7 @@
    Flow: health → signup test user → auth gate → onboarding → real chat →
    research (live, no fake stats) → vault masked → Apps empty → billing Free 20 credits.
 */
-const { chromium } = require('playwright');
+import { chromium } from 'playwright';
 
 (async () => {
   const base = process.env.BASE || 'http://127.0.0.1:8000';
@@ -57,10 +57,15 @@ const { chromium } = require('playwright');
   await p.waitForSelector('.hero h1', { timeout: 10000 });
   step('landing renders (authed)');
 
-  // pricing visible, honest harness wording
+  // Pricing is a dedicated public route; landing copy must not make stale
+  // implementation claims.
   const landing = await p.evaluate(() => document.body.innerText);
-  if (!/Free.*20 credits/i.test(landing)) errs.push('Pricing Free 20 credits missing on landing');
   if (/Codex-style|OpenAI Agents API/.test(landing)) errs.push('Stale Codex wording on landing');
+  await p.goto(base + '/pricing', { waitUntil: 'load' });
+  const pricing = await p.evaluate(() => document.body.innerText);
+  if (!/20 starter credits/i.test(pricing)) errs.push('Pricing Free 20 credits missing');
+  await p.goto(base, { waitUntil: 'load' });
+  await p.waitForSelector('.hero h1', { timeout: 10000 });
   step('pricing + harness wording honest');
 
   await p.click('[data-act="open-app"]');
@@ -110,8 +115,8 @@ const { chromium } = require('playwright');
   step('canvas run timeline renders');
   await p.waitForSelector('#cbody .shot img', { timeout: 15000 });
   step('canvas shows real page screenshot');
-  // Live tab: real streamed browser, takeover control bar with mascot.
-  await p.click('[data-act="ctab"][data-t="live"]');
+  // Live browser is opened from the browser card and rendered in Canvas.
+  await p.click('[data-act="watchlive"]');
   await p.waitForSelector('#liveimg[src^="data:"]', { timeout: 15000 });
   step('live viewport renders (poster)');
   await p.waitForFunction(() => (window.__liveFrames || 0) >= 1, { timeout: 30000 });
@@ -153,11 +158,11 @@ const { chromium } = require('playwright');
   await p.waitForSelector('[data-act="stab"][data-t="billing"]');
   await p.click('[data-act="stab"][data-t="billing"]');
   await p.waitForSelector('#billbody', { timeout: 15000 });
-  await p.waitForTimeout(3000);
+  await p.waitForFunction(() => !document.querySelector('#billbody')?.textContent?.includes('Loading'), { timeout: 30000 });
   const bill = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
   console.log('BILLING SAMPLE:\n' + bill.slice(0, 600));
   if (!/FREE/i.test(bill)) errs.push('Billing plan missing');
-  if (!/20 credits/i.test(bill)) errs.push('Free 20 credits missing');
+  if (!/20 starter credits/i.test(bill)) errs.push('Free 20 starter credits missing');
   if (!/Redeem gift/i.test(bill)) errs.push('Gift redeem missing');
   step('billing real');
 

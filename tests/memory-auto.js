@@ -9,9 +9,9 @@
   const s = await (await fetch(base + '/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, password: 'AutoMem123!' }) })).json();
   if (!s.access_token) fail('signup: ' + JSON.stringify(s).slice(0, 200));
   const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.access_token };
-  const marker = 'quinoa-' + Date.now();
+  const marker = 'project-' + Date.now();
 
-  const c1 = await (await fetch(base + '/api/chat', { method: 'POST', headers: H, body: JSON.stringify({ prompt: `A quick fact about me: my favorite grain is ${marker}. I eat it every Tuesday.`, history: [], agent: { name: 'T' }, memories: [] }) })).json();
+  const c1 = await (await fetch(base + '/api/chat', { method: 'POST', headers: H, body: JSON.stringify({ prompt: `A quick fact about me: my exact project codename is ${marker}.`, history: [], agent: { name: 'T' }, memories: [] }) })).json();
   if (c1.error) fail('chat1: ' + c1.error);
   console.log('chat1 savedMems:', JSON.stringify(c1.savedMems || []));
   if (!(c1.savedMems || []).length) fail('nothing auto-saved (savedMems empty)');
@@ -20,7 +20,7 @@
   if (!list.memories.some((m) => m.text.includes(marker))) fail('saved memory not listed: ' + JSON.stringify(list.memories).slice(0, 300));
   console.log('persisted: ok (' + list.memories.length + ' memories)');
 
-  const c2 = await (await fetch(base + '/api/chat', { method: 'POST', headers: H, body: JSON.stringify({ prompt: 'What is my favorite grain?', history: [], agent: { name: 'T' }, memories: [], sessionId: 'test-chat-1' }) })).json();
+  const c2 = await (await fetch(base + '/api/chat', { method: 'POST', headers: H, body: JSON.stringify({ prompt: 'What is my exact project codename? Include its numeric suffix.', history: [], agent: { name: 'T' }, memories: [], sessionId: 'test-chat-1' }) })).json();
   if (c2.error) fail('chat2: ' + c2.error);
   console.log('answer:', String(c2.text).slice(0, 200));
   if (!String(c2.text).includes(marker)) fail('agent did not recall the fact');

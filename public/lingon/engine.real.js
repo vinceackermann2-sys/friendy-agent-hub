@@ -24,6 +24,7 @@ window.Engine = (() => {
     if (/(email|inbox|gmail|newsletter)/.test(p)) return 'inbox';
     if (/(secret|password|token|api key|credential|vault)/.test(p)) return 'vault';
     if (/(sub.?agent|automation|automate|trigger|watch(?:er)?|schedule|recurring|every (?:minute|hour|day|week|month)|remind me)/.test(p)) return 'automation';
+    if (/(what do you remember|do you remember|your memor|recall|what do you know about me)/.test(p)) return 'chat';
     if (/(remember|don't forget|dont forget|keep in mind|preference)/.test(p)) return 'memory';
     if (/(build|create|make|design|code).*(website|landing|page|site|dashboard|app|chart|graph|deck)/.test(p) || /(website|landing page|one-pager)/.test(p)) return 'build';
     return 'chat';
@@ -317,7 +318,6 @@ window.Engine = (() => {
     try {
       const text = await chatAI(rt, raw, { signal: task?.signal, delegated: !!task });
       await rt.say(text, { mood: 'idle' });
-      rt.chips(['Run it', 'What can you do?', 'How do you keep me safe?']);
     } catch (e) {
       if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
       await rt.say(`I couldn't complete that request right now. Please try again in a moment.`, { mood: 'think' });
