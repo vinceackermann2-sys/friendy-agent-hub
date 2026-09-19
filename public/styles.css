@@ -287,10 +287,6 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .tline .d{ margin-left:auto; font-size:11.5px; color:var(--soft); }
 .tline .ok{ color:var(--green); }
 
-.chipsrow{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-.chipsrow .chip{ cursor:pointer; background:#fff; border:1px solid var(--line); color:#3C3F44; font-size:13px; padding:7px 14px; transition:all .15s; }
-.chipsrow .chip:hover{ border-color:var(--ink); color:var(--ink); }
-
 /* ---------- action cards ---------- */
 .acard{
   background:#fff; border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow);
@@ -852,4 +848,53 @@ footer.afooter{ max-width:none; margin-left:0; margin-right:0; display:block; }
 .pctitle{ font-weight:800; font-size:13px; display:flex; gap:8px; align-items:center; margin-top:12px; }
 .pcinput{ display:flex; gap:8px; margin-top:8px; }
 .pcinput input{ flex:1; }
+
+/* ============ pricing: free-gift banner strip (bottom of card) ============ */
+/* Blue strip like the reference: small $ card bottom-left, bold text right. */
+.gift-strip{
+  display:flex; align-items:center; gap:12px;
+  background:#45B6E8; border-radius:10px;
+  padding:8px 14px 8px 8px; margin-top:10px;
+}
+.gift-thumb{
+  flex:none; min-width:56px; height:44px; padding:0 10px;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:#fff; border-radius:7px;
+  font-size:16px; font-weight:800; letter-spacing:-.01em; color:#17181A;
+  box-shadow:0 1px 4px rgba(10,30,50,.25);
+}
+.gift-strip-text{ color:#fff; font-size:16px; font-weight:800; letter-spacing:-.01em; white-space:nowrap; }
+
+/* ============ pricing: purchased-credits dropdown ============ */
+.credit-add{ position:relative; }
+.credit-select-label{
+  display:block; font-size:12px; font-weight:700; letter-spacing:.1em;
+  color:#8E8E93; margin-bottom:8px;
+}
+.credit-select{ position:relative; }
+.credit-select-btn{
+  width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  background:#fff; border:1.5px solid #E2E2E6; border-radius:14px;
+  padding:13px 16px; font-size:16px; font-weight:500; color:#17181A;
+}
+.credit-select-btn:hover{ border-color:#c9c9cf; }
+.credit-select.open .credit-select-btn{ border-color:#c9c9cf; }
+.credit-select-btn .chev{ color:#6E7076; font-size:13px; flex:none; transition:transform .15s ease; }
+.credit-select.open .credit-select-btn .chev{ transform:rotate(180deg); }
+.credit-select-menu{
+  display:none; position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:30;
+  background:#fff; border:1px solid var(--line); border-radius:16px;
+  box-shadow:var(--shadow-lg); padding:6px; max-height:320px; overflow-y:auto;
+}
+.credit-select.open .credit-select-menu{ display:block; animation:pop .18s ease both; }
+.credit-opt{
+  width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  border:none; background:none; text-align:left;
+  font-size:16px; font-weight:500; color:#17181A;
+  padding:12px 14px; border-radius:10px;
+}
+.credit-opt:hover{ background:#F2F2F4; }
+.credit-opt.sel{ background:#F2F2F4; font-weight:600; }
+.credit-opt .tick{ color:#17181A; font-size:15px; font-weight:700; visibility:hidden; flex:none; }
+.credit-opt.sel .tick{ visibility:visible; }
 

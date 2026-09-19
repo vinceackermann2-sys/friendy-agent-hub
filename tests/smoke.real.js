@@ -91,9 +91,17 @@ import { chromium } from 'playwright';
   if (/couldn't reach the AI backend|exceeded your current quota/i.test(thread)) errs.push('AI backend unreachable (model quota/error) — not verified this run');
   step('real chat answered');
 
+  await p.fill('#cprompt', 'Do you have access to real-time live browsing?');
+  await p.keyboard.press('Enter');
+  await p.waitForFunction(() => {
+    const text = document.querySelector('#tinner')?.innerText || '';
+    return /supported public sources/i.test(text) && /sandboxed browser/i.test(text);
+  }, { timeout: 30000 });
+  step('browsing capability is described accurately');
+
   await p.click('[data-act="newchat"]');
   await p.waitForSelector('#cprompt');
-  await p.fill('#cprompt', 'Research Swedish party sentiment on social media');
+  await p.fill('#cprompt', 'Browse the web for current Swedish party sentiment on social media');
   await p.keyboard.press('Enter');
   await p.waitForSelector('.qopt', { timeout: 90000 });
   step('research live');

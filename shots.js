@@ -34,7 +34,6 @@ const { chromium } = require('playwright');
   await p.screenshot({ path: '/home/user/shots/5-chat-subagents.png' });
   await p.click('.qopt');
   await p.waitForSelector('.chartbox .bar', { timeout: 40000 });
-  await p.waitForSelector('.chipsrow', { timeout: 40000 });
   await p.waitForTimeout(500);
   await p.screenshot({ path: '/home/user/shots/6-chat-chart.png' });
 

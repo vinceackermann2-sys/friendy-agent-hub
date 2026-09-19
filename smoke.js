@@ -43,7 +43,7 @@ const { chromium } = require('playwright');
   await p.click('.qopt');                            // percentage graph + dataset
   await p.waitForSelector('.chartbox .bar', { timeout: 40000 });
   step('canvas chart rendered');
-  await p.waitForSelector('.chipsrow', { timeout: 40000 });
+  await p.waitForTimeout(500);
   step('research flow finished');
 
   // trace tab

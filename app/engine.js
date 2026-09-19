@@ -53,7 +53,6 @@ window.Engine = (() => {
     const n = rt.agent.name;
     const mem = rt.recall().find(m => m.src === 'you said so' || m.src === 'from our chat');
     await rt.say(`Hej — I'm **${n}**, your Lingon agent. I can research, browse, write code, manage files, and keep your work organized. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood:'happy' });
-    rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page', 'Remember that I prefer concise answers']);
   }
 
   /* ---------------- scenarios ---------------- */
@@ -114,7 +113,6 @@ window.Engine = (() => {
     rt.card({ type:'file', name:'dataset.csv', size:csv.length, content:csv, status:'done' });
 
     await rt.say(`Done. Across **1,392 qualifying comments**, the Social Democrats lead observed share of voice (24%), ahead of the Moderates (19%) and Sweden Democrats (17%) — with the Greens notably over-represented on social platforms versus forums. Everything is anonymized and source-linked in \`dataset.csv\`, and the chart is on your canvas. Remember: this measures what people *say publicly online*, not what Sweden will vote.`, { mood:'happy' });
-    rt.chips(['Break it down by platform', 'Write a report from this', 'Save the methodology to memory']);
   }
 
   async function github(rt){
@@ -153,7 +151,6 @@ window.Engine = (() => {
     rt.card({ type:'artifact', title:'pr-review.diff', kind:'code', status:'done' });
 
     await rt.say(`Review complete. **PR #48** is merge-ready — the jitter fix is sound and tests pass. **PR #51** has two failing tests around \`user.prefersFormat\` (undefined in the test setup) and a mobile-export TODO; I'd request changes. Full diff is on the canvas.`, { mood:'happy' });
-    rt.chips(['Draft a review comment for PR #51', 'What else is on my repos?', 'Build me a landing page']);
   }
 
   async function build(rt){
@@ -171,7 +168,6 @@ window.Engine = (() => {
     rt.card({ type:'artifact', title:'your-page.html', kind:'html', status:'done' });
     rt.card({ type:'file', name:'your-page.html', size:html.length, content:html, status:'done' });
     await rt.say(`Your page is live on the canvas and saved to Files. It's a single dependency-free HTML file — tell me what to tweak and I'll iterate in place.`, { mood:'happy' });
-    rt.chips(['Make the hero bigger', 'Add a contact section', 'Research something for me']);
   }
 
   async function inbox(rt){
@@ -244,12 +240,10 @@ window.Engine = (() => {
     }
     if (/what can you do/.test(p)){
       await rt.say(`Quite a lot: **deep research**, **browser and computer use**, **code and files** on your canvas, **email triage**, and memory across chats. Sensitive actions require your approval.`);
-      rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page']);
       return;
     }
     if (/keep me safe|safe|security|secret/.test(p)){
       await rt.say(`Your secrets are encrypted, actions require approval unless you explicitly allow them, and external access is restricted. You can review activity in the Trace tab.`);
-      rt.chips(['Save a secret to try it', 'Review my GitHub pull requests']);
       return;
     }
     if (/^run it/.test(p)){

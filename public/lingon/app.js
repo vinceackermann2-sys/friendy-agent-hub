@@ -162,9 +162,11 @@ const fresh = () => ({
   vault:{ secrets:[], apps:[], approvals:[], mode:'default' },
   memory:[],
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
-  // right-side canvas slider: canvasTab 'agent' shows the agent panel;
-  // agentTab picks its content: 'appearance' | 'approvals' | 'library'
-  agentTab:'appearance',
+  // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
+  composioApps:[], composioLoading:false, appQuery:'', appFilter:'all',
+  // right-side canvas: canvasTab 'agent' | 'canvas' | 'trace' | 'subagents' | 'mail' | 'wallet';
+  // agentTab picks agent-panel content: 'appearance' | 'approvals' | 'library'
+  agentTab:'appearance', walletTab:'wallet', mailTab:'inbox',
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
   userProfile:null, browserProfile:{ profile:'Default', sandbox:true, allowlist:true },
@@ -176,14 +178,21 @@ catch (e) { state = fresh(); }
 if (!state.vault) state.vault = fresh().vault;
 // Canvas is never open by default — user or a fresh artifact opens it.
 state.canvasOpen = false;
-if (!state.agentTab) state.agentTab = 'appearance';
+if (!state.agentTab || state.agentTab === 'subagents') state.agentTab = 'appearance';
 if (state.agentPanel) state.canvasTab = 'agent';
 delete state.agentPanel;
-if (!['agent', 'canvas', 'trace'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+// Migrate legacy nested sub-agents tab to its own top-level tab next to Trace.
+if (state.canvasTab === 'agent' && state.agentTab === 'subagents') state.canvasTab = 'subagents';
+if (!['agent', 'canvas', 'trace', 'subagents', 'mail', 'wallet'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+if (!state.walletTab) state.walletTab = 'wallet';
+if (!state.mailTab) state.mailTab = 'inbox';
 if (!state.settingsTab) state.settingsTab = 'profiles';
 if (!state.browserProfile) state.browserProfile = fresh().browserProfile;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
+if (!Array.isArray(state.composioApps)) state.composioApps = [];
+if (typeof state.appQuery !== 'string') state.appQuery = '';
+if (!state.appFilter) state.appFilter = 'all';
 // Honest apps: no fake OAuth connections exist — always empty.
 state.vault.apps = [];
 const save = () => localStorage.setItem(LS, JSON.stringify(state));
@@ -255,6 +264,10 @@ async function syncFromBackend() {
     ]);
     state.subAgents = Array.isArray(agents.subAgents) ? agents.subAgents : [];
     state.triggerOptions = options || fresh().triggerOptions;
+    try {
+      const aj = await window.LingonAuth.api('/api/composio/apps');
+      if (Array.isArray(aj.apps)) state.composioApps = aj.apps;
+    } catch {}
     for (const remote of automationChats.chats || []) {
       const messages = (remote.messages || []).map((m) => ({
         id:m.id,
@@ -279,6 +292,7 @@ async function syncFromBackend() {
     }
     state.chats.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
   } catch {}
+  try { await ensureMailbox(); } catch {}
   save();
 }
 
@@ -298,8 +312,69 @@ async function refreshSubAgents(repaint = true) {
       if (promptInput) state.subAgentDraft = promptInput.value;
     }
     save();
-    if (repaint && state.canvasOpen && state.canvasTab === 'agent' && state.agentTab === 'subagents') paintCanvas();
+    if (repaint && state.canvasOpen && state.canvasTab === 'subagents') paintCanvas();
   } catch (e) { toast(e.message || 'Could not load sub-agents.'); }
+}
+
+/* ---------------- Belna Apps via Composio (per-user OAuth) ---------------- */
+async function refreshComposioApps() {
+  if (!signedIn()) return;
+  state.composioLoading = true;
+  if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+  try {
+    const j = await window.LingonAuth.api('/api/composio/apps');
+    if (Array.isArray(j.apps)) state.composioApps = j.apps;
+  } catch (e) {
+    toast(e.message || 'Could not load apps.');
+  } finally {
+    state.composioLoading = false;
+    save();
+    if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+    try {
+      const o = await window.LingonAuth.api('/api/trigger-options');
+      state.triggerOptions = o || state.triggerOptions;
+      save();
+    } catch {}
+  }
+}
+
+async function connectComposioApp(toolkit, authConfigId) {
+  try {
+    toast(`Opening ${toolkit} connection…`);
+    const j = await window.LingonAuth.api('/api/composio/connect', {
+      method: 'POST',
+      body: JSON.stringify({ toolkit, authConfigId }),
+    });
+    if (j.redirectUrl) {
+      window.open(j.redirectUrl, '_blank', 'noopener');
+      toast('Finish signing in, then press Refresh.');
+    }
+  } catch (e) {
+    toast(e.message || 'Could not start connection.');
+  }
+}
+
+async function disconnectComposioApp(app) {
+  if (!app || !app.connectedAccountId) return;
+  if (!window.confirm(`Disconnect ${app.name}? Your agent will lose access until you reconnect.`)) return;
+  try {
+    await window.LingonAuth.api('/api/composio/disconnect', {
+      method: 'POST',
+      body: JSON.stringify({ connectedAccountId: app.connectedAccountId }),
+    });
+    state.composioApps = state.composioApps.map((a) =>
+      a.toolkit === app.toolkit ? { ...a, connected: false, connectedAccountId: null, status: 'NOT_CONNECTED' } : a
+    );
+    save();
+    paintApps($('#main'));
+    toast(`${app.name} disconnected.`);
+  } catch (e) {
+    toast(e.message || 'Could not disconnect.');
+  }
+}
+
+function composioAppByToolkit(toolkit) {
+  return (state.composioApps || []).find((a) => a.toolkit === String(toolkit || '').toLowerCase()) || null;
 }
 
 function subAgentTriggerLabel(subAgent) {
@@ -311,7 +386,11 @@ function subAgentTriggerLabel(subAgent) {
     if (minutes >= 60 && minutes % 60 === 0) return `Every ${minutes / 60}h`;
     return `Every ${minutes}m`;
   }
-  if (trigger.type === 'app') return `${trigger.app} · ${trigger.event}`;
+  if (trigger.type === 'app') {
+    const opt = (state.triggerOptions?.apps || []).find((a) => a.id === trigger.app);
+    const label = opt ? opt.name : String(trigger.app || 'app');
+    return `${label} · ${trigger.event}`;
+  }
   if (trigger.type === 'subagent') {
     const source = state.subAgents.find((item) => item.id === trigger.sourceAgentId);
     return `After ${source ? source.name : 'sub-agent'}`;
@@ -352,6 +431,36 @@ const currentUserId = () => {
   try { return (window.LingonAuth && window.LingonAuth.get() && window.LingonAuth.get().user && window.LingonAuth.get().user.id) || null; }
   catch { return null; }
 };
+let sandboxLeaseId = null;
+let sandboxLeaseTimer = null;
+function sandboxLeaseRequest(action) {
+  if (!sandboxLeaseId || !window.LingonAuth || !window.LingonAuth.signedIn()) return Promise.resolve(null);
+  return window.LingonAuth.api('/api/sandbox/lease', {
+    method: 'POST',
+    body: JSON.stringify({ action, leaseId: sandboxLeaseId, kind: 'app' }),
+  }).catch(() => null);
+}
+function startSandboxLease() {
+  if (!signedIn()) return;
+  if (!sandboxLeaseId) sandboxLeaseId = 'app_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36);
+  if (sandboxLeaseTimer) return;
+  sandboxLeaseRequest('acquire');
+  sandboxLeaseTimer = setInterval(() => {
+    if (signedIn()) sandboxLeaseRequest('renew');
+    else stopSandboxLease();
+  }, 25000);
+}
+function stopSandboxLease() {
+  if (sandboxLeaseTimer) { clearInterval(sandboxLeaseTimer); sandboxLeaseTimer = null; }
+  const id = sandboxLeaseId;
+  sandboxLeaseId = null;
+  if (!id) return;
+  try {
+    const sess = window.LingonAuth && window.LingonAuth.get && window.LingonAuth.get();
+    const token = sess && sess.access_token;
+    if (token) fetch('/api/sandbox/lease', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ action: 'release', leaseId: id, kind: 'app' }) }).catch(() => {});
+  } catch {}
+}
 function ensureOwnerScope(){
   const uid = currentUserId();
   if (!uid) return;
@@ -367,10 +476,12 @@ function ensureOwnerScope(){
 function render(){
   applyTheme();
   if (!signedIn()) {
+    stopSandboxLease();
     const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
     return state.pendingPrompt || appRoute ? renderAuth() : renderLanding();
   }
   ensureOwnerScope();
+  startSandboxLease();
   if (state.onboarded && state.agent && !state.agent.provisional) return renderApp();
   if (state.pendingPrompt && (!state.onboarded || !state.agent || (state.agent && state.agent.provisional))){
     // Signed-in with a saved homepage prompt: message goes to the agent chat
@@ -579,58 +690,117 @@ function pctOff(p){
   const pct = Math.round((was - price) / was * 100);
   return `<span class="pct-off">-${pct}%</span>`;
 }
+/* Extra-credit tiers for the "PURCHASED CREDITS" dropdown (credits → +$/mo). */
+const EXTRA_CREDIT_TIERS = [
+  { credits: 0, price: 0 },
+  { credits: 50, price: 15 },
+  { credits: 100, price: 30 },
+  { credits: 200, price: 45 },
+  { credits: 300, price: 60 },
+  { credits: 500, price: 75 },
+  { credits: 750, price: 100 },
+  { credits: 1000, price: 125 },
+];
+function extraTierLabel(t){
+  if (!t || !t.credits) return 'None';
+  return `${t.credits} credits — +$${t.price}`;
+}
 function giftCardHtml(p){
   const amt = Number(p.giftUsd || 0);
   if (!amt) return '';
-  const credits = amt * 2;
-  const uid = 'gc' + amt;
-  return `<div class="gift-note">+ FREE $${amt} gift card</div>`
-    + `<div class="giftcard">`
-    + `<svg class="giftcard-bg" viewBox="0 0 600 260" preserveAspectRatio="xMaxYMid slice" xmlns="http://www.w3.org/2000/svg">`
-    + `<defs><filter id="gcB${uid}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter>`
-    + `<filter id="gcG${uid}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="8" flood-color="#fff" flood-opacity=".6"/></filter></defs>`
-    + `<g filter="url(#gcB${uid})">`
-    + `<circle cx="510" cy="130" r="150" fill="#B8D4F7"/><circle cx="390" cy="130" r="95" fill="#4A7FD4" opacity=".9"/>`
-    + `<circle cx="410" cy="55" r="85" fill="#2E5BA8" opacity=".85"/><circle cx="410" cy="205" r="85" fill="#2E5BA8" opacity=".85"/>`
-    + `<circle cx="460" cy="35" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="460" cy="225" r="95" fill="#4A7FD4" opacity=".9"/>`
-    + `<circle cx="500" cy="130" r="120" fill="#3B6DD9" opacity=".9"/>`
-    + `<circle cx="530" cy="55" r="100" fill="#2E5BA8" opacity=".9"/><circle cx="530" cy="205" r="100" fill="#4A7FD4" opacity=".9"/>`
-    + `<circle cx="560" cy="130" r="110" fill="#B8D4F7" opacity=".85"/></g>`
-    + `<g transform="translate(500,130)">`
-    + `<path d="M0,-130 Q0,0 130,0 Q0,0 0,130 Q0,0 -130,0 Q0,0 0,-130Z" fill="#fff" opacity=".95" filter="url(#gcG${uid})"/>`
-    + `<path d="M0,-125 Q0,0 125,0 Q0,0 0,125 Q0,0 -125,0 Q0,0 0,-125Z" fill="#fff"/></g></svg>`
-    + `<div class="giftcard-content"><div class="giftcard-meta"><span class="gift-label">gift card</span><span class="gift-brand">belna</span></div>`
-    + `<div class="gift-amt">$${amt}</div>`
-    + `<div class="gift-sub">${credits} credits · use it or gift it</div></div></div>`;
+  return `<div class="gift-strip"><span class="gift-thumb">$${amt}</span>`
+    + `<span class="gift-strip-text">+ FREE $${amt} gift card</span></div>`;
 }
 function creditSliderHtml(p){
   const id = String(p.id || '');
   if (id !== 'pro' && id !== 'max') return '';
   const basePrice = Number(p.price || 0), baseCredits = Number(p.credits || 0);
+  const opts = EXTRA_CREDIT_TIERS.map((t, i) =>
+    `<button type="button" class="credit-opt${i === 0 ? ' sel' : ''}" role="option" aria-selected="${i === 0 ? 'true' : 'false'}" data-credits="${t.credits}" data-price="${t.price}"><span>${extraTierLabel(t)}</span><span class="tick">✓</span></button>`
+  ).join('');
   return `<div class="credit-add" data-base-price="${basePrice}" data-base-credits="${baseCredits}" data-plan="${esc(id)}">`
-    + `<div class="credit-add-top"><label>Add extra credits</label><span class="credit-add-val">+0 credits</span></div>`
-    + `<input type="range" min="0" max="200" step="10" value="0" class="credit-slider" data-plan="${esc(id)}" aria-label="Add extra credits to ${esc(id === 'pro' ? 'Pro' : 'Max')}">`
-    + `<div class="credit-add-sub">Top up on top of the plan · $0.50 / credit · <span class="credit-add-total">Total ${baseCredits} credits · $${basePrice}/mo</span></div></div>`;
+    + `<label class="credit-select-label">PURCHASED CREDITS</label>`
+    + `<div class="credit-select" data-plan="${esc(id)}" data-extra-credits="0" data-extra-price="0">`
+    + `<button type="button" class="credit-select-btn" aria-haspopup="listbox" aria-expanded="false"><span class="credit-select-val">None</span><span class="chev"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button>`
+    + `<div class="credit-select-menu" role="listbox">${opts}</div>`
+    + `</div>`
+    + `<div class="credit-add-sub"><span class="credit-add-total">Total ${baseCredits} credits · $${basePrice}/mo</span></div></div>`;
+}
+function extraCreditsFor(plan){
+  const sel = plan && document.querySelector(`.credit-select[data-plan="${plan}"]`);
+  if (sel) return { credits: Math.max(0, parseFloat(sel.dataset.extraCredits || '0')), price: Math.max(0, parseFloat(sel.dataset.extraPrice || '0')) };
+  const slider = plan && document.querySelector(`.credit-slider[data-plan="${plan}"]`);
+  if (slider) { const c = Math.max(0, parseFloat(slider.value || '0')); return { credits: c, price: c * 0.5 }; }
+  return { credits: 0, price: 0 };
 }
 function wireBillingSliders(root){
   if (!root || !root.querySelectorAll) return;
   root.querySelectorAll('.credit-add').forEach((box) => {
     const slider = box.querySelector('.credit-slider');
-    const val = box.querySelector('.credit-add-val');
-    const total = box.querySelector('.credit-add-total');
-    if (!slider || slider.dataset.wired) return;
-    slider.dataset.wired = '1';
-    const basePrice = parseFloat(box.dataset.basePrice || '0');
-    const baseCredits = parseFloat(box.dataset.baseCredits || '0');
-    const paint = () => {
-      const extra = parseFloat(slider.value || '0');
-      const extraCost = extra * 0.5;
-      if (val) val.textContent = '+' + extra + ' credits' + (extra ? ' (+$' + extraCost.toFixed(extraCost % 1 ? 2 : 0) + '/mo)' : '');
-      if (total) total.textContent = 'Total ' + (baseCredits + extra) + ' credits · $' + (basePrice + extraCost).toFixed((basePrice + extraCost) % 1 ? 2 : 0) + '/mo';
-    };
-    slider.addEventListener('input', paint);
-    paint();
+    if (slider && !slider.dataset.wired) {
+      slider.dataset.wired = '1';
+      const val = box.querySelector('.credit-add-val');
+      const total = box.querySelector('.credit-add-total');
+      const basePrice = parseFloat(box.dataset.basePrice || '0');
+      const baseCredits = parseFloat(box.dataset.baseCredits || '0');
+      const paint = () => {
+        const extra = parseFloat(slider.value || '0');
+        const extraCost = extra * 0.5;
+        if (val) val.textContent = '+' + extra + ' credits' + (extra ? ' (+$' + extraCost.toFixed(extraCost % 1 ? 2 : 0) + '/mo)' : '');
+        if (total) total.textContent = 'Total ' + (baseCredits + extra) + ' credits · $' + (basePrice + extraCost).toFixed((basePrice + extraCost) % 1 ? 2 : 0) + '/mo';
+      };
+      slider.addEventListener('input', paint);
+      paint();
+    }
+    const sel = box.querySelector('.credit-select');
+    if (sel && !sel.dataset.wired) {
+      sel.dataset.wired = '1';
+      const btn = sel.querySelector('.credit-select-btn');
+      const val = sel.querySelector('.credit-select-val');
+      const total = box.querySelector('.credit-add-total');
+      const basePrice = parseFloat(box.dataset.basePrice || '0');
+      const baseCredits = parseFloat(box.dataset.baseCredits || '0');
+      const fmt = (n) => String(Math.round(Number(n || 0) * 100) / 100);
+      const paint = () => {
+        const extra = parseFloat(sel.dataset.extraCredits || '0');
+        const cost = parseFloat(sel.dataset.extraPrice || '0');
+        const opt = sel.querySelector(`.credit-opt[data-credits="${extra}"][data-price="${cost}"]`);
+        if (val) val.textContent = opt ? opt.querySelector('span').textContent : (extra ? `${fmt(extra)} credits — +$${fmt(cost)}` : 'None');
+        if (total) total.textContent = 'Total ' + fmt(baseCredits + extra) + ' credits · $' + fmt(basePrice + cost) + '/mo';
+        if (btn) btn.setAttribute('aria-expanded', sel.classList.contains('open') ? 'true' : 'false');
+      };
+      if (btn) btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.credit-select.open').forEach((o) => { if (o !== sel) { o.classList.remove('open'); } });
+        sel.classList.toggle('open');
+        paint();
+      });
+      sel.querySelectorAll('.credit-opt').forEach((opt) => {
+        opt.addEventListener('click', (e) => {
+          e.stopPropagation();
+          sel.dataset.extraCredits = opt.dataset.credits || '0';
+          sel.dataset.extraPrice = opt.dataset.price || '0';
+          sel.querySelectorAll('.credit-opt').forEach((o) => { o.classList.remove('sel'); o.setAttribute('aria-selected', 'false'); });
+          opt.classList.add('sel');
+          opt.setAttribute('aria-selected', 'true');
+          sel.classList.remove('open');
+          paint();
+        });
+      });
+      paint();
+    }
   });
+  if (!document.documentElement.dataset.creditSelectWired) {
+    document.documentElement.dataset.creditSelectWired = '1';
+    document.addEventListener('click', () => {
+      let changed = false;
+      document.querySelectorAll('.credit-select.open').forEach((o) => { o.classList.remove('open'); changed = true; });
+      if (changed) document.querySelectorAll('.credit-select-btn').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') document.querySelectorAll('.credit-select.open').forEach((o) => o.classList.remove('open'));
+    });
+  }
 }
 function planCards(b){
   const ids = ['free', 'pro', 'max'];
@@ -690,7 +860,7 @@ function billSummary(b){
 function paintBilling(M){
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Billing</h1><span class="chip">${icon('card',12)} credits</span></div>
-    <p class="psub">Free starts with <b>20 credits</b> — have your own agent. Pro <b>$30/mo</b> → 60 credits monthly. Max <b>$50/mo</b> → 100 credits monthly. Add extra credits with the slider. Gift codes add credits when redeemed.</p>
+    <p class="psub">Free starts with <b>20 credits</b> — have your own agent. Pro <b>$30/mo</b> → 60 credits monthly. Max <b>$50/mo</b> → 100 credits monthly. Add extra credits with the dropdown. Gift codes add credits when redeemed.</p>
     <div id="billbody"><div class="row mut">Loading…</div></div>
     <div id="plancards" style="margin-top:18px"></div>
     <div class="kv billing-redeem"><div class="row">
@@ -975,7 +1145,6 @@ function renderLanding(){
             <div class="mbub u">Also remind me to water the plants?</div>
             <div class="mbub a"><b>Your agent</b>Remembered. I'll nudge you every Sunday evening.</div>
           </div>
-          <div class="chipsrow"><span class="chip">Research</span><span class="chip">Build</span><span class="chip">Remember</span></div>
         </div>
       </div>
     </section>
@@ -1143,6 +1312,7 @@ async function runInChatOnboarding(c){
     state.agent = { name: nm, color: colorKey, pers, claimedAt: Date.now(), ownerId: uidNow };
     state.ownerId = uidNow || state.ownerId;
     state.onboarded = true;
+    try { ensureMailbox(nm); } catch {}
     try { state.memory.unshift({ id: uid(), text: `Agent claimed and named “${nm}” — ${Mascot.PALETTE[colorKey].name.toLowerCase()}, ${pers.toLowerCase()}.`, src: 'onboarding', at: Date.now() }); } catch {}
     const pendingText = state.pendingPrompt
       || ((c.messages || []).find(mm => mm.role === 'user' && mm.kind === 'text') || {}).text
@@ -1355,6 +1525,7 @@ function finalizeOnboarding(){
   state.onboarded = true;
   state.agent = { name: (ob.name || '').trim() || 'Sigge', color: ob.color || 'lingon', pers: ob.pers || 'Playful', claimedAt: Date.now(), ownerId: uidNow };
   state.ownerId = uidNow || state.ownerId;
+  try { ensureMailbox(state.agent.name); } catch {}
   state.memory.unshift({ id: uid(), text: `Agent claimed and named “${state.agent.name}” — ${Mascot.PALETTE[state.agent.color].name.toLowerCase()}, ${state.agent.pers.toLowerCase()}.`, src:'onboarding', at: Date.now() });
   const c = { id: uid(), title:'First chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
   state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat';
@@ -1513,6 +1684,7 @@ function paintChat(M){
       ${c.source === 'automation' ? `<span class="chip">${icon('clock',12)} sub-agent</span>` : ''}
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
+      ${Engine.managed ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button><button class="btn ghost tiny" data-act="managed-stop">Stop</button>` : ''}
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('panel',16)}</button>
     </div>
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
@@ -1569,7 +1741,7 @@ function msgNode(c, m){
   if (m.kind === 'tools')
     return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body"><div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
   if (m.kind === 'chips')
-    return el(`<div class="msg" data-mid="${m.id}"><div class="chipsrow" style="margin-left:42px">${m.items.map(i => `<button class="chip" data-act="chip" data-t="${esc(i)}">${esc(i)}</button>`).join('')}</div></div>`);
+    return el('<div style="display:none"></div>');
   if (m.kind === 'card')
     return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}</div></div>`);
   return el('<div></div>');
@@ -1599,6 +1771,11 @@ function cardNode(c, m){
     : stChip(cd);
   const hd = (ic, bg, fg, title, sub) => `<div class="hd"><div class="tile" style="background:${bg};color:${fg}">${ic}</div><div><b>${title}</b><div class="sub">${sub}</div></div><div class="st">${chip}</div></div>`;
   const pending = cd.status === 'pending';
+
+  if (cd.type === 'approval' && cd.managedCallId) return `<div class="acard">
+    ${hd(icon('shieldcheck',20),'var(--acc-soft)','var(--acc)',esc(cd.title),'Approve this exact action')}
+    <div class="bd"><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(cd.detail)}</pre></div>
+    ${pending ? `<div class="stack"><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">Allow</button><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Deny</button></div>` : ''}</div>`;
 
   if (cd.type === 'approval') return `<div class="acard">
     ${hd(icon('shieldcheck',20),'var(--acc-soft)','var(--acc)',`Allow ${esc(state.agent.name)}: ${esc(cd.title)}`,'Action approval')}
@@ -1649,7 +1826,7 @@ function cardNode(c, m){
     <div class="stack">${cd.liveId ? `<button class="btn" data-act="watchlive">Watch live</button>` : ''}<button class="btn ghost" data-act="viewcanvas">Follow in canvas</button></div></div>`;
 
   if (cd.type === 'computer') return `<div class="acard">
-    ${hd(icon('term',20),'var(--ink)','#fff','Read-only tool output','Computed from the approved API response')}
+    ${hd(icon('term',20),'var(--ink)','#fff',cd.managed ? 'Agent tool output' : 'Read-only tool output',cd.managed ? 'Actual managed sandbox or search result' : 'Computed from the approved API response')}
     <div class="bd"><div class="term">${cd.lines.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}${cd.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div></div></div>`;
 
   if (cd.type === 'file') return `<div class="acard"><div class="filrow">
@@ -1696,6 +1873,39 @@ function makeRT(c){
   const rt = {
     chat: c, agent: state.agent, vault: state.vault,
     isFirst: c.messages.filter(m => m.role === 'user').length <= 1,
+    managedEvent(event){
+      if (event.type === 'heartbeat') return;
+      if (event.type === 'session') c.managedStatus = event.status;
+      if (event.type === 'paused') c.managedStatus = 'paused';
+      if (event.type === 'done') c.managedStatus = event.status;
+      if (event.type === 'trace') { rt.trace(event.trace.ic || 'box', event.trace.t); return; }
+      if (event.type === 'artifact') { rt.artifact(event.artifact); return; }
+      if (event.type === 'decision') {
+        const m = c.messages.find(x => x.card?.managedCallId === event.callId);
+        if (m) { m.card.status = event.status; m.card.choice = event.answer; if(event.ref)m.card.ref=event.ref; replaceNode(c,m); }
+      }
+      if (event.type === 'message' || event.type === 'message_delta') {
+        let m = c.messages.find(x => x.managedId === event.id);
+        if (!m) { m = { id:uid(), managedId:event.id, role:'agent', kind:'text', text:'' }; c.messages.push(m); append(msgNode(c,m)); }
+        m.text = event.type === 'message_delta' ? m.text + event.delta : event.text;
+        replaceNode(c,m);
+      }
+      if (event.type === 'card') {
+        let m = c.messages.find(x => x.managedId === event.id);
+        const card = { ...event.card, managedCallId:event.callId };
+        if (!m) { m = { id:uid(), managedId:event.id, kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
+        else { m.card = card; replaceNode(c,m); }
+        if (card.type === 'memory' && !state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
+      }
+      if (event.type === 'error') {
+        c.managedStatus = 'failed';
+        const m = { id:uid(), role:'agent', kind:'text', text:event.error, mood:'think' };
+        c.messages.push(m); append(msgNode(c,m));
+        rt.trace('alert', event.error);
+      }
+      save();
+      if (['done','paused','error'].includes(event.type) && active()) { paintMain(); paintSide(); }
+    },
     recall: () => state.memory.slice(),
     hasApp: n => false,
     hasSecret: n => state.vault.secrets.some(s => s.name === n),
@@ -1703,7 +1913,7 @@ function makeRT(c){
     openSubAgents(prompt){
       state.subAgentDraft = String(prompt || '').slice(0, 4000);
       state.subAgentComposer = true;
-      state.agentTab = 'subagents'; state.canvasTab = 'agent'; state.canvasOpen = true;
+      state.canvasTab = 'subagents'; state.canvasOpen = true;
       const app = $('#app'); if (app) app.classList.remove('nocanvas');
       save(); paintCanvas(); refreshSubAgents();
     },
@@ -1718,28 +1928,134 @@ function makeRT(c){
       const app = $('#app'); if (app) app.classList.remove('nocanvas');
       paintCanvas(); save();
     },
-    chips(items){ const m = { id: uid(), kind:'chips', items }; c.messages.push(m); append(msgNode(c, m)); save(); },
-    async say(text, opts){
-      const m = { id: uid(), role:'agent', kind:'text', text:'', mood:(opts || {}).mood || 'idle' };
+    chips(){ /* suggestion chips removed — no-op for backward compat */ },
+    // iPhone-style typing indicator: an agent bubble with ONLY three dots.
+    // Shows instantly (no wait) and stays until replaced by real content.
+    // Returns a live handle so callers can stream updates without waiting
+    // for the final answer: handle.append(delta) / handle.update(fullText) /
+    // handle.done(finalText). Works even if the chat is not active.
+    typing(opts){
+      const m = { id: uid(), role:'agent', kind:'text', text:'', mood:(opts || {}).mood || 'idle', typing: true };
       c.messages.push(m);
+      let node = null;
+      let bodyEl = null;
       if (active()){
-        const n = msgNode(c, m); append(n);
-        const body = n.querySelector('.md');
-        body.innerHTML = '<span class="tdots"><i></i><i></i><i></i></span>';
-        await sleep(500);
-        for (const tok of text.split(/(\s+)/)){ m.text += tok; body.innerHTML = md(m.text); scroll(); await sleep(16); }
-        n.querySelector('.ava').innerHTML = Mascot.svg(state.agent.color, m.mood, 30);
-      } else m.text = text;
-      save();
+        node = msgNode(c, m);
+        append(node);
+        bodyEl = node.querySelector('.md');
+        if (bodyEl) bodyEl.innerHTML = '<span class="tdots" aria-label="typing"><i></i><i></i><i></i></span>';
+        scroll();
+      }
+      let full = '';
+      let raf = 0;
+      const nextFrame = (fn) => {
+        if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(fn);
+        return setTimeout(fn, 0);
+      };
+      const cancelFrame = (id) => {
+        if (typeof cancelAnimationFrame === 'function') return cancelAnimationFrame(id);
+        return clearTimeout(id);
+      };
+      const paint = () => {
+        raf = 0;
+        if (!bodyEl || !bodyEl.isConnected) return;
+        if (!full) {
+          bodyEl.innerHTML = '<span class="tdots" aria-label="typing"><i></i><i></i><i></i></span>';
+        } else {
+          bodyEl.innerHTML = md(full);
+        }
+        scroll();
+      };
+      const schedule = () => {
+        // Coalesce rapid deltas into one paint per frame — updates stream
+        // in live without re-render thrash or artificial waiting.
+        if (raf) return;
+        raf = nextFrame(paint);
+      };
+      return {
+        msg: m,
+        append(delta){
+          full += String(delta == null ? '' : delta);
+          m.text = full;
+          if (bodyEl && bodyEl.isConnected) schedule();
+          return full;
+        },
+        update(text){
+          full = String(text == null ? '' : text);
+          m.text = full;
+          if (bodyEl && bodyEl.isConnected) schedule();
+          else if (!active()) save();
+          return full;
+        },
+        done(text, doneOpts){
+          if (raf) { cancelFrame(raf); raf = 0; }
+          if (text != null) { full = String(text); m.text = full; }
+          delete m.typing;
+          if (doneOpts && doneOpts.mood) m.mood = doneOpts.mood;
+          if (active()){
+            // Re-render through the normal node so markdown, avatar and
+            // actions are identical to a finished message.
+            const fresh = msgNode(c, m);
+            if (node && node.isConnected) node.replaceWith(fresh);
+            else append(fresh);
+            updateFloat();
+            scroll();
+          }
+          save();
+          return m;
+        },
+        abort(){
+          if (raf) { cancelFrame(raf); raf = 0; }
+          const i = c.messages.indexOf(m);
+          if (i >= 0) c.messages.splice(i, 1);
+          try { if (node && node.isConnected) node.remove(); } catch {}
+          save();
+        },
+      };
+    },
+    async say(text, opts){
+      // Instant send: bubble + three dots appear synchronously, then the
+      // text paints without the old 500ms artificial wait.
+      const handle = rt.typing(opts);
+      const full = String(text == null ? '' : text);
+      if (!full) return handle.done('', opts), undefined;
+      if (!active()){
+        handle.done(full, opts);
+        return;
+      }
+      // Fast progressive paint for non-streamed answers. Chunked (not
+      // per-token sleeps) so long answers appear quickly and never block
+      // subsequent sends.
+      const chunks = full.match(/(\s+|[^\s]+\s*)/g) || [full];
+      let acc = '';
+      const yieldFrame = () => new Promise((r) => {
+        if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(() => r());
+        return setTimeout(r, 0);
+      });
+      for (let i = 0; i < chunks.length; i++){
+        acc += chunks[i];
+        handle.update(acc);
+        // Yield to the browser every few chunks so the dots/text animate
+        // smoothly; no fixed 500ms/16ms waits.
+        if (i % 6 === 5) await yieldFrame();
+      }
+      handle.done(acc, opts);
     },
     async tools(items){
+      // No artificial waiting: log tool lines instantly so the chat never
+      // stalls on status messages. The "Working on your request" pseudo
+      // status is dropped — the typing dots are the only pending signal.
+      const list = (items || []).filter((it) => {
+        const t = String(it && it.t || '').toLowerCase();
+        return t !== 'working on your request';
+      });
+      if (!list.length) return;
       const m = { id: uid(), kind:'tools', items: [] }; c.messages.push(m);
       const n = active() ? msgNode(c, m) : null; if (n) append(n);
-      for (const it of items){
+      for (const it of list){
         m.items.push(it);
         if (n){ n.querySelector('.tools').insertAdjacentHTML('beforeend', tlineHTML(it)); scroll(); }
         rt.trace(it.ic, it.t + (it.d ? ' · ' + it.d : ''));
-        await sleep(650);
       }
       save();
     },
@@ -1901,7 +2217,7 @@ function agentSliderContent(){
   if (t === 'appearance'){
     body = `
       <div class="aslider-sec">
-        <div style="display:flex;gap:12px;align-items:center">${Mascot.svg(a.color,'happy',54)}<div><b>${esc(a.name)}</b><div><span class="chip">Arche 1.0</span></div></div></div>
+        <div style="display:flex;gap:12px;align-items:center">${Mascot.svg(a.color,'happy',54)}<div><b>${esc(a.name)}</b><div><span class="chip">Arche 1.0</span></div>${mailCache && mailCache.address ? `<div class="sub mono" style="margin-top:4px">${esc(mailCache.address)}</div>` : ''}</div></div>
         <label class="alabel">Agent name</label>
         <input class="field" id="agentname" maxlength="18" value="${esc(a.name)}">
         <label class="alabel">Mascot appearance</label>
@@ -1921,42 +2237,44 @@ function agentSliderContent(){
         ${state.vault.approvals.map(x => `<div class="row"><span style="color:var(--green)">${icon('check',15)}</span><div><b>${esc(x.label)}</b><div class="sub">always allowed · ${fmtWhen(x.at)}</div></div><div class="rgt"><button class="btn ghost small" data-act="revoke" data-id="${x.id}">Revoke</button></div></div>`).join('')}
         ${ap.map(x => `<div class="row"><span style="color:var(--mut)">${icon('shieldcheck',15)}</span><div><b>${esc(x.title)}</b><div class="sub">${esc(x.status)} · “${esc(x.chat)}”</div></div></div>`).join('') || (state.vault.approvals.length ? '' : '<div class="row mut">No approvals yet — sensitive actions will pause for you here.</div>')}
       </div></div>`;
-  } else {
-    const agents = state.subAgents || [];
-    const kind = state.subAgentTriggerType || 'schedule';
-    const apps = state.triggerOptions?.apps || [];
-    const scheduleOptions = state.triggerOptions?.schedules || [15,60,360,1440];
-    const triggerFields = kind === 'schedule'
-      ? `<label class="alabel">Run every</label><select class="field" id="subinterval">${scheduleOptions.map((minutes) => `<option value="${minutes}" ${Number(state.subAgentDraftInterval || 60) === Number(minutes) ? 'selected' : ''}>${minutes === 1440 ? 'Day' : minutes === 10080 ? 'Week' : minutes === 60 ? '1 hour' : minutes >= 60 ? (minutes / 60) + ' hours' : minutes + ' minutes'}</option>`).join('')}</select>`
-      : kind === 'app'
-        ? (apps.length ? `<label class="alabel">Connected app event</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} Connect an app first. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
-        : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${agents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
-    body = `<div class="aslider-sec subagents-panel">
-      <div class="subagent-intro"><span class="trigger-mark">${icon('clock',18)}</span><div><b>Automated chats</b><p>Each sub-agent has its own chat and runs when its trigger fires. Chain agents to build workflows.</p></div></div>
-      <button class="btn small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close setup' : 'New sub-agent'}</button>
-      ${state.subAgentComposer ? `<div class="trigger-form">
-        <label class="alabel">Name</label><input class="field" id="subname" maxlength="60" placeholder="Daily brief" value="${esc(state.subAgentDraftName || '')}">
-        <label class="alabel">Automation task</label><textarea class="field" id="subprompt" rows="4" placeholder="What should this sub-agent check, decide, or prepare?">${esc(state.subAgentDraft || '')}</textarea>
-        <label class="alabel">Trigger</label><select class="field" id="subtrigger"><option value="schedule" ${kind === 'schedule' ? 'selected' : ''}>Schedule</option><option value="app" ${kind === 'app' ? 'selected' : ''}>Connected app</option><option value="subagent" ${kind === 'subagent' ? 'selected' : ''}>Another sub-agent</option></select>
-        <div id="triggerfields">${triggerFields}</div>
-        <div class="trigger-safety">${icon('shieldcheck',14)} Runs in an isolated, account-scoped sandbox. Chains stop after four handoffs.</div>
-        <button class="btn small" data-act="create-subagent" ${kind === 'app' && !apps.length || kind === 'subagent' && !agents.length ? 'disabled' : ''}>Create automation</button>
-      </div>` : ''}
-      <div class="subagent-list">${agents.map((agent) => `<article class="subagent-card ${agent.enabled ? '' : 'paused'}">
-        <button class="subagent-main" data-act="open-subagent" data-id="${agent.id}"><span class="subagent-orb">${Mascot.svg(state.agent.color,'idle',30)}</span><span><b>${esc(agent.name)}</b><small>${esc(subAgentTriggerLabel(agent))}</small></span></button>
-        <div class="subagent-meta"><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus || 'ready') : 'paused'}</span>${agent.nextRunAt ? `<span>next ${fmtNext(new Date(agent.nextRunAt).getTime())}</span>` : ''}</div>
-        ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
-        <div class="subagent-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button><button class="iconbtn" data-act="delete-subagent" data-id="${agent.id}" title="Delete">${icon('trash',13)}</button></div>
-      </article>`).join('') || '<div class="trigger-empty">No sub-agents yet. Create one to watch a schedule, app event, or another automation.</div>'}</div>
-    </div>`;
   }
   return `<div class="aslider fill">
-    <div class="atabs">
-      <button class="${t === 'appearance' ? 'on' : ''}" data-act="agenttab" data-t="appearance">Appearance</button>
-      <button class="${t === 'approvals' ? 'on' : ''}" data-act="agenttab" data-t="approvals">Approvals</button>
-      <button class="${t === 'library' ? 'on' : ''}" data-act="agenttab" data-t="library">Library</button>
-      <button class="${t === 'subagents' ? 'on' : ''}" data-act="agenttab" data-t="subagents">Sub Agents</button>
+    <div class="seg canvas-seg">
+      <button class="${t === 'appearance' ? 'on' : ''}" data-act="agenttab" data-t="appearance">${icon('user',14)} Appearance</button>
+      <button class="${t === 'approvals' ? 'on' : ''}" data-act="agenttab" data-t="approvals">${icon('shieldcheck',14)} Approvals</button>
+      <button class="${t === 'library' ? 'on' : ''}" data-act="agenttab" data-t="library">${icon('file',14)} Library</button>
     </div>${body}</div>`;
+}
+
+/* Sub Agents panel — now a top-level canvas tab next to Trace. */
+function subAgentsTabContent(){
+  const agents = state.subAgents || [];
+  const kind = state.subAgentTriggerType || 'schedule';
+  const apps = state.triggerOptions?.apps || [];
+  const scheduleOptions = state.triggerOptions?.schedules || [15,60,360,1440];
+  const triggerFields = kind === 'schedule'
+    ? `<label class="alabel">Run every</label><select class="field" id="subinterval">${scheduleOptions.map((minutes) => `<option value="${minutes}" ${Number(state.subAgentDraftInterval || 60) === Number(minutes) ? 'selected' : ''}>${minutes === 1440 ? 'Day' : minutes === 10080 ? 'Week' : minutes === 60 ? '1 hour' : minutes >= 60 ? (minutes / 60) + ' hours' : minutes + ' minutes'}</option>`).join('')}</select>`
+    : kind === 'app'
+      ? (apps.length ? `<label class="alabel">Connected app event (via Composio)</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} No connected apps yet. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
+      : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${agents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
+  return `<div class="aslider-sec subagents-panel">
+    <div class="subagent-intro"><span class="trigger-mark">${icon('clock',18)}</span><div><b>Automated chats</b><p>Each sub-agent has its own chat and runs on a schedule, a connected-app event, or after another sub-agent. App events fire via Composio webhooks.</p></div></div>
+    <button class="btn small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close setup' : 'New sub-agent'}</button>
+    ${state.subAgentComposer ? `<div class="trigger-form">
+      <label class="alabel">Name</label><input class="field" id="subname" maxlength="60" placeholder="Daily brief" value="${esc(state.subAgentDraftName || '')}">
+      <label class="alabel">Automation task</label><textarea class="field" id="subprompt" rows="4" placeholder="What should this sub-agent check, decide, or prepare?">${esc(state.subAgentDraft || '')}</textarea>
+      <label class="alabel">Trigger</label><select class="field" id="subtrigger"><option value="schedule" ${kind === 'schedule' ? 'selected' : ''}>Schedule</option><option value="app" ${kind === 'app' ? 'selected' : ''}>Connected app</option><option value="subagent" ${kind === 'subagent' ? 'selected' : ''}>Another sub-agent</option></select>
+      <div id="triggerfields">${triggerFields}</div>
+      <div class="trigger-safety">${icon('shieldcheck',14)} Runs in an isolated, account-scoped sandbox. Chains stop after four handoffs.</div>
+      <button class="btn small" data-act="create-subagent" ${kind === 'app' && !apps.length || kind === 'subagent' && !agents.length ? 'disabled' : ''}>Create automation</button>
+    </div>` : ''}
+    <div class="subagent-list">${agents.map((agent) => `<article class="subagent-card ${agent.enabled ? '' : 'paused'}">
+      <button class="subagent-main" data-act="open-subagent" data-id="${agent.id}"><span class="subagent-orb">${Mascot.svg(state.agent.color,'idle',30)}</span><span><b>${esc(agent.name)}</b><small>${esc(subAgentTriggerLabel(agent))}</small></span></button>
+      <div class="subagent-meta"><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus || 'ready') : 'paused'}</span>${agent.nextRunAt ? `<span>next ${fmtNext(new Date(agent.nextRunAt).getTime())}</span>` : ''}</div>
+      ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
+      <div class="subagent-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button><button class="iconbtn" data-act="delete-subagent" data-id="${agent.id}" title="Delete">${icon('trash',13)}</button></div>
+    </article>`).join('') || '<div class="trigger-empty">No sub-agents yet. Create one to watch a schedule, app event, or another automation.</div>'}</div>
+  </div>`;
 }
 
 /* Live tab helpers: newest live browser session id for this chat. */
@@ -2113,6 +2431,262 @@ async function liveSend(ev){
     if (j.url && $('#liveurl')) $('#liveurl').textContent = j.url;
   } catch {}
 }
+let mailCache = null;
+async function ensureMailbox(name){
+  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return mailCache;
+  const agentName = String(name || (state.agent && state.agent.name) || 'Agent').trim();
+  try {
+    mailCache = await window.LingonAuth.api('/api/mail/ensure', { method:'POST', body: JSON.stringify({ agentName }) });
+  } catch (e) {
+    mailCache = Object.assign({ error: e.message, configured:false, address:null, messages:[], drafts:[], unread:0 }, mailCache || {});
+  }
+  return mailCache;
+}
+async function getMail(force, folder){
+  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return mailCache;
+  const tab = folder || state.mailTab || 'inbox';
+  if (mailCache && !force && mailCache.folder === tab && tab !== 'write') return mailCache;
+  try {
+    const name = (state.agent && state.agent.name) || '';
+    if (tab === 'write') {
+      mailCache = await window.LingonAuth.api('/api/mail?folder=inbox&name=' + encodeURIComponent(name));
+      mailCache.folder = 'write';
+    } else {
+      mailCache = await window.LingonAuth.api('/api/mail?folder=' + encodeURIComponent(tab) + '&name=' + encodeURIComponent(name));
+    }
+  } catch (e) {
+    mailCache = Object.assign({ error: e.message, configured:false, address:null, messages:[], drafts:[], unread:0, folder: tab }, mailCache || {});
+  }
+  return mailCache;
+}
+async function openMailMessage(id){
+  const j = await window.LingonAuth.api('/api/mail/messages/' + encodeURIComponent(id));
+  mailCache = mailCache || {};
+  mailCache.selected = j.message;
+  if (mailCache.messages) mailCache.messages = mailCache.messages.map((m) => m.id === id ? Object.assign({}, m, { isRead:true }) : m);
+  if (mailCache.unread > 0) mailCache.unread -= 1;
+  return j.message;
+}
+function mailListRows(m){
+  const who = m.folder === 'sent' ? (m.to || []).join(', ') : (m.fromName ? m.fromName + ' · ' + m.from : m.from);
+  return `<button class="mail-row ${m.isRead ? '' : 'unread'}" data-act="m-open" data-id="${esc(m.id)}">
+    <span class="mail-dot"></span>
+    <span class="mail-meta"><b>${esc(m.subject || '(no subject)')}</b><small>${esc(who || '')}</small><small class="mail-preview">${esc(m.preview || '')}</small></span>
+    <span class="mail-when">${fmtWhen(m.at)}</span>
+  </button>`;
+}
+function mailComposeBody(prefill){
+  const p = prefill || mailCache && mailCache.compose || {};
+  return `<div class="mail-compose">
+    <label class="alabel">To</label>
+    <input class="field" id="m-to" type="email" placeholder="name@example.com" value="${esc(p.to || '')}">
+    <label class="alabel">Subject</label>
+    <input class="field" id="m-subject" maxlength="200" value="${esc(p.subject || '')}">
+    <label class="alabel">Message</label>
+    <textarea class="field" id="m-body" rows="8" placeholder="Written as ${esc((state.agent && state.agent.name) || 'your agent')}…">${esc(p.body || '')}</textarea>
+    <input type="hidden" id="m-reply" value="${esc(p.inReplyTo || '')}">
+    <input type="hidden" id="m-draft" value="${esc(p.draftId || '')}">
+    <div class="mail-actions">
+      <button class="btn small" data-act="m-send">${icon('up',14)} Send</button>
+      <button class="btn ghost small" data-act="m-draft">${icon('file',14)} Save draft</button>
+    </div>
+  </div>`;
+}
+function mailReader(msg){
+  if (!msg) return '';
+  const who = msg.fromName ? esc(msg.fromName) + ' &lt;' + esc(msg.from) + '&gt;' : esc(msg.from || '');
+  return `<div class="mail-read">
+    <div class="mail-read-head">
+      <button class="btn ghost small" data-act="m-back">${icon('aur',14)} Back</button>
+      <button class="btn ghost small" data-act="m-reply" data-id="${esc(msg.id)}">${icon('mail',14)} Reply</button>
+    </div>
+    <h3>${esc(msg.subject || '(no subject)')}</h3>
+    <div class="sub">${who} · ${fmtWhen(msg.at)}</div>
+    <div class="sub">To ${esc((msg.to || []).join(', '))}</div>
+    <div class="mail-body">${esc(msg.bodyText || '').replace(/\n/g, '<br>')}</div>
+  </div>`;
+}
+function paintMail(body){
+  const tab = state.mailTab || 'inbox';
+  const m = mailCache;
+  const unread = m && m.unread ? m.unread : 0;
+  let inner = `<div class="cempty">${icon('mail',28)}<div class="mut2">Loading mail…</div></div>`;
+  if (m) {
+    if (m.selected && tab !== 'write') inner = mailReader(m.selected);
+    else if (tab === 'write') inner = mailComposeBody(m.compose);
+    else if (tab === 'drafts') {
+      const drafts = m.drafts || [];
+      inner = drafts.length
+        ? `<div class="mail-list">${drafts.map((d) => `<button class="mail-row" data-act="m-edit-draft" data-id="${esc(d.id)}"><span class="mail-meta"><b>${esc(d.subject || '(no subject)')}</b><small>${esc((d.to || []).join(', ') || 'No recipient')}</small></span></button>`).join('')}</div>`
+        : `<div class="cempty">${icon('file',28)}<div class="mut2">No drafts.</div></div>`;
+    } else {
+      const rows = m.messages || [];
+      inner = rows.length
+        ? `<div class="mail-list">${rows.map(mailListRows).join('')}</div>`
+        : `<div class="cempty">${icon('mail',28)}<div style="font-weight:700;margin-top:12px">${tab === 'sent' ? 'Nothing sent yet' : 'Inbox is empty'}</div><div class="mut2">${m.address ? 'Anyone can write to ' + esc(m.address) : 'Claim the mailbox to start receiving.'}</div></div>`;
+    }
+  }
+  const banner = m && m.configured === false
+    ? `<div class="warnband">${icon('mail',18)}<div><b>Mailbox is reserved. Sending needs RESEND_API_KEY.</b>${esc(m.receivingHint || 'Add the MX record Resend shows for mail.belna.se.')}</div></div>`
+    : '';
+  body.innerHTML = `<div class="aslider fill mail-panel">
+    <div class="mail-address">
+      <span>${icon('mail',16)}</span>
+      <div><b>${esc((state.agent && state.agent.name) || 'Agent')}’s mail</b><div class="sub mono">${esc((m && m.address) || 'Allocating…')}</div></div>
+      <div class="rgt">${m && m.address ? `<button class="iconbtn" data-act="m-copy" title="Copy address">${icon('copy',14)}</button>` : ''}<button class="iconbtn" data-act="m-refresh" title="Refresh">${icon('refresh',14)}</button></div>
+    </div>
+    ${banner}
+    <div class="seg canvas-seg">
+      <button class="${tab === 'inbox' ? 'on' : ''}" data-act="mtab" data-t="inbox">${icon('mail',14)} Inbox${unread ? ` <span class="cnt">${unread}</span>` : ''}</button>
+      <button class="${tab === 'sent' ? 'on' : ''}" data-act="mtab" data-t="sent">${icon('up',14)} Sent</button>
+      <button class="${tab === 'drafts' ? 'on' : ''}" data-act="mtab" data-t="drafts">${icon('file',14)} Drafts</button>
+      <button class="${tab === 'write' ? 'on' : ''}" data-act="mtab" data-t="write">${icon('plus',14)} Write</button>
+    </div>
+    ${inner}
+  </div>`;
+  centerActiveSeg(body);
+  if (!m) getMail(true, tab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
+}
+
+let walletCache = null;
+async function getWallet(force){
+  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return walletCache;
+  if (walletCache && !force) return walletCache;
+  try { walletCache = await window.LingonAuth.api('/api/wallet'); } catch (e) {
+    walletCache = Object.assign({ error: e.message, configured:false, card:{ status:'none' }, balances:[], activity:[] }, walletCache || {});
+  }
+  return walletCache;
+}
+function shortAddr(a){
+  const s = String(a || '');
+  return s.length > 12 ? s.slice(0, 6) + '…' + s.slice(-4) : s;
+}
+function walletCardFace(w){
+  const a = state.agent || {};
+  const card = (w && w.card) || {};
+  const last4 = card.last4 ? String(card.last4) : '••••';
+  const status = card.status || 'none';
+  const stLabel = status === 'active' ? 'Active' : status === 'pending_kyc' ? 'KYC' : status === 'pending' ? 'Attached' : status === 'frozen' ? 'Frozen' : 'Ready';
+  return `<div class="awallet-card ${status}">
+    <div class="awallet-card-top"><span>${icon('wallet',14)} ${esc(a.name || 'Agent')} card</span><span class="chip">${esc(stLabel)}</span></div>
+    <div class="awallet-card-chip"></div>
+    <div class="awallet-card-no">•••• •••• •••• ${esc(last4)}</div>
+    <div class="awallet-card-bot">
+      <div><small>Holder</small><b>${esc(card.holderName || a.name || 'Agent')}</b></div>
+      <div><small>Tied to</small><b class="mono">${esc(shortAddr(w && w.address))}</b></div>
+    </div>
+  </div>`;
+}
+function walletOverviewBody(w){
+  const ready = !!(w && w.address);
+  const a = state.agent || {};
+  const bals = (w && w.balances) || [];
+  const balRows = bals.map((b) => `<div class="row"><span style="color:var(--mut)">${icon('wallet',15)}</span><div><b>${esc(String(b.asset || '').toUpperCase())}</b><div class="sub">${esc(b.chain || w.chain || 'base')}</div></div><div class="rgt"><b>${esc(b.amount || '0')}</b>${b.usd ? `<div class="sub">$${esc(b.usd)}</div>` : ''}</div></div>`).join('')
+    || `<div class="row mut">${ready ? 'No on-chain balance yet — send USDC on Base to this address.' : 'Create the wallet to see balances.'}</div>`;
+  return `
+    <div class="warnband">${icon('shieldcheck',18)}<div><b>How ${esc(a.name || 'your agent')} spends</b>1. They ask in chat (“buy X for $Y”). 2. You tap Allow. 3. The wallet sends coins, or the card may charge that amount only. They never get the card number or the key.</div></div>
+    <div class="kv">
+      <div class="row"><span style="color:var(--mut)">${icon('wallet',16)}</span>
+        <div><b>${ready ? esc(a.name || 'Agent') + '’s wallet' : 'No wallet yet'}</b><div class="sub mono">${ready ? esc(w.address) : (w && w.configured === false ? 'Add PRIVY_APP_ID and PRIVY_APP_SECRET on the server' : 'Create a Privy wallet for this agent')}</div></div>
+        <div class="rgt">${ready ? `<button class="iconbtn" data-act="w-copy" title="Copy address">${icon('copy',14)}</button>` : `<button class="btn small" data-act="w-ensure">${icon('plus',14)} Create wallet</button>`}</div>
+      </div>
+      <div class="row"><span style="color:var(--mut)">${icon('shield',16)}</span>
+        <div><b>Daily spend cap</b><div class="sub">USDC the agent may send after you approve</div></div>
+        <div class="rgt"><input class="field" id="wlimit" type="number" min="1" max="500" step="1" value="${esc(w && w.dailyLimitUsd != null ? w.dailyLimitUsd : 50)}" style="max-width:88px"> <button class="btn ghost small" data-act="w-limit">Save</button></div>
+      </div>
+      <div class="row"><span style="color:var(--green)">${icon('check',16)}</span>
+        <div><b>Remaining today</b><div class="sub">$${esc((w && w.spentTodayUsd) || 0)} used</div></div>
+        <div class="rgt"><b>$${(w && w.remainingTodayUsd != null) ? esc(w.remainingTodayUsd) : '—'}</b></div>
+      </div>
+    </div>
+    <label class="alabel">Balances</label>
+    <div class="kv">${balRows}</div>
+    ${ready ? `<div class="psec"><label class="alabel">Send (you confirm)</label>
+      <div class="kv"><div class="row" style="background:var(--panel);flex-wrap:wrap;gap:8px">
+        <select class="field" id="wasset" style="max-width:110px"><option value="usdc">USDC</option><option value="eth">ETH</option></select>
+        <input class="field" id="wamt" placeholder="0.00" style="max-width:110px">
+        <input class="field mono" id="wto" placeholder="0x…" style="flex:1;min-width:160px">
+        <button class="btn small" data-act="w-send">${icon('up',14)} Send</button>
+      </div></div></div>` : ''}
+    <label class="alabel">Activity</label>
+    <div class="kv">${((w && w.activity) || []).map((t) => `<div class="row"><span style="color:var(--mut)">${icon('wallet',15)}</span><div><b>${esc(t.kind)} · ${esc(t.asset)} ${esc(t.amount)}</b><div class="sub">${esc(t.to || '')} · ${esc(t.status)}</div></div><div class="rgt"><span class="chip">${esc(t.status)}</span></div></div>`).join('') || '<div class="row mut">No transfers yet.</div>'}</div>`;
+}
+function walletCardBody(w){
+  const card = (w && w.card) || { status:'none' };
+  const bill = card.billing || {};
+  const attached = card.status && card.status !== 'none';
+  const buys = (w && w.purchases) || [];
+  return `
+    ${walletCardFace(w)}
+    <div class="warnband">${icon('card',18)}<div><b>Stripe one-time virtual cards.</b>You approve in chat → Stripe Issuing mints a single-use Visa locked to that amount. The agent only sees last four. You reveal the digits here to finish checkout. The model never gets the number.</div></div>
+    <div class="kv">
+      <div class="row"><span style="color:var(--mut)">${icon('card',16)}</span>
+        <div><b>${attached ? 'Standing card attached' : 'Attach the agent card'}</b><div class="sub">${w && w.address ? ('Wallet ' + esc(shortAddr(w.address))) : 'Create the wallet first'}</div></div>
+        <div class="rgt">${attached ? `<span class="chip green">${esc(card.status)}</span>` : `<button class="btn small" data-act="w-card" ${w && w.address ? '' : 'disabled'}>${icon('card',14)} Attach card</button>`}</div>
+      </div>
+    </div>
+    <label class="alabel">Billing (for Stripe Issuing)</label>
+    <div class="kv"><div class="row" style="background:var(--panel);flex-wrap:wrap;gap:8px">
+      <input class="field" id="w-line1" placeholder="Street" value="${esc(bill.line1 || '')}" style="flex:1;min-width:140px">
+      <input class="field" id="w-city" placeholder="City" value="${esc(bill.city || '')}" style="max-width:140px">
+      <input class="field" id="w-postal" placeholder="ZIP" value="${esc(bill.postal || '')}" style="max-width:90px">
+      <input class="field" id="w-country" placeholder="US" value="${esc(bill.country || 'US')}" style="max-width:70px">
+      <button class="btn ghost small" data-act="w-billing">Save</button>
+    </div></div>
+    <label class="alabel">One-time virtual cards</label>
+    <div class="kv">${buys.map((p) => `<div class="row"><span style="color:var(--mut)">${icon('card',15)}</span><div><b>$${esc(p.amount)} at ${esc(p.merchant)}</b><div class="sub">${p.issuing ? 'Stripe virtual · ' : ''}${p.last4 ? '•••• ' + esc(p.last4) : 'no last4'} · ${esc(p.reason || 'approved in chat')}${p.issuingError ? ' · ' + esc(p.issuingError) : ''}</div></div><div class="rgt">${p.issuing ? `<button class="btn ghost small" data-act="w-reveal" data-id="${esc(p.id)}">Reveal</button>` : ''}<span class="chip">${esc(p.status)}</span></div></div>`).join('') || '<div class="row mut">None yet. Approve a purchase in chat and Stripe will mint a one-time card.</div>'}
+    </div>
+    <div id="issuing-reveal" class="issuing-reveal" hidden>
+      <label class="alabel">Card number (you only)</label><div id="issuing-number" class="issuing-el"></div>
+      <div class="issuing-row"><div><label class="alabel">Expiry</label><div id="issuing-exp" class="issuing-el"></div></div><div><label class="alabel">CVC</label><div id="issuing-cvc" class="issuing-el"></div></div></div>
+    </div>`;
+}
+function loadStripeJs(){
+  return new Promise((resolve, reject) => {
+    if (window.Stripe) return resolve(window.Stripe);
+    const s = document.createElement('script');
+    s.src = 'https://js.stripe.com/v3/';
+    s.onload = () => resolve(window.Stripe);
+    s.onerror = () => reject(new Error('Could not load Stripe.'));
+    document.head.appendChild(s);
+  });
+}
+async function revealStripeCard(purchaseId){
+  const w = walletCache;
+  const buy = ((w && w.purchases) || []).find((p) => p.id === purchaseId);
+  if (!buy || !buy.stripeCardId) throw new Error('No Stripe virtual card on that purchase.');
+  if (!w.stripePk) throw new Error('Add STRIPE_PUBLISHABLE_KEY to the server to reveal the card.');
+  const StripeCtor = await loadStripeJs();
+  const stripe = StripeCtor(w.stripePk);
+  const nonceRes = await stripe.createEphemeralKeyNonce({ issuingCard: buy.stripeCardId });
+  const ek = await window.LingonAuth.api('/api/wallet/purchases/' + encodeURIComponent(purchaseId) + '/ephemeral', { method:'POST', body: JSON.stringify({ nonce: nonceRes.nonce }) });
+  const box = $('#issuing-reveal');
+  if (box) box.hidden = false;
+  const elements = stripe.elements();
+  const opts = { issuingCard: buy.stripeCardId, nonce: nonceRes.nonce, ephemeralKeySecret: ek.secret };
+  ['issuing-number','issuing-exp','issuing-cvc'].forEach((id) => { const n = document.getElementById(id); if (n) n.innerHTML = ''; });
+  if ($('#issuing-number')) elements.create('issuingCardNumberDisplay', opts).mount('#issuing-number');
+  if ($('#issuing-exp')) elements.create('issuingCardExpiryDisplay', opts).mount('#issuing-exp');
+  if ($('#issuing-cvc')) elements.create('issuingCardCvcDisplay', opts).mount('#issuing-cvc');
+}
+
+function paintWallet(body){
+  const tab = state.walletTab || 'wallet';
+  const w = walletCache;
+  const err = w && w.error ? `<div class="trigger-error">${esc(w.error)}</div>` : '';
+  const inner = !w
+    ? `<div class="cempty">${icon('wallet',28)}<div class="mut2">Loading wallet…</div></div>`
+    : tab === 'card' ? walletCardBody(w) : walletOverviewBody(w);
+  body.innerHTML = `<div class="aslider fill wallet-panel">
+    <div class="seg canvas-seg">
+      <button class="${tab === 'wallet' ? 'on' : ''}" data-act="wtab" data-t="wallet">${icon('wallet',14)} Wallet</button>
+      <button class="${tab === 'card' ? 'on' : ''}" data-act="wtab" data-t="card">${icon('card',14)} Card</button>
+      <button class="iconbtn" data-act="w-refresh" title="Refresh" style="margin-left:auto">${icon('refresh',14)}</button>
+    </div>${err}${inner}</div>`;
+  centerActiveSeg(body);
+  if (!w) getWallet(true).then(() => { if (state.canvasTab === 'wallet' && $('#cbody')) paintWallet($('#cbody')); });
+}
+
 function paintCanvas(){
   const cv = $('#canvas'); if (!cv) return;
   // Migrate legacy 'live' tab to 'canvas'
@@ -2124,21 +2698,37 @@ function paintCanvas(){
   const liveId = liveIdFor(c);
   cv.innerHTML = `
     <div class="canvas-resize" id="canvasResize"></div>
-    <div class="atabs ttop">
-      <button class="agent ${top === 'agent' ? 'on' : ''}" data-act="ctab" data-t="agent" title="Agent panel">${Mascot.svg(state.agent.color,'idle',22)}<span>${esc(state.agent.name)}</span></button>
-      <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
-      <button class="${top === 'trace' ? 'on' : ''}" data-act="ctab" data-t="trace">${icon('list',14)} Trace <span class="cnt">${(c && c.trace || []).length}</span></button>
+    <div class="canvas-head">
+      <div class="seg canvas-seg">
+        <button class="${top === 'agent' ? 'on' : ''}" data-act="ctab" data-t="agent" title="Agent panel">${Mascot.svg(state.agent.color,'idle',18)}<span>${esc(state.agent.name)}</span></button>
+        <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
+        <button class="${top === 'trace' ? 'on' : ''}" data-act="ctab" data-t="trace">${icon('list',14)} Trace <span class="cnt">${(c && c.trace || []).length}</span></button>
+        <button class="${top === 'subagents' ? 'on' : ''}" data-act="ctab" data-t="subagents">${icon('clock',14)} Sub Agents <span class="cnt">${(state.subAgents || []).length}</span></button>
+        <button class="${top === 'mail' ? 'on' : ''}" data-act="ctab" data-t="mail">${icon('mail',14)} Mail${mailCache && mailCache.unread ? ` <span class="cnt">${mailCache.unread}</span>` : ''}</button>
+        <button class="${top === 'wallet' ? 'on' : ''}" data-act="ctab" data-t="wallet">${icon('wallet',14)} Wallet</button>
+      </div>
       <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
     </div>
     <div class="cbody" id="cbody"></div>`;
   initCanvasResize();
+  centerActiveSeg(cv);
   const body = $('#cbody');
+  if (top === 'mail'){
+    paintMail(body);
+    return;
+  }
+  if (top === 'wallet'){
+    paintWallet(body);
+    return;
+  }
   if (top === 'agent'){
     body.innerHTML = agentSliderContent();
+    centerActiveSeg(body);
     const an = $('#agentname');
     if (an) an.addEventListener('change', e => {
       const v = e.target.value.trim(); if (!v) return;
       state.agent.name = v; save(); paintSide(); paintMain(); paintCanvas();
+      ensureMailbox(v).then(() => { if (state.canvasTab === 'agent' && $('#cbody')) paintCanvas(); });
       toast('Renamed — they answer to ' + v + ' now.');
     });
     return;
@@ -2147,6 +2737,11 @@ function paintCanvas(){
     body.innerHTML = (c && c.trace && c.trace.length)
       ? `<div class="tools" style="border:none;padding:0">${c.trace.map(t => `<div class="tline">${icon(t.ic,13)}<span>${esc(t.t)}</span></div>`).join('')}</div>`
       : `<div class="cempty">${Mascot.svg(state.agent.color,'think',70,'mascot-bob')}<div class="mut2">Every tool call, guardrail and sub-agent step will appear here.</div></div>`;
+    return;
+  }
+  if (state.canvasTab === 'subagents'){
+    body.innerHTML = subAgentsTabContent();
+    refreshSubAgents(false);
     return;
   }
   if (top === 'live'){
@@ -2250,7 +2845,16 @@ function paintVault(M){
       </div>
     </div>`;
   } else if (tab === 'apps'){
-    body = `<div class="kv"><div class="row mut">No connected apps. GitHub works via a personal access token saved in Secrets (real read-only API) — there is no fake OAuth here. Gmail isn't connected.</div></div>`;
+    const connected = (state.composioApps || []).filter((a) => a.connected);
+    body = `<div class="warnband">${icon('shieldcheck',18)}<div><b>Apps moved to their own home.</b>Connections are per-account OAuth via Composio — Belna never sees your passwords. Manage everything under Apps.</div></div>
+    <div class="kv">
+      ${connected.map((a) => `<div class="row">
+        <img src="${esc(a.logo || '')}" alt="" style="width:26px;height:26px;border-radius:8px" onerror="this.style.display='none'">
+        <div><b>${esc(a.name || a.toolkit)}</b><div class="sub">connected · powers chat, sub-agents and triggers</div></div>
+        <div class="rgt"><span class="chip green">connected</span></div></div>`).join('') || '<div class="row mut">No apps connected yet.</div>'}
+      <div class="row" style="background:var(--panel)"><div><b>Connect apps</b><div class="sub">${connected.length} connected · ${(state.composioApps || []).length} available</div></div>
+      <div class="rgt"><button class="btn small" data-act="nav" data-view="apps">Open Apps</button></div></div>
+    </div>`;
   } else if (tab === 'approved'){
     body = `<div class="kv">
       ${v.approvals.map(a => `<div class="row">
@@ -2317,7 +2921,9 @@ function paintProfile(M){
   </div></div>`;
   $('#pname').addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
-    state.agent.name = v; save(); paintSide(); paintCanvas(); toast('Renamed — they answer to ' + v + ' now.');
+    state.agent.name = v; save(); paintSide(); paintCanvas();
+    ensureMailbox(v);
+    toast('Renamed — they answer to ' + v + ' now.');
   });
 }
 
@@ -2355,14 +2961,15 @@ function settingsMemoryBody(){
       </div>`).join('') || `<div class="memory-empty"><span class="memory-file-icon">${icon('book',16)}</span><div><b>Nothing remembered yet</b><p>Ask your agent to remember a preference or detail and it will appear here.</p></div></div>`}</div>
     </section>`;
 }
-function centerActiveSettingsTab(container){
-  const settingsTabs = container && container.querySelector('.seg');
-  const activeSettingsTab = settingsTabs && settingsTabs.querySelector('.on');
-  if (!settingsTabs || !activeSettingsTab) return;
+function centerActiveSeg(container){
+  const tabs = container && container.querySelector('.seg');
+  const active = tabs && tabs.querySelector('.on');
+  if (!tabs || !active) return;
   requestAnimationFrame(() => {
-    settingsTabs.scrollLeft = Math.max(0, activeSettingsTab.offsetLeft - (settingsTabs.clientWidth - activeSettingsTab.offsetWidth) / 2);
+    tabs.scrollLeft = Math.max(0, active.offsetLeft - (tabs.clientWidth - active.offsetWidth) / 2);
   });
 }
+function centerActiveSettingsTab(container){ centerActiveSeg(container); }
 function paintSettings(M){
   const a = state.agent;
   const u = currentUser();
@@ -2435,7 +3042,9 @@ function paintSettings(M){
   const pn = $('#pname');
   if (pn) pn.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
-    state.agent.name = v; save(); paintSide(); paintCanvas(); toast('Renamed — they answer to ' + v + ' now.');
+    state.agent.name = v; save(); paintSide(); paintCanvas();
+    ensureMailbox(v);
+    toast('Renamed — they answer to ' + v + ' now.');
   });
   const un = $('#uname');
   if (un) un.addEventListener('change', e => {
@@ -2456,24 +3065,84 @@ function paintSettings(M){
   }
 }
 
-/* ---------------- Apps (real connections only, never faked) ---------------- */
+/* ---------------- Apps — Belna connected apps via Composio ---------------- */
 function paintApps(M){
-  const hasGH = state.vault.secrets.some(s => s.name === 'github_token');
-  M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Apps</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">real connections only</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">Connect apps to extend Arche 1.0. Nothing here is simulated — unconnected apps simply do nothing until you connect them.</p>
-    <div class="kv">
-      <div class="row"><span style="color:var(--ink)">${icon('git',18)}</span>
-        <div><b>GitHub</b><div class="sub">${hasGH ? 'PAT sealed in Secrets · read-only PR reviews' : 'Needs a fine-grained PAT in Secrets (Contents + Pull requests, read-only)'}</div></div>
-        <div class="rgt">${hasGH ? '<span class="chip green">connected</span>' : '<button class="btn small" data-act="goto-secrets">Connect</button>'}</div></div>
-      <div class="row"><span style="color:var(--acc)">${icon('mail',18)}</span>
-        <div><b>Gmail</b><div class="sub">OAuth not configured in this build — inbox stays untouched, nothing simulated</div></div>
-        <div class="rgt"><span class="chip">not connected</span></div></div>
-      <div class="row"><span style="color:var(--mut)">${icon('box',18)}</span>
-        <div><b>More apps</b><div class="sub">New connectors appear here only when a real OAuth or token flow exists</div></div>
-        <div class="rgt"><span class="chip">soon</span></div></div>
+  const apps = Array.isArray(state.composioApps) ? state.composioApps : [];
+  const q = String(state.appQuery || '').toLowerCase().trim();
+  const filter = state.appFilter || 'all';
+  const connectedCount = apps.filter((a) => a.connected).length;
+
+  let list = apps;
+  if (filter === 'connected') list = list.filter((a) => a.connected);
+  if (filter === 'available') list = list.filter((a) => !a.connected);
+  if (q) {
+    list = list.filter((a) =>
+      String(a.name || '').toLowerCase().includes(q) ||
+      String(a.toolkit || '').toLowerCase().includes(q) ||
+      String(a.description || '').toLowerCase().includes(q)
+    );
+  }
+
+  const cards = list.map((a) => {
+    const logo = a.logo
+      ? `<img src="${esc(a.logo)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      : `<span class="app-fallback">${esc(String(a.name || a.toolkit || '?').slice(0, 1).toUpperCase())}</span>`;
+    return `<article class="app-card ${a.connected ? 'is-connected' : ''}">
+      <div class="app-top"><span class="app-logo">${logo}</span>
+        ${a.connected ? '<span class="chip green">connected</span>' : '<span class="chip">not connected</span>'}
+      </div>
+      <b>${esc(a.name || a.toolkit)}</b>
+      <p>${esc(String(a.description || 'Connect to let your Belna agent act on it.').slice(0, 140))}</p>
+      <div class="app-actions">
+        ${a.connected
+          ? `<button class="btn ghost small" data-act="disconnect-app" data-toolkit="${esc(a.toolkit)}">Disconnect</button>
+             <button class="btn small" data-act="automate-app" data-toolkit="${esc(a.toolkit)}">Automate</button>`
+          : `<button class="btn small" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}">Connect</button>`}
+      </div>
+    </article>`;
+  }).join('');
+
+  M.innerHTML = `<div class="page"><div class="pageinner apps-page">
+    <div class="phead apps-head">
+      <div class="apps-title">
+        <span class="apps-mascot">${Mascot.logo(34)}</span>
+        <div><h1>Apps</h1><div class="apps-sub">${connectedCount} connected · ${apps.length} available · <span class="belna-accent">belna</span> secure connections</div></div>
+      </div>
+      <span style="display:flex;gap:8px;align-items:center">
+        <button class="btn ghost small" data-act="refresh-apps">${icon('refresh',14)} Refresh</button>
+        <button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button>
+      </span>
     </div>
+    <div class="apps-hero">
+      <div><b>Connect once — your agent does the work.</b><p>Secure per-account OAuth handled by Composio. Belna never sees your passwords, tokens stay with your account, and you can disconnect anytime. Connected apps power chat actions, sub-agents and triggers.</p></div>
+      <span class="chip acc">${icon('shieldcheck',12)} OAuth · per-user isolation</span>
+    </div>
+    <div class="apps-toolbar">
+      <input class="field apps-search" id="appquery" placeholder="Search apps — gmail, github, slack…" value="${esc(state.appQuery || '')}">
+      <div class="seg apps-filter">
+        <button class="${filter === 'all' ? 'on' : ''}" data-act="app-filter" data-f="all">All</button>
+        <button class="${filter === 'connected' ? 'on' : ''}" data-act="app-filter" data-f="connected">Connected (${connectedCount})</button>
+        <button class="${filter === 'available' ? 'on' : ''}" data-act="app-filter" data-f="available">Available</button>
+      </div>
+    </div>
+    ${state.composioLoading ? '<div class="row mut" style="padding:18px">Loading your apps…</div>' : ''}
+    ${!state.composioLoading && !apps.length ? `<div class="kv"><div class="row mut">App connections are not configured yet. The server needs COMPOSIO_API_KEY.</div></div>` : ''}
+    ${!state.composioLoading && apps.length && !list.length ? '<div class="kv"><div class="row mut">No apps match your search.</div></div>' : ''}
+    <div class="apps-grid">${cards}</div>
+    <p class="fineprint">Trouble after connecting? Press Refresh — Composio confirms the connection, then chat, sub-agents and triggers can use it immediately.</p>
   </div></div>`;
+  const input = $('#appquery');
+  if (input) {
+    input.addEventListener('input', (e) => {
+      state.appQuery = e.target.value;
+      save();
+      const pos = e.target.selectionStart;
+      paintApps($('#main'));
+      const again = $('#appquery');
+      if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
+    });
+  }
+  if (!apps.length && !state.composioLoading && signedIn()) refreshComposioApps();
 }
 
 /* ================================================================
@@ -2483,8 +3152,10 @@ window.addEventListener('resize', () => {
   if (state.view === 'settings' && $('#main')) centerActiveSettingsTab($('#main'));
 });
 window.addEventListener('focus', () => {
+  startSandboxLease();
   if (signedIn() && state.onboarded) syncFromBackend().then(() => { if ($('#side')) paintSide(); if (state.view === 'chat' && $('#main')) paintMain(); });
 });
+window.addEventListener('pagehide', () => stopSandboxLease());
 document.addEventListener('change', (e) => {
   if (e.target && e.target.id === 'subtrigger') {
     state.subAgentDraft = (($('#subprompt') || {}).value || '');
@@ -2560,7 +3231,21 @@ document.addEventListener('click', async e => {
   if (act === 'togglemenu'){ mobileNavOpen = !mobileNavOpen; renderApp(); return; }
   if (act === 'nav'){
     if (!signedIn()){ renderAuth(); return; }
-    mobileNavOpen = false; state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp(); return;
+    mobileNavOpen = false; state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp();
+    if (state.view === 'apps') refreshComposioApps();
+    return;
+  }
+  if (act === 'refresh-apps'){ refreshComposioApps(); return; }
+  if (act === 'app-filter'){ state.appFilter = b.dataset.f || 'all'; save(); paintApps(document.getElementById('main')); return; }
+  if (act === 'connect-app'){ connectComposioApp(b.dataset.toolkit, b.dataset.auth); return; }
+  if (act === 'disconnect-app'){ disconnectComposioApp(composioAppByToolkit(b.dataset.toolkit)); return; }
+  if (act === 'automate-app'){
+    const _tk = String(b.dataset.toolkit || '').toLowerCase();
+    state.canvasTab = 'subagents'; state.canvasOpen = true;
+    state.subAgentComposer = true; state.subAgentTriggerType = 'app';
+    save(); paintCanvas(); refreshSubAgents();
+    toast(_tk ? ('Pick a ' + _tk + ' event for the trigger.') : 'Pick a connected-app event.');
+    return;
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
@@ -2574,7 +3259,6 @@ document.addEventListener('click', async e => {
   }
   if (act === 'agenttab'){
     state.agentTab = b.dataset.t; state.canvasTab = 'agent'; save(); paintCanvas();
-    if (state.agentTab === 'subagents') refreshSubAgents();
     return;
   }
   if (act === 'new-subagent'){
@@ -2583,7 +3267,7 @@ document.addEventListener('click', async e => {
     save(); paintCanvas(); return;
   }
   if (act === 'open-subagents'){
-    state.agentTab = 'subagents'; state.canvasTab = 'agent'; state.canvasOpen = true;
+    state.canvasTab = 'subagents'; state.canvasOpen = true;
     const app = $('#app'); if (app) app.classList.remove('nocanvas');
     save(); paintCanvas(); refreshSubAgents(); return;
   }
@@ -2594,7 +3278,7 @@ document.addEventListener('click', async e => {
     let trigger;
     if (type === 'schedule') trigger = { type, intervalMinutes:Number((($('#subinterval') || {}).value) || 60) };
     if (type === 'app') {
-      const [app, event] = String((($('#subappevent') || {}).value) || '').split(':');
+      const _ae = String((($('#subappevent') || {}).value) || ''); const _ci = _ae.indexOf(':'); const app = _ci >= 0 ? _ae.slice(0, _ci) : _ae; const event = _ci >= 0 ? _ae.slice(_ci + 1) : '';
       trigger = { type, app, event };
     }
     if (type === 'subagent') trigger = { type, sourceAgentId:(($('#subsource') || {}).value) || '' };
@@ -2656,7 +3340,137 @@ document.addEventListener('click', async e => {
     save(); renderApp(); return;
   }
   if (act === 'togglecanvas'){ state.canvasOpen = !state.canvasOpen; save(); $('#app').classList.toggle('nocanvas', !state.canvasOpen); paintCanvas(); return; }
-  if (act === 'ctab'){ state.canvasTab = b.dataset.t; if (b.dataset.t !== 'canvas') state._showLiveInCanvas = false; paintCanvas(); return; }
+  if (act === 'ctab'){ state.canvasTab = b.dataset.t; if (b.dataset.t !== 'canvas') state._showLiveInCanvas = false; save(); paintCanvas(); if (b.dataset.t === 'subagents') refreshSubAgents(); if (b.dataset.t === 'wallet') getWallet(true).then(() => { if (state.canvasTab === 'wallet' && $('#cbody')) paintWallet($('#cbody')); }); if (b.dataset.t === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); }); return; }
+  if (act === 'mtab'){
+    state.mailTab = b.dataset.t || 'inbox';
+    if (mailCache) mailCache.selected = null;
+    if (state.mailTab === 'write' && mailCache) mailCache.compose = { to:'', subject:'', body:'' };
+    save();
+    if ($('#cbody')) paintMail($('#cbody'));
+    if (state.mailTab !== 'write') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
+    return;
+  }
+  if (act === 'm-refresh'){ getMail(true, state.mailTab === 'write' ? 'inbox' : state.mailTab).then(() => { if ($('#cbody')) paintMail($('#cbody')); }); return; }
+  if (act === 'm-copy'){
+    const addr = mailCache && mailCache.address;
+    if (!addr){ toast('No address yet.'); return; }
+    copyText(addr).then(() => toast('Copied ' + addr)).catch(() => toast('Could not copy'));
+    return;
+  }
+  if (act === 'm-open'){
+    openMailMessage(b.dataset.id).then(() => { if ($('#cbody')) paintMail($('#cbody')); }).catch((err) => toast(err.message));
+    return;
+  }
+  if (act === 'm-back'){
+    if (mailCache) mailCache.selected = null;
+    if ($('#cbody')) paintMail($('#cbody'));
+    return;
+  }
+  if (act === 'm-reply'){
+    const msg = mailCache && mailCache.selected;
+    if (!msg) return;
+    state.mailTab = 'write';
+    mailCache.selected = null;
+    mailCache.compose = {
+      to: msg.direction === 'outbound' ? (msg.to || []).join(', ') : msg.from,
+      subject: /^re:/i.test(msg.subject || '') ? msg.subject : 'Re: ' + (msg.subject || ''),
+      body: '',
+      inReplyTo: msg.messageId || msg.id,
+    };
+    save();
+    if ($('#cbody')) paintMail($('#cbody'));
+    return;
+  }
+  if (act === 'm-edit-draft'){
+    const draft = ((mailCache && mailCache.drafts) || []).find((d) => d.id === b.dataset.id);
+    if (!draft) return;
+    state.mailTab = 'write';
+    mailCache.compose = { to: (draft.to || []).join(', '), subject: draft.subject, body: draft.bodyText, draftId: draft.id, inReplyTo: draft.inReplyTo };
+    save();
+    if ($('#cbody')) paintMail($('#cbody'));
+    return;
+  }
+  if (act === 'm-draft'){
+    const to = (($('#m-to') || {}).value || '').trim();
+    const subject = (($('#m-subject') || {}).value || '').trim();
+    const bodyTxt = (($('#m-body') || {}).value || '').trim();
+    const draftId = (($('#m-draft') || {}).value || '').trim();
+    window.LingonAuth.api('/api/mail/drafts', { method:'POST', body: JSON.stringify({ id: draftId || undefined, to, subject, body: bodyTxt }) }).then((j) => {
+      toast('Draft saved.');
+      if (mailCache) mailCache.compose = Object.assign({}, mailCache.compose, { draftId: j.draft && j.draft.id });
+    }).catch((err) => toast(err.message));
+    return;
+  }
+  if (act === 'm-send'){
+    const to = (($('#m-to') || {}).value || '').trim();
+    const subject = (($('#m-subject') || {}).value || '').trim();
+    const bodyTxt = (($('#m-body') || {}).value || '').trim();
+    const inReplyTo = (($('#m-reply') || {}).value || '').trim();
+    const draftId = (($('#m-draft') || {}).value || '').trim();
+    if (!to || !subject || !bodyTxt){ toast('To, subject and message are required.'); return; }
+    if (!window.confirm('Send this email as ' + ((state.agent && state.agent.name) || 'your agent') + '?')) return;
+    b.disabled = true;
+    window.LingonAuth.api('/api/mail/send', { method:'POST', body: JSON.stringify({ to, subject, body: bodyTxt, inReplyTo: inReplyTo || undefined, draftId: draftId || undefined, agentName: (state.agent && state.agent.name) || '', confirm:true }) }).then((j) => {
+      mailCache = j.mailbox || mailCache;
+      state.mailTab = 'sent';
+      save();
+      if ($('#cbody')) paintMail($('#cbody'));
+      toast('Sent from ' + ((mailCache && mailCache.address) || 'the agent mailbox') + '.');
+    }).catch((err) => { b.disabled = false; toast(err.message); });
+    return;
+  }
+  if (act === 'wtab'){ state.walletTab = b.dataset.t || 'wallet'; save(); if ($('#cbody')) paintWallet($('#cbody')); return; }
+  if (act === 'w-refresh'){ getWallet(true).then(() => { if ($('#cbody')) paintWallet($('#cbody')); }); return; }
+  if (act === 'w-copy'){
+    const addr = walletCache && walletCache.address;
+    if (!addr){ toast('No wallet address yet.'); return; }
+    copyText(addr).then(() => toast('Wallet address copied')).catch(() => toast('Could not copy'));
+    return;
+  }
+  if (act === 'w-ensure'){
+    b.disabled = true;
+    window.LingonAuth.api('/api/wallet/ensure', { method:'POST', body:'{}' }).then((j) => {
+      walletCache = j; if ($('#cbody')) paintWallet($('#cbody')); toast('Agent wallet is ready.');
+    }).catch((err) => { b.disabled = false; toast(err.message); });
+    return;
+  }
+  if (act === 'w-card'){
+    b.disabled = true;
+    window.LingonAuth.api('/api/wallet/card', { method:'POST', body: JSON.stringify({ holderName: (state.agent && state.agent.name) || '' }) }).then((j) => {
+      walletCache = j.wallet || j; state.walletTab = 'card'; save(); if ($('#cbody')) paintWallet($('#cbody')); toast('Card attached to the agent wallet.');
+    }).catch((err) => { b.disabled = false; toast(err.message); });
+    return;
+  }
+  if (act === 'w-billing'){
+    const billing = { line1: (($('#w-line1')||{}).value||'').trim(), city: (($('#w-city')||{}).value||'').trim(), postal: (($('#w-postal')||{}).value||'').trim(), country: (($('#w-country')||{}).value||'US').trim() };
+    window.LingonAuth.api('/api/wallet/billing', { method:'POST', body: JSON.stringify({ billing, holderName: (state.agent && state.agent.name) || '' }) }).then((j) => {
+      walletCache = j; if ($('#cbody')) paintWallet($('#cbody')); toast('Billing saved for Stripe Issuing.');
+    }).catch((err) => toast(err.message));
+    return;
+  }
+  if (act === 'w-reveal'){
+    revealStripeCard(b.dataset.id).catch((err) => toast(err.message));
+    return;
+  }
+  if (act === 'w-limit'){
+    const n = Number((($('#wlimit') || {}).value) || 0);
+    window.LingonAuth.api('/api/wallet/limit', { method:'POST', body: JSON.stringify({ dailyLimitUsd: n }) }).then((j) => {
+      walletCache = j; if ($('#cbody')) paintWallet($('#cbody')); toast('Daily spend cap saved.');
+    }).catch((err) => toast(err.message));
+    return;
+  }
+  if (act === 'w-send'){
+    const to = (($('#wto') || {}).value || '').trim();
+    const amount = Number((($('#wamt') || {}).value) || 0);
+    const asset = (($('#wasset') || {}).value) || 'usdc';
+    if (!to || !(amount > 0)){ toast('Enter a destination and amount.'); return; }
+    if (!window.confirm('Send ' + amount + ' ' + asset.toUpperCase() + ' from the agent wallet? This cannot be undone.')) return;
+    b.disabled = true;
+    window.LingonAuth.api('/api/wallet/transfer', { method:'POST', body: JSON.stringify({ to, amount, asset, confirm:true }) }).then((j) => {
+      walletCache = j.wallet || walletCache; if ($('#cbody')) paintWallet($('#cbody')); toast('Sent.');
+    }).catch((err) => { b.disabled = false; toast(err.message); });
+    return;
+  }
   if (act === 'viewcanvas'){ state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
   if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = true; $('#app') && $('#app').classList.remove('nocanvas'); save(); paintCanvas(); return; }
   if (act === 'takeover'){ liveTakeover(); return; }
@@ -2667,10 +3481,6 @@ document.addEventListener('click', async e => {
   }
   if (act === 'openbrowser'){ toast('For safety, browsing stays contained in the sandbox window above.'); return; }
   if (act === 'artmenu'){ toast('Artifact saved — find it in Vault → Library.'); return; }
-  if (act === 'chip'){
-    if (!signedIn()){ state.pendingPrompt = b.dataset.t; save(); renderAuth(); return; }
-    sendPrompt(b.dataset.t); return;
-  }
   if (act === 'replymsg' && c && m){
     const draft = ($('#cprompt') || {}).value || '';
     c.replyingTo = { id:m.id, role:m.role === 'user' ? 'user' : 'agent', text:String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, 220) };
@@ -2698,6 +3508,31 @@ document.addEventListener('click', async e => {
   if (act === 'copycode'){ const t = $('#codebox'); if (t) await copyText(t.textContent); toast('Copied'); return; }
 
   /* card resolutions (real accounts only — no anonymous approvals) */
+  if (act === 'managed-stop') { await Engine.stop(makeRT(chat())); return; }
+  if (act === 'managed-resume') { await Engine.resume(makeRT(chat())); return; }
+  if (m?.card?.managedCallId && ['save-secret','skip-secret'].includes(act)) {
+    if (!signedIn()) { renderAuth(); return; }
+    if(act === 'save-secret') {
+      const node=document.querySelector(`[data-mid="${m.id}"]`);
+      const input=node.querySelector('[data-f="val"]');
+      if(!input.value) { toast('Enter the credential value.'); return; }
+      b.disabled=true;
+      try {
+        await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name:m.card.suggest,value:input.value})});
+        input.value='';
+      } catch(err) {b.disabled=false;toast(err.message);return;}
+    }
+    await Engine.resume(makeRT(c),{callId:m.card.managedCallId,allow:act==='save-secret'});
+    b.disabled=false;return;
+  }
+  if (m?.card?.managedCallId && ['managed-allow','managed-deny','qopt'].includes(act)) {
+    if (!signedIn()) { renderAuth(); return; }
+    b.disabled = true;
+    const allow = act !== 'managed-deny';
+    await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow, answer:act === 'qopt' ? b.dataset.o : undefined });
+    b.disabled = false;
+    replaceNode(c,m); save(); return;
+  }
   if (act === 'approve' && m){ if (!signedIn()){ renderAuth(); return; } resolveCard(c, m, { ok:true }, 'approved'); return; }
   if (act === 'deny' && m){ if (!signedIn()){ renderAuth(); return; } resolveCard(c, m, { ok:false }, 'denied'); return; }
   if (act === 'always' && m){
@@ -2705,9 +3540,9 @@ document.addEventListener('click', async e => {
     save(); resolveCard(c, m, { ok:true, always:true }, 'always'); return;
   }
   if (act === 'connect' && m){
-    // No fake OAuth: GitHub uses a PAT in Secrets; Gmail is not connected.
     resolveCard(c, m, { ok:false }, 'denied');
-    toast(m.card.app === 'github' ? 'No OAuth here — save a GitHub PAT in Secrets instead.' : 'Gmail is not connected.');
+    state.view = 'apps'; save(); renderApp(); refreshComposioApps();
+    toast('Connect that app under Apps — secure OAuth, no tokens to paste.');
     return;
   }
   if (act === 'deny-connect' && m){ resolveCard(c, m, { ok:false }, 'denied'); return; }
@@ -2723,7 +3558,11 @@ document.addEventListener('click', async e => {
     save(); resolveCard(c, m, { ok:true }, 'saved'); paintSide(); return;
   }
   if (act === 'qopt' && m){ if (!signedIn()){ renderAuth(); return; } m.card.choice = b.dataset.o; resolveCard(c, m, { choice: b.dataset.o }, 'answered'); return; }
-  if (act === 'download' && m){ dl(m.card.name, m.card.content); return; }
+  if (act === 'download' && m){
+    if (m.card.managedArtifactId) { try { await Engine.download(c.id, m.card); } catch (err) { toast(err.message); } }
+    else dl(m.card.name, m.card.content);
+    return;
+  }
 
   /* vault / settings page */
   if (act === 'vtab'){ state.vaultTab = b.dataset.t; paintVault($('#main')); return; }
@@ -2742,7 +3581,7 @@ document.addEventListener('click', async e => {
     save(); repaintSettings(); paintSide(); toast('Sealed in vault — agent gets ' + ref + ' only'); return;
   }
   if (act === 'toggleapp'){
-    toast('No app connections to toggle — Apps is empty by design.');
+    state.view = 'apps'; save(); renderApp(); refreshComposioApps();
     return;
   }
   if (act === 'signin'){ doAuth('signin'); return; }
@@ -2755,6 +3594,7 @@ document.addEventListener('click', async e => {
   if (act === 'otp-send'){ authOtpSend(); return; }
   if (act === 'otp-verify'){ authOtpVerify(); return; }
   if (act === 'signout'){
+    stopSandboxLease();
     window.LingonAuth.set(null);
     state.view = 'chat';
     render();
@@ -2775,9 +3615,8 @@ document.addEventListener('click', async e => {
   if (act === 'checkout'){
     try {
       const plan = b.dataset.p;
-      const slider = plan && document.querySelector(`.credit-slider[data-plan="${plan}"]`);
-      const extraCredits = slider ? Math.max(0, parseFloat(slider.value || '0')) : 0;
-      const j = await window.LingonAuth.api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan, extraCredits }) });
+      const ex = extraCreditsFor(plan);
+      const j = await window.LingonAuth.api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan, extraCredits: ex.credits, extraPrice: ex.price }) });
       if (j.url) { window.location.href = j.url; return; }
       toast(j.note || 'Checkout started.');
     } catch (e) { toast(e.message); }
@@ -2793,9 +3632,8 @@ document.addEventListener('click', async e => {
   if (act === 'upgrade'){
     try {
       const plan = b.dataset.p;
-      const slider = plan && document.querySelector(`.credit-slider[data-plan="${plan}"]`);
-      const extraCredits = slider ? Math.max(0, parseFloat(slider.value || '0')) : 0;
-      const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: JSON.stringify({ plan, extraCredits }) });
+      const ex = extraCreditsFor(plan);
+      const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: JSON.stringify({ plan, extraCredits: ex.credits, extraPrice: ex.price }) });
       if (j.url) { window.location.href = j.url; return; }
       toast(j.note || 'Request recorded.');
     } catch (e) { toast(e.message); }

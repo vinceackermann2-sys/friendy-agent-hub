@@ -47,5 +47,32 @@ window.LingonAuth = (() => {
     }
     return j;
   }
-  return { get, set, headers, api, signedIn: () => !!get()?.access_token };
+  async function apiStream(path, opts = {}) {
+    // Raw fetch for SSE streaming (/api/chat/stream). Returns the Response
+    // so callers can read deltas incrementally — never buffers JSON.
+    const doFetch = () => fetch((window.LingonConfig.apiBase || '') + path, { ...opts, headers: headers(opts.headers || {}) });
+    let r = await doFetch();
+    if (r.status === 401 && path !== '/api/auth/refresh') {
+      const s = get();
+      if (s?.refresh_token) {
+        try {
+          const rr = await fetch((window.LingonConfig.apiBase || '') + '/api/auth/refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: s.refresh_token }),
+          });
+          const jj = await rr.json();
+          if (rr.ok && jj.access_token) {
+            set({ access_token: jj.access_token, refresh_token: jj.refresh_token, user: jj.user });
+            r = await doFetch();
+          }
+        } catch {}
+      }
+      if (r.status === 401) {
+        set(null);
+        throw Object.assign(new Error('Sign in required.'), { code: 401 });
+      }
+    }
+    return r;
+  }
+  return { get, set, headers, api, apiStream, signedIn: () => !!get()?.access_token };
 })();
