@@ -26,9 +26,11 @@ import * as Automations from './agents/automations.js';
 import * as composio from './composio.js';
 import * as privy from './privy.js';
 import * as mail from './mail.js';
-import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases, startIdleWatcher } from './agents/azure-vm.js';
+import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases } from './agents/azure-vm.js';
 import { handle as vmHarnessHandle } from './agents/vm-harness.js';
-startIdleWatcher();
+
+// Cloudflare forbids timers at module scope. Durable lease cleanup for this
+// edge runtime is driven by the authenticated Supabase Edge Function instead.
 
 const app = createApp();
 const requestSignal = (req) => req.signal;
