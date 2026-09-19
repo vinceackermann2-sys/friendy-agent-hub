@@ -36,13 +36,19 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
       subAgentId: subAgent.id,
       metadata: { automationRunId: run.id, triggerType: event.type },
     });
-    const response = await Runner.modelAnswer({
-      agent: { instructions: AUTOMATION_SYSTEM + memoryText },
-      task: userTurn,
-      history: previous.map((m) => ({ role: m.role, text: m.text })).slice(-20),
-      model: MODEL_DEFAULT,
+    const { runAgentTurn } = require('./vm-harness');
+    const response = await runAgentTurn({
+      userId, chatId: subAgent.chatId, prompt: userTurn,
+      history: previous.map((m) => ({ role:m.role, text:m.text })).slice(-20),
+      context: { automation: true, memories: memories.map(m => m.text), agent: { pers: 'Precise' } },
     });
-    await Runner.logModelUsage(userId, response.model || MODEL_DEFAULT, [response.usage, response.compactUsage]);
+    if (response.status === 'paused') {
+      const output = 'This automation is waiting for your approval. Open its chat and reconnect to review the pending action.';
+      await store.saveTurn(userId, subAgent.chatId, 'agent', output, { title:subAgent.name, source:'automation', subAgentId:subAgent.id });
+      await store.finishAutomationRun(userId, run.id, 'waiting_approval', { output }, null);
+      await store.markSubAgentRun(userId, subAgent.id, 'waiting_approval', null, nextRunAt(subAgent.trigger));
+      return { runId:run.id, chatId:subAgent.chatId, output, status:'waiting_approval' };
+    }
     const output = protectAgentResponse(subAgent.prompt, response.text);
     await store.saveTurn(userId, subAgent.chatId, 'agent', output, {
       title: subAgent.name,

@@ -29,7 +29,7 @@ in `localStorage`.
    tool traces, and cards for:
    approvals (approve / always-allow / deny), connect-app, **secrets box**,
    questions, sub-agents, browser use, sandboxed computer use, files, artifacts,
-   memory saves, suggestion chips.
+   memory saves.
 4. **Canvas (right, chat-only)** — live artifacts: animated bar charts, sandboxed
    HTML previews, diffs/code, plans — plus a **Trace** tab showing every tool call,
    guardrail and sub-agent step. Artifact cards in chat carry inline previews.

@@ -7,6 +7,7 @@ const SCRIPTS = [
   "/lingon/mascot.js",
   "/lingon/task-routing.js",
   "/lingon/engine.real.js",
+  "/lingon/engine.managed.js",
   "/lingon/app.js",
 ];
 

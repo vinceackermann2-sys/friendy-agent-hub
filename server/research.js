@@ -105,8 +105,8 @@ async function realResearch(query, hooks = {}) {
         const c = await live.content(s);
         let screenshot = null;
         try {
-          const buf = await s.page.screenshot({ type: 'jpeg', quality: 40 });
-          if (buf.length <= 220000) screenshot = 'data:image/jpeg;base64,' + buf.toString('base64');
+          const buf = await live.screenshot(s);
+          if (buf && buf.length <= 220000) screenshot = 'data:image/jpeg;base64,' + buf.toString('base64');
         } catch {}
         opened = { url: c.url, title: c.title, liveId: s.id, live: true, screenshot };
         snippets.push({ url: c.url, renderedTitle: c.title, excerpt: String(c.text || '').slice(0, 900) });

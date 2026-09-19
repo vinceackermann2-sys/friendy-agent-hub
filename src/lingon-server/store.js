@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
-let LOCAL = { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [] };
+let LOCAL = { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [] };
 
 function loadLocal() {
   return LOCAL;
@@ -738,6 +738,537 @@ async function grantsTotalByReason(userId, reason) {
     .reduce((n, r) => n + Number(r.credits || 0), 0);
 }
 
+function mapWallet(r, userId) {
+  return {
+    userId: r.user_id || r.userId || userId,
+    privyWalletId: r.privy_wallet_id || r.privyWalletId || null,
+    address: r.address || null,
+    chain: r.chain || 'base',
+    externalId: r.external_id || r.externalId || null,
+    card: r.card && typeof r.card === 'object' ? r.card : { status: 'none' },
+    dailyLimitUsd: r.daily_limit_usd != null ? Number(r.daily_limit_usd) : (r.dailyLimitUsd != null ? Number(r.dailyLimitUsd) : 50),
+    envelopes: Array.isArray(r.envelopes) ? r.envelopes : [],
+    createdAt: r.created_at ? new Date(r.created_at).getTime() : (r.createdAt || Date.now()),
+  };
+}
+
+async function getAgentWallet(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_wallets').select('*').eq('user_id', userId).maybeSingle();
+      if (error) throw error;
+      if (data) return mapWallet(data, userId);
+    } catch (e) {
+      console.warn('[store] supabase wallet fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.wallets || []).find((w) => w.userId === userId) || null;
+}
+
+async function upsertAgentWallet(userId, patch) {
+  const prev = await getAgentWallet(userId);
+  const next = Object.assign({
+    userId,
+    privyWalletId: null,
+    address: null,
+    chain: 'base',
+    externalId: null,
+    card: { status: 'none' },
+    dailyLimitUsd: 50,
+    envelopes: [],
+    createdAt: Date.now(),
+  }, prev || {}, patch || {}, { userId });
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('agent_wallets').upsert({
+        user_id: userId,
+        privy_wallet_id: next.privyWalletId,
+        address: next.address,
+        chain: next.chain,
+        external_id: next.externalId || null,
+        card: next.card,
+        daily_limit_usd: next.dailyLimitUsd,
+        envelopes: next.envelopes || [],
+      }, { onConflict: 'user_id' });
+      if (error) throw error;
+      return next;
+    } catch (e) {
+      console.warn('[store] supabase upsert wallet fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.wallets = d.wallets || [];
+  const i = d.wallets.findIndex((w) => w.userId === userId);
+  if (i >= 0) d.wallets[i] = next; else d.wallets.unshift(next);
+  saveLocal(d);
+  return next;
+}
+
+function mapWalletTx(r, userId) {
+  return {
+    id: r.id,
+    userId: r.user_id || r.userId || userId,
+    kind: r.kind,
+    asset: r.asset,
+    amount: Number(r.amount || 0),
+    to: r.to_address || r.to || null,
+    status: r.status,
+    hash: r.tx_hash || r.hash || null,
+    error: r.error || null,
+    at: r.created_at ? new Date(r.created_at).getTime() : (r.at || Date.now()),
+  };
+}
+
+async function listWalletTx(userId, limit) {
+  const cap = Math.min(80, Number(limit) || 20);
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_wallet_tx').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(cap);
+      if (error) throw error;
+      return (data || []).map((r) => mapWalletTx(r, userId));
+    } catch (e) {
+      console.warn('[store] supabase wallet tx fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.walletTx || []).filter((t) => t.userId === userId).sort((a, b) => b.at - a.at).slice(0, cap);
+}
+
+async function addWalletTx(userId, tx) {
+  const row = {
+    id: 'wtx_' + uid(),
+    userId,
+    kind: tx.kind || 'transfer',
+    asset: tx.asset || 'usdc',
+    amount: Number(tx.amount || 0),
+    to: tx.to || null,
+    status: tx.status || 'pending',
+    hash: tx.hash || null,
+    error: tx.error || null,
+    at: Date.now(),
+  };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('agent_wallet_tx').insert({
+        id: row.id,
+        user_id: userId,
+        kind: row.kind,
+        asset: row.asset,
+        amount: row.amount,
+        to_address: row.to,
+        status: row.status,
+        tx_hash: row.hash,
+        error: row.error,
+      });
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] supabase insert wallet tx fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.walletTx = d.walletTx || [];
+  d.walletTx.unshift(row);
+  saveLocal(d);
+  return row;
+}
+
+async function reserveWalletSpend(userId, tx, dailyLimitUsd) {
+  const id = 'wtx_' + uid();
+  const s = supa();
+  if (s) {
+    await ensureProfile(userId);
+    const { data, error } = await s.rpc('reserve_agent_wallet_spend', {
+      p_user_id: userId,
+      p_tx_id: id,
+      p_kind: tx.kind || 'transfer',
+      p_asset: tx.asset || 'usdc',
+      p_amount: Number(tx.amount || 0),
+      p_to_address: tx.to || null,
+      p_daily_limit: Number(dailyLimitUsd || 0),
+      p_status: tx.status || 'pending',
+    });
+    if (error) {
+      const e = new Error(String(error.message || '').includes('DAILY_LIMIT') ? 'Daily wallet spend limit exceeded.' : 'Could not reserve wallet spend.');
+      e.code = String(error.message || '').includes('DAILY_LIMIT') ? 'LIMIT' : 'WALLET_STORE';
+      throw e;
+    }
+    return mapWalletTx(data, userId);
+  }
+  if (supaConfigured()) throw Object.assign(new Error('Wallet database is unavailable.'), { code: 'WALLET_STORE' });
+  return addWalletTx(userId, { ...tx, id });
+}
+
+async function updateWalletTx(userId, id, patch) {
+  const s = supa();
+  if (s) {
+    try {
+      const upd = {};
+      if (patch.status) upd.status = patch.status;
+      if (patch.hash !== undefined) upd.tx_hash = patch.hash;
+      if (patch.error !== undefined) upd.error = patch.error;
+      const { error } = await s.from('agent_wallet_tx').update(upd).eq('id', id).eq('user_id', userId);
+      if (error) throw error;
+    } catch (e) {
+      console.warn('[store] supabase update wallet tx fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.walletTx = (d.walletTx || []).map((t) => t.id === id && t.userId === userId ? Object.assign({}, t, patch) : t);
+  saveLocal(d);
+  return (d.walletTx || []).find((t) => t.id === id) || { id, userId, ...patch };
+}
+
+function mapMailbox(r, userId) {
+  return {
+    userId: r.user_id || r.userId || userId,
+    localPart: r.local_part || r.localPart || '',
+    address: r.address || '',
+    displayName: r.display_name || r.displayName || '',
+    createdAt: r.created_at ? new Date(r.created_at).getTime() : (r.createdAt || Date.now()),
+  };
+}
+function mapMailMessage(r, userId) {
+  const to = r.to_addresses || r.toAddresses || [];
+  const cc = r.cc_addresses || r.ccAddresses || [];
+  return {
+    id: r.id,
+    userId: r.user_id || r.userId || userId,
+    mailboxAddress: r.mailbox_address || r.mailboxAddress || '',
+    direction: r.direction || 'inbound',
+    folder: r.folder || 'inbox',
+    fromAddress: r.from_address || r.fromAddress || '',
+    fromName: r.from_name || r.fromName || '',
+    toAddresses: Array.isArray(to) ? to : [],
+    ccAddresses: Array.isArray(cc) ? cc : [],
+    subject: r.subject || '',
+    bodyText: r.body_text || r.bodyText || '',
+    bodyHtml: r.body_html || r.bodyHtml || '',
+    messageId: r.message_id || r.messageId || null,
+    inReplyTo: r.in_reply_to || r.inReplyTo || null,
+    threadId: r.thread_id || r.threadId || null,
+    resendId: r.resend_id || r.resendId || null,
+    isRead: r.is_read != null ? !!r.is_read : !!r.isRead,
+    at: r.created_at ? new Date(r.created_at).getTime() : (r.at || Date.now()),
+  };
+}
+function mapMailDraft(r, userId) {
+  const to = r.to_addresses || r.toAddresses || [];
+  return {
+    id: r.id,
+    userId: r.user_id || r.userId || userId,
+    toAddresses: Array.isArray(to) ? to : [],
+    subject: r.subject || '',
+    bodyText: r.body_text || r.bodyText || '',
+    inReplyTo: r.in_reply_to || r.inReplyTo || null,
+    at: r.updated_at ? new Date(r.updated_at).getTime() : (r.at || Date.now()),
+  };
+}
+
+async function getMailboxByUser(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_mailboxes').select('*').eq('user_id', userId).maybeSingle();
+      if (error) throw error;
+      if (data) return mapMailbox(data, userId);
+    } catch (e) {
+      console.warn('[store] supabase mailbox fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailboxes || []).find((m) => m.userId === userId) || null;
+}
+async function getMailboxByAddress(address) {
+  const addr = String(address || '').trim().toLowerCase();
+  if (!addr) return null;
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_mailboxes').select('*').ilike('address', addr).maybeSingle();
+      if (error) throw error;
+      if (data) return mapMailbox(data, data.user_id);
+    } catch (e) {
+      console.warn('[store] supabase mailbox-by-address fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailboxes || []).find((m) => String(m.address || '').toLowerCase() === addr) || null;
+}
+async function mailLocalPartTaken(part, exceptUserId) {
+  const local = String(part || '').toLowerCase();
+  const s = supa();
+  if (s) {
+    try {
+      let q = s.from('agent_mailboxes').select('user_id').eq('local_part', local);
+      if (exceptUserId) q = q.neq('user_id', exceptUserId);
+      const { data, error } = await q.maybeSingle();
+      if (error && error.code !== 'PGRST116') throw error;
+      return !!data;
+    } catch (e) {
+      console.warn('[store] supabase local-part fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailboxes || []).some((m) => m.localPart === local && m.userId !== exceptUserId);
+}
+async function upsertMailbox(userId, patch) {
+  const prev = await getMailboxByUser(userId);
+  const next = Object.assign({
+    userId,
+    localPart: '',
+    address: '',
+    displayName: '',
+    createdAt: Date.now(),
+  }, prev || {}, patch || {}, { userId });
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('agent_mailboxes').upsert({
+        user_id: userId,
+        local_part: next.localPart,
+        address: next.address,
+        display_name: next.displayName,
+      }, { onConflict: 'user_id' });
+      if (error) throw error;
+      return next;
+    } catch (e) {
+      console.warn('[store] supabase upsert mailbox fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.mailboxes = d.mailboxes || [];
+  const i = d.mailboxes.findIndex((m) => m.userId === userId);
+  if (i >= 0) d.mailboxes[i] = next; else d.mailboxes.unshift(next);
+  saveLocal(d);
+  return next;
+}
+async function listMailMessages(userId, { folder, q, limit } = {}) {
+  const cap = Math.min(80, Number(limit) || 40);
+  const needle = String(q || '').trim().toLowerCase();
+  const s = supa();
+  if (s) {
+    try {
+      let query = s.from('agent_mail_messages').select('*').eq('user_id', userId);
+      if (folder && folder !== 'all') query = query.eq('folder', folder);
+      if (needle) query = query.or('subject.ilike.%' + needle + '%,from_address.ilike.%' + needle + '%,body_text.ilike.%' + needle + '%');
+      const { data, error } = await query.order('created_at', { ascending: false }).limit(cap);
+      if (error) throw error;
+      return (data || []).map((r) => mapMailMessage(r, userId));
+    } catch (e) {
+      console.warn('[store] supabase mail list fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailMessages || [])
+    .filter((m) => m.userId === userId)
+    .filter((m) => !folder || folder === 'all' || m.folder === folder)
+    .filter((m) => !needle || [m.subject, m.fromAddress, m.bodyText].some((x) => String(x || '').toLowerCase().includes(needle)))
+    .sort((a, b) => b.at - a.at)
+    .slice(0, cap);
+}
+async function getMailMessage(userId, id) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_mail_messages').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
+      if (error) throw error;
+      if (data) return mapMailMessage(data, userId);
+    } catch (e) {
+      console.warn('[store] supabase mail get fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailMessages || []).find((m) => m.id === id && m.userId === userId) || null;
+}
+async function getMailMessageByResendId(resendId) {
+  const id = String(resendId || '');
+  if (!id) return null;
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_mail_messages').select('*').eq('resend_id', id).maybeSingle();
+      if (error) throw error;
+      if (data) return mapMailMessage(data, data.user_id);
+    } catch (e) {
+      console.warn('[store] supabase mail resend-id fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailMessages || []).find((m) => m.resendId === id) || null;
+}
+async function insertMailMessage(userId, msg) {
+  const row = {
+    id: 'msg_' + uid(),
+    userId,
+    mailboxAddress: msg.mailboxAddress || '',
+    direction: msg.direction || 'inbound',
+    folder: msg.folder || (msg.direction === 'outbound' ? 'sent' : 'inbox'),
+    fromAddress: msg.fromAddress || '',
+    fromName: msg.fromName || '',
+    toAddresses: msg.toAddresses || [],
+    ccAddresses: msg.ccAddresses || [],
+    subject: msg.subject || '',
+    bodyText: msg.bodyText || '',
+    bodyHtml: msg.bodyHtml || '',
+    messageId: msg.messageId || null,
+    inReplyTo: msg.inReplyTo || null,
+    threadId: msg.threadId || null,
+    resendId: msg.resendId || null,
+    isRead: !!msg.isRead,
+    at: Date.now(),
+  };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('agent_mail_messages').insert({
+        id: row.id,
+        user_id: userId,
+        mailbox_address: row.mailboxAddress,
+        direction: row.direction,
+        folder: row.folder,
+        from_address: row.fromAddress,
+        from_name: row.fromName,
+        to_addresses: row.toAddresses,
+        cc_addresses: row.ccAddresses,
+        subject: row.subject,
+        body_text: row.bodyText,
+        body_html: row.bodyHtml,
+        message_id: row.messageId,
+        in_reply_to: row.inReplyTo,
+        thread_id: row.threadId,
+        resend_id: row.resendId,
+        is_read: row.isRead,
+      });
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] supabase insert mail fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.mailMessages = d.mailMessages || [];
+  d.mailMessages.unshift(row);
+  saveLocal(d);
+  return row;
+}
+async function updateMailMessage(userId, id, patch) {
+  const s = supa();
+  if (s) {
+    try {
+      const upd = {};
+      if (patch.isRead != null) upd.is_read = !!patch.isRead;
+      const { error } = await s.from('agent_mail_messages').update(upd).eq('id', id).eq('user_id', userId);
+      if (error) throw error;
+    } catch (e) {
+      console.warn('[store] supabase update mail fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.mailMessages = (d.mailMessages || []).map((m) => m.id === id && m.userId === userId ? Object.assign({}, m, patch) : m);
+  saveLocal(d);
+  return (d.mailMessages || []).find((m) => m.id === id) || { id, userId, ...patch };
+}
+async function countUnreadMail(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { count, error } = await s.from('agent_mail_messages').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('folder', 'inbox').eq('is_read', false);
+      if (error) throw error;
+      return Number(count || 0);
+    } catch (e) {
+      console.warn('[store] supabase unread mail fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailMessages || []).filter((m) => m.userId === userId && m.folder === 'inbox' && !m.isRead).length;
+}
+async function countOutboundMailToday(userId) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const since = start.toISOString();
+  const s = supa();
+  if (s) {
+    try {
+      const { count, error } = await s.from('agent_mail_messages').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('direction', 'outbound').gte('created_at', since);
+      if (error) throw error;
+      return Number(count || 0);
+    } catch (e) {
+      console.warn('[store] supabase outbound mail fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailMessages || []).filter((m) => m.userId === userId && m.direction === 'outbound' && m.at >= start.getTime()).length;
+}
+async function listMailDrafts(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_mail_drafts').select('*').eq('user_id', userId).order('updated_at', { ascending: false }).limit(20);
+      if (error) throw error;
+      return (data || []).map((r) => mapMailDraft(r, userId));
+    } catch (e) {
+      console.warn('[store] supabase drafts fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.mailDrafts || []).filter((x) => x.userId === userId).sort((a, b) => b.at - a.at).slice(0, 20);
+}
+async function upsertMailDraft(userId, input) {
+  const row = {
+    id: input.id || ('dft_' + uid()),
+    userId,
+    toAddresses: input.toAddresses || [],
+    subject: input.subject || '',
+    bodyText: input.bodyText || '',
+    inReplyTo: input.inReplyTo || null,
+    at: Date.now(),
+  };
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('agent_mail_drafts').upsert({
+        id: row.id,
+        user_id: userId,
+        to_addresses: row.toAddresses,
+        subject: row.subject,
+        body_text: row.bodyText,
+        in_reply_to: row.inReplyTo,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'id' });
+      if (error) throw error;
+      return row;
+    } catch (e) {
+      console.warn('[store] supabase upsert draft fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.mailDrafts = d.mailDrafts || [];
+  const i = d.mailDrafts.findIndex((x) => x.id === row.id && x.userId === userId);
+  if (i >= 0) d.mailDrafts[i] = row; else d.mailDrafts.unshift(row);
+  saveLocal(d);
+  return row;
+}
+async function deleteMailDraft(userId, id) {
+  const s = supa();
+  if (s) {
+    try { await s.from('agent_mail_drafts').delete().eq('id', id).eq('user_id', userId); } catch {}
+  }
+  const d = loadLocal();
+  d.mailDrafts = (d.mailDrafts || []).filter((x) => !(x.id === id && x.userId === userId));
+  saveLocal(d);
+}
+
 export {
   listMemories, addMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret,
@@ -751,5 +1282,9 @@ export {
   saveTurn, searchTurns, listChatMessages, listAutomationChats,
   listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent,
   listDueSubAgents, markSubAgentRun, beginAutomationRun, finishAutomationRun, listAutomationRuns,
+  getAgentWallet, upsertAgentWallet, listWalletTx, addWalletTx, reserveWalletSpend, updateWalletTx,
+  getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
+  listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
+  countUnreadMail, countOutboundMailToday, listMailDrafts, upsertMailDraft, deleteMailDraft,
   CREDIT_GRANT_FREE,
 };

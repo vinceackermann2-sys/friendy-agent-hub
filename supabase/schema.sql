@@ -164,3 +164,111 @@ alter table api_usage enable row level security;
 alter table gift_cards enable row level security;
 alter table upgrade_requests enable row level security;
 alter table stripe_events enable row level security;
+
+create table if not exists agent_wallets (
+  user_id text primary key references profiles(id) on delete cascade,
+  privy_wallet_id text unique,
+  address text,
+  external_id text unique,
+  chain text not null default 'base',
+  card jsonb not null default '{"status":"none"}'::jsonb,
+  daily_limit_usd numeric(12,2) not null default 50,
+  envelopes jsonb not null default '[]'::jsonb,
+  stripe_cardholder_id text,
+  created_at timestamptz not null default now()
+);
+create table if not exists agent_wallet_tx (
+  id text primary key,
+  user_id text not null references profiles(id) on delete cascade,
+  kind text not null default 'transfer',
+  asset text not null default 'usdc',
+  amount numeric(18,8) not null default 0,
+  to_address text,
+  status text not null default 'pending',
+  tx_hash text,
+  error text,
+  created_at timestamptz default now()
+);
+create index if not exists agent_wallet_tx_user_idx on agent_wallet_tx(user_id, created_at desc);
+alter table agent_wallets enable row level security;
+alter table agent_wallet_tx enable row level security;
+revoke all on agent_wallets, agent_wallet_tx from anon, authenticated;
+grant all on agent_wallets, agent_wallet_tx to service_role;
+
+create table if not exists agent_mailboxes (
+  user_id text primary key references profiles(id) on delete cascade,
+  local_part text not null,
+  address text not null,
+  display_name text not null default '',
+  created_at timestamptz not null default now(),
+  unique (local_part),
+  unique (address)
+);
+create table if not exists agent_mail_messages (
+  id text primary key,
+  user_id text not null references profiles(id) on delete cascade,
+  mailbox_address text not null,
+  direction text not null default 'inbound',
+  folder text not null default 'inbox',
+  from_address text not null default '',
+  from_name text not null default '',
+  to_addresses jsonb not null default '[]'::jsonb,
+  cc_addresses jsonb not null default '[]'::jsonb,
+  subject text not null default '',
+  body_text text not null default '',
+  body_html text not null default '',
+  message_id text,
+  in_reply_to text,
+  thread_id text,
+  resend_id text,
+  is_read boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists agent_mail_messages_user_idx on agent_mail_messages(user_id, created_at desc);
+create index if not exists agent_mail_messages_folder_idx on agent_mail_messages(user_id, folder, created_at desc);
+create unique index if not exists agent_mail_messages_resend_idx on agent_mail_messages(resend_id) where resend_id is not null;
+create table if not exists agent_mail_drafts (
+  id text primary key,
+  user_id text not null references profiles(id) on delete cascade,
+  to_addresses jsonb not null default '[]'::jsonb,
+  subject text not null default '',
+  body_text text not null default '',
+  in_reply_to text,
+  updated_at timestamptz not null default now()
+);
+create index if not exists agent_mail_drafts_user_idx on agent_mail_drafts(user_id, updated_at desc);
+alter table agent_mailboxes enable row level security;
+alter table agent_mail_messages enable row level security;
+alter table agent_mail_drafts enable row level security;
+revoke all on agent_mailboxes, agent_mail_messages, agent_mail_drafts from anon, authenticated;
+grant all on agent_mailboxes, agent_mail_messages, agent_mail_drafts to service_role;
+
+create table if not exists agent_vm_instances (
+  user_id text primary key,
+  vm_name text not null unique,
+  power_state text not null default 'deallocated'
+    check (power_state in ('deallocated', 'starting', 'running', 'stopping')),
+  stop_claim_token text,
+  stop_claimed_at timestamptz,
+  last_lease_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create table if not exists agent_vm_leases (
+  user_id text not null references agent_vm_instances(user_id) on delete cascade,
+  lease_id text not null,
+  kind text not null default 'app',
+  vm_name text not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, lease_id)
+);
+create index if not exists agent_vm_leases_expires_idx on agent_vm_leases(expires_at);
+alter table agent_vm_instances enable row level security;
+alter table agent_vm_leases enable row level security;
+revoke all on agent_vm_instances, agent_vm_leases from anon, authenticated;
+grant all on agent_vm_instances, agent_vm_leases to service_role;
+
+-- Lease, server-secret, and atomic wallet-reservation functions plus the
+-- minute sweeper schedule live in timestamped migrations under migrations/.

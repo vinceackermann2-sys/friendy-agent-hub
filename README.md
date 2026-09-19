@@ -1,5 +1,10 @@
 # Lingon — your personal agent (REAL backend)
 
+**Runtime:** Gemini 3.5 is the model. Each user gets an isolated Azure VM
+sandbox for untrusted code/files/browser. Until `AZURE_*` is set, the harness
+uses a per-user local workspace and keeps `code_run` disabled. OpenAI / Codex
+Agents API is **not** used. See `server/agents/azure-vm.js`.
+
 Every user claims, names and customizes their own agent, then works with it
 through chat + visual canvas + sealed vault. **This build is real: nothing is
 simulated.** AI answers come from Gemini server-side, research does live web
@@ -57,10 +62,10 @@ payments connect — no charge is made. See Billing in the app.
 
 ## Harness (honest)
 
-NOT the OpenAI Codex Agents API. Our own Gemini tool boundary
-(`server/harness.js`): allowlisted fetch, read-only GitHub with your
-per-request PAT (`X-GitHub-Token`), sandboxed HTML artifacts, approvals for
-sensitive tools, full trace. Vault → Apps shows empty — no fake OAuth.
+Gemini 3.5 decides tools via function calling (`server/agents/vm-harness.js`).
+Untrusted work runs in the user's Azure VM (`server/agents/azure-vm.js`).
+Until Azure is configured, the fallback is an isolated per-user workspace and
+`code_run` stays disabled. Secrets never enter the model or the VM.
 
 ## What is real vs honest
 

@@ -38,6 +38,12 @@ async function main() {
   assert.equal(routeMessage(active, "Build me a landing page"), "new-chat");
   assert.equal(routeMessage(null, "Build me a landing page"), "start-task");
   assert.equal(taskKind("Draft a concise launch announcement"), "general");
+  assert.equal(taskKind("Browse the web for current Lingonberry nutrition guidance"), "research");
+  assert.equal(taskKind("Search online for recent Swedish AI news"), "research");
+  assert.equal(taskKind("Look up the latest public information about Stockholm"), "research");
+  assert.equal(taskKind("Search GitHub pull requests for regressions"), "github");
+  assert.equal(taskKind("Search my previous chats for the launch name"), null);
+  assert.equal(taskKind("Do you have access to real-time live browsing?"), null);
 
   const realFetch = global.fetch;
   try {

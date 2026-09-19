@@ -2,10 +2,13 @@
    Each tool: { name, type, description, approval, run(args, ctx) }.
    - Tool search: pickTools(task) loads only relevant definitions (saves tokens).
    - Programmatic calling: runParallel executes independent calls concurrently.
-   ctx: { userId, sessionId, trace (push fn), githubPat }
+   ctx: { userId, sessionId, trace (push fn), signal }
+   App actions run through Composio (per-user OAuth) — never via vault PATs.
 */
 const { fetchAllowlisted } = require('./sandbox');
 const { entry } = require('./tracing');
+const composio = require('../composio');
+const azure = require('./azure-vm');
 
 const TOOLS = {
   web_search: {
@@ -28,93 +31,70 @@ const TOOLS = {
       return out;
     },
   },
-  github_prs: {
-    name: 'github_prs', type: 'function', approval: true,
-    description: 'Read-only list of recent repos + open PRs using the user PAT.',
+  composio_apps: {
+    name: 'composio_apps', type: 'function', approval: false,
+    description: 'List the user’s Composio-connected apps (per-user OAuth via Belna Apps).',
     run: async (_, ctx) => {
-      if (!ctx.githubPat) throw Object.assign(new Error('GitHub token required.'), { code: 'NO_PAT' });
-      const gh = async (url, accept = 'application/vnd.github+json') => {
-        const r = await fetchAllowlisted(url, { headers: { Authorization: `Bearer ${ctx.githubPat}`, Accept: accept }, signal: ctx.signal });
-        if (!r.ok) throw new Error(`GitHub ${r.status}`);
-        return accept.includes('diff') ? r.text() : r.json();
-      };
-      const repos = await gh('https://api.github.com/user/repos?per_page=10&sort=updated');
-      const prs = [];
-      await Promise.all(repos.slice(0, 5).map(async (repo) => {
-        try {
-          const list = await gh(`https://api.github.com/repos/${repo.full_name}/pulls?state=open&per_page=5`);
-          for (const pr of list) prs.push({ repo: repo.full_name, number: pr.number, title: pr.title, url: pr.html_url, user: pr.user?.login });
-        } catch {}
-      }));
-      ctx.trace(entry('git', `github_prs: ${repos.length} repos, ${prs.length} open PRs (read-only)`));
-      return { repos: repos.map((r) => r.full_name), prs };
+      const connected = await composio.listConnected(ctx.userId);
+      const active = connected.filter((c) => String(c.status).toUpperCase() === 'ACTIVE');
+      ctx.trace(entry('box', `composio_apps: ${active.length} connected`));
+      return active;
     },
   },
-  github_diff: {
-    name: 'github_diff', type: 'function', approval: true,
-    description: 'Read-only fetch of a single PR diff.',
-    run: async ({ repo, number }, ctx) => {
-      if (!ctx.githubPat) throw Object.assign(new Error('GitHub token required.'), { code: 'NO_PAT' });
-      const r = await fetchAllowlisted(`https://api.github.com/repos/${repo}/pulls/${number}`, {
-        headers: { Authorization: `Bearer ${ctx.githubPat}`, Accept: 'application/vnd.github.diff' }, signal: ctx.signal,
-      });
-      const diff = (await r.text()).slice(0, 30000);
-      ctx.trace(entry('git', `github_diff: ${repo}#${number} (${diff.length} chars)`));
-      return { diff };
+  composio_execute: {
+    name: 'composio_execute', type: 'function', approval: true,
+    description: 'Run a Composio tool on behalf of the user via their connected app (e.g. GMAIL_FETCH_EMAILS, GITHUB_LIST_PRS). Requires the toolkit to be connected under Apps.',
+    run: async ({ tool, args, connectedAccountId }, ctx) => {
+      const slug = String(tool || '').toUpperCase().trim();
+      if (!/^[A-Z0-9_]+$/.test(slug)) throw Object.assign(new Error('Valid tool slug required.'), { code: 'BAD_INPUT' });
+      const out = await composio.executeTool(ctx.userId, { tool: slug, args: args || {}, connectedAccountId });
+      if (out && out.successful === false) throw new Error(String(out.error || 'App action failed.').slice(0, 400));
+      ctx.trace(entry('box', `composio_execute: ${slug} done`));
+      return out.data || out;
+    },
+  },
+  shell: {
+    name: 'shell', type: 'code', approval: false,
+    description: 'Run a bash command in the user Azure VM workspace (/home/lingon/workspace). Files persist on the VM disk.',
+    run: async ({ command }, ctx) => {
+      const out = await azure.execInSandbox(ctx.userId, 'shell', { command });
+      ctx.trace(entry('term', `shell: exit on ${out.vmName}`));
+      return out;
+    },
+  },
+  computer_screenshot: {
+    name: 'computer_screenshot', type: 'browser', approval: false,
+    description: 'Screenshot a page in the user Azure VM browser (headless Chromium).',
+    run: async ({ url }, ctx) => {
+      const { hostAllowed } = require('./sandbox');
+      const u = String(url || '');
+      if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
+      const out = await azure.execInSandbox(ctx.userId, 'computer_screenshot', { url: u });
+      ctx.trace(entry('globe', `computer_screenshot: ${new URL(u).hostname}`));
+      return out;
     },
   },
   browser_open: {
     name: 'browser_open', type: 'browser', approval: false,
-    description: 'Open one allowlisted URL in headless Chromium; returns real title, text and links.',
+    description: 'Open one allowlisted URL in the user Azure VM browser (Chromium). Disabled until the VM boundary is configured.',
     run: async ({ url }, ctx) => {
       const { hostAllowed } = require('./sandbox');
       const u = String(url || '');
       if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
       if (ctx.signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
       if (process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
-      const puppeteer = require('puppeteer');
-      const t0 = Date.now();
-      const browser = await puppeteer.launch({ headless: true });
-      try {
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1280, height: 900 });
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
-          const target = request.url();
-          if (target === 'about:blank' || target.startsWith('data:') || hostAllowed(target)) request.continue().catch(() => {});
-          else request.abort('blockedbyclient').catch(() => {});
-        });
-        await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        if (ctx.signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
-        await new Promise((resolve) => setTimeout(resolve, 1200));
-        const data = await page.evaluate(() => ({
-          title: document.title,
-          text: document.body ? document.body.innerText.slice(0, 4000) : '',
-          links: [...document.querySelectorAll('a[href]')].slice(0, 10).map((a) => ({ t: a.innerText.slice(0, 80), h: a.href.slice(0, 200) })),
-        }));
-        // Capped JPEG screenshot so users can SEE the visited page. ~40-120KB.
-        let screenshot = null;
-        try {
-          const buf = await page.screenshot({ type: 'jpeg', quality: 40 });
-          if (buf.length <= 220000) screenshot = 'data:image/jpeg;base64,' + buf.toString('base64');
-        } catch {}
-        ctx.trace(entry('globe', `browser_open: ${new URL(u).hostname}${new URL(u).pathname.slice(0, 40)} · “${String(data.title).slice(0, 60)}” · ${Date.now() - t0}ms`));
-        return { url: u, ok: true, ...data, screenshot };
-      } finally {
-        await browser.close().catch(() => {});
-      }
+      const out = await azure.execInSandbox(ctx.userId, 'browser_open', { url: u });
+      ctx.trace(entry('globe', `browser_open: ${new URL(u).hostname} on ${out.vmName}`));
+      return out;
     },
   },
   code_run: {
     name: 'code_run', type: 'code', approval: false,
-    description: 'Disabled: arbitrary JS execution is not available (node:vm is not a security boundary).',
-    // SECURITY: node:vm is explicitly NOT a sandbox — code inside the context
-    // can reach the outer realm via the constructor chain of any injected
-    // function, obtain `process`, read every secret in process.env and run OS
-    // commands. Re-enable only behind a real isolation boundary.
-    run: async (_args, ctx) => {
-      ctx.trace(entry('alert', 'code_run: disabled — untrusted code execution is not permitted'));
-      throw Object.assign(new Error('code execution is disabled on this deployment'), { code: 'DISABLED' });
+    description: 'Execute js/python/bash ONLY inside the user Azure VM via Run Command. Disabled without Azure.',
+    run: async (args, ctx) => {
+      const out = await azure.execInSandbox(ctx.userId, 'code_run', args);
+      ctx.trace(entry('code', `code_run: ${out.language} on ${out.vmName}`));
+      return out;
     },
   },
   build_page: {
@@ -155,6 +135,86 @@ const TOOLS = {
       return agents.map(({ id, name, enabled, trigger, lastStatus, nextRunAt }) => ({ id, name, enabled, trigger, lastStatus, nextRunAt }));
     },
   },
+  wallet_status: {
+    name: 'wallet_status', type: 'function', approval: false,
+    description: 'Read this account’s agent wallet address, balances, attached card status (last4 only), and remaining daily spend. Never invent numbers.',
+    run: async (_, ctx) => {
+      const privy = require('../privy');
+      const snap = await privy.agentStatus(ctx.userId);
+      ctx.trace(entry('wallet', `wallet_status: ${snap.address ? 'ready' : 'missing'}`));
+      return snap;
+    },
+  },
+  wallet_transfer: {
+    name: 'wallet_transfer', type: 'function', approval: true,
+    description: 'Send USDC or ETH from the agent wallet. REQUIRES owner approval. Never send without an explicit destination and amount.',
+    run: async ({ to, amount, asset }, ctx) => {
+      const privy = require('../privy');
+      const out = await privy.transfer(ctx.userId, { to, amount, asset: asset || 'usdc', confirm: true });
+      ctx.trace(entry('wallet', `wallet_transfer: ${out.asset} ${out.amount} sent`));
+      return { status: out.status, asset: out.asset, amount: out.amount, to: String(out.to).slice(0, 6) + '…' + String(out.to).slice(-4), hash: out.hash };
+    },
+  },
+  wallet_purchase: {
+    name: 'wallet_purchase', type: 'function', approval: true,
+    description: 'Ask the owner to approve a purchase. method=card authorizes a matching charge on the attached card without revealing the card number. method=wallet sends USDC to to=. REQUIRES owner approval. Never ask for or use full card numbers.',
+    run: async ({ amount, merchant, reason, method, to }, ctx) => {
+      const privy = require('../privy');
+      const out = await privy.purchase(ctx.userId, { amount, merchant, reason, method, to, confirm: true });
+      ctx.trace(entry('wallet', `wallet_purchase: ${out.method} ${out.amount} ${out.merchant} ${out.status}`));
+      return out;
+    },
+  },
+  mail_status: {
+    name: 'mail_status', type: 'function', approval: false,
+    description: 'Read this agent’s own mailbox address, unread count, and whether sending is ready. Never invent the address.',
+    run: async ({ agent_name }, ctx) => {
+      const mail = require('../mail');
+      const snap = await mail.agentStatus(ctx.userId, agent_name);
+      ctx.trace(entry('mail', `mail_status: ${snap.address || 'missing'}`));
+      return snap;
+    },
+  },
+  mail_list: {
+    name: 'mail_list', type: 'function', approval: false,
+    description: 'List recent messages in this agent’s own inbox or sent folder. Never invent emails.',
+    run: async ({ folder, limit }, ctx) => {
+      const mail = require('../mail');
+      const rows = await mail.agentList(ctx.userId, { folder: folder === 'sent' ? 'sent' : 'inbox', limit });
+      ctx.trace(entry('mail', `mail_list: ${rows.length} ${folder || 'inbox'}`));
+      return rows;
+    },
+  },
+  mail_read: {
+    name: 'mail_read', type: 'function', approval: false,
+    description: 'Read one message from this agent’s mailbox by id. Marks inbound mail read.',
+    run: async ({ id }, ctx) => {
+      const mail = require('../mail');
+      const msg = await mail.readMessage(ctx.userId, String(id || ''));
+      ctx.trace(entry('mail', `mail_read: ${msg.subject}`));
+      return msg;
+    },
+  },
+  mail_draft: {
+    name: 'mail_draft', type: 'function', approval: false,
+    description: 'Save a draft in this agent’s mailbox. Does not send.',
+    run: async ({ to, subject, body, id }, ctx) => {
+      const mail = require('../mail');
+      const draft = await mail.saveDraft(ctx.userId, { to, subject, body, id });
+      ctx.trace(entry('mail', `mail_draft: ${draft.subject}`));
+      return draft;
+    },
+  },
+  mail_send: {
+    name: 'mail_send', type: 'function', approval: true,
+    description: 'Send email from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body.',
+    run: async ({ to, subject, body, in_reply_to, agent_name }, ctx) => {
+      const mail = require('../mail');
+      const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, agentName: agent_name, confirm: true });
+      ctx.trace(entry('mail', `mail_send: ${out.subject} → ${(out.to || []).join(', ')}`));
+      return { id: out.id, to: out.to, subject: out.subject, from: out.from };
+    },
+  },
   trigger_create: {
     name: 'trigger_create', type: 'function', approval: true,
     description: 'Create an isolated automation chat with a schedule, connected-app, or sub-agent trigger.',
@@ -166,8 +226,8 @@ const TOOLS = {
       if (existing.length >= 25) throw Object.assign(new Error('Sub-agent limit reached.'), { code: 'BAD_INPUT' });
       if (input.trigger.type === 'subagent' && !existing.some((agent) => agent.id === input.trigger.sourceAgentId)) throw Object.assign(new Error('Source sub-agent not found.'), { code: 'BAD_INPUT' });
       if (input.trigger.type === 'app') {
-        const secrets = await store.listSecrets(ctx.userId);
-        if (input.trigger.app !== 'github' || !secrets.some((secret) => secret.name === 'github_token')) throw Object.assign(new Error('Connected app required.'), { code: 'BAD_INPUT' });
+        const ok = await composio.isToolkitConnected(ctx.userId, input.trigger.app);
+        if (!ok) throw Object.assign(new Error('Connected app required — connect it under Apps first.'), { code: 'BAD_INPUT' });
       }
       const agent = await store.createSubAgent(ctx.userId, input, nextRunAt(input.trigger));
       ctx.trace(entry('clock', `trigger_create: ${agent.name}`));
@@ -181,10 +241,12 @@ function pickTools(task) {
   const t = String(task || '').toLowerCase();
   const names = new Set(['memory_write']);
   if (/(research|investigat|social|poll|sentiment|news|search|find)/.test(t)) names.add('web_search');
-  if (/(github|\bpr\b|pull request|repo|diff|code review)/.test(t)) { names.add('github_prs'); names.add('github_diff'); }
+  if (/(gmail|slack|calendar|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|calendar|task|issue|ticket)/.test(t)) { names.add('composio_apps'); names.add('composio_execute'); }
+  if (/(email|e-mail|inbox|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl)/.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
   if (/(build|landing|page|site|website|dashboard)/.test(t)) names.add('build_page');
   if (/(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous)/.test(t)) names.add('history_search');
   if (/(trigger|watch|schedule|recurring|every (?:hour|day|week)|sub.?agent|automation)/.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
+  if (/(wallet|pay|payment|transfer|usdc|\beth\b|invoice|payout|spend|debit card|virtual card|buy |purchase)/.test(t)) { names.add('wallet_status'); names.add('wallet_transfer'); names.add('wallet_purchase'); }
   if (names.size === 1) names.add('web_search'); // default research capability
   return [...names].map((n) => TOOLS[n]);
 }

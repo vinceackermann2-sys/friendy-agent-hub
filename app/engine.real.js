@@ -19,14 +19,14 @@ window.Engine = (() => {
   function intent(p) {
     p = String(p || '').toLowerCase();
     if (/\b(?:what|which) (?:is )?(?:the )?(?:current )?(?:date|day|month|year|time)\b|\b(?:today'?s date|date today|current date|current time|current year)\b/.test(p)) return 'chat';
-    if (/(research|investigate|find out|analy[sz]e|forum|reddit|social media|poll|part(y|ies)|sentiment|opinion|\bnews\b|\blatest\b|\bcurrent\b|\brecent\b|up[- ]to[- ]date)/.test(p)) return 'research';
-    if (/(github|pull request|\bpr\b|\brepo\b|code review|merge request)/.test(p)) return 'github';
-    if (/(email|inbox|gmail|newsletter)/.test(p)) return 'inbox';
+    if (/(github|pull request|\bpr\b|\brepo\b|code review|merge request)/.test(p)) return 'apps';
+    if (/(email|inbox|gmail|newsletter|slack|calendar|notion|drive|sheet|stripe|hubspot|linkedin|tweet|connect my|my apps|use my app)/.test(p)) return 'apps';
     if (/(secret|password|token|api key|credential|vault)/.test(p)) return 'vault';
     if (/(sub.?agent|automation|automate|trigger|watch(?:er)?|schedule|recurring|every (?:minute|hour|day|week|month)|remind me)/.test(p)) return 'automation';
     if (/(what do you remember|do you remember|your memor|recall|what do you know about me)/.test(p)) return 'chat';
     if (/(remember|don't forget|dont forget|keep in mind|preference)/.test(p)) return 'memory';
     if (/(build|create|make|design|code).*(website|landing|page|site|dashboard|app|chart|graph|deck)/.test(p) || /(website|landing page|one-pager)/.test(p)) return 'build';
+    if (taskRouting.isResearch(p) || /(part(y|ies)|opinion|\bcurrent\b)/.test(p)) return 'research';
     return 'chat';
   }
 
@@ -34,9 +34,9 @@ window.Engine = (() => {
     const p = String(prompt || '').toLowerCase();
     switch (intent(p)) {
       case 'research': return `I'd review current public sources and prepare a cited briefing on your canvas. No invented percentages — only what the sources actually support.`;
-      case 'github': return `I'd use your securely stored GitHub credential to list your open pull requests, inspect the real diff, and review it. Nothing is mocked or simulated.`;
+      case 'apps': return `I'd run that via your connected app (Gmail, GitHub, Slack, Calendar and 50+ more) — real actions only, nothing simulated. Connect the app under Apps first if needed.`;
       case 'build': return `I'd generate a single-file page from your brief, render a live preview on the canvas, and hand you the file. You iterate, I regenerate.`;
-      case 'inbox': return `No inbox connection exists. Gmail OAuth isn't configured, so I won't pretend to read email — ask me for research, GitHub reviews, or pages instead. I never simulate inbox contents.`;
+
       case 'vault': return `Secrets stay encrypted and scoped to your account. Protected values are never shown in chat or activity history. Claim your agent and try the secrets box.`;
       case 'memory': return `I can remember useful preferences across chats. Your memories are inspectable, deletable, and never shared with other users.`;
       default: return `I'd break that into clear steps, use available tools where helpful, and keep useful artifacts on your canvas. Sensitive actions require your approval.`;
@@ -57,17 +57,17 @@ window.Engine = (() => {
     const memories = rt.recall().slice(0, 10);
     const history = historyFor(rt, prompt);
     const current = (rt.chat.messages || []).filter((m) => m.kind === 'text').slice(-1)[0];
-    try {
-      const j = await api('/api/chat', {
-        method: 'POST',
-        body: JSON.stringify({
-          prompt, history, replyTo: current?.replyTo,
-          agent: { name: rt.agent.name, pers: rt.agent.pers }, memories,
-          sessionId: rt.chat.id, activeTask: options.activeTask || undefined,
-          delegated: !!options.delegated,
-        }),
-        signal: options.signal,
-      });
+    const payload = {
+      prompt, history, replyTo: current?.replyTo,
+      agent: { name: rt.agent.name, pers: rt.agent.pers }, memories,
+      sessionId: rt.chat.id, activeTask: options.activeTask || undefined,
+      delegated: !!options.delegated,
+    };
+    // Live handle lets the caller paint the answer progressively.
+    // If the caller already shows the iPhone-style three dots, stream
+    // straight into it — never wait for the final answer to update.
+    const live = options.live || null;
+    const applyTraceAndMemory = (j) => {
       if (Array.isArray(j.trace)) j.trace.forEach((t) => rt.trace(t.ic || 'spark', t.t));
       // ChatGPT-style: surface automatic saves like "Memory updated".
       for (const sm of j.savedMems || []) {
@@ -75,6 +75,123 @@ window.Engine = (() => {
           rt.remember(sm.text, 'auto');
           rt.card({ type: 'memory', text: 'Memory updated — ' + sm.text, status: 'done' });
         }
+      }
+    };
+    const streamInto = async () => {
+      if (!live || !window.LingonAuth || typeof window.LingonAuth.apiStream !== 'function') return null;
+      let res;
+      try {
+        res = await window.LingonAuth.apiStream('/api/chat/stream', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          signal: options.signal,
+        });
+      } catch {
+        return null;
+      }
+      if (!res || !res.ok || !res.body) {
+        try { res && res.body && await res.body.cancel(); } catch {}
+        return null;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let full = '';
+      const onEvent = (raw) => {
+        for (const chunk of String(raw).split('\n\n')) {
+          const line = chunk.trim();
+          if (!line.startsWith('data:')) continue;
+          let evt;
+          try { evt = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          if (evt.delta) {
+            full += String(evt.delta);
+            try { live.update(full); } catch {}
+          } else if (evt.replace != null) {
+            full = String(evt.replace);
+            try { live.update(full); } catch {}
+          } else if (evt.done) {
+            if (evt.text != null) full = String(evt.text);
+            try { live.update(full); } catch {}
+            applyTraceAndMemory(evt);
+            return { finished: true, text: full };
+          } else if (evt.error) {
+            const e = new Error(evt.error);
+            e.code = evt.code || 502;
+            e.upgrade = !!evt.upgrade_required;
+            throw e;
+          }
+        }
+        return null;
+      };
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (options.signal && options.signal.aborted) {
+            try { await reader.cancel(); } catch {}
+            const ab = new Error('Task interrupted');
+            ab.name = 'AbortError';
+            throw ab;
+          }
+          if (value) {
+            buf += decoder.decode(value, { stream: !done });
+            const idx = buf.lastIndexOf('\n\n');
+            if (idx >= 0) {
+              const slice = buf.slice(0, idx + 2);
+              buf = buf.slice(idx + 2);
+              const r = onEvent(slice);
+              if (r && r.finished) {
+                try { await reader.cancel(); } catch {}
+                return r.text;
+              }
+            }
+          }
+          if (done) {
+            if (buf.trim()) {
+              const r = onEvent(buf + '\n\n');
+              if (r && r.finished) return r.text;
+            }
+            break;
+          }
+        }
+      } finally {
+        try { reader.releaseLock(); } catch {}
+      }
+      // Stream ended without a done frame — treat accumulated text as final
+      // if we got anything, otherwise fall back to the JSON endpoint.
+      return full ? { streamed: true, text: full } : null;
+    };
+    try {
+      if (live) {
+        const streamed = await streamInto();
+        if (typeof streamed === 'string') return streamed;
+        if (streamed && streamed.text) {
+          // Stream closed early but we already painted partial text live.
+          // Still fetch the authoritative final via JSON to persist
+          // trace/memory correctly, then correct the bubble if needed.
+          try {
+            const j = await api('/api/chat', {
+              method: 'POST',
+              body: JSON.stringify(payload),
+              signal: options.signal,
+            });
+            applyTraceAndMemory(j);
+            if (j.text && j.text !== streamed.text) live.update(j.text);
+            return j.text;
+          } catch {
+            return streamed.text;
+          }
+        }
+      }
+      const j = await api('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal: options.signal,
+      });
+      applyTraceAndMemory(j);
+      if (live) {
+        // Non-streaming fallback: we already show three dots, so paint the
+        // answer into the same bubble instead of appending a second one.
+        try { live.update(j.text); } catch {}
       }
       return j.text;
     } catch (e) {
@@ -109,8 +226,7 @@ window.Engine = (() => {
   /* ---------------- greeting ---------------- */
   async function greet(rt) {
     const mem = rt.recall().find((m) => m.src === 'you said so' || m.src === 'from our chat');
-    await rt.say(`Hej — I'm **${rt.agent.name}**, your Lingon agent. I can research with live sources, review GitHub pull requests with your permission, and create pages and files. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
-    rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page', 'Remember that I prefer concise answers']);
+    await rt.say(`Hej — I'm **${rt.agent.name}**, your Belna agent. I can research with live sources, act on your connected apps (Gmail, GitHub, Slack, Calendar and more), run sub-agent automations, and create pages and files. Connect apps under Apps and I'll use them with your permission. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
   }
 
   /* ---------------- REAL research ---------------- */
@@ -165,74 +281,31 @@ window.Engine = (() => {
       rt.card({ type: 'file', name: 'research-sources.txt', size: content.length, content, status: 'done' });
     }
     await rt.say(`Done — live briefing is on your canvas with sources. Open the source links to verify everything; I didn't invent any counts.`, { mood: 'happy' });
-    rt.chips(['Break it down by source', 'Save the methodology to memory', 'Review my GitHub pull requests']);
   }
 
-  /* ---------------- REAL github (PAT, no fake OAuth) ---------------- */
-  async function github(rt, task) {
-    // No fake "Connect GitHub OAuth" — real flow is PAT in vault → read-only API.
-    if (!rt.hasSecret('github_token')) {
-      await rt.say(`To review real PRs I need a GitHub fine-grained PAT (Contents + Pull requests, read-only). Paste it in the **secrets box** — sealed in your vault, sent only to api.github.com via a dedicated header, never to the model.`);
-      const s = rt.card({ type: 'secret', suggest: 'github_token', status: 'pending' });
-      const r = await s.wait(task?.signal);
-      if (!r.ok) { await rt.say(`Skipped — I won't touch your repos without a token, and I won't fake a review.`); return; }
-      try { await syncSecretToBackend('github_token', s.msg?.card?.ref); } catch {}
-    }
-    const token = readLocalSecretValue('github_token');
-    if (!token) { await rt.say(`I have a reference but no value on this device, so I can't call GitHub. Re-save the token in the Vault.`); return; }
-    const ref = rt.secretRef('github_token');
-    rt.trace('lock', `GitHub credential ${ref} approved for this read-only action`);
-    rt.trace('shield', 'credential value remained protected');
-
-    const a = rt.card({ type: 'approval', key: 'gh_review', title: 'Review real open PRs', detail: 'Calls api.github.com with your PAT (read-only). No writes to your repos.', status: 'pending' });
-    const ar = await a.wait(task?.signal);
-    if (!ar.ok) { await rt.say(`Understood — I won't call GitHub.`); return; }
-
-      const t = rt.card({ type: 'computer', status: 'running', lines: [] });
-      t.update((c) => c.lines.push({ t: 'Read-only GitHub statistics from live API data', cls: 'p' }));
-    let data;
+  /* ---------------- Connected apps via Composio (real OAuth, no PATs) ---------------- */
+  async function appsFlow(rt, raw, task) {
+    await rt.say('On it — checking your connected apps and running that for real.', { mood: 'think' });
+    await rt.tools([{ ic: 'box', t: 'Using connected app', d: 'via secure OAuth' }]);
     try {
-      const j = await api(`/api/github/prs?sessionId=${encodeURIComponent(rt.chat.id)}`, { headers: { 'X-GitHub-Token': token }, signal: task?.signal });
-      data = j;
-      (j.trace || []).forEach((x) => rt.trace(x.ic, x.t));
-      // Real stdout from the executed sandbox — not composed client-side.
-      for (const line of String(j.stdout || '').split('\n').filter(Boolean).slice(0, 8)) {
-        t.update((c) => c.lines.push({ t: line, cls: 'g' }));
-      }
-      if (j.pcId) t.update((c) => { c.pcId = j.pcId; });
+      const j = await api('/api/composio/agent-run', { method: 'POST', body: JSON.stringify({ prompt: raw, sessionId: rt.chat.id }), signal: task?.signal });
+      (j.trace || []).forEach((x) => rt.trace(x.ic || 'box', x.t || 'app action'));
+      rt.trace('box', 'app action: ' + (j.tool || 'done'));
+      await rt.say(j.text || 'Done — check Apps if you need to reconnect anything.', { mood: 'happy' });
+      return;
     } catch (e) {
       if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
-      t.update((c) => { c.lines.push({ t: '✗ GitHub call failed: ' + e.message, cls: 'p' }); c.status = 'done'; });
-      t.resolve({ ok: false });
-      await rt.say(`GitHub call failed: ${e.message}\n\nMost common cause is an expired or narrowly-scoped token.`, { mood: 'think' });
+      const msg = String(e.message || '');
+      if (e.code === 409 || /No apps connected|Connect one under Apps|Connect that app/i.test(msg)) {
+        await rt.say('That needs a connected app first. Open **Apps**, connect it with one click (secure OAuth — no tokens to paste), press Refresh, then ask me again. I never simulate app data.', { mood: 'think' });
+        rt.card({ type: 'apps', status: 'pending' });
+        return;
+      }
+      await rt.say('I could not complete that app action right now (' + msg.slice(0, 160) + '). Please try again in a moment.', { mood: 'think' });
       return;
     }
-    t.update((c) => c.status = 'done'); t.resolve({ ok: true });
-
-    if (!data.prs.length) {
-      await rt.say(`Checked **${data.repos.length} recently-updated repos** — **zero open PRs** right now. Nothing to review, and I'm not going to invent any.`, { mood: 'happy' });
-      return;
-    }
-    const first = data.prs[0];
-    let diff = '';
-    try {
-      const j = await api(`/api/github/diff?repo=${encodeURIComponent(first.repo)}&number=${encodeURIComponent(first.number)}`, { headers: { 'X-GitHub-Token': token }, signal: task?.signal });
-      diff = (j.diff || '').slice(0, 8000);
-    } catch {}
-    if (diff) {
-      rt.artifact({ kind: 'code', title: `${first.repo} #${first.number}.diff`, code: diff });
-      rt.card({ type: 'artifact', title: `${first.repo} #${first.number}.diff`, kind: 'code', status: 'done' });
-    }
-    let review = '';
-    try {
-      review = await chatAI(rt, `Review this real GitHub PR for ${first.repo} #${first.number} "${first.title}" (${first.url}). Be concrete and honest; flag risks. Diff (may be truncated):\n${diff.slice(0, 6000)}`, { signal: task?.signal, delegated: true });
-    } catch (e) {
-      review = `Found **${data.prs.length} open PRs**. Newest: **${first.repo} #${first.number}** — ${first.title} (${first.url}). AI review is unavailable (${e.message}).`;
-    }
-    await rt.say(review, { mood: 'happy' });
-    rt.chips(['Show all open PRs', 'Build me a landing page', 'What can you do?']);
-    rt.trace('git', `${data.prs.length} open PRs: ` + data.prs.slice(0, 4).map((p) => `${p.repo}#${p.number}`).join(', '));
   }
+  async function github(rt, task) { return appsFlow(rt, (task && task.prompt) || 'github', task); }
 
   /* ---------------- REAL build ---------------- */
   async function build(rt, task) {
@@ -253,13 +326,11 @@ window.Engine = (() => {
       if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
       await rt.say(`I couldn't generate that page right now. Please try again in a moment.`, { mood: 'think' });
     }
-    rt.chips(['Make the hero bigger', 'Add a contact section', 'Research something for me']);
   }
 
   /* ---------------- inbox: honest empty (no fake connection) ---------------- */
   async function inbox(rt) {
     await rt.say(`No inbox is connected — and there's no fake demo data. Gmail OAuth isn't configured in this build, so nothing was read. Ask me for research, GitHub reviews, or pages instead.`, { mood: 'think' });
-    rt.chips(['Save a secret to try the vault', 'Review my GitHub pull requests', 'What can you do?']);
   }
 
   async function vaultFlow(rt) {
@@ -294,6 +365,9 @@ window.Engine = (() => {
     if (asksAboutInternalDetails(raw)) {
       return rt.say(privateDetailsReply(), { mood: 'idle' });
     }
+    if (taskRouting.isBrowsingCapability(raw)) {
+      return rt.say(`Yes. I can run live research against supported public sources and open allowlisted result pages in a sandboxed browser. Give me a topic to search, and I'll show the browser, sources, and tool trace while I work.`, { mood: 'happy' });
+    }
     if (/who are you|what are you/.test(p)) {
       return rt.say(`I'm **${rt.agent.name}**, your Lingon agent. How can I help?`, { mood: 'happy' });
     }
@@ -303,24 +377,31 @@ window.Engine = (() => {
       return rt.say(`Here's what I'm carrying (account-scoped):\n\n` + ms.slice(0, 6).map((m) => `- ${m.text}`).join('\n') + `\n\nDelete any under **Memory**.`, { mood: 'happy' });
     }
     if (/what can you do/.test(p)) {
-      await rt.say(`I can do **live research** with cited sources, **GitHub pull-request reviews** with your permission, **page generation**, and **account memory plus secure credential storage**. If something isn't available, I'll say so. Sensitive actions pause for approval and appear in your activity history.`);
-      rt.chips(['Research Swedish party sentiment on social media', 'Review my GitHub pull requests', 'Build me a landing page']);
+      await rt.say(`I can do **live research** with cited sources, **act on your connected apps** (Gmail, GitHub, Slack, Calendar and 50+ more), **sub-agent automations with triggers**, **page generation**, and **account memory plus secure credential storage**. If something isn't available, I'll say so. Sensitive actions pause for approval and appear in your activity history.`);
       return;
     }
     if (/keep me safe|safe|security|secret/.test(p)) {
       await rt.say(`Your data is account-scoped, secrets are encrypted, and sensitive actions require approval. External access is restricted, GitHub access is read-only, and activity is visible in the Trace tab.`);
-      rt.chips(['Save a secret to try it', 'Review my GitHub pull requests']);
       return;
     }
     if (/^run it/.test(p)) return research(rt, raw);
     if (/show all open prs|what else is on my repos/.test(p)) return github(rt);
-    await rt.tools([{ ic: 'spark', t: 'Working on your request', d: 'live' }]);
+    // No "Working on your request" status line — show only the iPhone-style
+    // three dots, instantly, then stream the answer live into the same
+    // bubble. Nothing waits for the final answer to update the user.
+    const live = (typeof rt.typing === 'function') ? rt.typing({ mood: 'idle' }) : null;
     try {
-      const text = await chatAI(rt, raw, { signal: task?.signal, delegated: !!task });
-      await rt.say(text, { mood: 'idle' });
+      const text = await chatAI(rt, raw, { signal: task?.signal, delegated: !!task, live });
+      if (live) live.done(text, { mood: 'idle' });
+      else await rt.say(text, { mood: 'idle' });
     } catch (e) {
-      if (task?.signal?.aborted || e?.name === 'AbortError') throw e;
-      await rt.say(`I couldn't complete that request right now. Please try again in a moment.`, { mood: 'think' });
+      if (task?.signal?.aborted || e?.name === 'AbortError') {
+        if (live) live.abort();
+        throw e;
+      }
+      const msg = `I couldn't complete that request right now. Please try again in a moment.`;
+      if (live) live.done(msg, { mood: 'think' });
+      else await rt.say(msg, { mood: 'think' });
     }
   }
 
@@ -329,23 +410,29 @@ window.Engine = (() => {
   }
 
   async function respondWhileWorking(rt, raw, activeTask) {
+    // Same instant-dots + live-update contract while a delegated worker runs.
+    const live = (typeof rt.typing === 'function') ? rt.typing({ mood: 'idle' }) : null;
     try {
-      const text = await chatAI(rt, raw, { activeTask: {
+      const text = await chatAI(rt, raw, { live, activeTask: {
         kind: activeTask.kind,
         prompt: activeTask.prompt,
         startedAt: activeTask.startedAt,
         updates: activeTask.updates || [],
       } });
-      await rt.say(text, { mood: 'idle' });
+      if (live) live.done(text, { mood: 'idle' });
+      else await rt.say(text, { mood: 'idle' });
     } catch (e) {
-      await rt.say(`I'm still here and the delegated work is continuing. I couldn't answer that follow-up just now, but you can send another message or interrupt the task.`, { mood: 'think' });
+      const msg = `I'm still here and the delegated work is continuing. I couldn't answer that follow-up just now, but you can send another message or interrupt the task.`;
+      if (live) live.done(msg, { mood: 'think' });
+      else await rt.say(msg, { mood: 'think' });
     }
   }
 
   async function runTask(rt, raw, task) {
     switch (task?.kind || taskRouting.taskKind(raw)) {
       case 'research': return research(rt, raw, task);
-      case 'github': return github(rt, task);
+      case 'apps': return appsFlow(rt, raw, task);
+      case 'github': return appsFlow(rt, raw, task);
       case 'build': return build(rt, task);
       default: return chatExtra(rt, raw, task);
     }
@@ -357,9 +444,10 @@ window.Engine = (() => {
     if (rt.isFirst && /hej|hello|hi\b/.test(p) && p.length < 24) return greet(rt);
     switch (intent(p)) {
       case 'research': return research(rt, raw);
-      case 'github': return github(rt);
+      case 'apps': return appsFlow(rt, raw);
+      case 'github': return appsFlow(rt, raw);
       case 'build': return build(rt);
-      case 'inbox': return inbox(rt);
+      case 'inbox': return appsFlow(rt, raw);
       case 'vault': return vaultFlow(rt);
       case 'memory': return memoryFlow(rt, raw);
       case 'automation': return automationFlow(rt, raw);

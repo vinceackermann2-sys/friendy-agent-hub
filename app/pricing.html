@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pricing — Belna Swedish Safe AI Agents</title>
-<meta name="description" content="Belna pricing in credits: Free with 20 starter credits, Pro $30/mo (-40%) with 60 credits monthly + free $50 gift card, Max $50/mo (-50%) with 100 credits monthly + free $100 gift card. Add extra credits with the slider. Secure payment via Stripe, gift codes, no hidden charges.">
+<meta name="description" content="Belna pricing in credits: Free with 20 starter credits, Pro $30/mo (-40%) with 60 credits monthly + free $50 gift card, Max $50/mo (-50%) with 100 credits monthly + free $100 gift card. Add extra credits with the dropdown. Secure payment via Stripe, gift codes, no hidden charges.">
 <link rel="canonical" href="https://belna.se/pricing.html">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,40 +24,89 @@
 <a class="btn ghost" href="/#cta">Start free</a></div>
 <div class="pcard pop"><span class="poptag">MOST POPULAR</span><div class="pname">Pro</div><div class="pprice">$30 <s>$50</s> <span class="pct-off">-40%</span><span class="mut" style="font-size:14px">/mo</span></div><p class="pdesc">60 credits every month.</p>
 <ul><li><span>✓</span>Everything in Free</li><li><span>✓</span>60 credits monthly</li><li><span>✓</span>Priority harness capacity</li></ul>
-<div class="credit-add" data-base-price="30" data-base-credits="60">
-<div class="credit-add-top"><label>Add extra credits</label><span class="credit-add-val">+0 credits</span></div>
-<input type="range" min="0" max="200" step="10" value="0" class="credit-slider" aria-label="Add extra credits to Pro">
-<div class="credit-add-sub">Top up on top of the plan · $0.50 / credit · <span class="credit-add-total">Total 60 credits · $30/mo</span></div>
+<div class="credit-add" data-base-price="30" data-base-credits="60" data-plan="pro">
+<label class="credit-select-label">PURCHASED CREDITS</label>
+<div class="credit-select" data-plan="pro" data-extra-credits="0" data-extra-price="0">
+<button type="button" class="credit-select-btn" aria-haspopup="listbox" aria-expanded="false"><span class="credit-select-val">None</span><span class="chev"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button>
+<div class="credit-select-menu" role="listbox">
+<button type="button" class="credit-opt sel" role="option" aria-selected="true" data-credits="0" data-price="0"><span>None</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="50" data-price="15"><span>50 credits — +$15</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="100" data-price="30"><span>100 credits — +$30</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="200" data-price="45"><span>200 credits — +$45</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="300" data-price="60"><span>300 credits — +$60</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="500" data-price="75"><span>500 credits — +$75</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="750" data-price="100"><span>750 credits — +$100</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="1000" data-price="125"><span>1000 credits — +$125</span><span class="tick">✓</span></button>
 </div>
-<a class="btn" href="/#cta">Get Pro</a><div class="gift-note">+ FREE $50 gift card</div>
-<div class="giftcard"><svg class="giftcard-bg" viewBox="0 0 600 260" preserveAspectRatio="xMaxYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><filter id="gcB50" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter><filter id="gcG50" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="8" flood-color="#fff" flood-opacity=".6"/></filter></defs><g filter="url(#gcB50)"><circle cx="510" cy="130" r="150" fill="#B8D4F7"/><circle cx="390" cy="130" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="410" cy="55" r="85" fill="#2E5BA8" opacity=".85"/><circle cx="410" cy="205" r="85" fill="#2E5BA8" opacity=".85"/><circle cx="460" cy="35" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="460" cy="225" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="500" cy="130" r="120" fill="#3B6DD9" opacity=".9"/><circle cx="530" cy="55" r="100" fill="#2E5BA8" opacity=".9"/><circle cx="530" cy="205" r="100" fill="#4A7FD4" opacity=".9"/><circle cx="560" cy="130" r="110" fill="#B8D4F7" opacity=".85"/></g><g transform="translate(500,130)"><path d="M0,-130 Q0,0 130,0 Q0,0 0,130 Q0,0 -130,0 Q0,0 0,-130Z" fill="#fff" opacity=".95" filter="url(#gcG50)"/><path d="M0,-125 Q0,0 125,0 Q0,0 0,125 Q0,0 -125,0 Q0,0 0,-125Z" fill="#fff"/></g></svg><div class="giftcard-content"><div class="giftcard-meta"><span class="gift-label">gift card</span><span class="gift-brand">belna</span></div><div class="gift-amt">$50</div><div class="gift-sub">100 credits · use it or gift it</div></div></div></div>
+</div>
+<div class="credit-add-sub"><span class="credit-add-total">Total 60 credits · $30/mo</span></div>
+</div>
+<a class="btn" href="/#cta">Get Pro</a><div class="gift-strip"><span class="gift-thumb">$50</span><span class="gift-strip-text">+ FREE $50 gift card</span></div></div>
 <div class="pcard"><div class="pname">Max</div><div class="pprice">$50 <s>$100</s> <span class="pct-off">-50%</span><span class="mut" style="font-size:14px">/mo</span></div><p class="pdesc">100 credits every month.</p>
 <ul><li><span>✓</span>Everything in Pro</li><li><span>✓</span>100 credits monthly</li><li><span>✓</span>Highest harness capacity</li></ul>
-<div class="credit-add" data-base-price="50" data-base-credits="100">
-<div class="credit-add-top"><label>Add extra credits</label><span class="credit-add-val">+0 credits</span></div>
-<input type="range" min="0" max="200" step="10" value="0" class="credit-slider" aria-label="Add extra credits to Max">
-<div class="credit-add-sub">Top up on top of the plan · $0.50 / credit · <span class="credit-add-total">Total 100 credits · $50/mo</span></div>
+<div class="credit-add" data-base-price="50" data-base-credits="100" data-plan="max">
+<label class="credit-select-label">PURCHASED CREDITS</label>
+<div class="credit-select" data-plan="max" data-extra-credits="0" data-extra-price="0">
+<button type="button" class="credit-select-btn" aria-haspopup="listbox" aria-expanded="false"><span class="credit-select-val">None</span><span class="chev"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button>
+<div class="credit-select-menu" role="listbox">
+<button type="button" class="credit-opt sel" role="option" aria-selected="true" data-credits="0" data-price="0"><span>None</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="50" data-price="15"><span>50 credits — +$15</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="100" data-price="30"><span>100 credits — +$30</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="200" data-price="45"><span>200 credits — +$45</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="300" data-price="60"><span>300 credits — +$60</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="500" data-price="75"><span>500 credits — +$75</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="750" data-price="100"><span>750 credits — +$100</span><span class="tick">✓</span></button>
+<button type="button" class="credit-opt" role="option" aria-selected="false" data-credits="1000" data-price="125"><span>1000 credits — +$125</span><span class="tick">✓</span></button>
 </div>
-<a class="btn ghost" href="/#cta">Get Max</a><div class="gift-note">+ FREE $100 gift card</div>
-<div class="giftcard"><svg class="giftcard-bg" viewBox="0 0 600 260" preserveAspectRatio="xMaxYMid slice" xmlns="http://www.w3.org/2000/svg"><defs><filter id="gcB100" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter><filter id="gcG100" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="8" flood-color="#fff" flood-opacity=".6"/></filter></defs><g filter="url(#gcB100)"><circle cx="510" cy="130" r="150" fill="#B8D4F7"/><circle cx="390" cy="130" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="410" cy="55" r="85" fill="#2E5BA8" opacity=".85"/><circle cx="410" cy="205" r="85" fill="#2E5BA8" opacity=".85"/><circle cx="460" cy="35" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="460" cy="225" r="95" fill="#4A7FD4" opacity=".9"/><circle cx="500" cy="130" r="120" fill="#3B6DD9" opacity=".9"/><circle cx="530" cy="55" r="100" fill="#2E5BA8" opacity=".9"/><circle cx="530" cy="205" r="100" fill="#4A7FD4" opacity=".9"/><circle cx="560" cy="130" r="110" fill="#B8D4F7" opacity=".85"/></g><g transform="translate(500,130)"><path d="M0,-130 Q0,0 130,0 Q0,0 0,130 Q0,0 -130,0 Q0,0 0,-130Z" fill="#fff" opacity=".95" filter="url(#gcG100)"/><path d="M0,-125 Q0,0 125,0 Q0,0 0,125 Q0,0 -125,0 Q0,0 0,-125Z" fill="#fff"/></g></svg><div class="giftcard-content"><div class="giftcard-meta"><span class="gift-label">gift card</span><span class="gift-brand">belna</span></div><div class="gift-amt">$100</div><div class="gift-sub">200 credits · use it or gift it</div></div></div></div>
+</div>
+<div class="credit-add-sub"><span class="credit-add-total">Total 100 credits · $50/mo</span></div>
+</div>
+<a class="btn ghost" href="/#cta">Get Max</a><div class="gift-strip"><span class="gift-thumb">$100</span><span class="gift-strip-text">+ FREE $100 gift card</span></div></div>
 </div>
 <script>
 (function(){
+  function fmt(n){ return String(Math.round(Number(n || 0) * 100) / 100); }
   document.querySelectorAll('.credit-add').forEach(function(box){
-    var slider = box.querySelector('.credit-slider');
-    var val = box.querySelector('.credit-add-val');
+    var sel = box.querySelector('.credit-select');
+    if(!sel) return;
+    var btn = sel.querySelector('.credit-select-btn');
+    var val = sel.querySelector('.credit-select-val');
     var total = box.querySelector('.credit-add-total');
-    if(!slider) return;
     var basePrice = parseFloat(box.dataset.basePrice || '0');
     var baseCredits = parseFloat(box.dataset.baseCredits || '0');
     function paint(){
-      var extra = parseFloat(slider.value || '0');
-      var extraCost = extra * 0.5;
-      if(val) val.textContent = '+' + extra + ' credits' + (extra ? ' (+$' + (extraCost.toFixed(extraCost % 1 ? 2 : 0)) + '/mo)' : '');
-      if(total) total.textContent = 'Total ' + (baseCredits + extra) + ' credits · $' + (basePrice + extraCost).toFixed((basePrice + extraCost) % 1 ? 2 : 0) + '/mo';
+      var extra = parseFloat(sel.dataset.extraCredits || '0');
+      var cost = parseFloat(sel.dataset.extraPrice || '0');
+      var opt = sel.querySelector('.credit-opt[data-credits="' + extra + '"][data-price="' + cost + '"]');
+      if(val) val.textContent = opt ? opt.querySelector('span').textContent : (extra ? extra + ' credits — +$' + cost : 'None');
+      if(total) total.textContent = 'Total ' + fmt(baseCredits + extra) + ' credits · $' + fmt(basePrice + cost) + '/mo';
+      if(btn) btn.setAttribute('aria-expanded', sel.classList.contains('open') ? 'true' : 'false');
     }
-    slider.addEventListener('input', paint);
+    if(btn) btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      document.querySelectorAll('.credit-select.open').forEach(function(o){ if(o !== sel) o.classList.remove('open'); });
+      sel.classList.toggle('open');
+      paint();
+    });
+    sel.querySelectorAll('.credit-opt').forEach(function(opt){
+      opt.addEventListener('click', function(e){
+        e.stopPropagation();
+        sel.dataset.extraCredits = opt.dataset.credits || '0';
+        sel.dataset.extraPrice = opt.dataset.price || '0';
+        sel.querySelectorAll('.credit-opt').forEach(function(o){ o.classList.remove('sel'); o.setAttribute('aria-selected', 'false'); });
+        opt.classList.add('sel');
+        opt.setAttribute('aria-selected', 'true');
+        sel.classList.remove('open');
+        paint();
+      });
+    });
     paint();
+  });
+  document.addEventListener('click', function(){
+    document.querySelectorAll('.credit-select.open').forEach(function(o){ o.classList.remove('open'); });
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') document.querySelectorAll('.credit-select.open').forEach(function(o){ o.classList.remove('open'); });
   });
 })();
 </script>
