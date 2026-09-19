@@ -50,15 +50,27 @@ async function ensureCredit(userId) {
   }
 }
 
-async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, signal }) {
+async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, signal, onDelta }) {
   const direct = currentTimeAnswer(task);
-  if (direct) return { text: direct, usage: null, model: 'server-clock', compacted: false, compactUsage: null, direct: true };
+  if (direct) {
+    // Keep streaming UX consistent even for instant clock answers:
+    // emit in small chunks so the bubble updates instead of popping in.
+    if (typeof onDelta === 'function') {
+      const parts = String(direct).match(/(\s+|[^\s]+)/g) || [direct];
+      let full = '';
+      for (const p of parts) {
+        full += p;
+        try { onDelta(p, full); } catch {}
+      }
+    }
+    return { text: direct, usage: null, model: 'server-clock', compacted: false, compactUsage: null, direct: true };
+  }
   const { history: h2, compacted, costUsage } = await compactIfNeeded({ history, model });
   const system = `${runtimeClock()}\n\n${agent.instructions || ''}${systemExtra || ''}`;
   const replyContext = replyTo && replyTo.text
     ? `[The user is replying to this ${replyTo.role === 'user' ? 'user' : 'assistant'} message: ${String(replyTo.text).slice(0, 500)}]\n\n`
     : '';
-  const r = await callGemini({ prompt: replyContext + task, system, history: h2, model, signal });
+  const r = await callGemini({ prompt: replyContext + task, system, history: h2, model, signal, onDelta });
   return { text: r.text, usage: r.usage, model: r.model || model, compacted, compactUsage: costUsage || null };
 }
 

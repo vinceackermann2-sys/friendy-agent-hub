@@ -49,13 +49,50 @@ class Res {
     this.headers.set('Content-Type', 'application/json');
     return this._finish(JSON.stringify(obj));
   }
+  writeHead(code, headers) {
+    this.statusCode = code;
+    if (headers) for (const [k, v] of Object.entries(headers)) this.headers.set(k, String(v));
+    if (this.headers.get('Content-Type')?.includes('text/event-stream')) {
+      const stream = new ReadableStream({
+        start: controller => { this._streamController = controller; },
+        cancel: () => { this._ended = true; this._onCancel?.(); },
+      });
+      return this._finish(stream);
+    }
+    if (this._body == null) this._body = '';
+    return this;
+  }
+  write(chunk) {
+    if (this._streamController) {
+      if (this._ended) return false;
+      this._streamController.enqueue(new TextEncoder().encode(String(chunk ?? '')));
+      return true;
+    }
+    if (this._sent) return false;
+    if (this._body == null) this._body = '';
+    this._body += String(chunk ?? '');
+    return true;
+  }
   send(body) {
+    if (body instanceof Uint8Array) return this._finish(body);
     if (typeof body === 'object' && body !== null) return this.json(body);
     if (!this.headers.get('Content-Type')) this.headers.set('Content-Type', 'text/html; charset=utf-8');
     return this._finish(body == null ? '' : String(body));
   }
   end(body) {
-    return this._finish(body ?? '');
+    if (this._streamController) {
+      if (!this._ended) {
+        if (body) this.write(body);
+        this._ended = true;
+        this._streamController.close();
+      }
+      return this;
+    }
+    if (this._sent) return this;
+    const extra = body ?? '';
+    const combined = (this._body != null ? String(this._body) : '') + String(extra);
+    // If headers already say event-stream, keep them; otherwise default.
+    return this._finish(combined);
   }
   redirect(location) {
     this.statusCode = 302;
@@ -100,9 +137,12 @@ export function createApp() {
     async handle(request) {
       const url = new URL(request.url);
       const res = new Res();
+      const streamController = new AbortController();
+      res._onCancel = () => streamController.abort();
       let body = {};
+      let text = '';
       if (request.method !== 'GET' && request.method !== 'HEAD') {
-        const text = await request.text().catch(() => '');
+        text = await request.text().catch(() => '');
         if (text) {
           try {
             body = JSON.parse(text);
@@ -123,11 +163,12 @@ export function createApp() {
         url: url.pathname + url.search,
         query,
         body,
+        rawText: text,
         headers,
         params: {},
         ip: headers['cf-connecting-ip'] || headers['x-forwarded-for'] || 'ip',
         protocol: url.protocol.replace(':', ''),
-        signal: request.signal,
+        signal: AbortSignal.any([request.signal, streamController.signal]),
         get: (k) => headers[String(k).toLowerCase()],
       };
 
@@ -170,13 +211,18 @@ export function createApp() {
           })(),
         );
 
-      try {
-        await run();
-        while (pending.length) await Promise.all(pending.splice(0));
-      } catch (e) {
-        if (!res._sent) res.status(500).json({ error: String(e?.message || e) });
-      }
-      if (!res._sent) res.status(404).json({ error: 'Not found' });
+      // Return headers as soon as SSE starts while the handler keeps producing
+      // stream chunks. Awaiting the entire handler here buffers every tool event.
+      void (async () => {
+        try {
+          await run();
+          while (pending.length) await Promise.all(pending.splice(0));
+        } catch (e) {
+          if (!res._sent) res.status(500).json({ error: String(e?.message || e) });
+          else res.end();
+        }
+        if (!res._sent) res.status(404).json({ error: 'Not found' });
+      })();
       return res.promise;
     },
   };

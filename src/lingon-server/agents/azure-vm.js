@@ -1,0 +1,31 @@
+/* Bundle the shared CJS Azure provider into Lovable's server output. */
+import azure from '../../../server/agents/azure-vm.js';
+
+export const azureConfig = azure.azureConfig;
+export const isAzureConfigured = azure.isAzureConfigured;
+export const isLeaseStoreConfigured = azure.isLeaseStoreConfigured;
+export const verifySweepToken = azure.verifySweepToken;
+export const missingAzureFields = azure.missingAzureFields;
+export const vmNameForUser = azure.vmNameForUser;
+export const userHash = azure.userHash;
+export const localWorkspaceForUser = azure.localWorkspaceForUser;
+export const assertLocalPath = azure.assertLocalPath;
+export const buildRunScript = azure.buildRunScript;
+export const buildShellScript = azure.buildShellScript;
+export const buildBrowserScript = azure.buildBrowserScript;
+export const buildBrowserSessionScript = azure.buildBrowserSessionScript;
+export const getSandbox = azure.getSandbox;
+export const statusForUser = azure.statusForUser;
+export const execInSandbox = azure.execInSandbox;
+export const ensureInfrastructure = azure.ensureInfrastructure;
+export const ensureVm = azure.ensureVm;
+export const ensureRunning = azure.ensureRunning;
+export const acquireLease = azure.acquireLease;
+export const renewLease = azure.renewLease;
+export const releaseLease = azure.releaseLease;
+export const sweepLeases = azure.sweepLeases;
+export const startVm = azure.startVm;
+export const deallocateVm = azure.deallocateVm;
+export const powerState = azure.powerState;
+export const startIdleWatcher = azure.startIdleWatcher;
+export const provisionUserVm = azure.provisionUserVm;
