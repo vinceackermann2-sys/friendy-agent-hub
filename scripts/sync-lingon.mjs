@@ -5,7 +5,7 @@
 // The Node/Express backend in server/ is mirrored to src/lingon-server/
 // (ESM edge port) by hand; this script verifies the branding strings match
 // and warns when they drift so the API identity stays in sync.
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,6 +33,34 @@ for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.man
 for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'security.html', 'terms.html', 'sitemap.xml']) {
   copy(join('app', f), join('public', f));
 }
+
+// Lovable's live Vite server evaluates source files as ESM and cannot execute
+// the CommonJS provider directly. Generate an equivalent ESM copy for the
+// edge port while keeping server/ compatible with the Node/Express runtime.
+function syncAzureProvider() {
+  const srcFile = 'server/agents/azure-vm.js';
+  const edgeFile = 'src/lingon-server/agents/azure-vm.js';
+  const cryptoRequire = "const crypto = require('crypto');";
+  const exportsMarker = '\nmodule.exports = {';
+  const src = readFileSync(join(root, srcFile), 'utf8');
+  const exportsAt = src.lastIndexOf(exportsMarker);
+  if (!src.includes(cryptoRequire) || exportsAt < 0) {
+    console.error(`sync-lingon: could not convert ${srcFile} to ESM`);
+    failures++;
+    return;
+  }
+  const esm = src
+    .replace(cryptoRequire, "import crypto from 'node:crypto';")
+    .slice(0, exportsAt)
+    + '\nexport {'
+    + src.slice(exportsAt + exportsMarker.length);
+  const to = join(root, edgeFile);
+  mkdirSync(dirname(to), { recursive: true });
+  writeFileSync(to, esm, 'utf8');
+  console.log(`sync-lingon: ${srcFile} -> ${edgeFile} (ESM)`);
+}
+
+syncAzureProvider();
 
 // Backend confidentiality policy must match between server/ (Node) and
 // src/lingon-server/ (edge port) so chat + research behave the same way.
