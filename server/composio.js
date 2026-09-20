@@ -6,6 +6,7 @@
 */
 const BASE = 'https://backend.composio.dev/api/v3.1';
 const crypto = require('crypto');
+const store = require('./store');
 
 function apiKey() {
   return String(
@@ -197,6 +198,63 @@ async function toolkitMeta(slug) {
   }
 }
 
+function walkIdentity(obj, pred, depth = 0) {
+  if (!obj || typeof obj !== 'object' || depth > 4) return '';
+  if (Array.isArray(obj)) {
+    for (const it of obj) {
+      const hit = walkIdentity(it, pred, depth + 1);
+      if (hit) return hit;
+    }
+    return '';
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === 'string' && pred(k, v)) return v.trim();
+  }
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === 'object') {
+      const hit = walkIdentity(v, pred, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return '';
+}
+function accountIdentity(it) {
+  const bags = [it && it.data, it && it.params, it && it.state && it.state.val, it].filter(Boolean);
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const emailKey = /^(email|email_address|emailaddress|user_email|useremail|mail|login)$/i;
+  const nameKey = /^(name|display_name|displayname|full_name|fullname|username|user_name|login)$/i;
+  const picKey = /^(picture|avatar|avatar_url|photo|photo_url|image|image_url|profile_picture|profilepicture|picture_url)$/i;
+  let email = '', name = '', picture = '';
+  for (const bag of bags) {
+    if (!email) email = walkIdentity(bag, (k, v) => emailKey.test(k) && emailRe.test(v));
+    if (!email) email = walkIdentity(bag, (_k, v) => emailRe.test(v) && v.length < 120);
+    if (!name) name = walkIdentity(bag, (k, v) => nameKey.test(k) && v.length < 80 && !emailRe.test(v));
+    if (!picture) picture = walkIdentity(bag, (k, v) => picKey.test(k) && /^https?:\/\//i.test(v));
+  }
+  return {
+    email: email || '',
+    name: name || String((it && it.alias) || ''),
+    picture: picture || '',
+    alias: (it && it.alias) || '',
+    wordId: (it && (it.word_id || it.wordId)) || '',
+  };
+}
+function mapConnected(it) {
+  const idn = accountIdentity(it);
+  return {
+    id: it.id,
+    toolkit: String((it.toolkit && it.toolkit.slug) || '').toLowerCase(),
+    authConfigId: (it.auth_config && it.auth_config.id) || null,
+    status: it.status || 'ACTIVE',
+    updatedAt: it.updated_at || it.created_at || null,
+    email: idn.email,
+    name: idn.name,
+    picture: idn.picture,
+    alias: idn.alias,
+    wordId: idn.wordId,
+  };
+}
+
 // ---- connected accounts per Belna user ----
 // NOTE: the Composio list endpoint ignores the user_id filter and returns the
 // whole project's accounts, so we MUST filter client-side on exact user_id.
@@ -206,13 +264,7 @@ async function listConnected(belnaUserId) {
   const j = await cfetch(`/connected_accounts?user_id=${encodeURIComponent(uid)}&limit=100`);
   return (j.items || [])
     .filter((it) => String(it.user_id || '') === uid)
-    .map((it) => ({
-      id: it.id,
-      toolkit: String((it.toolkit && it.toolkit.slug) || '').toLowerCase(),
-      authConfigId: (it.auth_config && it.auth_config.id) || null,
-      status: it.status || 'ACTIVE',
-      updatedAt: it.updated_at || it.created_at || null,
-    }));
+    .map(mapConnected);
 }
 
 async function appsForUser(belnaUserId) {
@@ -220,16 +272,17 @@ async function appsForUser(belnaUserId) {
     listAuthConfigs(),
     listConnected(belnaUserId).catch(() => []),
   ]);
-  const activeByToolkit = new Map();
+  const accountsByToolkit = new Map();
   for (const c of connected) {
-    if (String(c.status).toUpperCase() === 'ACTIVE') {
-      if (!activeByToolkit.has(c.toolkit)) activeByToolkit.set(c.toolkit, c);
-    }
+    if (String(c.status).toUpperCase() !== 'ACTIVE') continue;
+    if (!accountsByToolkit.has(c.toolkit)) accountsByToolkit.set(c.toolkit, []);
+    accountsByToolkit.get(c.toolkit).push(c);
   }
   const apps = [];
   for (const cfg of configs) {
     const meta = await toolkitMeta(cfg.toolkit);
-    const conn = activeByToolkit.get(cfg.toolkit) || null;
+    const accounts = accountsByToolkit.get(cfg.toolkit) || [];
+    const conn = accounts[0] || null;
     apps.push({
       toolkit: cfg.toolkit,
       name: (meta && meta.name) || cfg.toolkit,
@@ -238,8 +291,10 @@ async function appsForUser(belnaUserId) {
       categories: (meta && meta.categories) || [],
       authConfigId: cfg.id,
       authScheme: cfg.authScheme,
-      connected: !!conn,
+      connected: accounts.length > 0,
       connectedAccountId: conn ? conn.id : null,
+      accounts,
+      accountCount: accounts.length,
       status: conn ? conn.status : 'NOT_CONNECTED',
     });
   }
@@ -259,13 +314,20 @@ async function createLink(belnaUserId, { authConfigId, toolkit, callbackUrl }) {
   if (!allowed || (toolkit && allowed.toolkit !== String(toolkit).toLowerCase())) {
     throw Object.assign(new Error('That app connection configuration is not enabled.'), { code: 'BAD_INPUT' });
   }
+  const existing = (await listConnected(belnaUserId).catch(() => []))
+    .filter((c) => c.toolkit === allowed.toolkit && String(c.status).toUpperCase() === 'ACTIVE');
+  const body = {
+    auth_config_id: authId,
+    user_id: composioUserId(belnaUserId),
+    callback_url: callbackUrl || undefined,
+  };
+  if (existing.length) {
+    body.alias = `${allowed.toolkit}-${Date.now().toString(36)}`;
+    body.allow_multiple = true;
+  }
   const j = await cfetch('/connected_accounts/link', {
     method: 'POST',
-    body: {
-      auth_config_id: authId,
-      user_id: composioUserId(belnaUserId),
-      callback_url: callbackUrl || undefined,
-    },
+    body,
   });
   return {
     redirectUrl: j.redirect_url || j.redirectUrl,
@@ -323,20 +385,51 @@ async function parseWebhook(raw, headers = {}) {
 }
 
 // ---- tools ----
+function toolKind(tool) {
+  const tags = ((tool && tool.tags) || []).map((t) => String(t).toLowerCase());
+  if (tags.some((t) => /write|create|update|delete|mutate|send/.test(t))) return 'write';
+  if (tags.some((t) => /read|list|get|fetch|search/.test(t))) return 'read';
+  const scopes = ((tool && tool.scopes) || []).join(' ').toLowerCase();
+  if (/\.readonly\b|read_only|readonly/.test(scopes) && !/write|modify|send/.test(scopes)) return 'read';
+  const s = `${(tool && tool.slug) || ''} ${(tool && tool.name) || ''} ${(tool && tool.description) || ''}`.toLowerCase();
+  if (/\b(send|create|update|delete|post|write|insert|remove|trash|archive|modify|reply|forward|upload|publish|invite|edit|patch|move|rename|share|merge|approve|cancel|schedule|book|pay|charge|transfer)\b/.test(s)) return 'write';
+  return 'read';
+}
+function mapTool(t, toolkit) {
+  return {
+    slug: t.slug,
+    name: t.name,
+    description: t.description || t.human_description || '',
+    version: t.version || (t.available_versions && t.available_versions[0]) || 'latest',
+    toolkit: (t.toolkit && t.toolkit.slug) || toolkit || '',
+    logo: (t.toolkit && t.toolkit.logo) || '',
+    kind: toolKind(t),
+    scopes: t.scopes || [],
+  };
+}
 async function listTools(toolkit, { limit = 30, query = '' } = {}) {
   const params = new URLSearchParams();
   if (toolkit) params.set('toolkit_slug', String(toolkit).toLowerCase());
   if (query) params.set('query', String(query).slice(0, 120));
   params.set('limit', String(Math.min(100, Math.max(1, Number(limit) || 30))));
   const j = await cfetch(`/tools?${params.toString()}`);
-  return (j.items || []).map((t) => ({
-    slug: t.slug,
-    name: t.name,
-    description: t.description,
-    version: t.version || (t.available_versions && t.available_versions[0]) || 'latest',
-    toolkit: (t.toolkit && t.toolkit.slug) || toolkit || '',
-    logo: (t.toolkit && t.toolkit.logo) || '',
-  }));
+  return (j.items || []).map((t) => mapTool(t, toolkit));
+}
+async function listToolkitTools(toolkit, cap = 200) {
+  const slug = String(toolkit || '').toLowerCase();
+  const all = [];
+  let cursor = null;
+  for (let i = 0; i < 5 && all.length < cap; i++) {
+    const params = new URLSearchParams();
+    if (slug) params.set('toolkit_slug', slug);
+    params.set('limit', String(Math.min(100, cap - all.length)));
+    if (cursor) params.set('cursor', cursor);
+    const j = await cfetch(`/tools?${params.toString()}`);
+    for (const t of j.items || []) all.push(mapTool(t, slug));
+    cursor = j.next_cursor || j.nextCursor || null;
+    if (!cursor) break;
+  }
+  return all;
 }
 
 async function getTool(toolSlug) {
@@ -347,6 +440,7 @@ async function executeTool(belnaUserId, { tool, toolSlug, args, arguments: args2
   const slug = String(tool || toolSlug || '').toUpperCase().trim();
   if (!/^[A-Z0-9_]+$/.test(slug)) throw Object.assign(new Error('Pick a valid tool.'), { code: 'BAD_INPUT' });
   let ConnectedAccountId = connectedAccountId || undefined;
+  let connectedToolkit = '';
   if (ConnectedAccountId) {
     // Never let a user borrow another account: the connection must belong to
     // their own Composio user id.
@@ -360,6 +454,17 @@ async function executeTool(belnaUserId, { tool, toolSlug, args, arguments: args2
     if (String(acct.status || '').toUpperCase() !== 'ACTIVE') {
       throw Object.assign(new Error('That connection is no longer active. Reconnect it under Apps.'), { code: 'BAD_INPUT' });
     }
+    connectedToolkit = String((acct.toolkit && acct.toolkit.slug) || '').toLowerCase();
+  }
+  const toolMeta = await getTool(slug);
+  const toolkitSlug = String((toolMeta && toolMeta.toolkit && toolMeta.toolkit.slug) || '').toLowerCase();
+  if (!toolkitSlug) throw Object.assign(new Error('Could not determine the connector for this tool.'), { code: 'BAD_INPUT' });
+  if (ConnectedAccountId && connectedToolkit !== toolkitSlug) {
+    throw Object.assign(new Error('That connection cannot run this tool.'), { code: 'BAD_INPUT' });
+  }
+  const disabled = await store.getConnectorPermissions(belnaUserId, toolkitSlug);
+  if (disabled.includes(slug)) {
+    throw Object.assign(new Error('That permission is turned off for this connector.'), { code: 'PERMISSION_OFF' });
   }
   // If no explicit account, Composio picks the first ACTIVE account for the
   // user+toolkit — which is exactly the per-user isolation we want.
@@ -428,6 +533,46 @@ async function triggerOptionsForUser(belnaUserId) {
   }
 }
 
+async function toolkitForUser(belnaUserId, toolkit) {
+  const slug = String(toolkit || '').toLowerCase();
+  if (!slug) throw Object.assign(new Error('toolkit required.'), { code: 'BAD_INPUT' });
+  const [apps, tools, disabled] = await Promise.all([
+    appsForUser(belnaUserId),
+    listToolkitTools(slug, 200).catch(() => []),
+    store.getConnectorPermissions(belnaUserId, slug),
+  ]);
+  const app = apps.find((a) => a.toolkit === slug);
+  if (!app) throw Object.assign(new Error('That connector is not available.'), { code: 'BAD_INPUT' });
+  const accounts = [];
+  for (const acc of app.accounts || []) {
+    let next = acc;
+    if (!acc.email || !acc.picture) {
+      try {
+        const raw = await getConnectedAccount(acc.id);
+        if (raw && String(raw.user_id || '') === composioUserId(belnaUserId)) next = { ...acc, ...mapConnected(raw), toolkit: slug };
+      } catch {}
+    }
+    accounts.push(next);
+  }
+  const off = new Set(disabled);
+  return {
+    ...app,
+    accounts,
+    accountCount: accounts.length,
+    permissions: tools.map((t) => ({ ...t, enabled: !off.has(String(t.slug || '').toUpperCase()) })),
+  };
+}
+
+async function setToolkitPermissions(belnaUserId, toolkit, disabled) {
+  const slug = String(toolkit || '').toLowerCase();
+  if (!slug) throw Object.assign(new Error('toolkit required.'), { code: 'BAD_INPUT' });
+  const configs = await listAuthConfigs();
+  if (!configs.some((c) => c.toolkit === slug)) {
+    throw Object.assign(new Error('That connector is not available.'), { code: 'BAD_INPUT' });
+  }
+  return store.setConnectorPermissions(belnaUserId, slug, disabled);
+}
+
 async function isToolkitConnected(belnaUserId, toolkit) {
   const s = String(toolkit || '').toLowerCase();
   if (!s) return false;
@@ -460,4 +605,6 @@ module.exports = {
   listTriggerTypes,
   triggerOptionsForUser,
   isToolkitConnected,
+  toolkitForUser,
+  setToolkitPermissions,
 };

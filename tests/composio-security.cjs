@@ -20,6 +20,19 @@ global.fetch = async (url, options = {}) => {
   if (String(url).includes('/connected_accounts/ca_other')) {
     return new Response(JSON.stringify({ id: 'ca_other', user_id: 'belna:user-b', status: 'ACTIVE', toolkit: { slug: 'github' } }), { status: 200 });
   }
+  if (String(url).includes('/connected_accounts/ca_github_owner')) {
+    return new Response(JSON.stringify({ id: 'ca_github_owner', user_id: 'belna:user-a', status: 'ACTIVE', toolkit: { slug: 'github' } }), { status: 200 });
+  }
+  if (String(url).includes('/tools/GMAIL_SEND_EMAIL')) {
+    return new Response(JSON.stringify({ slug: 'GMAIL_SEND_EMAIL', toolkit: { slug: 'gmail' } }), { status: 200 });
+  }
+  if (String(url).includes('/connected_accounts')) {
+    return new Response(JSON.stringify({ items: [
+      { id: 'ca_owner', user_id: 'belna:user-a', status: 'ACTIVE', toolkit: { slug: 'gmail' }, data: { email: 'jane@gmail.com', name: 'Jane', picture: 'https://example.com/j.png' } },
+      { id: 'ca_work', user_id: 'belna:user-a', status: 'ACTIVE', toolkit: { slug: 'gmail' }, data: { email: 'work@company.com' } },
+      { id: 'ca_other', user_id: 'belna:user-b', status: 'ACTIVE', toolkit: { slug: 'github' }, data: { email: 'other@x.com' } },
+    ] }), { status: 200 });
+  }
   return new Response(JSON.stringify({ redirect_url: 'https://connect.example/link' }), { status: 200 });
 };
 
@@ -59,6 +72,44 @@ async function main() {
     () => composio.parseWebhook(raw, { 'webhook-id': id, 'webhook-timestamp': timestamp, 'webhook-signature': 'v1,bad' }),
     /Bad webhook signature/,
   );
+
+  const mine = await composio.listConnected('user-a');
+  assert.equal(mine.length, 2);
+  assert.equal(mine[0].email, 'jane@gmail.com');
+  assert.equal(mine[0].picture, 'https://example.com/j.png');
+  assert.equal(mine.some((a) => a.email === 'other@x.com'), false);
+
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dataFile = path.join(__dirname, '../server/data.json');
+  let prev = null;
+  try { prev = fs.readFileSync(dataFile, 'utf8'); } catch {}
+  try {
+    const store = require('../server/store');
+    await store.setConnectorPermissions('user-a', 'gmail', ['GMAIL_SEND_EMAIL']);
+    await assert.rejects(
+      () => composio.executeTool('user-a', { tool: 'GMAIL_SEND_EMAIL', connectedAccountId: 'ca_owner' }),
+      /turned off/,
+    );
+    await assert.rejects(
+      () => composio.executeTool('user-a', { tool: 'GMAIL_SEND_EMAIL', connectedAccountId: 'ca_github_owner' }),
+      /cannot run this tool/,
+    );
+    const getPermissions = store.getConnectorPermissions;
+    store.getConnectorPermissions = async () => { throw new Error('Permission database unavailable.'); };
+    try {
+      await assert.rejects(
+        () => composio.executeTool('user-a', { tool: 'GMAIL_SEND_EMAIL', connectedAccountId: 'ca_owner' }),
+        /Permission database unavailable/,
+      );
+    } finally {
+      store.getConnectorPermissions = getPermissions;
+    }
+  } finally {
+    if (prev != null) fs.writeFileSync(dataFile, prev);
+    else try { fs.unlinkSync(dataFile); } catch {}
+  }
+
   console.log('composio security: ok');
 }
 
