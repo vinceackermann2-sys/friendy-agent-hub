@@ -14,7 +14,7 @@ function loadLocal() {
   try {
     return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   } catch {
-    return { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [] };
+    return { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [], connectorPermissions: [] };
   }
 }
 function saveLocal(d) {
@@ -1418,6 +1418,42 @@ async function deleteMailDraft(userId, id) {
   saveLocal(d);
 }
 
+function normalizeDisabled(list) {
+  return [...new Set((Array.isArray(list) ? list : []).map((s) => String(s || '').toUpperCase().trim()).filter((s) => /^[A-Z0-9_]+$/.test(s)))];
+}
+async function getConnectorPermissions(userId, toolkit) {
+  const tk = String(toolkit || '').toLowerCase();
+  if (!userId || !tk) return [];
+  const s = supa();
+  if (s) {
+    const { data, error } = await s.from('connector_permissions').select('disabled').eq('user_id', userId).eq('toolkit', tk).maybeSingle();
+    if (error) throw error;
+    return normalizeDisabled(data && data.disabled);
+  }
+  const d = loadLocal();
+  const row = (d.connectorPermissions || []).find((r) => r.userId === userId && r.toolkit === tk);
+  return normalizeDisabled(row && row.disabled);
+}
+async function setConnectorPermissions(userId, toolkit, disabled) {
+  const tk = String(toolkit || '').toLowerCase();
+  if (!userId || !tk) return [];
+  const list = normalizeDisabled(disabled);
+  const s = supa();
+  if (s) {
+    await ensureProfile(userId);
+    const { error } = await s.from('connector_permissions').upsert({
+      user_id: userId, toolkit: tk, disabled: list, updated_at: new Date().toISOString(),
+    });
+    if (error) throw error;
+    return list;
+  }
+  const d = loadLocal();
+  d.connectorPermissions = (d.connectorPermissions || []).filter((r) => !(r.userId === userId && r.toolkit === tk));
+  d.connectorPermissions.push({ userId, toolkit: tk, disabled: list, at: Date.now() });
+  saveLocal(d);
+  return list;
+}
+
 module.exports = {
   listMemories, addMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret,
@@ -1435,5 +1471,6 @@ module.exports = {
   getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
   countUnreadMail, countOutboundMailToday, listMailDrafts, upsertMailDraft, deleteMailDraft,
+  getConnectorPermissions, setConnectorPermissions,
   CREDIT_GRANT_FREE,
 };

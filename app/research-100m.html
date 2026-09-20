@@ -17,144 +17,123 @@
 <body class="rx">
 <div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
-<main class="legal rx-page">
+<main class="legal rx-page rx-article">
 <a class="rx-back" href="/research#research"><span class="arr">←</span> Research</a>
-<div class="rx-kicker">Model cards · 100M programme</div>
-<p class="rx-meta">TAM v3 · Cortex-S · 12 min read</p>
 <h1>Can a hybrid beat the Transformer?</h1>
-<p class="rx-lede">Two alternatives that carry a <b>running memory</b> alongside attention, each trained at <b>100 million parameters on 2 billion tokens</b>, raced against an identical Transformer. Same card structure for both models — specs, architecture, results, take — then one folder you can download.</p>
-<div class="rx-tags">
-  <span class="rx-tag blue">100M parameters</span>
-  <span class="rx-tag blue">2B tokens</span>
-  <span class="rx-tag">H100 · bfloat16</span>
-  <span class="rx-tag green">One download folder</span>
+<p class="rx-lede">Two 100M designs with a running memory, raced on the same 2B tokens.</p>
+<p class="rx-byline">100M programme · TAM v3 · Cortex-S · The Belna team</p>
+
+<div class="rx-prose">
+<p>The Transformer is the default because it is simple, fast, and good at quizzes. We asked a narrower question: if you give a model a <b>running memory</b> alongside attention, does the loss actually move?</p>
+<p>Two answers, same protocol. Each model is about 100 million parameters, trained on 2 billion tokens, against an identical Transformer. Same data mix. Same seed. Same H100. If the hybrid signal is real, it should show up twice.</p>
 </div>
+
+<blockquote class="rx-pull">Both hybrids beat a matched Transformer on loss. Predicting text is not the whole story — the Transformer is still about a third faster, and it still wins most quizzes.</blockquote>
+
 <nav class="rx-nav" aria-label="On this page">
   <a href="#tam-v3">TAM v3</a><a href="#cortex-s">Cortex-S</a><a href="#protocol">Protocol</a><a href="#code">Download</a>
 </nav>
 
-<div class="tldr" id="tldr">
-  <h3>At a glance</h3>
-  <ul>
-    <li><b>Both hybrids beat a matched Transformer</b> on loss and perplexity at 25M, 50M and 100M.</li>
-    <li><b>Predicting text is not the whole story:</b> the Transformer is about a third faster and still wins most quiz benches.</li>
-    <li><b>Replicate from one folder</b> — data, TAM, Transformer, Cortex-S, compare. No inline dump.</li>
-  </ul>
-</div>
+<article class="rx-sec rx-chapter" id="tam-v3">
+  <div class="rx-kicker">Model card 01</div>
+  <h2>TAM v3</h2>
+  <p>Temporal Associative Memory: reduced-width causal attention and a diagonal affine scan run in parallel. A learned gate mixes them. About 55% of the signal goes through state.</p>
 
-<!-- TAM v3 -->
-<article class="rx-sec" id="tam-v3">
-  <div class="rx-kicker" style="margin-top:56px">Model card 01</div>
-  <h2 style="margin-top:8px;font-size:clamp(26px,4vw,34px)">TAM v3</h2>
-  <p class="rx-lede">Temporal Associative Memory: reduced-width causal attention and a diagonal affine scan run in parallel. A learned gate mixes them.</p>
-  <div class="rx-tags">
-    <span class="rx-tag blue">101.8M params</span>
-    <span class="rx-tag">World-state scan</span>
-    <span class="rx-tag">Gate ≈ 55% state</span>
-  </div>
-
-  <div class="rx-sec-head"><span class="rx-num">1</span><h2>Specs</h2></div>
-  <div class="rx-card">
-    <dl class="spec">
-      <div><dt>Parameters</dt><dd>101,806,616 (Transformer: 101,803,520)</dd></div>
-      <div><dt>Block</dt><dd>Attention ∥ diagonal affine scan, gated mix</dd></div>
-      <div><dt>Mix</dt><dd>out = 2 × ((1−g)·attn + g·state)</dd></div>
-      <div><dt>Data</dt><dd>2B tokens, identical mix and seed 8100</dd></div>
-      <div><dt>Context</dt><dd>512 · GPT-2 tokenizer</dd></div>
-      <div><dt>Hardware</dt><dd>H100 · bfloat16 · torch.compile · AdamW</dd></div>
-    </dl>
-    <p class="formula">output = 2 × ((1 − g) × attention + g × world_state)</p>
-  </div>
-
-  <div class="rx-sec-head"><span class="rx-num">2</span><h2>Architecture</h2></div>
-  <div class="diagram" aria-hidden="true">
+  <figure class="diagram" aria-hidden="true">
     <svg viewBox="0 0 840 230" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="24" y="86" width="120" height="58" rx="14" fill="#FBFBFC" stroke="#E7E7EA"/>
+      <rect x="24" y="86" width="120" height="58" rx="14" fill="#FFFFFF" stroke="#E7E7EA"/>
       <text x="84" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
-      <path d="M144 115H188" stroke="#4A7FD4" stroke-width="2"/>
-      <polygon points="188,111 198,115 188,119" fill="#4A7FD4"/>
-      <rect x="198" y="28" width="200" height="70" rx="14" fill="#EDF3FE" stroke="#C6D8F5"/>
-      <text x="298" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#1D5BBF">Causal attention</text>
+      <path d="M144 115H188" stroke="#17181A" stroke-width="2"/>
+      <polygon points="188,111 198,115 188,119" fill="#17181A"/>
+      <rect x="198" y="28" width="200" height="70" rx="14" fill="#ECECF0" stroke="#E7E7EA"/>
+      <text x="298" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Causal attention</text>
       <text x="298" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">reduced width</text>
       <rect x="198" y="132" width="200" height="70" rx="14" fill="#E9F4EE" stroke="#BFE0CC"/>
       <text x="298" y="162" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">World-state scan</text>
       <text x="298" y="182" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">s = αs + u</text>
-      <path d="M398 63H470" stroke="#4A7FD4" stroke-width="2"/>
+      <path d="M398 63H470" stroke="#17181A" stroke-width="2"/>
       <path d="M398 167H470" stroke="#3E8E5A" stroke-width="2"/>
-      <rect x="470" y="86" width="130" height="58" rx="14" fill="#15284b"/>
+      <rect x="470" y="86" width="130" height="58" rx="14" fill="#17181A"/>
       <text x="535" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#fff">Gate g</text>
-      <path d="M600 115H648" stroke="#4A7FD4" stroke-width="2"/>
-      <polygon points="648,111 658,115 648,119" fill="#4A7FD4"/>
+      <path d="M600 115H648" stroke="#17181A" stroke-width="2"/>
+      <polygon points="648,111 658,115 648,119" fill="#17181A"/>
       <rect x="658" y="86" width="158" height="58" rx="14" fill="#fff" stroke="#E7E7EA"/>
       <text x="737" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Block output</text>
     </svg>
-    <p class="diagram-cap">Attention and the recurrent notebook update together. The gate learns to send about 55% of the signal through state.</p>
-  </div>
+    <figcaption class="diagram-cap">Attention and the recurrent notebook update together. The gate learns to send about 55% of the signal through state.</figcaption>
+  </figure>
 
-  <div class="rx-sec-head"><span class="rx-num">3</span><h2>Results</h2></div>
+  <h3>Specs</h3>
+  <dl class="spec">
+    <div><dt>Parameters</dt><dd>101,806,616 (Transformer: 101,803,520)</dd></div>
+    <div><dt>Block</dt><dd>Attention ∥ diagonal affine scan, gated mix</dd></div>
+    <div><dt>Mix</dt><dd>out = 2 × ((1−g)·attn + g·state)</dd></div>
+    <div><dt>Data</dt><dd>2B tokens, identical mix and seed 8100</dd></div>
+    <div><dt>Context</dt><dd>512 · GPT-2 tokenizer</dd></div>
+    <div><dt>Hardware</dt><dd>H100 · bfloat16 · torch.compile · AdamW</dd></div>
+  </dl>
+  <p class="formula">output = 2 × ((1 − g) × attention + g × world_state)</p>
+
+  <h3>Results</h3>
+  <p>Lower loss at every scale we tested. Not a faster model. Not a better quiz-taker.</p>
   <div class="stat-row">
     <div class="stat-pill win"><span class="val">14.86</span><span class="lab">TAM PPL</span></div>
     <div class="stat-pill lose"><span class="val">15.05</span><span class="lab">Transformer PPL</span></div>
     <div class="stat-pill win"><span class="val">2.698</span><span class="lab">TAM NLL</span></div>
     <div class="stat-pill lose"><span class="val">2.712</span><span class="lab">Transformer NLL</span></div>
   </div>
-  <div class="rx-card">
-    <h3>Pretrain + post-train</h3>
-    <div class="rx-scroll"><table class="rtable">
-      <thead><tr><th>Metric</th><th class="hl">TAM v3</th><th>Transformer</th><th>Winner</th></tr></thead>
-      <tbody>
-        <tr><td>Pretrain NLL ↓</td><td class="hl win">2.6984</td><td>2.7116</td><td><span class="rx-tag blue">TAM</span></td></tr>
-        <tr><td>Pretrain perplexity ↓</td><td class="hl win">14.86</td><td>15.05</td><td><span class="rx-tag blue">TAM</span></td></tr>
-        <tr><td>SFT assistant NLL ↓</td><td class="hl win">1.7839</td><td>1.7947</td><td><span class="rx-tag blue">TAM</span></td></tr>
-        <tr><td>DPO reward accuracy ↑</td><td class="hl">62.0%</td><td class="win">62.6%</td><td><span class="rx-tag">TFM</span></td></tr>
-        <tr><td>Final mixture NLL ↓</td><td class="hl win">2.8439</td><td>2.8647</td><td><span class="rx-tag blue">TAM</span></td></tr>
-        <tr><td>Throughput (tok/s) ↑</td><td class="hl dim">~254.8k</td><td class="win">~319.9k</td><td><span class="rx-tag">TFM</span></td></tr>
-        <tr><td>Wall-clock time ↓</td><td class="hl dim">~9,196s</td><td class="win">~6,917s</td><td><span class="rx-tag">TFM</span></td></tr>
-      </tbody>
-    </table></div>
-  </div>
-  <div class="rx-card">
-    <h3>Loss at every scale</h3>
-    <div class="rx-scroll"><table class="rtable">
-      <thead><tr><th>Scale</th><th class="hl">TAM NLL</th><th>Transformer NLL</th><th>TAM wins</th></tr></thead>
-      <tbody>
-        <tr><td>25M · 10M tok · 3 seeds</td><td class="hl win">7.162</td><td>7.207</td><td><b>3 / 3</b></td></tr>
-        <tr><td>50M · 10M tok · 3 seeds</td><td class="hl win">6.889</td><td>7.064</td><td><b>3 / 3</b></td></tr>
-        <tr><td>100M · 2B tok · 1 seed</td><td class="hl win">2.698</td><td>2.712</td><td><b>1 / 1</b></td></tr>
-      </tbody>
-    </table></div>
-  </div>
-  <div class="rx-card">
-    <h3>Quizzes: Transformer strikes back</h3>
-    <div class="rx-scroll"><table class="rtable">
-      <thead><tr><th>Benchmark</th><th class="hl">TAM v3</th><th>Transformer</th><th>Delta</th></tr></thead>
-      <tbody>
-        <tr><td>ARC-Easy</td><td class="hl">31.5%</td><td class="win">35.5%</td><td class="dim">−4.0 pp</td></tr>
-        <tr><td>ARC-Challenge</td><td class="hl win">26.0%</td><td>25.5%</td><td>+0.5 pp</td></tr>
-        <tr><td>PIQA</td><td class="hl">54.0%</td><td class="win">58.0%</td><td class="dim">−4.0 pp</td></tr>
-        <tr><td>HellaSwag</td><td class="hl">27.5%</td><td class="win">29.5%</td><td class="dim">−2.0 pp</td></tr>
-        <tr><td>OpenBookQA</td><td class="hl">28.5%</td><td class="win">29.5%</td><td class="dim">−1.0 pp</td></tr>
-        <tr><td>GSM8K</td><td class="hl">2.0%</td><td>2.0%</td><td class="dim">0.0 pp</td></tr>
-        <tr><td><b>Five-MCQ mean</b></td><td class="hl">33.5%</td><td class="win">35.6%</td><td class="dim">−2.1 pp</td></tr>
-      </tbody>
-    </table></div>
-  </div>
-  <div class="rx-card">
-    <h3>Memory probes — peak at 256 tokens</h3>
-    <div class="rx-scroll"><table class="rtable">
-      <thead><tr><th>Context</th><th class="hl">TAM − Transformer</th><th>95% CI</th><th>Signal</th></tr></thead>
-      <tbody>
-        <tr><td>128</td><td class="hl dim">−2.08 pp</td><td class="dim">−7.03 to +2.60</td><td></td></tr>
-        <tr><td><b>256</b></td><td class="hl win">+7.81 pp</td><td>+2.60 to +13.54</td><td><span class="rx-tag blue">Significant</span></td></tr>
-        <tr><td>384</td><td class="hl">+2.86 pp</td><td class="dim">−2.60 to +8.33</td><td></td></tr>
-        <tr><td>512</td><td class="hl dim">−0.52 pp</td><td class="dim">−5.73 to +4.69</td><td></td></tr>
-        <tr><td>Aggregate</td><td class="hl">+1.04 pp</td><td>−1.00 to +3.05</td><td></td></tr>
-      </tbody>
-    </table></div>
-    <p class="fineprint">At 256 tokens, state tracking was +11.5 pp and needle retrieval +12.5 pp. The edge fades where full attention already holds the dependency.</p>
-  </div>
 
-  <div class="rx-sec-head"><span class="rx-num">4</span><h2>Take</h2></div>
+  <h3>Pretrain + post-train</h3>
+  <div class="rx-scroll"><table class="rtable">
+    <thead><tr><th>Metric</th><th class="hl">TAM v3</th><th>Transformer</th><th>Winner</th></tr></thead>
+    <tbody>
+      <tr><td>Pretrain NLL ↓</td><td class="hl win">2.6984</td><td>2.7116</td><td>TAM</td></tr>
+      <tr><td>Pretrain perplexity ↓</td><td class="hl win">14.86</td><td>15.05</td><td>TAM</td></tr>
+      <tr><td>SFT assistant NLL ↓</td><td class="hl win">1.7839</td><td>1.7947</td><td>TAM</td></tr>
+      <tr><td>DPO reward accuracy ↑</td><td class="hl">62.0%</td><td class="win">62.6%</td><td>TFM</td></tr>
+      <tr><td>Final mixture NLL ↓</td><td class="hl win">2.8439</td><td>2.8647</td><td>TAM</td></tr>
+      <tr><td>Throughput (tok/s) ↑</td><td class="hl dim">~254.8k</td><td class="win">~319.9k</td><td>TFM</td></tr>
+      <tr><td>Wall-clock time ↓</td><td class="hl dim">~9,196s</td><td class="win">~6,917s</td><td>TFM</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Loss at every scale</h3>
+  <div class="rx-scroll"><table class="rtable">
+    <thead><tr><th>Scale</th><th class="hl">TAM NLL</th><th>Transformer NLL</th><th>TAM wins</th></tr></thead>
+    <tbody>
+      <tr><td>25M · 10M tok · 3 seeds</td><td class="hl win">7.162</td><td>7.207</td><td><b>3 / 3</b></td></tr>
+      <tr><td>50M · 10M tok · 3 seeds</td><td class="hl win">6.889</td><td>7.064</td><td><b>3 / 3</b></td></tr>
+      <tr><td>100M · 2B tok · 1 seed</td><td class="hl win">2.698</td><td>2.712</td><td><b>1 / 1</b></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Quizzes: Transformer strikes back</h3>
+  <div class="rx-scroll"><table class="rtable">
+    <thead><tr><th>Benchmark</th><th class="hl">TAM v3</th><th>Transformer</th><th>Delta</th></tr></thead>
+    <tbody>
+      <tr><td>ARC-Easy</td><td class="hl">31.5%</td><td class="win">35.5%</td><td class="dim">−4.0 pp</td></tr>
+      <tr><td>ARC-Challenge</td><td class="hl win">26.0%</td><td>25.5%</td><td>+0.5 pp</td></tr>
+      <tr><td>PIQA</td><td class="hl">54.0%</td><td class="win">58.0%</td><td class="dim">−4.0 pp</td></tr>
+      <tr><td>HellaSwag</td><td class="hl">27.5%</td><td class="win">29.5%</td><td class="dim">−2.0 pp</td></tr>
+      <tr><td>OpenBookQA</td><td class="hl">28.5%</td><td class="win">29.5%</td><td class="dim">−1.0 pp</td></tr>
+      <tr><td>GSM8K</td><td class="hl">2.0%</td><td>2.0%</td><td class="dim">0.0 pp</td></tr>
+      <tr><td><b>Five-MCQ mean</b></td><td class="hl">33.5%</td><td class="win">35.6%</td><td class="dim">−2.1 pp</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Memory probes — peak at 256 tokens</h3>
+  <div class="rx-scroll"><table class="rtable">
+    <thead><tr><th>Context</th><th class="hl">TAM − Transformer</th><th>95% CI</th><th>Signal</th></tr></thead>
+    <tbody>
+      <tr><td>128</td><td class="hl dim">−2.08 pp</td><td class="dim">−7.03 to +2.60</td><td></td></tr>
+      <tr><td><b>256</b></td><td class="hl win">+7.81 pp</td><td>+2.60 to +13.54</td><td>Significant</td></tr>
+      <tr><td>384</td><td class="hl">+2.86 pp</td><td class="dim">−2.60 to +8.33</td><td></td></tr>
+      <tr><td>512</td><td class="hl dim">−0.52 pp</td><td class="dim">−5.73 to +4.69</td><td></td></tr>
+      <tr><td>Aggregate</td><td class="hl">+1.04 pp</td><td>−1.00 to +3.05</td><td></td></tr>
+    </tbody>
+  </table></div>
+  <p class="fineprint">At 256 tokens, state tracking was +11.5 pp and needle retrieval +12.5 pp. The edge fades where full attention already holds the dependency.</p>
+
   <div class="verdict">
     <h3>Real signal, not a breakthrough</h3>
     <p>The recurrent state helps language modelling. It does not yet buy wall-clock or quiz wins.</p>
@@ -168,75 +147,63 @@
   </div>
 </article>
 
-<!-- Cortex-S -->
-<article class="rx-sec" id="cortex-s">
-  <div class="rx-kicker" style="margin-top:56px">Model card 02</div>
-  <h2 style="margin-top:8px;font-size:clamp(26px,4vw,34px)">Cortex-S</h2>
-  <p class="rx-lede">Sparse mixture-of-experts with persistent recurrent state. Full attention only every sixth layer — the rest ride the state. A second, independent design on the same frozen 2B-token corpus.</p>
-  <div class="rx-tags">
-    <span class="rx-tag blue">101.8M params</span>
-    <span class="rx-tag">8 experts · top-2</span>
-    <span class="rx-tag">Safety-bounded state</span>
-  </div>
+<article class="rx-sec rx-chapter" id="cortex-s">
+  <div class="rx-kicker">Model card 02</div>
+  <h2>Cortex-S</h2>
+  <p>One design can be a fluke. Cortex-S is a completely separate architecture on the same frozen 2B-token corpus: sparse mixture-of-experts, persistent recurrent state, full attention only every sixth layer. The rest ride the state. The write is tanh-bounded, so every step stays in a fixed range and is auditable by construction.</p>
 
-  <div class="rx-sec-head"><span class="rx-num">1</span><h2>Specs</h2></div>
-  <div class="rx-card">
-    <dl class="spec">
-      <div><dt>Parameters</dt><dd>101,778,112</dd></div>
-      <div><dt>Experts</dt><dd>8 feed-forward, top-2 routing</dd></div>
-      <div><dt>Attention</dt><dd>Full causal only when layer_id % 6 == 0</dd></div>
-      <div><dt>State</dt><dd>128 values per layer, tanh-bounded write</dd></div>
-      <div><dt>Safety</dt><dd>Deterministic kernel bound on every step</dd></div>
-      <div><dt>Protocol</dt><dd>Same data, seed, hardware as TAM / Transformer</dd></div>
-    </dl>
-  </div>
-
-  <div class="rx-sec-head"><span class="rx-num">2</span><h2>Architecture</h2></div>
-  <div class="diagram" aria-hidden="true">
+  <figure class="diagram" aria-hidden="true">
     <svg viewBox="0 0 840 210" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="24" y="76" width="110" height="58" rx="14" fill="#FBFBFC" stroke="#E7E7EA"/>
+      <rect x="24" y="76" width="110" height="58" rx="14" fill="#FFFFFF" stroke="#E7E7EA"/>
       <text x="79" y="110" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
-      <path d="M134 105H176" stroke="#4A7FD4" stroke-width="2"/><polygon points="176,101 186,105 176,109" fill="#4A7FD4"/>
-      <rect x="186" y="36" width="118" height="138" rx="16" fill="#EDF3FE" stroke="#C6D8F5"/>
-      <text x="245" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#1D5BBF">Layer 0</text>
-      <text x="245" y="100" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#1D5BBF">Attention</text>
+      <path d="M134 105H176" stroke="#17181A" stroke-width="2"/><polygon points="176,101 186,105 176,109" fill="#17181A"/>
+      <rect x="186" y="36" width="118" height="138" rx="16" fill="#ECECF0" stroke="#E7E7EA"/>
+      <text x="245" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Layer 0</text>
+      <text x="245" y="100" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#17181A">Attention</text>
       <text x="245" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">+ MoE + state</text>
       <text x="245" y="148" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" fill="#9A9CA3">every 6th</text>
-      <rect x="324" y="36" width="118" height="138" rx="16" fill="#FBFBFC" stroke="#E7E7EA"/>
+      <rect x="324" y="36" width="118" height="138" rx="16" fill="#FFFFFF" stroke="#E7E7EA"/>
       <text x="383" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Layer 1–5</text>
       <text x="383" y="100" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#3E8E5A">MoE + state</text>
       <text x="383" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">no full attn</text>
-      <rect x="462" y="36" width="118" height="138" rx="16" fill="#EDF3FE" stroke="#C6D8F5"/>
-      <text x="521" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#1D5BBF">Layer 6</text>
-      <text x="521" y="100" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#1D5BBF">Attention</text>
+      <rect x="462" y="36" width="118" height="138" rx="16" fill="#ECECF0" stroke="#E7E7EA"/>
+      <text x="521" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Layer 6</text>
+      <text x="521" y="100" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#17181A">Attention</text>
       <text x="521" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">+ MoE + state</text>
-      <path d="M580 105H622" stroke="#4A7FD4" stroke-width="2"/><polygon points="622,101 632,105 622,109" fill="#4A7FD4"/>
-      <rect x="632" y="76" width="184" height="58" rx="14" fill="#15284b"/>
+      <path d="M580 105H622" stroke="#17181A" stroke-width="2"/><polygon points="622,101 632,105 622,109" fill="#17181A"/>
+      <rect x="632" y="76" width="184" height="58" rx="14" fill="#17181A"/>
       <text x="724" y="110" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#fff">Bounded state</text>
     </svg>
-    <p class="diagram-cap">State write is tanh-bounded, so every step stays in a fixed range and is auditable by construction.</p>
-  </div>
+    <figcaption class="diagram-cap">State write is tanh-bounded, so every step stays in a fixed range and is auditable by construction.</figcaption>
+  </figure>
 
-  <div class="rx-sec-head"><span class="rx-num">3</span><h2>Results</h2></div>
+  <h3>Specs</h3>
+  <dl class="spec">
+    <div><dt>Parameters</dt><dd>101,778,112</dd></div>
+    <div><dt>Experts</dt><dd>8 feed-forward, top-2 routing</dd></div>
+    <div><dt>Attention</dt><dd>Full causal only when layer_id % 6 == 0</dd></div>
+    <div><dt>State</dt><dd>128 values per layer, tanh-bounded write</dd></div>
+    <div><dt>Safety</dt><dd>Deterministic kernel bound on every step</dd></div>
+    <div><dt>Protocol</dt><dd>Same data, seed, hardware as TAM / Transformer</dd></div>
+  </dl>
+
+  <h3>Results</h3>
   <div class="stat-row">
     <div class="stat-pill win"><span class="val">15.015</span><span class="lab">Cortex-S PPL</span></div>
     <div class="stat-pill lose"><span class="val">15.054</span><span class="lab">Transformer PPL</span></div>
     <div class="stat-pill win"><span class="val">2.709</span><span class="lab">Cortex-S NLL</span></div>
     <div class="stat-pill lose"><span class="val">2.712</span><span class="lab">Transformer NLL</span></div>
   </div>
-  <div class="rx-card">
-    <div class="rx-scroll"><table class="rtable">
-      <thead><tr><th>Metric</th><th class="hl">Cortex-S</th><th>Transformer</th></tr></thead>
-      <tbody>
-        <tr><td>Parameters</td><td class="hl">101,778,112</td><td>101,803,520</td></tr>
-        <tr><td>Final NLL ↓</td><td class="hl win">2.7091</td><td>2.7116</td></tr>
-        <tr><td>Final perplexity ↓</td><td class="hl win">15.015</td><td>15.054</td></tr>
-        <tr><td>Architecture</td><td class="hl">Sparse MoE + recurrent</td><td>Standard causal attention</td></tr>
-      </tbody>
-    </table></div>
-  </div>
+  <div class="rx-scroll"><table class="rtable">
+    <thead><tr><th>Metric</th><th class="hl">Cortex-S</th><th>Transformer</th></tr></thead>
+    <tbody>
+      <tr><td>Parameters</td><td class="hl">101,778,112</td><td>101,803,520</td></tr>
+      <tr><td>Final NLL ↓</td><td class="hl win">2.7091</td><td>2.7116</td></tr>
+      <tr><td>Final perplexity ↓</td><td class="hl win">15.015</td><td>15.054</td></tr>
+      <tr><td>Architecture</td><td class="hl">Sparse MoE + recurrent</td><td>Standard causal attention</td></tr>
+    </tbody>
+  </table></div>
 
-  <div class="rx-sec-head"><span class="rx-num">4</span><h2>Take</h2></div>
   <div class="verdict">
     <h3>Not a fluke of one design</h3>
     <p>A completely separate architecture, same frozen corpus — and it also beats the Transformer on loss. The hybrid signal is real. The compute and quiz caveats from TAM still apply.</p>
@@ -244,7 +211,8 @@
 </article>
 
 <div class="rx-sec" id="protocol">
-  <div class="rx-sec-head"><span class="rx-num">5</span><h2>Shared protocol</h2></div>
+  <h2>Shared protocol</h2>
+  <p>One race, three runners. Nothing below is free to drift between TAM, Cortex-S, and the Transformer.</p>
   <div class="rx-grid">
     <div class="rx-box"><span class="num">2B</span><p><b>Tokens</b> — FineWeb-Edu 45%, FineMath 17.5%, StackV2 15%, Cosmopedia 15%, ArXiv 7.5%</p></div>
     <div class="rx-box"><span class="num">8100</span><p><b>Same seed</b> — AdamW, cosine 3e-4, wd 0.1, clip 1.0, effective batch 128</p></div>
@@ -254,7 +222,7 @@
 </div>
 
 <div class="rx-sec" id="code">
-  <div class="rx-sec-head"><span class="rx-num">6</span><h2>Download the folder</h2></div>
+  <h2>Download the folder</h2>
   <p>One package — data prep, TAM / Transformer trainer, Cortex-S block, compare script. Unzip and run; do not scroll a wall of files here.</p>
   <div class="pack">
     <div class="pack-copy">

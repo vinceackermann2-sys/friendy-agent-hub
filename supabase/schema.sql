@@ -64,6 +64,14 @@ create table if not exists vault_apps (
   primary key (user_id, app)
 );
 
+create table if not exists connector_permissions (
+  user_id text not null references profiles(id) on delete cascade,
+  toolkit text not null,
+  disabled jsonb not null default '[]'::jsonb,
+  updated_at timestamptz default now(),
+  primary key (user_id, toolkit)
+);
+
 create table if not exists approvals (
   id text primary key,
   user_id text not null references profiles(id) on delete cascade,
@@ -79,6 +87,7 @@ alter table messages enable row level security;
 alter table memories enable row level security;
 alter table vault_secrets enable row level security;
 alter table vault_apps enable row level security;
+alter table connector_permissions enable row level security;
 alter table approvals enable row level security;
 
 -- Service-role key bypasses RLS (backend use). For anon/authenticated use,

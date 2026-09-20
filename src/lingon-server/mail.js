@@ -73,6 +73,81 @@ function parseAddressList(value) {
   }).filter((x) => x.email);
 }
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderBodyHtml(bodyText) {
+  return String(bodyText || '')
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p style="margin:0 0 18px;font-size:16px;line-height:1.65;color:#17181A;">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+function brandEmailHtml({ bodyText, agentName, agentAddress } = {}) {
+  const name = escapeHtml(String(agentName || '').trim() || 'Your agent');
+  const address = escapeHtml(String(agentAddress || '').trim());
+  const content = renderBodyHtml(bodyText);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>Message from ${name}</title>
+</head>
+<body style="margin:0;padding:0;background:#F6F6F7;color:#17181A;font-family:'Segoe UI',Arial,sans-serif;-webkit-text-size-adjust:100%;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">A message from ${name} at Belna.</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#F6F6F7;">
+    <tr>
+      <td align="center" style="padding:34px 16px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:620px;">
+          <tr>
+            <td style="padding:0 4px 18px;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="vertical-align:middle;padding-right:10px;"><img src="https://belna.se/email-logo.png" width="30" height="20" alt="" style="display:block;border:0;width:30px;height:20px;"></td>
+                  <td style="vertical-align:middle;font-size:19px;line-height:24px;font-weight:800;letter-spacing:-0.5px;color:#17181A;">belna</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#FFFFFF;border:1px solid #E7E7EA;border-radius:18px;padding:38px 40px;box-shadow:0 10px 28px rgba(20,20,26,0.06);">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="padding-bottom:26px;border-bottom:1px solid #EFEFF1;">
+                    <div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#9A9CA3;">Message from a Belna agent</div>
+                    <div style="margin-top:5px;font-size:21px;line-height:28px;font-weight:750;letter-spacing:-0.4px;color:#17181A;">${name}</div>
+                    ${address ? `<div style="margin-top:3px;font-size:13px;line-height:19px;color:#6E7076;">${address}</div>` : ''}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding-top:27px;">${content}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 4px 0;font-size:12px;line-height:18px;color:#9A9CA3;">
+              Sent by ${name}, a Belna agent. Replies go directly to this agent's mailbox.<br>
+              <a href="https://belna.se" style="color:#6E7076;text-decoration:none;">belna.se</a> · Swedish safe AI agents
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 function publicMailbox(row, extra = {}) {
   return {
     configured: configured(),
@@ -255,7 +330,7 @@ async function send(userId, input) {
       to,
       subject,
       text: bodyText,
-      html: '<p>' + bodyText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</p>',
+      html: brandEmailHtml({ bodyText, agentName: box.displayName, agentAddress: box.address }),
       headers: Object.keys(headers).length ? headers : undefined,
     },
   });
@@ -368,7 +443,7 @@ async function agentList(userId, { folder, limit } = {}) {
 }
 
 export {
-  configured, mailDomain, slugifyName, isReserved, addressFor, parseRecipients, parseAddressList,
+  configured, mailDomain, slugifyName, isReserved, addressFor, parseRecipients, parseAddressList, brandEmailHtml,
   publicMailbox, publicMessage, ensureMailbox, snapshot, readMessage, markRead, saveDraft, send,
   ingestWebhook, verifyWebhook, agentStatus, agentList, MAX_SEND_PER_DAY, RESERVED,
 };

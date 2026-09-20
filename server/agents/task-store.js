@@ -4,12 +4,15 @@ function db() {
   if (client) return client;
   const url = process.env.SUPABASE_URL || process.env.LINGON_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.LINGON_SUPABASE_SECRET_KEY;
-  if (!url || !key) throw Object.assign(new Error('Task storage is not configured.'), { status:503 });
+  if (!url || !key) throw Object.assign(new Error('Task storage is not configured.'), { status:503, code:'TASK_STORE_NOT_CONFIGURED' });
   return (client = createClient(url, key, { auth:{ persistSession:false, autoRefreshToken:false } }));
 }
 async function query(result) {
   const { data, error } = await result;
-  if (error) throw Object.assign(new Error(error.code==='P0001'?error.message:'Task storage is unavailable. Check the chat-task migrations.'), { status:error.code==='P0001'?409:503 });
+  if (error) throw Object.assign(new Error(error.code==='P0001'?error.message:'Task storage is unavailable. Check the chat-task migrations.'), {
+    status:error.code==='P0001'?409:503,
+    code:`TASK_STORE_${String(error.code || 'ERROR').replace(/[^A-Z0-9_]/gi,'_').slice(0,40)}`,
+  });
   return data;
 }
 const first = async (request) => (await query(request))?.[0] || null;

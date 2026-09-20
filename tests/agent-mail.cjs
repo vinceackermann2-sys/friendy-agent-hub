@@ -35,6 +35,17 @@ async function main() {
   assert.equal(parsed[0].name, 'Agrippa');
   assert.equal(parsed[1].email, 'human@example.com');
 
+  const branded = mail.brandEmailHtml({
+    agentName: 'Alva & Co',
+    agentAddress: 'alva@mail.belna.se',
+    bodyText: 'Hello <team>,\n\nThe report is ready.',
+  });
+  assert.match(branded, /belna/);
+  assert.match(branded, /Alva &amp; Co/);
+  assert.match(branded, /Hello &lt;team&gt;/);
+  assert.match(branded, /alva@mail\.belna\.se/);
+  assert.doesNotMatch(branded, /Hello <team>/);
+
   assert.equal(mail.verifyWebhook('{}', {}), false);
 
   console.log('agent mail: ok');

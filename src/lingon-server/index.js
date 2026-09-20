@@ -499,6 +499,23 @@ app.post('/api/composio/disconnect', rateLimit(30, 60000), requireAuth(async (re
     res.status(e.code === 'BAD_INPUT' ? 400 : 502).json({ error: e.message || 'Could not remove the connection.' });
   }
 }));
+app.get('/api/composio/toolkit', requireAuth(async (req, res) => {
+  try {
+    if (!composio.configured()) return res.status(503).json({ error: 'App connections are not configured.' });
+    res.json(await composio.toolkitForUser(req.user.id, req.query.toolkit));
+  } catch (e) {
+    res.status(e.code === 'BAD_INPUT' ? 400 : 502).json({ error: e.message || 'Could not load connector.' });
+  }
+}));
+app.post('/api/composio/permissions', rateLimit(60, 60000), requireAuth(async (req, res) => {
+  try {
+    const { toolkit, disabled } = req.body || {};
+    const list = await composio.setToolkitPermissions(req.user.id, toolkit, disabled);
+    res.json({ ok: true, disabled: list });
+  } catch (e) {
+    res.status(e.code === 'BAD_INPUT' ? 400 : 502).json({ error: e.message || 'Could not save permissions.' });
+  }
+}));
 app.get('/api/composio/tools', requireAuth(async (req, res) => {
   try {
     const { toolkit, q, query, limit } = req.query;
@@ -528,6 +545,7 @@ app.post('/api/composio/execute', rateLimit(30, 60000), requireAuth(async (req, 
     res.json({ ok: result.successful !== false, result });
   } catch (e) {
     if (e.code === 'NO_CREDIT') return res.status(402).json({ error: e.message, upgrade_required: true });
+    if (e.code === 'PERMISSION_OFF') return res.status(403).json({ error: e.message });
     const msg = String(e.message || 'Tool run failed.');
     if (/No connected account|not connected|connect your/i.test(msg)) {
       return res.status(409).json({ error: 'Connect that app under Apps first, then retry.', needsConnection: true });

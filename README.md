@@ -40,14 +40,17 @@ exchanges the code, verifies the email via userinfo, and bridges it into an
 app session server-side. Needs `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` in
 `.env` (see `.env.example`) plus the redirect URI registered in Google Cloud
 console. Passwordless email one-time codes (`/api/auth/otp` → `/api/auth/verify`)
-work with no extra setup.
+work with no extra setup. To use the branded code email, install the template
+from `supabase/templates/magic_link.html` as described in
+`supabase/templates/README.md`; `db push` does not publish Auth templates.
 
 ## Supabase setup
 
 1. SQL Editor → run `supabase/schema.sql`, then `supabase/schema2.sql`,
    `supabase/schema3.sql`, and `supabase/schema4.sql` in order. The fourth
    migration adds owner-scoped triggers, automation runs, and automation chats.
-   For an already linked project, deploy tracked updates with `npx supabase db push`.
+   For an already linked project, deploy tracked updates with `npx supabase db push`,
+   including `20260920120000_connector_permissions.sql` for per-tool connector controls.
 2. API settings → URL + publishable + secret into `.env` (already done here).
 3. Restart `npm start` → `/api/health` shows `"supabase": true`.
 
@@ -87,7 +90,8 @@ Until Azure is configured, the fallback is an isolated per-user workspace and
 - GitHub: real PR list + diff + Gemini review. PAT per-request, never logged/sent to model.
 - Memory + vault: Supabase per-account, encrypted at rest. `sec_••••` only in traces.
 - Triggers + sub-agents: durable schedule/app/sub-agent watchers. Every run is an isolated chat, usage-metered and visible in Trace.
-- Gmail/apps: honestly empty — no fake connections.
+- Apps: per-user Composio OAuth connections, including multiple accounts per
+  connector and per-tool permissions. Disabled tools are blocked server-side.
 
 ## Tests
 
@@ -109,5 +113,5 @@ gh repo create lingon-agent --private --source=. --push
 
 - `app/` — frontend (config.js, mascot.js, engine.js fallback, engine.real.js, app.js, styles.css)
 - `server/` — real backend (index.js, gemini.js, research.js, store.js)
-- `supabase/` — schema.sql + setup guide
+- `supabase/` — schema, tracked migrations, Auth email template, and setup guide
 - `tests/smoke.real.js` — Playwright verification against the real backend

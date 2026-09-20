@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
-let LOCAL = { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [] };
+let LOCAL = { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [], connectorPermissions: [] };
 
 function loadLocal() {
   return LOCAL;
@@ -1325,6 +1325,50 @@ async function deleteMailDraft(userId, id) {
   saveLocal(d);
 }
 
+function normalizeDisabled(list) {
+  return [...new Set((Array.isArray(list) ? list : []).map((s) => String(s || '').toUpperCase().trim()).filter((s) => /^[A-Z0-9_]+$/.test(s)))];
+}
+async function getConnectorPermissions(userId, toolkit) {
+  const tk = String(toolkit || '').toLowerCase();
+  if (!userId || !tk) return [];
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('connector_permissions').select('disabled').eq('user_id', userId).eq('toolkit', tk).maybeSingle();
+      if (error) throw error;
+      return normalizeDisabled(data && data.disabled);
+    } catch (e) {
+      console.warn('[store] connector_permissions fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  const row = (d.connectorPermissions || []).find((r) => r.userId === userId && r.toolkit === tk);
+  return normalizeDisabled(row && row.disabled);
+}
+async function setConnectorPermissions(userId, toolkit, disabled) {
+  const tk = String(toolkit || '').toLowerCase();
+  if (!userId || !tk) return [];
+  const list = normalizeDisabled(disabled);
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('connector_permissions').upsert({
+        user_id: userId, toolkit: tk, disabled: list, updated_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      return list;
+    } catch (e) {
+      console.warn('[store] connector_permissions upsert fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.connectorPermissions = (d.connectorPermissions || []).filter((r) => !(r.userId === userId && r.toolkit === tk));
+  d.connectorPermissions.push({ userId, toolkit: tk, disabled: list, at: Date.now() });
+  saveLocal(d);
+  return list;
+}
+
 export {
   listMemories, addMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret,
@@ -1341,6 +1385,7 @@ export {
   getAgentWallet, upsertAgentWallet, listWalletTx, addWalletTx, reserveWalletSpend, updateWalletTx,
   getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
-  countUnreadMail, countOutboundMailToday, listMailDrafts, upsertMailDraft, deleteMailDraft,
+  countUnreadMail, countOutboundMailToday,   listMailDrafts, upsertMailDraft, deleteMailDraft,
+  getConnectorPermissions, setConnectorPermissions,
   CREDIT_GRANT_FREE,
 };

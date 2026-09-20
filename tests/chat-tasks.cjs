@@ -55,6 +55,24 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await assert.rejects(h.runtime.details('a',id,'different'),/not found/);
   console.log(`controlled concurrency: foreground reply ${replyMs.toFixed(2)}ms with worker held; 1 main model call per message, 0 narrator calls`);
 
+  // A task-store outage must not take down ordinary conversation. The model
+  // receives no delegation controls, so it cannot claim background work began.
+  const degradedEvents=[],degradedReports=[],degradedModels=[];
+  const degraded=createCoordinator({
+    tasks:{summaries:async()=>{throw Object.assign(new Error('Task storage is unavailable.'),{status:503,code:'TASK_STORE_PGRST202'});}},
+    model:async opts=>{degradedModels.push(opts);return {text:'Direct answer while tasks recover.'};},
+    schemas:[{name:'history_search',description:'Search history',parameters:{type:'object',properties:{}}}],tools:{},azure:{getSandbox:async()=>({mode:'azure'})},
+    store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:h.d.checkPrompt,
+    protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],reportError:(event,details)=>degradedReports.push({event,details}),
+  });
+  await degraded.run({userId:'a',chatId:'chat',requestId:'degraded',prompt:'Hello',onEvent:e=>degradedEvents.push(e)});
+  assert.equal(degradedEvents.find(e=>e.type==='message').text,'Direct answer while tasks recover.');
+  assert.deepEqual(degradedModels[0].tools.map(t=>t.name),['history_search']);
+  assert.match(degradedModels[0].system,/Task storage is temporarily unavailable/);
+  assert.equal(degradedReports[0].event,'task_storage_unavailable');
+  assert.equal(degradedReports[0].details.status,503);
+  assert.equal(degradedReports[0].details.code,'TASK_STORE_PGRST202');
+
   // A stale model completion must not finalize or queue actions after steering.
   const s=setup(),modelEntered=gate(),modelRelease=gate();
   s.answers.push(async()=>{modelEntered.resolve();return modelRelease.promise;});const sr=await s.create();

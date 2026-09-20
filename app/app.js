@@ -67,6 +67,7 @@ const IC = {
   aur:'<path d="M7 17L17 7M7 7h10v10"/>',
   panel:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
   board:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-9 9"/>',
+  easel:'<path d="M12 3V1M5 4h14l2 13H3L5 4Z"/><path d="M8 17l-2 6M16 17l2 6M8 9h8M7 13h10"/>',
   left:'<path d="M19 12H5M12 19l-7-7 7-7"/>',
   list:'<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
   key:'<circle cx="7.5" cy="15.5" r="4"/><path d="M11 12L21 2M18 5l3 3"/>',
@@ -78,6 +79,7 @@ const IC = {
   chatb:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>',
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   copy:'<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  chev:'<path d="M6 9l6 6 6-6"/>',
   attach:'<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/>',
   folder:'<path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2-2Z"/>',
   pencil:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
@@ -167,8 +169,8 @@ const fresh = () => ({
   memory:[],
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
-  composioApps:[], composioLoading:false, appQuery:'', appFilter:'all',
-  // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'library' | 'approvals'
+  composioApps:[], composioLoading:false, appQuery:'', appFilter:'all', appOpen:null, appDetails:{},
+  // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'approvals'
   agentEdit:false, mailTab:'inbox',
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
@@ -183,24 +185,26 @@ if (!state.vault) state.vault = fresh().vault;
 state.canvasOpen = false;
 if (state.agentPanel) state.canvasTab = 'approvals';
 delete state.agentPanel;
-if (state.canvasTab === 'agent') state.canvasTab = state.agentTab === 'library' ? 'library' : 'approvals';
+if (state.canvasTab === 'agent') state.canvasTab = 'approvals';
 if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
-if (!['canvas', 'passport', 'subagents', 'mail', 'payments', 'library', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+if (!['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
 delete state.agentTab;
 delete state.walletTab;
 if (!state.mailTab) state.mailTab = 'inbox';
 if (!state.settingsTab) state.settingsTab = 'profiles';
+if (state.settingsTab === 'theme') state.settingsTab = 'profiles';
 if (!state.browserProfile) state.browserProfile = fresh().browserProfile;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
 if (!Array.isArray(state.composioApps)) state.composioApps = [];
 state.composioLoading = false;
-if (typeof state.appQuery !== 'string') state.appQuery = '';
-  if (!state.appFilter) state.appFilter = 'all';
+  if (typeof state.appQuery !== 'string') state.appQuery = '';
+  if (!state.appFilter || state.appFilter === 'available') state.appFilter = 'all';
+  if (typeof state.appOpen !== 'string') state.appOpen = null;
+  if (!state.appDetails || typeof state.appDetails !== 'object') state.appDetails = {};
   // Honest apps: no fake OAuth connections exist — always empty.
   state.vault.apps = [];
-  let designPreview = false;
-  const save = () => { if (!designPreview) localStorage.setItem(LS, JSON.stringify(state)); };
+  const save = () => { localStorage.setItem(LS, JSON.stringify(state)); };
 const taskRuns = new Map();
 
 // Remove implementation details left in conversations by older app versions.
@@ -431,23 +435,98 @@ async function connectComposioApp(toolkit, authConfigId) {
   }
 }
 
-async function disconnectComposioApp(app) {
-  if (!app || !app.connectedAccountId) return;
-  if (!window.confirm(`Disconnect ${app.name}? Your agent will lose access until you reconnect.`)) return;
+function patchConnectorAccounts(toolkit, accounts) {
+  const next = Array.isArray(accounts) ? accounts : [];
+  state.composioApps = (state.composioApps || []).map((a) => {
+    if (a.toolkit !== toolkit) return a;
+    return {
+      ...a,
+      accounts: next,
+      accountCount: next.length,
+      connected: next.length > 0,
+      connectedAccountId: next[0] ? next[0].id : null,
+      status: next[0] ? next[0].status : 'NOT_CONNECTED',
+    };
+  });
+  if (state.appDetails && state.appDetails[toolkit]) {
+    state.appDetails[toolkit] = { ...state.appDetails[toolkit], accounts: next, accountCount: next.length };
+  }
+}
+
+async function disconnectComposioApp(app, accountId) {
+  const id = accountId || (app && app.connectedAccountId);
+  if (!app || !id) return;
+  const acc = ((app.accounts || []).find((a) => a.id === id)) || {};
+  const who = acc.email || acc.name || app.name || 'this account';
+  if (!window.confirm(`Disconnect ${who}? Your agent will lose access until you reconnect.`)) return;
   try {
     await window.LingonAuth.api('/api/composio/disconnect', {
       method: 'POST',
-      body: JSON.stringify({ connectedAccountId: app.connectedAccountId }),
+      body: JSON.stringify({ connectedAccountId: id }),
     });
-    state.composioApps = state.composioApps.map((a) =>
-      a.toolkit === app.toolkit ? { ...a, connected: false, connectedAccountId: null, status: 'NOT_CONNECTED' } : a
-    );
+    const left = (app.accounts || []).filter((a) => a.id !== id);
+    patchConnectorAccounts(app.toolkit, left);
     save();
     paintApps($('#main'));
-    toast(`${app.name} disconnected.`);
+    toast(`${who} disconnected.`);
   } catch (e) {
     toast(e.message || 'Could not disconnect.');
   }
+}
+
+async function openConnector(toolkit, force) {
+  const tk = String(toolkit || '').toLowerCase();
+  if (!tk) return;
+  if (!force && state.appOpen === tk) {
+    state.appOpen = null;
+    save();
+    paintApps($('#main'));
+    return;
+  }
+  state.appOpen = tk;
+  if (!state.appDetails) state.appDetails = {};
+  const prev = state.appDetails[tk] || {};
+  if (force || !prev.permissions) state.appDetails[tk] = { ...prev, loading: true };
+  save();
+  paintApps($('#main'));
+  try {
+    const j = await window.LingonAuth.api('/api/composio/toolkit?toolkit=' + encodeURIComponent(tk));
+    state.appDetails[tk] = { loading: false, ...j };
+    if (Array.isArray(j.accounts)) patchConnectorAccounts(tk, j.accounts);
+  } catch (e) {
+    state.appDetails[tk] = { loading: false, error: e.message || 'Could not open connector.' };
+    toast(e.message || 'Could not open connector.');
+  }
+  save();
+  if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+}
+
+async function saveConnectorPermissions(toolkit, permissions) {
+  const disabled = (permissions || []).filter((p) => !p.enabled).map((p) => p.slug);
+  await window.LingonAuth.api('/api/composio/permissions', {
+    method: 'POST',
+    body: JSON.stringify({ toolkit, disabled }),
+  });
+}
+
+async function toggleConnectorPermission(toolkit, slug, enabled) {
+  const d = state.appDetails && state.appDetails[toolkit];
+  if (!d || !Array.isArray(d.permissions)) return;
+  d.permissions = d.permissions.map((p) => p.slug === slug ? { ...p, enabled } : p);
+  save();
+  paintApps($('#main'));
+  try { await saveConnectorPermissions(toolkit, d.permissions); }
+  catch (e) { toast(e.message || 'Could not save permission.'); openConnector(toolkit, true); }
+}
+
+async function toggleConnectorKind(toolkit, kind, enabled) {
+  const d = state.appDetails && state.appDetails[toolkit];
+  if (!d || !Array.isArray(d.permissions)) return;
+  d.permissions = d.permissions.map((p) => p.kind === kind ? { ...p, enabled } : p);
+  save();
+  paintApps($('#main'));
+  try { await saveConnectorPermissions(toolkit, d.permissions); }
+  catch (e) { toast(e.message || 'Could not save permissions.'); openConnector(toolkit, true); }
 }
 
 function composioAppByToolkit(toolkit) {
@@ -504,92 +583,55 @@ const isActive = c => state.view === 'chat' && state.activeChat === c.id;
    leaks chats/agents between real accounts, and no code path can claim or
    chat without a signed-in user. */
 const signedIn = () => !!(window.LingonAuth && window.LingonAuth.signedIn());
-const needsOnboarding = () => !designPreview && (!state.onboarded || !state.agent || state.agent.provisional);
+const needsOnboarding = () => !state.onboarded || !state.agent || state.agent.provisional;
 const currentUserId = () => {
   try { return (window.LingonAuth && window.LingonAuth.get() && window.LingonAuth.get().user && window.LingonAuth.get().user.id) || null; }
   catch { return null; }
 };
-function designPreviewRequested(){
-  try {
-    const p = String(new URLSearchParams(location.search).get('preview') || '').toLowerCase();
-    if (p === '1' || p === 'app' || p === 'agent' || p === 'chat') return true;
-    const h = String(location.hash || '').toLowerCase();
-    return h === '#preview' || h === '#preview=app';
-  } catch { return false; }
-}
-function seedDesignPreview(){
-  const now = Date.now();
-  const chatId = 'preview-gothenburg';
-  state = Object.assign(fresh(), {
-    onboarded:true,
-    ownerId:'preview',
-    agent:{ name:'Your agent', color:'lingon', pers:'Playful', claimedAt:now },
-    view:'chat',
-    canvasOpen:true,
-    canvasTab:'canvas',
-    theme:state.theme || 'grey',
-    userProfile:{ name:'You' },
-    vault:{
-      secrets:[],
-      apps:[],
-      approvals:[{ id:'prev-allow', label:'Book Gothenburg movers', at:now - 40000 }],
-      mode:'default',
-    },
-    chats:[
-      {
-        id:chatId,
-        title:'Move to Gothenburg',
-        createdAt:now - 120000,
-        messages:[
-          { id:'pm1', role:'user', kind:'text', text:'Plan my move to Gothenburg next month — movers, addresses, budget' },
-          { id:'pm2', role:'agent', kind:'text', mood:'happy', text:'Done. Moving checklist with dates, 3 movers compared on price, address-change drafts, and a budget table — all on your canvas. Nothing sent without your yes.' },
-          { id:'pm3', role:'user', kind:'text', text:'Also remind me to water the plants?' },
-          { id:'pm4', role:'agent', kind:'text', mood:'idle', text:"Remembered. I'll nudge you every Sunday evening." },
-          { id:'pm5', role:'agent', kind:'card', card:{ type:'approval', status:'approved', title:'Change of address drafts', body:'Skatteverket + bank + subscriptions' } },
-        ],
-        trace:[
-          { ic:'search', t:'Compared 3 Gothenburg movers' },
-          { ic:'file', t:'Drafted address-change letters' },
-          { ic:'shieldcheck', t:'Paused before booking' },
-        ],
-        artifact:{ kind:'plan', title:'Gothenburg move plan', items:['Compare movers by price and van size','Draft address changes — nothing sent without your yes','Budget table on the canvas'] },
-      },
-      { id:'preview-plants', title:'Sunday plant reminder', messages:[], trace:[], artifact:null, createdAt:now - 86400000 },
-      { id:'preview-brief', title:'Weekly brief', messages:[], trace:[], artifact:null, source:'automation', createdAt:now - 172800000 },
-    ],
-    activeChat:chatId,
-    subAgents:[{
-      id:'preview-sa',
-      chatId:'preview-plants',
-      name:'Sunday plant reminder',
-      prompt:'Nudge every Sunday evening to water the plants.',
-      enabled:true,
-      trigger:{ type:'schedule', intervalMinutes:10080 },
-      nextRunAt:now + 2 * 86400000,
-      lastStatus:'done',
-    }],
-  });
-}
-function applyDesignPreview(){
-  if (!designPreviewRequested()) return;
-  if (signedIn()){
-    state.view = 'chat';
-    state.canvasOpen = true;
-    state.canvasTab = 'canvas';
-    if (!state.agent) state.agent = { name:'Your agent', color:'lingon', pers:'Playful', provisional:true, claimedAt:Date.now() };
-    return;
-  }
-  if (!designPreview) seedDesignPreview();
-  designPreview = true;
-}
 let sandboxLeaseId = null;
 let sandboxLeaseTimer = null;
-function sandboxLeaseRequest(action) {
-  if (!sandboxLeaseId || !window.LingonAuth || !window.LingonAuth.signedIn()) return Promise.resolve(null);
-  return window.LingonAuth.api('/api/sandbox/lease', {
-    method: 'POST',
-    body: JSON.stringify({ action, leaseId: sandboxLeaseId, kind: 'app' }),
-  }).catch(() => null);
+let sandboxVmState = 'disconnected';
+function vmConnectionView(){
+  const work = statusFor(chat());
+  if (work && work !== 'Available') return { label:work, tone:'busy' };
+  if (sandboxVmState === 'connected') return { label:'Connected', tone:'' };
+  if (sandboxVmState === 'connecting') return { label:'Connecting…', tone:'busy' };
+  return { label:'Disconnected', tone:'offline' };
+}
+function refreshVmConnectionView(){
+  const badge = document.querySelector('.agent-hero-status');
+  if (!badge) return;
+  const view = vmConnectionView();
+  badge.classList.toggle('busy', view.tone === 'busy');
+  badge.classList.toggle('offline', view.tone === 'offline');
+  const label = badge.querySelector('span');
+  if (label) label.textContent = view.label;
+}
+function setSandboxVmState(next){
+  if (sandboxVmState === next) return;
+  sandboxVmState = next;
+  refreshVmConnectionView();
+}
+async function sandboxLeaseRequest(action) {
+  if (!sandboxLeaseId || !window.LingonAuth || !window.LingonAuth.signedIn()) {
+    setSandboxVmState('disconnected');
+    return null;
+  }
+  if (action === 'acquire') setSandboxVmState('connecting');
+  try {
+    const result = await window.LingonAuth.api('/api/sandbox/lease', {
+      method: 'POST',
+      body: JSON.stringify({ action, leaseId: sandboxLeaseId, kind: 'app' }),
+    });
+    if (action !== 'release') {
+      const trulyConnected = result?.power === 'running' && !!result?.vmName;
+      setSandboxVmState(trulyConnected ? 'connected' : 'disconnected');
+    }
+    return result;
+  } catch {
+    setSandboxVmState('disconnected');
+    return null;
+  }
 }
 function startSandboxLease() {
   if (!signedIn()) return;
@@ -605,6 +647,7 @@ function stopSandboxLease() {
   if (sandboxLeaseTimer) { clearInterval(sandboxLeaseTimer); sandboxLeaseTimer = null; }
   const id = sandboxLeaseId;
   sandboxLeaseId = null;
+  setSandboxVmState('disconnected');
   if (!id) return;
   try {
     const sess = window.LingonAuth && window.LingonAuth.get && window.LingonAuth.get();
@@ -626,10 +669,6 @@ function ensureOwnerScope(){
 
 function render(){
   applyTheme();
-  if (designPreviewRequested()){
-    applyDesignPreview();
-    return renderApp();
-  }
   if (!signedIn()) {
     stopSandboxLease();
     const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
@@ -1049,26 +1088,26 @@ function planCards(b){
       <div class="pprice">$${fmtC(p.price)}${p.was ? ` <s>$${fmtC(p.was)}</s>` : ''}<span>${id === 'free' ? '/ forever' : '/ month'}</span></div>${pctOff(p)}
       <div class="billing-plan-credits">${icon('spark',16)} <b>${fmtC(p.credits)}</b> ${id === 'free' ? 'starter credits' : 'credits / month'}</div>
       <ul>${features[id].map(text => `<li>${icon('check',13)} ${text}</li>`).join('')}</ul>
-      ${id !== 'free' && !current ? `<details class="billing-plan-extras"><summary>Add extra credits <span>Optional</span></summary>${creditSliderHtml(p)}</details>` : ''}
+      ${id !== 'free' && !current ? `<div class="billing-plan-extras">${creditSliderHtml(p)}</div>` : ''}
       ${action}${giftCardHtml(p)}
     </article>`;
   }).join('')}</div>`;
 }
 function billSummary(b){
-  const v = creditView(b), agent = state.agent || {};
+  const v = creditView(b);
   const firstName = currentUser().name.trim().split(/\s+/)[0];
   const manage = b && b.plan !== 'free'
     ? `<button class="billing-manage" data-act="portal">Manage subscription ${icon('aur',14)}</button>`
     : '';
   const note = v.tone === 'empty' ? 'A fresh start is a top-up away.' : v.tone === 'low' ? 'Running a little low. Top up whenever you’re ready.' : `Ready for your next idea${firstName && firstName !== 'Guest' ? ', ' + esc(firstName) : ''}.`;
-  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Your credit balance">
-    <div class="billing-balance-top"><span class="billing-plan-pill">${Mascot.logo(17)} ${esc(billingPlanName(b))} plan</span><span class="billing-status">${esc(b.status || 'active')}</span>${manage}</div>
+  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Credit balance">
+    <div class="billing-balance-top"><span class="billing-status">${esc(b.status || 'active')}</span>${manage}</div>
     <div class="billing-balance-main">
-      <div class="billing-balance-copy"><span class="billing-label">Your credit balance</span>
+      <div class="billing-balance-copy">
         <div class="billing-balance-number"><strong>${fmtC(v.remaining)}</strong><span>credits left</span></div>
         <p class="billing-balance-note">${note}</p>
       </div>
-      <div class="billing-companion" aria-hidden="true"><span class="billing-companion-orbit"></span>${Mascot.svg(agent.color || 'lingon',v.tone === 'ready' ? 'happy' : 'idle',116)}<span>You + ${esc(agent.name || 'your agent')}</span></div>
+      <div class="billing-companion" aria-hidden="true"><span class="billing-companion-orbit"></span>${Mascot.svg('lingon',v.tone === 'ready' ? 'happy' : 'idle',116)}</div>
     </div>
     <div class="billing-balance-bottom"><div class="billing-balance-meter">
       <div class="billing-meter-label"><span><b>${fmtC(v.used)}</b> of ${fmtC(v.granted)} credits used</span><span>${Math.round(v.percent)}% left</span></div>${creditMeterHtml(v)}
@@ -1209,55 +1248,181 @@ const STAR_SKY_SVG = `<svg viewBox="0 0 1672 941" preserveAspectRatio="xMidYMid 
 </g>
 </svg>`;
 
-function landingAppPreview(){
-  const agent = Mascot.svg('lingon', 'happy', 30);
-  const hero = Mascot.svg('lingon', 'idle', 84);
-  const tiny = Mascot.svg('lingon', 'idle', 18);
-  return `<figure class="app-preview" aria-label="Preview of the Belna agent chat and right-side menu">
-    <aside class="ap-side">
-      <div class="sidebrand">${Mascot.logo(24)}<span>belna</span></div>
-      <span class="btn ap-static">${icon('plus',14)} New chat</span>
-      <div class="slabel">Chats</div>
-      <div class="sitem chatitem on">${icon('chatb',14)}<span>Move to Gothenburg</span></div>
-      <div class="sitem chatitem">${icon('chatb',14)}<span>Sunday plant reminder</span></div>
-      <div class="sitem chatitem">${icon('clock',14)}<span>Weekly brief</span></div>
-    </aside>
-    <div class="ap-chat">
-      <div class="floathead"><div class="fav">${Mascot.svg('lingon','idle',40)}</div><div class="pill">Your agent<span class="st">Available</span></div></div>
-      <div class="chathead"><span class="ttl">Move to Gothenburg</span><span class="sp"></span><span class="iconbtn ap-static">${icon('panel',16)}</span></div>
-      <div class="thread"><div class="threadinner">
-        <div class="msg user"><div class="message-stack"><div class="bub">Plan my move to Gothenburg next month — movers, addresses, budget</div></div></div>
-        <div class="msg agent"><div class="ava">${agent}</div><div class="body message-stack"><div class="bub">Done. Moving checklist with dates, 3 movers compared on price, address-change drafts, and a budget table — all on your canvas. Nothing sent without your yes.</div></div></div>
-        <div class="msg user"><div class="message-stack"><div class="bub">Also remind me to water the plants?</div></div></div>
-        <div class="msg agent"><div class="ava">${agent}</div><div class="body message-stack"><div class="bub">Remembered. I'll nudge you every Sunday evening.</div></div></div>
-      </div></div>
-      <div class="composerwrap"><div class="composer"><div class="promptbox">
-        <div class="ap-fake-input">Ask your agent anything…</div>
-        <div class="pb-row"><span class="iconbtn ap-static">${icon('plus',16)}</span><span class="micbtn ap-static">${icon('up',17)}</span></div>
-      </div></div></div>
-    </div>
-    <aside class="ap-rail">
-      <div class="canvas-head">
-        <div class="agent-hero">
-          <div class="agent-hero-fig">${hero}<span class="iconbtn agent-hero-edit ap-static">${icon('pencil',14)}</span></div>
-          <b class="agent-hero-name">Your agent</b>
-          <span class="agent-hero-status"><i></i>Connected</span>
-        </div>
-        <div class="canvas-head-row">
-          <div class="seg canvas-seg">
-            <span class="on">${icon('board',14)} Canvas</span>
-            <span>${icon('clock',14)} Automations</span>
-            <span>${icon('mail',14)} Mail</span>
-            <span>${icon('file',14)} Library</span>
-            <span>${icon('shieldcheck',14)} Approvals</span>
+function landingLifeBento(){
+  const ask = 'Do my taxes';
+  const apps = [
+    { n:'WhatsApp', t:'whatsapp', d:'whatsapp.com', bg:'#fff' },
+    { n:'Teams', t:'microsoftteams', d:'teams.microsoft.com', bg:'#fff' },
+    { n:'Slack', t:'slack', d:'slack.com', bg:'#4A154B' },
+    { n:'GitHub', t:'github', d:'github.com', bg:'#fff' },
+    { n:'Notion', t:'notion', d:'notion.so', bg:'#fff' },
+    { n:'Outlook', t:'outlook', d:'outlook.com', bg:'#0F6CBD' },
+    { n:'Linear', t:'linear', d:'linear.app', bg:'#5E6AD2' },
+    { n:'Canva', t:'canva', d:'canva.com', bg:'#fff' },
+    { n:'HubSpot', t:'hubspot', d:'hubspot.com', bg:'#FF7A59' },
+    { n:'Jira', t:'jira', d:'atlassian.com', bg:'#1868DB' },
+    { n:'Stripe', t:'stripe', d:'stripe.com', bg:'#635BFF' },
+    { n:'Asana', t:'asana', d:'asana.com', bg:'#F06A6A' },
+    { n:'Instagram', t:'instagram', d:'instagram.com', bg:'#E1306C' },
+    { n:'Dropbox', t:'dropbox', d:'dropbox.com', bg:'#0061FF' },
+    { n:'Figma', t:'figma', d:'figma.com', bg:'#1E1E1E' },
+    { n:'Zoom', t:'zoom', d:'zoom.us', bg:'#2D8CFF' },
+    { n:'Salesforce', t:'salesforce', d:'salesforce.com', bg:'#00A1E0' },
+    { n:'Airtable', t:'airtable', d:'airtable.com', bg:'#18BFFF' },
+    { n:'LinkedIn', t:'linkedin', d:'linkedin.com', bg:'#0A66C2' },
+    { n:'Monday', t:'monday', d:'monday.com', bg:'#6161FF' },
+    { n:'Discord', t:'discord', d:'discord.com', bg:'#5865F2' },
+    { n:'Spotify', t:'spotify', d:'spotify.com', bg:'#1DB954' },
+    { n:'Shopify', t:'shopify', d:'shopify.com', bg:'#96BF48' },
+    { n:'ClickUp', t:'clickup', d:'clickup.com', bg:'#7B68EE' },
+    { n:'X', t:'twitter', d:'x.com', bg:'#fff' },
+  ];
+  const tile = a => `<span class="life-app-tile" title="${esc(a.n)}"><img src="https://www.google.com/s2/favicons?sz=128&domain=${encodeURIComponent(a.d)}" alt="${esc(a.n)}"></span>`;
+  return `<section class="asection life-section" id="agent" aria-label="Bring anything to life">
+      <div class="life-head">
+        <h2>Bring anything to life</h2>
+        <p class="lede">If you can think of it, your agent can make it real life.</p>
+      </div>
+      <div class="life-bento">
+        <article class="life-card life-outcome">
+          <div class="life-copy">
+            <h3>Describe the outcome</h3>
+            <p>Say what you want done. Your agent figures out the steps.</p>
           </div>
+          <div class="life-visual">
+            <button type="button" class="life-prompt" data-act="life-ask" data-prompt="${esc(ask)}" aria-label="${esc(ask)}">
+              <span class="life-ph">${esc(ask)}...</span>
+            </button>
+          </div>
+        </article>
+        <article class="life-card life-apps">
+          <div class="life-copy">
+            <h3>Connect your life and apps</h3>
+            <p>Mail, calendar, bills, files — your agent works where you already live.</p>
+          </div>
+          <div class="life-visual">
+            <div class="life-apps-stage" aria-hidden="true">
+              <div class="life-apps-grid">${apps.map(tile).join('')}</div>
+            </div>
+          </div>
+        </article>
+        <article class="life-card life-approve">
+          <div class="life-copy">
+            <h3>Approve every action</h3>
+            <p>Sensitive work pauses until you say yes. Nothing runs without you.</p>
+          </div>
+          <div class="life-visual">
+            <div class="life-chat-frame" aria-hidden="true">
+              <div class="msg agent">
+                <div class="body">
+                  <div class="acard life-acard">
+                    <div class="hd">
+                      <div class="tile" style="background:var(--acc-soft);color:var(--acc)">${icon('shieldcheck',20)}</div>
+                      <div><b>Allow Alva: ${esc(ask)}</b><div class="sub">Action approval</div></div>
+                      <div class="st"><span class="chip">waiting for you</span></div>
+                    </div>
+                    <div class="bd">
+                      <div class="life-drive">
+                        <div class="life-drive-h"><b>Drive</b></div>
+                        <div class="life-drive-path">My Drive › Taxes 2025</div>
+                        <div class="life-drive-list">
+                          <div class="life-drive-row"><span class="life-pdf">PDF</span><span>Declaration_2025.pdf</span></div>
+                          <div class="life-drive-row"><span class="life-pdf">PDF</span><span>Income_statement.pdf</span></div>
+                          <div class="life-drive-row"><span class="life-pdf">PDF</span><span>Dentist_receipt.pdf</span></div>
+                          <div class="life-drive-row"><span class="life-pdf">PDF</span><span>Interest_statement.pdf</span></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="stack">
+                      <span class="btn">${icon('check',15)} Allow</span>
+                      <span class="btn green">Always allow</span>
+                      <span class="btn soft">Deny</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+        <article class="life-card life-secure">
+          <div class="life-copy">
+            <h3>Data is kept secure and private</h3>
+            <p>Its own isolated VM and credential store. Secrets never land in chat.</p>
+          </div>
+          <div class="life-visual">
+            <div class="life-appframe" aria-hidden="true">
+              <div class="phead"><h1>Vault</h1><span class="chip green">${icon('lock',12)} encrypted at rest</span></div>
+              <div class="seg">
+                <span>${icon('box',14)} Apps</span>
+                <span class="on">${icon('key',14)} Secrets</span>
+                <span>${icon('shieldcheck',14)} Approved</span>
+              </div>
+              <div class="warnband">${icon('shieldcheck',18)}<div><b>Your secrets remain protected.</b>Values are masked in chat and activity history. Reveal below is for your eyes alone, on this device.</div></div>
+              <div class="kv">
+                <div class="row"><span style="color:var(--mut)">${icon('laptop',16)}</span><div><b>Alva’s computer</b><div class="sub">Isolated VM · Sweden</div></div><div class="rgt"><span class="chip green">running</span></div></div>
+                <div class="row"><span style="color:var(--mut)">${icon('lock',16)}</span><div><b class="mono">GMAIL_APP_PASSWORD</b><div class="sub">sec_mail · added 2h</div></div><div class="rgt"><span class="mono mut" style="letter-spacing:.08em">•••• •••• ••••</span><span class="iconbtn">${icon('eye',14)}</span></div></div>
+                <div class="row"><span style="color:var(--mut)">${icon('lock',16)}</span><div><b class="mono">STRIPE_SECRET_KEY</b><div class="sub">sec_pay · added 1d</div></div><div class="rgt"><span class="mono mut" style="letter-spacing:.08em">•••• •••• ••••</span><span class="iconbtn">${icon('eye',14)}</span></div></div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>`;
+}
+function landingAgentPassport(){
+  const agent = Mascot.svg('lingon', 'idle', 118);
+  return `<div class="landing-passport-card" aria-label="Your secure agent passport">
+    <div class="landing-phone-shell">
+      <span class="landing-phone-island" aria-hidden="true"></span>
+      <div class="landing-phone-screen">
+        <div class="landing-passport-hero">
+          <div class="landing-passport-mascot">${agent}</div>
+          <b>Alva</b>
+        </div>
+        <div class="landing-passport-tabs" role="tablist" aria-label="Agent passport details">
+          <button class="on" type="button" role="tab" aria-selected="true" aria-controls="landing-passport-name" data-act="landing-passport-tab" data-passport-tab="name">Name</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="landing-passport-mail" data-act="landing-passport-tab" data-passport-tab="mail">Mail</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="landing-passport-wallet" data-act="landing-passport-tab" data-passport-tab="wallet">Wallet</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="landing-passport-computer" data-act="landing-passport-tab" data-passport-tab="computer">Computer</button>
+        </div>
+        <div class="landing-passport-slider">
+          <section class="landing-passport-panel on" id="landing-passport-name" role="tabpanel" data-passport-panel="name">
+            <label class="landing-passport-label">Agent name</label>
+            <div class="landing-passport-input"><strong>Alva</strong>${icon('pencil',14)}</div>
+            <label class="landing-passport-label">Appearance</label>
+            <div class="landing-passport-swatches" aria-label="Appearance colours">${Mascot.keys.map(k => `<i class="${k === 'lingon' ? 'on' : ''}" title="${Mascot.PALETTE[k].name}" style="--swatch:${Mascot.PALETTE[k].body}"></i>`).join('')}</div>
+          </section>
+          <section class="landing-passport-panel" id="landing-passport-mail" role="tabpanel" data-passport-panel="mail" hidden>
+            <div class="landing-passport-mail-head"><span>${icon('mail',16)}</span><div><strong>Alva’s mail</strong><small>alva@mail.belna.se</small></div>${icon('refresh',14)}</div>
+            <div class="landing-passport-mail-tabs"><span class="on">Inbox</span><span>Sent</span><span>Drafts</span><span>Write</span></div>
+            <div class="landing-passport-mail-row"><i></i><div><strong>Welcome to your inbox</strong><small>Belna team</small><small>Your agent’s mailbox is ready.</small></div><time>now</time></div>
+          </section>
+          <section class="landing-passport-panel" id="landing-passport-wallet" role="tabpanel" data-passport-panel="wallet" hidden>
+            <div class="landing-passport-payment-card" aria-label="Sample agent wallet card">
+              <div class="landing-passport-card-top"><span>belna</span><small>AGENT WALLET</small></div>
+              <span class="landing-passport-card-chip" aria-hidden="true"></span>
+              <div class="landing-passport-card-number" aria-hidden="true">•••• &nbsp;•••• &nbsp;•••• &nbsp;2048</div>
+              <div class="landing-passport-card-bottom"><span>ALVA</span><span>PREVIEW</span></div>
+            </div>
+          </section>
+          <section class="landing-passport-panel" id="landing-passport-computer" role="tabpanel" data-passport-panel="computer" hidden>
+            <div class="landing-passport-computer-card">
+              <span class="landing-passport-computer-icon">${icon('laptop',30)}</span>
+              <strong>Alva’s computer</strong>
+              <p>A private workspace for browsing, files and the work you ask your agent to do.</p>
+            </div>
+          </section>
         </div>
       </div>
-      <div class="cbody">
-        <div class="cempty">${tiny}<div style="font-weight:700;margin-top:12px">The canvas</div><div class="mut2">Charts, live pages, diffs and plans land here.</div></div>
+      <div class="landing-phone-composer" aria-hidden="true">
+        <span class="landing-phone-plus">+</span>
+        <span class="landing-phone-message">Message Alva</span>
+        <span class="landing-phone-mic">${icon('mic',16)}</span>
+        <span class="landing-phone-bars"><i></i><i></i><i></i><i></i></span>
       </div>
-    </aside>
-  </figure>`;
+      <span class="landing-phone-home" aria-hidden="true"></span>
+    </div>
+  </div>`;
 }
 
 function renderLanding(){
@@ -1382,30 +1547,17 @@ function renderLanding(){
       </div>
     </section>
 
-    <section class="asection" id="safety" aria-label="Safe Swedish AI">
-      <h2>Safe Swedish AI</h2>
-      <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
-      <div class="panel model-card">
-        <div class="mc-title">Arche 1.0 vs frontier models</div>
-        <div class="mc-table"><table class="btable">
-          <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
-          <tbody>
-            <tr><td>GPQA Diamond</td><td class="star">93.5</td><td>94.1</td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
-            <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td>88.8</td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
-            <tr><td>BrowseComp</td><td class="star">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
-            <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td>85.0</td><td>83.4</td></tr>
-            <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
-          </tbody>
-        </table></div>
-        <div class="fineprint mc-foot"><span>Full results and methodology in <a href="/research-arche-1-0">Research → Arche 1.0</a></span></div>
+    <section class="asection secure-agent-section" id="secure-agent" aria-label="Your own secure agent">
+      <div class="secure-agent-layout">
+        <div class="secure-agent-copy">
+          <h2>Your own secure agent</h2>
+          <p>Your agent gets a personal identity, private mailbox, secure wallet and its own computer — all in one place, always under your control.</p>
+        </div>
+        ${landingAgentPassport()}
       </div>
     </section>
 
-    <section class="asection asection-preview" id="agent" aria-label="Your personal AI Agent">
-      <h2>Your personal AI Agent.</h2>
-      <p class="lede">If you can think it, your Agent can make it real life. <a href="?preview=app">Open the app preview</a></p>
-      ${landingAppPreview()}
-    </section>
+    ${landingLifeBento()}
 
     <section class="cta2" id="cta" aria-label="Start">
       <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Start now</div>
@@ -1421,6 +1573,42 @@ function renderLanding(){
             </span>
           </div>
         </form>
+      </div>
+    </section>
+
+    <section class="asection" id="safety" aria-label="Safe Swedish AI">
+      <div class="safety-layout">
+        <div class="safety-copy">
+          <h2>Safe Swedish AI</h2>
+          <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
+        </div>
+        <div class="panel model-card">
+          <div class="mc-viz" aria-hidden="true">
+            <svg viewBox="0 0 640 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="8" y="18" width="118" height="52" rx="12" fill="#ECECF0" stroke="#E7E7EA"/>
+              <text x="67" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Kimi K3</text>
+              <path d="M126 44H162" stroke="#17181A" stroke-width="2"/><polygon points="162,40 172,44 162,48" fill="#17181A"/>
+              <rect x="172" y="12" width="296" height="64" rx="14" fill="#fff" stroke="#E7E7EA"/>
+              <text x="320" y="36" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" font-weight="800" letter-spacing="1.2" fill="#17181A">BELNA HARNESS</text>
+              <text x="320" y="56" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="700" fill="#17181A">Approve · Vault · Sandbox · Trace</text>
+              <path d="M468 44H504" stroke="#17181A" stroke-width="2"/><polygon points="504,40 514,44 504,48" fill="#17181A"/>
+              <rect x="514" y="18" width="118" height="52" rx="12" fill="#E9F4EE" stroke="#BFE0CC"/>
+              <text x="573" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">Work</text>
+            </svg>
+          </div>
+          <div class="mc-title">Arche 1.0 vs frontier models</div>
+          <div class="mc-table"><table class="btable">
+            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th></tr></thead>
+            <tbody>
+              <tr><td>GPQA Diamond</td><td class="star">93.5</td><td>94.1</td><td>93.8</td><td>92.6</td></tr>
+              <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td>88.8</td><td>87.5</td><td>88.0</td></tr>
+              <tr><td>BrowseComp</td><td class="star">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td></tr>
+              <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td>85.0</td></tr>
+              <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td></tr>
+            </tbody>
+          </table></div>
+          <div class="fineprint mc-foot"><span>Full results and methodology in <a href="/research-arche-1-0">Research → Arche 1.0</a></span></div>
+        </div>
       </div>
     </section>
 
@@ -1537,7 +1725,7 @@ function runInChatOnboarding(c){
   } else {
     state.agent.name = answers.name; state.agent.color = answers.color;
     say('Hej ' + currentUser().name + '! I’m ' + answers.name + ', your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. Tell me what you want done, and I’ll take it from there. I’ll ask for access or approval when needed.');
-    card({ type:'passport', title:'My passport', note:'Meet your agent and see what I can do in the right-side menu.' });
+    card({ type:'passport', title:'Your agent is ready', note:'Finish setup and start chatting.' });
   }
 }
 
@@ -1564,7 +1752,7 @@ async function openOnboardingPassport(c, m){
   state.memory.unshift({ id:uid(), text:'Agent named “' + answers.name + '” — ' + Mascot.PALETTE[answers.color].name + '.', src:'onboarding', at:Date.now() });
   const pending = state.pendingPrompt;
   state.pendingPrompt = null;
-  state.canvasOpen = true; state.canvasTab = 'passport';
+  state.canvasOpen = true; state.canvasTab = 'canvas';
   save(); renderApp();
   ensureMailbox(answers.name).catch(() => {});
   if (pending) await runAgentOn(c, pending);
@@ -1692,8 +1880,7 @@ function openOnboarding(){ return startPendingPromptFlow(); }
    APP SHELL
 ================================================================ */
 function renderApp(){
-  if (designPreviewRequested()) applyDesignPreview();
-  if (!signedIn() && !designPreview){ renderAuth(); return; }
+  if (!signedIn()){ renderAuth(); return; }
   ensureOwnerScope();
   if (needsOnboarding()) {
     if (!chat()?.onboarding) return startPendingPromptFlow();
@@ -1703,8 +1890,7 @@ function renderApp(){
   applyTheme();
   belnaStopLandingFx();
   root.innerHTML = `
-  ${designPreview ? '<div class="design-preview-banner">Design preview — agent chat + right-side menu · not a live account</div>' : ''}
-  <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${designPreview ? 'design-preview' : ''}" id="app">
+  <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''}" id="app">
     <button class="mobile-nav-toggle" data-act="togglemenu" aria-label="${mobileNavOpen ? 'Close navigation' : 'Open navigation'}" aria-expanded="${mobileNavOpen}">${icon(mobileNavOpen ? 'x' : 'menu',20)}</button>
     <button class="side-scrim" data-act="togglemenu" aria-label="Close navigation"></button>
     <aside class="side" id="side"></aside>
@@ -1763,7 +1949,7 @@ function paintSide(){
       <div class="userwrap">
         ${state.userMenuOpen ? `<div class="usermenu pop">
           <button class="sitem" data-act="nav" data-view="settings">${icon('gear',15)} Settings</button>
-          <button class="sitem" data-act="nav" data-view="apps">${icon('box',15)} Apps</button>
+          <button class="sitem" data-act="nav" data-view="apps">${icon('box',15)} Connectors</button>
           <button class="sitem" data-act="signout">${icon('x',15)} Sign out</button>
         </div>` : ''}
         <button class="userrow" data-act="usermenu">
@@ -1777,18 +1963,20 @@ function paintSide(){
     getBilling().then(b => {
       const box = $('#usagecard');
       if (!box) return;
-      box.innerHTML = b ? usageCardHtml(b) : `<button class="usage-unavailable" data-act="nav" data-view="billing">View your credits ${icon('aur',14)}</button>`;
+      box.innerHTML = b ? usageCardHtml(b) : `<button class="usage-unavailable" data-act="nav" data-view="billing">View billing ${icon('aur',14)}</button>`;
     }).catch(() => {});
   } catch {}
 }
+function themeMascotColor(){
+  return ({ grey:'charcoal', brick:'lingon', blue:'blueberry', yellow:'sun', green:'moss', pink:'rose' })[state.theme] || 'lingon';
+}
 function usageCardHtml(b){
-  const v = creditView(b), a = state.agent || {};
+  const v = creditView(b);
   const note = v.tone === 'empty' ? 'Ready for a top-up' : v.tone === 'low' ? 'A little low on credits' : `${fmtC(v.used)} of ${fmtC(v.granted)} used`;
   return `<div class="usage-content credit-tone-${v.tone}">
-    <div class="usage-heading"><span>Your credits</span><span class="usage-plan">${esc(billingPlanName(b))}</span></div>
     <div class="usage-balance"><strong>${fmtC(v.remaining)}</strong><span>credits left</span></div>
     ${creditMeterHtml(v)}<div class="usage-caption">${note}</div>
-    <div class="usage-footer"><span class="usage-companion">${Mascot.svg(a.color || 'lingon','happy',28)}<span>You + ${esc(a.name || 'your agent')}</span></span>${icon('aur',14)}</div>
+    <div class="usage-footer"><span class="usage-companion">${Mascot.svg(themeMascotColor(),'happy',28)}</span>${icon('aur',14)}</div>
     <button class="usage-link" data-act="nav" data-view="billing" aria-label="View billing and credits" title="View billing and credits"></button>
   </div>`;
 }
@@ -1863,7 +2051,7 @@ function paintChat(M){
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
       ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
-      <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('panel',16)}</button>
+      <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('easel',16)}</button>
     </div>
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
       ${c.messages.map(m => msgNode(c, m).outerHTML).join('')}
@@ -1897,40 +2085,62 @@ function paintChat(M){
   if (Engine.managed && signedIn() && !needsOnboarding()) void Engine.recoverTasks?.(makeRT(c));
 }
 
+const APPLE_EMOJI_CDN = 'https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/';
 const REACTIONS = [
-  { emoji:'👍', label:'Thumbs up' },
-  { emoji:'👎', label:'Thumbs down' },
-  { emoji:'❤️', label:'Heart' },
-  { emoji:'💩', label:'Poop' },
+  { id:'up', emoji:'👍', code:'1f44d', label:'Thumbs up' },
+  { id:'down', emoji:'👎', code:'1f44e', label:'Thumbs down' },
+  { id:'heart', emoji:'❤️', code:'2764-fe0f', label:'Heart' },
+  { id:'poop', emoji:'💩', code:'1f4a9', label:'Poop' },
 ];
+function normalizeReaction(value){
+  return String(value || '').replace(/\uFE0F|\uFE0E/g, '');
+}
+function findReaction(value){
+  const raw = String(value || '');
+  const norm = normalizeReaction(raw);
+  return REACTIONS.find((r) => r.id === raw || r.emoji === raw || normalizeReaction(r.emoji) === norm) || null;
+}
+function appleEmojiHTML(emoji, code){
+  const unified = code || [...String(emoji)].map((ch) => ch.codePointAt(0).toString(16)).join('-');
+  const fallback = unified.split('-').filter((p) => p !== 'fe0f' && p !== 'fe0e').join('-');
+  return `<img class="imessage-emoji" src="${APPLE_EMOJI_CDN}${unified}.png" alt="${esc(emoji)}" draggable="false" data-fallback="${APPLE_EMOJI_CDN}${fallback}.png" onerror="if(!this.dataset.tried&&this.getAttribute('src')!==this.dataset.fallback){this.dataset.tried=1;this.src=this.dataset.fallback}else{this.replaceWith(document.createTextNode(this.alt))}">`;
+}
+function paintAppleEmoji(html){
+  return String(html).replace(/\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)*/gu, (emoji) => appleEmojiHTML(emoji));
+}
 function replyPreviewHTML(m){
   if (!m.replyTo) return '';
   const who = m.replyTo.role === 'user' ? 'You' : state.agent.name;
-  return `<div class="reply-preview"><b>${esc(who)}</b><span>${esc(m.replyTo.text)}</span></div>`;
+  return `<div class="reply-preview"><b>${esc(who)}</b><span>${paintAppleEmoji(esc(m.replyTo.text))}</span></div>`;
 }
-function messageActionsHTML(c, m){
-  const active = new Set(Array.isArray(m.reactions) ? m.reactions : []);
+function messageChromeHTML(c, m){
+  const active = new Set((Array.isArray(m.reactions) ? m.reactions : []).map((r) => findReaction(r)?.id).filter(Boolean));
   const attrs = `data-chat="${c.id}" data-msg="${m.id}"`;
-  const chosen = REACTIONS.filter((r) => active.has(r.emoji)).map((r) => `<button class="reaction-pill on" data-act="reactmsg" ${attrs} data-emoji="${r.emoji}" title="Remove ${r.label}" aria-label="Remove ${r.label}">${r.emoji}</button>`).join('');
-  return `${chosen ? `<div class="message-reactions">${chosen}</div>` : ''}<div class="message-actions" aria-label="Message actions">
-    <button data-act="replymsg" ${attrs} title="Reply">${icon('chatb',13)}<span>Reply</span></button>
-    <button data-act="copymsg" ${attrs} title="Copy">${icon('copy',13)}<span>Copy</span></button>
-    <span class="reaction-options">${REACTIONS.map((r) => `<button class="reaction-choice ${active.has(r.emoji) ? 'on' : ''}" data-act="reactmsg" ${attrs} data-emoji="${r.emoji}" title="${r.label}" aria-label="${r.label}">${r.emoji}</button>`).join('')}</span>
-  </div>`;
+  const chosen = REACTIONS.filter((r) => active.has(r.id)).map((r) => `<button type="button" class="reaction-pill on" data-act="reactmsg" ${attrs} data-reaction="${r.id}" title="Remove ${r.label}" aria-label="Remove ${r.label}">${appleEmojiHTML(r.emoji, r.code)}</button>`).join('');
+  return {
+    has: active.size > 0,
+    reactions: chosen ? `<div class="message-reactions">${chosen}</div>` : '',
+    actions: `<div class="message-actions" aria-label="Message actions">
+    <button type="button" data-act="replymsg" ${attrs} title="Reply">${icon('chatb',13)}<span>Reply</span></button>
+    <button type="button" data-act="copymsg" ${attrs} title="Copy">${icon('copy',13)}<span>Copy</span></button>
+    <span class="reaction-options">${REACTIONS.map((r) => `<button type="button" class="reaction-choice ${active.has(r.id) ? 'on' : ''}" data-act="reactmsg" ${attrs} data-reaction="${r.id}" title="${r.label}" aria-label="${r.label}">${appleEmojiHTML(r.emoji, r.code)}</button>`).join('')}</span>
+  </div>`,
+  };
 }
 function msgNode(c, m){
+  const chrome = (m.kind === 'text') ? messageChromeHTML(c, m) : { has:false, reactions:'', actions:'' };
   if (m.kind === 'text' && m.role === 'user'){
     const filesHtml = (m.files && m.files.length) ? `<div class="msg-files">${m.files.map((f,i) => `<button class="attach-pill sent" data-act="canvas-upload" data-chat="${c.id}" data-msg="${m.id}" data-i="${i}" title="View in Canvas">${icon('file',12)}<span class="ap-name">${esc(f.name.length > 24 ? f.name.slice(0,21)+'…' : f.name)}</span><span class="ap-size">${fmtBytes(f.size)}</span></button>`).join('')}</div>` : '';
-    return el(`<div class="msg user" data-mid="${m.id}"><div class="message-stack"><div class="bub">${replyPreviewHTML(m)}${filesHtml}${esc(m.text)}</div>${messageActionsHTML(c, m)}</div></div>`);
+    return el(`<div class="msg user" data-mid="${m.id}"><div class="message-stack${chrome.has ? ' has-reactions' : ''}"><div class="bub-wrap"><div class="bub">${replyPreviewHTML(m)}${filesHtml}${paintAppleEmoji(esc(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
   }
   if (m.kind === 'text')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body message-stack"><div class="bub md">${replyPreviewHTML(m)}${md(m.text)}</div>${messageActionsHTML(c, m)}</div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body message-stack${chrome.has ? ' has-reactions' : ''}"><div class="bub-wrap"><div class="bub md">${replyPreviewHTML(m)}${paintAppleEmoji(md(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
   if (m.kind === 'tools')
     return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body"><div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
   if (m.kind === 'chips')
     return el('<div style="display:none"></div>');
   if (m.kind === 'card')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${['progress','browser','computer','file','artifact','canvas'].includes(m.card.type) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('panel',14)} Show in Canvas</button>`}</div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${['progress','browser','computer','file','artifact','canvas'].includes(m.card.type) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
   return el('<div></div>');
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
@@ -2007,9 +2217,9 @@ function cardNode(c, m){
     ${pending ? `<div class="stack"><button class="btn" data-act="save-secret" data-chat="${k}" data-msg="${mid}">${icon('lock',14)} Save to vault</button><button class="btn ghost" data-act="skip-secret" data-chat="${k}" data-msg="${mid}">Skip</button></div>` : (cd.status === 'saved' ? `<div class="ft"><span class="note mono">${esc(cd.ref)} · ••••••••</span></div>` : '')}</div>`;
 
   if (cd.type === 'passport') return `<div class="acard">
-    ${hd(icon('user',20),'var(--acc-soft)','var(--acc)','My passport',state.agent.name)}
+    ${hd(icon('user',20),'var(--acc-soft)','var(--acc)','Your agent is ready',state.agent.name)}
     <div class="bd">${esc(cd.note)}</div>
-    <div class="stack"><button class="btn" data-act="open-passport" data-chat="${k}" data-msg="${mid}">Open My passport ${icon('aur',15)}</button></div></div>`;
+    <div class="stack"><button class="btn" data-act="open-passport" data-chat="${k}" data-msg="${mid}">Start chatting ${icon('aur',15)}</button></div></div>`;
 
   if (cd.type === 'question') return `<div class="acard">
     ${hd(icon('spark',20),'var(--acc-soft)','var(--acc)','Question', state.agent.name + ' is asking')}
@@ -2044,10 +2254,10 @@ function cardNode(c, m){
   if (cd.type === 'file') return `<div class="acard"><div class="filrow">
     <div class="fic">${icon('file',17)}</div>
     <div><b>${esc(cd.name)}</b><div class="sz">${fmtBytes(cd.size || 0)} · saved to Files</div></div>
-    <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="View in Canvas">${icon('panel',15)}</button><button class="iconbtn" data-act="download" data-chat="${k}" data-msg="${mid}" title="Download">${icon('down',15)}</button></div>
+    <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="View in Canvas">${icon('easel',15)}</button><button class="iconbtn" data-act="download" data-chat="${k}" data-msg="${mid}" title="Download">${icon('down',15)}</button></div>
   </div></div>`;
 
-  if (cd.type === 'canvas') return `<div class="acard">${hd(icon('board',20),'var(--acc-soft)','var(--acc)',esc(cd.title || 'Canvas item'),esc(cd.format || 'document'))}
+  if (cd.type === 'canvas') return `<div class="acard">${hd(icon('easel',20),'var(--acc-soft)','var(--acc)',esc(cd.title || 'Canvas item'),esc(cd.format || 'document'))}
     <div class="bd mut">${esc(String(cd.content || '').slice(0, 180))}</div><div class="stack"><button class="btn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">Open in Canvas</button></div></div>`;
 
   if (cd.type === 'artifact') return `<div class="acard">
@@ -2055,7 +2265,7 @@ function cardNode(c, m){
     <div class="filrow" style="border-top:1px solid var(--line2);padding-top:12px">
       <div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('spark',16)}</div>
       <div><b>${esc(cd.title)}</b><div class="sz">Artifact</div></div>
-      <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="View on canvas">${icon('panel',14)}</button><button class="dotmenu" data-act="artmenu" title="More">•••</button></div>
+      <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="View on canvas">${icon('easel',14)}</button><button class="dotmenu" data-act="artmenu" title="More">•••</button></div>
     </div></div>`;
 
   if (cd.type === 'memory') return `<div class="acard">
@@ -2422,7 +2632,7 @@ async function sendPrompt(text, files){
     if (c?.onboarding) {
       const pq = pendingQuestion(c);
       if (pq) answerOnboarding(c, pq.m, text);
-      else toast('Open My passport to finish setup.');
+      else toast('Finish setup from the agent card.');
     } else startPendingPromptFlow(text);
     return;
   }
@@ -2513,30 +2723,17 @@ function canvasHeroHTML(){
   const a = state.agent;
   if (!a) return '';
   const editing = !!state.agentEdit;
-  const st = statusFor(chat());
-  const statusLabel = (!st || st === 'Available') ? 'Connected' : st;
-  const live = statusLabel !== 'Connected';
+  const connection = vmConnectionView();
   return `<div class="agent-hero">
     <div class="agent-hero-fig">
       ${Mascot.svg(a.color, editing ? 'happy' : 'idle', 84)}
       <button class="iconbtn agent-hero-edit${editing ? ' on' : ''}" data-act="agent-edit" title="Edit appearance">${icon('pencil',14)}</button>
     </div>
     <b class="agent-hero-name">${esc(a.name)}</b>
-    <span class="agent-hero-status${live ? ' busy' : ''}"><i></i>${esc(statusLabel)}</span>
+    <span class="agent-hero-status${connection.tone ? ' ' + connection.tone : ''}"><i></i><span>${esc(connection.label)}</span></span>
     ${mailCache && mailCache.address ? `<div class="sub mono agent-hero-mail">${esc(mailCache.address)}</div>` : ''}
     ${editing ? agentAppearanceForm(a) : ''}
   </div>`;
-}
-function passportTabContent(){
-  const a = state.agent;
-  return `<section class="aslider-sec passport-panel"><h2>My passport</h2>
-    <p>Hej, I’m ${esc(a.name)} — your personal agent.</p>
-    <div class="kv">
-      <div class="row">${icon('user',16)}<div><b>Your agent</b><div class="sub">${esc(a.name)} · ${esc(Mascot.PALETTE[a.color]?.name || a.color)}</div></div></div>
-      <div class="row">${icon('lock',16)}<div><b>My own secure computer</b><div class="sub">A workspace for browsing, coding, and creating files on your behalf.</div></div></div>
-      <div class="row">${icon('spark',16)}<div><b>What I can do</b><div class="sub">Research, write, build, organize tasks, and work with your connected apps.</div></div></div>
-      <div class="row">${icon('shieldcheck',16)}<div><b>You’re in control</b><div class="sub">I’ll ask for access or approval when needed. Review my work, memory, and approvals here.</div></div></div>
-    </div></section>`;
 }
 function libraryTabContent(){
   const arts = artifactRows();
@@ -3000,7 +3197,7 @@ function canvasGalleryHTML(c){
     for (const [i,file] of (m.files || []).entries()) items.push({m, i, label:file.name, kind:'file'});
   }
   if (!items.length) return '';
-  return `<div class="canvas-gallery"><div class="runhead">${icon('board',14)} From this chat</div>${items.slice(-30).reverse().map(item => `<button class="canvas-gallery-item" data-act="${item.i === undefined ? 'canvas-card' : 'canvas-upload'}" data-chat="${c.id}" data-msg="${item.m.id}"${item.i === undefined ? '' : ` data-i="${item.i}"`}><span>${icon(item.kind === 'browser' ? 'globe' : item.kind === 'file' ? 'file' : item.kind === 'computer' ? 'term' : 'board',15)}</span><b>${esc(item.label)}</b><small>${esc(item.kind)}</small></button>`).join('')}</div>`;
+  return `<div class="canvas-gallery"><div class="runhead">${icon('easel',14)} From this chat</div>${items.slice(-30).reverse().map(item => `<button class="canvas-gallery-item" data-act="${item.i === undefined ? 'canvas-card' : 'canvas-upload'}" data-chat="${c.id}" data-msg="${item.m.id}"${item.i === undefined ? '' : ` data-i="${item.i}"`}><span>${icon(item.kind === 'browser' ? 'globe' : item.kind === 'file' ? 'file' : item.kind === 'computer' ? 'term' : 'easel',15)}</span><b>${esc(item.label)}</b><small>${esc(item.kind)}</small></button>`).join('')}</div>`;
 }
 function paintCanvasSelection(body, c, m){
   const file = c.canvasSelectedFileIndex !== undefined ? m.files?.[c.canvasSelectedFileIndex] : null;
@@ -3040,7 +3237,7 @@ function paintCanvas(){
   scopeMailCache();
   if (state.canvasTab === 'agent') state.canvasTab = 'approvals';
   if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
-  if (!['canvas', 'passport', 'subagents', 'mail', 'payments', 'library', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+  if (!['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
   if (!state._showLiveInCanvas) state._showLiveInCanvas = false;
   const c = chat();
   const top = state.canvasTab || 'canvas';
@@ -3053,12 +3250,10 @@ function paintCanvas(){
       ${canvasHeroHTML()}
       <div class="canvas-head-row">
         <div class="seg canvas-seg">
-          <button class="${top === 'passport' ? 'on' : ''}" data-act="ctab" data-t="passport">${icon('user',14)} My passport</button>
-          <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
+          <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('easel',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
           <button class="${top === 'subagents' ? 'on' : ''}" data-act="ctab" data-t="subagents">${icon('clock',14)} Automations <span class="cnt">${(state.subAgents || []).length}</span></button>
           <button class="${top === 'mail' ? 'on' : ''}" data-act="ctab" data-t="mail">${icon('mail',14)} Mail${mailCache && mailCache.unread ? ` <span class="cnt">${mailCache.unread}</span>` : ''}</button>
           <button class="${top === 'payments' ? 'on' : ''}" data-act="ctab" data-t="payments">${icon('wallet',14)} Payments</button>
-          <button class="${top === 'library' ? 'on' : ''}" data-act="ctab" data-t="library">${icon('file',14)} Library</button>
           <button class="${top === 'approvals' ? 'on' : ''}" data-act="ctab" data-t="approvals">${icon('shieldcheck',14)} Approvals</button>
         </div>
         <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
@@ -3075,13 +3270,8 @@ function paintCanvas(){
     toast('Renamed — they answer to ' + v + ' now.');
   });
   const body = $('#cbody');
-  if (top === 'passport') { body.innerHTML = passportTabContent(); return; }
   if (top === 'mail'){
     paintMail(body);
-    return;
-  }
-  if (top === 'library'){
-    body.innerHTML = libraryTabContent();
     return;
   }
   if (top === 'payments'){
@@ -3210,7 +3400,7 @@ function paintVault(M){
     body = `<div class="apps-jump">
       <div class="apps-stack">${stack}</div>
       <div><b>${connected.length ? connected.length + ' live' : 'No connected apps'}</b></div>
-      <button class="btn small" data-act="nav" data-view="apps">Open Apps</button>
+      <button class="btn small" data-act="nav" data-view="apps">Open Connectors</button>
     </div>`;
   } else if (tab === 'approved'){
     body = `<div class="kv">
@@ -3331,6 +3521,7 @@ function paintSettings(M){
   const a = state.agent;
   const u = currentUser();
   const tab = state.settingsTab || 'profiles';
+  const curTheme = THEMES.find(t => t.id === (state.theme || 'grey')) || THEMES[0];
   let body = '';
   if (tab === 'profiles'){
     body = `
@@ -3352,21 +3543,22 @@ function paintSettings(M){
         </div>
       </div>
     </div>
+    <div class="psec"><h3>${icon('star',15)} Theme</h3>
+      <div class="kv"><div class="row" style="align-items:flex-start"><span style="color:var(--mut)">${icon('star',16)}</span>
+        <div style="flex:1"><b>Accent color</b><div class="sub">Current: ${esc(curTheme.name)} · applies instantly</div>
+          <div class="swatches" style="justify-content:flex-start;margin-top:12px">${THEMES.map(t => `<button class="swatch ${curTheme.id === t.id ? 'on' : ''}" data-act="theme" data-v="${t.id}" title="${t.name}"><span style="width:26px;height:26px;border-radius:50%;background:${t.c};display:block"></span></button>`).join('')}</div>
+        </div></div></div>
+    </div>
     <div class="psec"><h3 style="color:var(--acc)">${icon('alert',15)} Danger zone</h3>
       <div class="kv"><div class="row"><div><b>Release this agent</b><div class="sub">Deletes chats, vault, memory and the claim on this device.</div></div>
       <div class="rgt"><button class="btn soft small" data-act="reset">Release</button></div></div></div>
     </div>`;
-  } else if (tab === 'theme'){
-    const cur = THEMES.find(t => t.id === (state.theme || 'grey')) || THEMES[0];
-    body = `<p class="psub">Accent color for highlights, selections and card headers. Standard Grey is the default — everything stays neutral until you pick a color.</p>
-    <div class="kv"><div class="row" style="align-items:flex-start"><span style="color:var(--mut)">${icon('star',16)}</span>
-      <div style="flex:1"><b>Accent color</b><div class="sub">Current: ${esc(cur.name)} · applies instantly</div>
-        <div class="swatches" style="justify-content:flex-start;margin-top:12px">${THEMES.map(t => `<button class="swatch ${cur.id === t.id ? 'on' : ''}" data-act="theme" data-v="${t.id}" title="${t.name}"><span style="width:26px;height:26px;border-radius:50%;background:${t.c};display:block"></span></button>`).join('')}</div>
-      </div></div></div>`;
   } else if (tab === 'secrets'){
     body = settingsSecretsBody(state.vault);
   } else if (tab === 'memory'){
     body = settingsMemoryBody();
+  } else if (tab === 'library'){
+    body = libraryTabContent();
   } else if (tab === 'browser'){
     const bp = state.browserProfile || { profile:'Default', sandbox:true, allowlist:true };
     body = `<div class="kv">
@@ -3378,12 +3570,12 @@ function paintSettings(M){
   }
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : 'User profiles, secrets, memory, browser profile and billing — all scoped to your account, never shared.'}</p>
+    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : 'Profiles, theme, secrets, memory, library, browser and billing — all scoped to your account, never shared.'}</p>
     <div class="seg">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles">${icon('user',14)} Profiles</button>
-      <button class="${tab === 'theme' ? 'on' : ''}" data-act="stab" data-t="theme">${icon('star',14)} Theme</button>
       <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets">${icon('key',14)} Secrets</button>
       <button class="${tab === 'memory' ? 'on' : ''}" data-act="stab" data-t="memory">${icon('book',14)} Memory</button>
+      <button class="${tab === 'library' ? 'on' : ''}" data-act="stab" data-t="library">${icon('file',14)} Library</button>
       <button class="${tab === 'browser' ? 'on' : ''}" data-act="stab" data-t="browser">${icon('globe',14)} Browser</button>
       <button class="${tab === 'billing' ? 'on' : ''}" data-act="stab" data-t="billing">${icon('card',14)} Billing</button>
     </div>
@@ -3424,72 +3616,110 @@ function appsStackList(apps){
   const more = apps.filter((a) => !connected.includes(a) && !extras.includes(a));
   return [...connected, ...extras, ...more].slice(0, 7);
 }
+function accountFace(acc, app){
+  if (acc && acc.picture) return `<img src="${esc(acc.picture)}" alt="" loading="lazy" onerror="this.style.display='none'">`;
+  const letter = String((acc && (acc.name || acc.email)) || (app && (app.name || app.toolkit)) || '?').replace(/^[^A-Za-z0-9]+/, '').slice(0, 1).toUpperCase() || '?';
+  return `<span>${esc(letter)}</span>`;
+}
+function switchHtml(on, attrs){
+  return `<button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on ? 'true' : 'false'}" ${attrs}><i></i></button>`;
+}
+function connectorBodyHtml(a){
+  const detail = (state.appDetails && state.appDetails[a.toolkit]) || {};
+  const accounts = Array.isArray(detail.accounts) ? detail.accounts : (Array.isArray(a.accounts) ? a.accounts : []);
+  const perms = Array.isArray(detail.permissions) ? detail.permissions : [];
+  if (detail.loading && !perms.length) {
+    return `<div class="conn-body"><div class="conn-skel"></div><div class="conn-skel"></div></div>`;
+  }
+  if (detail.error && !perms.length && !accounts.length) {
+    return `<div class="conn-body"><div class="conn-empty">${esc(detail.error)}</div></div>`;
+  }
+  const connectLabel = accounts.length ? 'Add account' : 'Connect';
+  const accountRows = accounts.map((acc) => {
+    const mail = acc.email || acc.alias || acc.wordId || 'Connected account';
+    const nm = acc.name && acc.name !== acc.email ? acc.name : '';
+    return `<div class="conn-account">
+      <span class="conn-ava">${accountFace(acc, a)}</span>
+      <div class="conn-who"><b>${esc(mail)}</b>${nm ? `<span>${esc(nm)}</span>` : ''}</div>
+      <button class="btn ghost tiny" data-act="disconnect-app" data-toolkit="${esc(a.toolkit)}" data-account="${esc(acc.id)}">Disconnect</button>
+    </div>`;
+  }).join('') || `<div class="conn-empty">No accounts yet. Connect one to let your agent use ${esc(a.name || a.toolkit)}.</div>`;
+  const kindBlock = (kind, label) => {
+    const rows = perms.filter((p) => p.kind === kind);
+    if (!rows.length) return '';
+    const allOn = rows.every((p) => p.enabled);
+    return `<div class="conn-kind">
+      <div class="conn-kind-h">
+        <b>${label}</b>
+        <span>${rows.filter((p) => p.enabled).length}/${rows.length}</span>
+        ${switchHtml(allOn, `data-act="perm-kind" data-toolkit="${esc(a.toolkit)}" data-kind="${kind}"`)}
+      </div>
+      ${rows.map((p) => `<div class="conn-perm">
+        <div><b>${esc(p.name || p.slug)}</b><span>${esc(p.description || p.slug)}</span></div>
+        ${switchHtml(!!p.enabled, `data-act="perm-toggle" data-toolkit="${esc(a.toolkit)}" data-slug="${esc(p.slug)}"`)}
+      </div>`).join('')}
+    </div>`;
+  };
+  return `<div class="conn-body">
+    <div class="conn-actions">
+      <button class="btn small" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}">${icon('plus',14)} ${connectLabel}</button>
+      ${a.connected ? `<button class="btn ghost small" data-act="automate-app" data-toolkit="${esc(a.toolkit)}">Automate</button>` : ''}
+    </div>
+    <div class="conn-sec"><h3>Accounts</h3>${accountRows}</div>
+    <div class="conn-sec">
+      <h3>Permissions</h3>
+      <p class="conn-hint">Read and write access your agent may use. Turn any off to block it.</p>
+      ${detail.loading ? `<div class="conn-skel"></div>` : (perms.length ? `${kindBlock('read', 'Read')}${kindBlock('write', 'Write')}` : `<div class="conn-empty">No permissions listed for this connector.</div>`)}
+    </div>
+  </div>`;
+}
 function paintApps(M){
   const apps = Array.isArray(state.composioApps) ? state.composioApps : [];
   const q = String(state.appQuery || '').toLowerCase().trim();
-  const filter = state.appFilter || 'all';
+  const filter = state.appFilter === 'connected' ? 'connected' : 'all';
   const connectedCount = apps.filter((a) => a.connected).length;
-  const stack = appsStackList(apps);
 
   let list = apps.slice();
   if (filter === 'connected') list = list.filter((a) => a.connected);
-  if (filter === 'available') list = list.filter((a) => !a.connected);
   if (q) {
     list = list.filter((a) =>
       String(a.name || '').toLowerCase().includes(q) ||
       String(a.toolkit || '').toLowerCase().includes(q) ||
-      String(a.description || '').toLowerCase().includes(q)
+      String(a.description || '').toLowerCase().includes(q) ||
+      (a.accounts || []).some((acc) => String(acc.email || acc.name || '').toLowerCase().includes(q))
     );
   }
   list.sort((a, b) => (Number(b.connected) - Number(a.connected)) || String(a.name || a.toolkit).localeCompare(String(b.name || b.toolkit)));
 
-  const cards = list.map((a) => `<article class="app-card ${a.connected ? 'is-connected' : ''}" data-toolkit="${esc(a.toolkit)}" title="${esc(a.name || a.toolkit)}">
-      <span class="app-logo">${appLogoHtml(a)}${a.connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
-      <b>${esc(a.name || a.toolkit)}</b>
-      <div class="app-actions">
-        ${a.connected
-          ? `<button class="btn small" data-act="automate-app" data-toolkit="${esc(a.toolkit)}">Automate</button>
-             <button class="iconbtn" data-act="disconnect-app" data-toolkit="${esc(a.toolkit)}" title="Disconnect">${icon('x',14)}</button>`
-          : `<button class="btn small" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}">Connect</button>`}
-      </div>
-    </article>`).join('');
+  const rows = list.map((a) => {
+    const open = state.appOpen === a.toolkit;
+    const n = Number(a.accountCount || (a.accounts && a.accounts.length) || (a.connected ? 1 : 0));
+    const sub = a.connected ? (n === 1 ? '1 account' : `${n} accounts`) : 'Not connected';
+    return `<article class="conn-row ${a.connected ? 'is-connected' : ''} ${open ? 'is-open' : ''}" data-toolkit="${esc(a.toolkit)}">
+      <button type="button" class="conn-head" data-act="toggle-connector" data-toolkit="${esc(a.toolkit)}">
+        <span class="app-logo">${appLogoHtml(a)}${a.connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
+        <span class="conn-meta"><b>${esc(a.name || a.toolkit)}</b><span>${esc(sub)}</span></span>
+        ${a.connected ? `<span class="chip green">Connected</span>` : ''}
+        <span class="conn-chev">${icon('chev',16)}</span>
+      </button>
+      ${open ? connectorBodyHtml(a) : ''}
+    </article>`;
+  }).join('');
 
-  const stackHtml = stack.map((a) =>
-    `<button type="button" class="apps-stack-logo ${a.connected ? 'on' : ''}" data-act="app-focus" data-toolkit="${esc(a.toolkit)}" title="${esc(a.name || a.toolkit)}">${appLogoHtml(a)}</button>`
-  ).join('');
-
-  let board = `<div class="apps-grid">${cards}</div>`;
-  if (state.composioLoading && !list.length) board = `<div class="apps-grid">${'<article class="app-card skel"></article>'.repeat(8)}</div>`;
-  else if (!state.composioLoading && !apps.length) board = `<div class="apps-empty">${icon('box',22)}<b>No apps yet</b><span>Connections aren't configured on this server.</span></div>`;
+  let board = `<div class="conn-list">${rows}</div>`;
+  if (state.composioLoading && !list.length) board = `<div class="conn-list">${'<article class="conn-row skel"></article>'.repeat(6)}</div>`;
+  else if (!state.composioLoading && !apps.length) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Connections aren't configured on this server.</span></div>`;
   else if (!state.composioLoading && !list.length) board = `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
 
   M.innerHTML = `<div class="page"><div class="pageinner apps-page">
-    <div class="phead apps-head">
-      <div class="apps-title">
-        <span class="apps-mascot">${Mascot.logo(34)}</span>
-        <h1>Apps</h1>
-      </div>
-      <span class="apps-head-acts">
-        <button class="iconbtn" data-act="refresh-apps" title="Refresh">${icon('refresh',16)}</button>
-        <button class="btn ghost small" data-act="nav" data-view="chat">Chat</button>
-      </span>
-    </div>
-    <div class="apps-hero">
-      <div class="apps-stack">${stackHtml || `<span class="apps-stack-logo ghost">${Mascot.logo(22)}</span>`}</div>
-      <div class="apps-live"><b>${connectedCount}</b><span>${connectedCount ? 'live' : 'No connected apps'}</span></div>
-      <div class="apps-marks">
-        <span title="Per-account OAuth. Belna never sees your passwords.">${icon('shieldcheck',14)} OAuth</span>
-        <span title="Tokens stay with your account.">${icon('lock',14)} Isolated</span>
-        <span title="Disconnect anytime.">${icon('x',14)} Revoke</span>
-      </div>
-    </div>
     <div class="apps-toolbar">
-      <label class="apps-search-wrap">${icon('search',16)}<input class="field apps-search" id="appquery" placeholder="Gmail, Slack, GitHub…" value="${esc(state.appQuery || '')}"></label>
+      <h1>Connectors</h1>
+      <label class="apps-search-wrap">${icon('search',16)}<input class="field apps-search" id="appquery" placeholder="Search connectors" value="${esc(state.appQuery || '')}"></label>
       <div class="seg apps-filter">
+        <button class="${filter === 'connected' ? 'on' : ''}" data-act="app-filter" data-f="connected">Connected${connectedCount ? ` ${connectedCount}` : ''}</button>
         <button class="${filter === 'all' ? 'on' : ''}" data-act="app-filter" data-f="all">All</button>
-        <button class="${filter === 'connected' ? 'on' : ''}" data-act="app-filter" data-f="connected">${icon('check',13)} ${connectedCount}</button>
-        <button class="${filter === 'available' ? 'on' : ''}" data-act="app-filter" data-f="available">Browse</button>
       </div>
+      <button class="iconbtn" data-act="refresh-apps" title="Refresh">${icon('refresh',16)}</button>
     </div>
     ${board}
   </div></div>`;
@@ -3557,10 +3787,32 @@ document.addEventListener('click', async e => {
     e.preventDefault(); toast('Finish setting up your agent first.'); return;
   }
   if (act === 'qopt' && m?.card?.onboarding) { answerOnboarding(c, m, b.dataset.o); return; }
+  if (act === 'life-ask'){
+    e.preventDefault();
+    const prompt = (b.dataset.prompt || '').trim();
+    if (prompt) landingRun(prompt);
+    return;
+  }
+  if (act === 'landing-passport-tab') {
+    const card = b.closest('.landing-passport-card');
+    const selected = b.dataset.passportTab;
+    if (!card || !selected) return;
+    card.querySelectorAll('[data-passport-tab]').forEach(tab => {
+      const active = tab.dataset.passportTab === selected;
+      tab.classList.toggle('on', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    card.querySelectorAll('[data-passport-panel]').forEach(panel => {
+      const active = panel.dataset.passportPanel === selected;
+      panel.hidden = !active;
+      panel.classList.toggle('on', active);
+    });
+    return;
+  }
   if (act === 'open-passport') {
     if (!signedIn()) { renderAuth(); return; }
     if (needsOnboarding()) { await openOnboardingPassport(c, m); return; }
-    state.canvasOpen = true; state.canvasTab = 'passport'; save(); renderApp(); return;
+    state.canvasOpen = false; state.view = 'settings'; state.settingsTab = 'profiles'; save(); renderApp(); return;
   }
 
   if (act === 'rmfile'){ removeFile(+b.dataset.idx); return; }
@@ -3611,24 +3863,33 @@ document.addEventListener('click', async e => {
     if (state.view === 'apps') refreshComposioApps();
     return;
   }
-  if (act === 'refresh-apps'){ refreshComposioApps(true); return; }
+  if (act === 'refresh-apps'){
+    refreshComposioApps(true).then(() => { if (state.appOpen) openConnector(state.appOpen, true); });
+    return;
+  }
   if (act === 'payments-stripe-apps'){
     state.appQuery = 'stripe'; state.appFilter = 'all'; state.view = 'apps';
     save(); renderApp(); refreshComposioApps(true); return;
   }
-  if (act === 'app-filter'){ state.appFilter = b.dataset.f || 'all'; save(); paintApps(document.getElementById('main')); return; }
+  if (act === 'app-filter'){ state.appFilter = b.dataset.f === 'connected' ? 'connected' : 'all'; save(); paintApps(document.getElementById('main')); return; }
   if (act === 'app-focus'){
     const tk = String(b.dataset.toolkit || '');
-    const card = document.querySelector(`.app-card[data-toolkit="${tk}"]`);
-    if (card){
-      card.classList.add('pulse');
-      card.scrollIntoView({ behavior:'smooth', block:'center' });
-      setTimeout(() => card.classList.remove('pulse'), 1100);
-    }
+    openConnector(tk, true);
+    return;
+  }
+  if (act === 'toggle-connector'){ openConnector(b.dataset.toolkit); return; }
+  if (act === 'perm-toggle'){
+    const on = b.getAttribute('aria-checked') !== 'true';
+    toggleConnectorPermission(b.dataset.toolkit, b.dataset.slug, on);
+    return;
+  }
+  if (act === 'perm-kind'){
+    const on = b.getAttribute('aria-checked') !== 'true';
+    toggleConnectorKind(b.dataset.toolkit, b.dataset.kind, on);
     return;
   }
   if (act === 'connect-app'){ connectComposioApp(b.dataset.toolkit, b.dataset.auth); return; }
-  if (act === 'disconnect-app'){ disconnectComposioApp(composioAppByToolkit(b.dataset.toolkit)); return; }
+  if (act === 'disconnect-app'){ disconnectComposioApp(composioAppByToolkit(b.dataset.toolkit), b.dataset.account); return; }
   if (act === 'automate-app'){
     const _tk = String(b.dataset.toolkit || '').toLowerCase();
     state.canvasTab = 'subagents'; state.canvasOpen = true;
@@ -3735,7 +3996,7 @@ document.addEventListener('click', async e => {
   if (act === 'togglecanvas'){ state.canvasOpen = !state.canvasOpen; save(); $('#app').classList.toggle('nocanvas', !state.canvasOpen); paintCanvas(); return; }
   if (act === 'ctab'){
     const next = b.dataset.t === 'agent' || b.dataset.t === 'trace' || b.dataset.t === 'wallet' ? 'canvas' : b.dataset.t;
-    state.canvasTab = next;
+    state.canvasTab = ['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(next) ? next : 'canvas';
     if (next !== 'canvas') state._showLiveInCanvas = false;
     save(); paintCanvas();
     if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
@@ -3869,10 +4130,10 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'reactmsg' && c && m){
-    const emoji = b.dataset.emoji;
-    if (!REACTIONS.some((r) => r.emoji === emoji)) return;
-    const reactions = new Set(Array.isArray(m.reactions) ? m.reactions : []);
-    reactions.has(emoji) ? reactions.delete(emoji) : reactions.add(emoji);
+    const reaction = findReaction(b.dataset.reaction || b.dataset.emoji);
+    if (!reaction) return;
+    const reactions = new Set((Array.isArray(m.reactions) ? m.reactions : []).map((r) => findReaction(r)?.id).filter(Boolean));
+    reactions.has(reaction.id) ? reactions.delete(reaction.id) : reactions.add(reaction.id);
     m.reactions = [...reactions]; save(); replaceNode(c, m); return;
   }
   if (act === 'copycode'){ const t = $('#codebox'); if (t) await copyText(t.textContent); toast('Copied'); return; }
