@@ -61,11 +61,14 @@ window.Mascot = (() => {
   }
 
   function logo(size = 26){
+    const w = size;
+    const h = +(size * 128.72 / 200).toFixed(2);
     return `
-<svg width="${size}" height="${size}" viewBox="0 0 120 120" fill="none" aria-hidden="true">
-  <path d="${STAR}" fill="#4A7FD4" stroke="#4A7FD4" stroke-width="18" stroke-linejoin="round"/>
-  <ellipse cx="48" cy="48" rx="9" ry="6" fill="#fff" opacity=".3"/>
-  ${spark(92, 22, 8, '#5F9E63')}
+<svg class="belna-mark" width="${w}" height="${h}" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true">
+  <polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/>
+  <polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/>
+  <polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/>
+  <polygon points="100 104.546384 124.18 128.72 75.82 128.72"/>
 </svg>`;
   }
 

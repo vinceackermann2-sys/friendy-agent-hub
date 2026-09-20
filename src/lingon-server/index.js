@@ -3,8 +3,8 @@
    Auth: Supabase JWT required on all stateful routes (user_id comes from the
    verified token, never from the client). Health + plans are public.
    Billing: credits (1 credit = $0.50 face, margin built in). Free: 20 starter
-   credits. Pro $30/mo → 60 credits/mo + $50 gift card. Max $50/mo → 100
-   credits/mo + $100 gift card. Gift redeem adds credits.
+   credits. Pro $50/mo → 60 credits/mo. Max $100/mo → 100 credits/mo.
+   Gift redeem adds credits.
    Harness: Gemini 3.5 + per-user Azure VM (see agents/azure-vm.js).
 */
 import { createApp } from './express-shim.js';
@@ -28,6 +28,7 @@ import * as privy from './privy.js';
 import * as mail from './mail.js';
 import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases } from './agents/azure-vm.js';
 import { handle as vmHarnessHandle } from './agents/vm-harness.js';
+import { handle as conversationHandle, tasks as chatTasks } from './agents/conversation.js';
 
 // Cloudflare forbids timers at module scope. Durable lease cleanup for this
 // edge runtime is driven by the authenticated Supabase Edge Function instead.
@@ -74,6 +75,12 @@ app.post('/api/internal/vm-sweep', rateLimit(10, 60000), async (req, res) => {
   try { return res.json({ ok: true, ...(await sweepLeases({ limit: 20 })) }); }
   catch { return res.status(502).json({ error: 'VM sweep failed.' }); }
 });
+app.post('/api/internal/tasks-tick', rateLimit(120, 60000), async (req, res) => {
+  if (!(await verifySweepToken(req.headers.authorization))) return res.status(401).json({ error:'Unauthorized.' });
+  try { res.json(await chatTasks.tick({drain:true})); } catch { res.status(503).json({ error:'Task worker unavailable.' }); }
+});
+app.use('/api/agent/conversation', rateLimit(120, 60000), requireAuth(conversationHandle));
+app.use('/api/agent/tasks', rateLimit(240, 60000), requireAuth(conversationHandle));
 app.use('/api/agent', rateLimit(120, 60000), requireAuth(vmHarnessHandle));
 app.use('/api/sandbox', rateLimit(30, 60000), requireAuth(vmHarnessHandle));
 app.post('/api/chat', rateLimit(60, 60000), requireAuth(vmHarnessHandle));
@@ -292,20 +299,21 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
 // This edge port serves the same credit ledger; upgrades here record a
 // request and point at Checkout on the main backend.
 async function billingFor(userId) {
-  const sub = await store.getSubscription(userId);
-  const plan = PLANS[sub.plan] || PLANS.free;
+  const subPromise = store.getSubscription(userId);
   await store.ensureFreeGrant(userId);
+  const [sub, totals] = await Promise.all([subPromise, store.billingTotals(userId)]);
+  const plan = PLANS[sub.plan] || PLANS.free;
   try {
-    const giftsUsd = await store.giftsCredit(userId);
-    const giftGranted = await store.grantsTotalByReason(userId, 'gift_redeem');
-    const expected = creditsForGiftUsd(giftsUsd);
-    if (expected > giftGranted + 1e-9) {
-      await store.addGrant(userId, expected - giftGranted, 'gift_redeem', 'backfill:legacy');
+    const expected = creditsForGiftUsd(totals.giftsUsd);
+    if (expected > totals.giftGranted + 1e-9) {
+      const difference = expected - totals.giftGranted;
+      await store.addGrant(userId, difference, 'gift_redeem', 'backfill:legacy');
+      totals.granted += difference;
     }
   } catch {}
-  const granted = await store.grantsTotal(userId);
-  const usedCredits = await store.creditsUsed(userId);
-  const giftsRedeemedUsd = await store.giftsCredit(userId);
+  const granted = totals.granted;
+  const usedCredits = totals.used;
+  const giftsRedeemedUsd = totals.giftsUsd;
   const remaining = Math.max(0, granted - usedCredits);
   return {
     plan: sub.plan, status: sub.status,
@@ -320,6 +328,7 @@ async function billingFor(userId) {
   };
 }
 app.get('/api/billing', requireAuth(async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json(await billingFor(req.user.id));
 }));
 app.post('/api/billing/redeem', requireAuth(async (req, res) => {
@@ -938,7 +947,7 @@ app.get('/api/mail', requireAuth(async (req, res) => {
 app.post('/api/mail/ensure', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try {
     const box = await mail.ensureMailbox(req.user.id, (req.body || {}).agentName || req.body?.name);
-    res.json(await mail.snapshot(req.user.id, { ensureName: box.displayName }));
+    res.json(await mail.snapshot(req.user.id, { mailbox: box }));
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
 app.get('/api/mail/messages/:id', requireAuth(async (req, res) => {

@@ -146,10 +146,10 @@ async function ensureMailbox(userId, agentName) {
   return store.upsertMailbox(userId, { localPart, address: addressFor(localPart), displayName: name });
 }
 
-async function snapshot(userId, { folder = 'inbox', q = '', ensureName, limit } = {}) {
-  const box = ensureName != null || !(await store.getMailboxByUser(userId))
-    ? await ensureMailbox(userId, ensureName || 'Agent')
-    : await store.getMailboxByUser(userId);
+async function snapshot(userId, { folder = 'inbox', q = '', ensureName, limit, mailbox } = {}) {
+  let box = mailbox;
+  if (!box) box = ensureName != null ? await ensureMailbox(userId, ensureName) : await store.getMailboxByUser(userId);
+  if (!box) box = await ensureMailbox(userId, 'Agent');
   const [messages, drafts, unread] = await Promise.all([
     store.listMailMessages(userId, { folder, q, limit: limit || 40 }),
     store.listMailDrafts(userId),

@@ -243,7 +243,7 @@ window.Engine = (() => {
       return;
     }
     if (/keep me safe|safe|security|secret/.test(p)){
-      await rt.say(`Your secrets are encrypted, actions require approval unless you explicitly allow them, and external access is restricted. You can review activity in the Trace tab.`);
+      await rt.say(`Your secrets are encrypted, actions require approval unless you explicitly allow them, and external access is restricted. Activity is logged.`);
       return;
     }
     if (/^run it/.test(p)){

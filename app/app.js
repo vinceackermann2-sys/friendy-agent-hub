@@ -36,6 +36,7 @@ async function copyText(text){
 const IC = {
   plus:'<path d="M12 5v14M5 12h14"/>',
   up:'<path d="M12 19V5M5 12l7-7 7 7"/>',
+  stop:'<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/>',
   mic:'<path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/>',
   search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
   globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 5.6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.6-4-9s1.5-6.4 4-9Z"/>',
@@ -66,6 +67,7 @@ const IC = {
   aur:'<path d="M7 17L17 7M7 7h10v10"/>',
   panel:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
   board:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-9 9"/>',
+  left:'<path d="M19 12H5M12 19l-7-7 7-7"/>',
   list:'<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
   key:'<circle cx="7.5" cy="15.5" r="4"/><path d="M11 12L21 2M18 5l3 3"/>',
   star:'<path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1Z"/>',
@@ -78,6 +80,7 @@ const IC = {
   copy:'<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   attach:'<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/>',
   folder:'<path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2-2Z"/>',
+  pencil:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   card:'<rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/>',
   gift:'<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"/>',
 };
@@ -109,6 +112,7 @@ function paintAttachPills(){
       `<span class="attach-pill">${icon('file',12)}<span class="ap-name">${esc(f.name.length > 20 ? f.name.slice(0,17)+'…' : f.name)}</span><span class="ap-size">${fmtBytes(f.size)}</span><button class="ap-x" data-act="rmfile" data-idx="${i}">${icon('x',10)}</button></span>`
     ).join('');
   });
+  syncComposerActions(chat());
 }
 function wirePromptBox(form, textarea, opts){
   if (!form || !textarea) return;
@@ -164,9 +168,8 @@ const fresh = () => ({
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
   composioApps:[], composioLoading:false, appQuery:'', appFilter:'all',
-  // right-side canvas: canvasTab 'agent' | 'canvas' | 'trace' | 'subagents' | 'mail' | 'wallet';
-  // agentTab picks agent-panel content: 'appearance' | 'approvals' | 'library'
-  agentTab:'appearance', walletTab:'wallet', mailTab:'inbox',
+  // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'library' | 'approvals'
+  agentEdit:false, mailTab:'inbox',
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
   userProfile:null, browserProfile:{ profile:'Default', sandbox:true, allowlist:true },
@@ -178,24 +181,26 @@ catch (e) { state = fresh(); }
 if (!state.vault) state.vault = fresh().vault;
 // Canvas is never open by default — user or a fresh artifact opens it.
 state.canvasOpen = false;
-if (!state.agentTab || state.agentTab === 'subagents') state.agentTab = 'appearance';
-if (state.agentPanel) state.canvasTab = 'agent';
+if (state.agentPanel) state.canvasTab = 'approvals';
 delete state.agentPanel;
-// Migrate legacy nested sub-agents tab to its own top-level tab next to Trace.
-if (state.canvasTab === 'agent' && state.agentTab === 'subagents') state.canvasTab = 'subagents';
-if (!['agent', 'canvas', 'trace', 'subagents', 'mail', 'wallet'].includes(state.canvasTab)) state.canvasTab = 'canvas';
-if (!state.walletTab) state.walletTab = 'wallet';
+if (state.canvasTab === 'agent') state.canvasTab = state.agentTab === 'library' ? 'library' : 'approvals';
+if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
+if (!['canvas', 'passport', 'subagents', 'mail', 'payments', 'library', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+delete state.agentTab;
+delete state.walletTab;
 if (!state.mailTab) state.mailTab = 'inbox';
 if (!state.settingsTab) state.settingsTab = 'profiles';
 if (!state.browserProfile) state.browserProfile = fresh().browserProfile;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
 if (!Array.isArray(state.composioApps)) state.composioApps = [];
+state.composioLoading = false;
 if (typeof state.appQuery !== 'string') state.appQuery = '';
-if (!state.appFilter) state.appFilter = 'all';
-// Honest apps: no fake OAuth connections exist — always empty.
-state.vault.apps = [];
-const save = () => localStorage.setItem(LS, JSON.stringify(state));
+  if (!state.appFilter) state.appFilter = 'all';
+  // Honest apps: no fake OAuth connections exist — always empty.
+  state.vault.apps = [];
+  let designPreview = false;
+  const save = () => { if (!designPreview) localStorage.setItem(LS, JSON.stringify(state)); };
 const taskRuns = new Map();
 
 // Remove implementation details left in conversations by older app versions.
@@ -203,6 +208,19 @@ const legacyInternalCopy = /(?:powered by \*\*Arche|live backend|through (?:my|t
 const neutralInternalReply = `I can't provide or speculate about internal implementation, system, or provider details. I can explain my capabilities and privacy protections at a high level, or help with your task.`;
 let scrubbedLegacyChat = false;
 for (const c of state.chats || []) {
+  c.messages = c.messages || [];
+  const wasCompleted = c.managedStatus === 'completed';
+  if (c.managedStatus === 'running' || c.managedProgress) {
+    if (c.managedStatus === 'running') c.managedStatus = 'interrupted';
+    c.managedProgress = null;
+    scrubbedLegacyChat = true;
+  }
+  for (const m of c.messages) {
+    if (m.card?.type === 'progress' && m.card.status === 'running') {
+      m.card.status = wasCompleted ? 'done' : 'interrupted';
+      scrubbedLegacyChat = true;
+    }
+  }
   if (c.coordinatorRuns) { c.coordinatorRuns = 0; scrubbedLegacyChat = true; }
   if (c.busy && !c.onboarding) { c.busy = false; scrubbedLegacyChat = true; }
   if (c.activeTask && c.activeTask.status === 'running') {
@@ -240,35 +258,46 @@ for (const c of state.chats || []) {
 if (scrubbedLegacyChat) save();
 
 /* ---------------- backend-synced memory/vault (auth-scoped) ---------------- */
-async function syncFromBackend() {
-  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return;
-  try {
-    const m = await window.LingonAuth.api('/api/memories');
-    const seen = new Set(state.memory.map((x) => x.text));
-    (m.memories || []).forEach((r) => {
-      if (!seen.has(r.text)) state.memory.unshift({ id: r.id, text: r.text, src: 'account', at: r.at });
-    });
-  } catch {}
-  try {
-    const s = await window.LingonAuth.api('/api/secrets');
-    const have = new Set(state.vault.secrets.map((x) => x.id));
-    (s.secrets || []).forEach((r) => {
-      if (!have.has(r.id)) state.vault.secrets.unshift({ id: r.id, ref: r.ref, name: r.name, at: r.at, backend: true });
-    });
-  } catch {}
-  try {
-    const [agents, options, automationChats] = await Promise.all([
-      window.LingonAuth.api('/api/sub-agents'),
-      window.LingonAuth.api('/api/trigger-options'),
+let backendSyncPending = null;
+let backendSyncOwner = null;
+let backendSyncedAt = 0;
+const BACKEND_SYNC_MS = 30000;
+async function syncFromBackend(force = false) {
+  const owner = billingIdentity();
+  if (!owner) return false;
+  if (owner !== backendSyncOwner) {
+    backendSyncOwner = owner;
+    backendSyncedAt = 0;
+    backendSyncPending = null;
+  }
+  if (backendSyncPending) {
+    if (!force) return backendSyncPending;
+    await backendSyncPending;
+  }
+  if (!force && Date.now() - backendSyncedAt < BACKEND_SYNC_MS) return false;
+  const request = (async () => {
+    const [memories, secrets, automationChats] = await Promise.allSettled([
+      window.LingonAuth.api('/api/memories'),
+      window.LingonAuth.api('/api/secrets'),
       window.LingonAuth.api('/api/automation-chats'),
     ]);
-    state.subAgents = Array.isArray(agents.subAgents) ? agents.subAgents : [];
-    state.triggerOptions = options || fresh().triggerOptions;
-    try {
-      const aj = await window.LingonAuth.api('/api/composio/apps');
-      if (Array.isArray(aj.apps)) state.composioApps = aj.apps;
-    } catch {}
-    for (const remote of automationChats.chats || []) {
+    if (owner !== billingIdentity()) return false;
+    const value = (result) => result.status === 'fulfilled' ? result.value : null;
+    const m = value(memories);
+    if (m) {
+      const seen = new Set(state.memory.map((x) => x.text));
+      (m.memories || []).forEach((r) => {
+        if (!seen.has(r.text)) state.memory.unshift({ id: r.id, text: r.text, src: 'account', at: r.at });
+      });
+    }
+    const s = value(secrets);
+    if (s) {
+      const have = new Set(state.vault.secrets.map((x) => x.id));
+      (s.secrets || []).forEach((r) => {
+        if (!have.has(r.id)) state.vault.secrets.unshift({ id: r.id, ref: r.ref, name: r.name, at: r.at, backend: true });
+      });
+    }
+    for (const remote of (value(automationChats)?.chats || [])) {
       const messages = (remote.messages || []).map((m) => ({
         id:m.id,
         role:m.role === 'assistant' ? 'agent' : m.role,
@@ -291,51 +320,99 @@ async function syncFromBackend() {
       else state.chats.unshift(mapped);
     }
     state.chats.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
-  } catch {}
-  try { await ensureMailbox(); } catch {}
-  save();
+    await ensureMailbox();
+    if (owner === billingIdentity()) save();
+    return owner === billingIdentity();
+  })().finally(() => {
+    if (backendSyncPending === request) {
+      backendSyncPending = null;
+      backendSyncedAt = Date.now();
+    }
+  });
+  backendSyncPending = request;
+  return request;
 }
 
-async function refreshSubAgents(repaint = true) {
-  if (!signedIn()) return;
-  try {
-    const [agents, options] = await Promise.all([
-      window.LingonAuth.api('/api/sub-agents'),
-      window.LingonAuth.api('/api/trigger-options'),
-    ]);
-    state.subAgents = Array.isArray(agents.subAgents) ? agents.subAgents : [];
-    state.triggerOptions = options || state.triggerOptions;
-    if (state.subAgentComposer) {
-      const nameInput = $('#subname');
-      const promptInput = $('#subprompt');
-      if (nameInput) state.subAgentDraftName = nameInput.value;
-      if (promptInput) state.subAgentDraft = promptInput.value;
-    }
-    save();
-    if (repaint && state.canvasOpen && state.canvasTab === 'subagents') paintCanvas();
-  } catch (e) { toast(e.message || 'Could not load sub-agents.'); }
+let subAgentsPending = null;
+let subAgentsOwner = null;
+let subAgentsCheckedAt = 0;
+const SUB_AGENTS_CACHE_MS = 30000;
+function refreshSubAgents(repaint = true) {
+  const owner = billingIdentity();
+  if (!owner) return Promise.resolve();
+  if (owner !== subAgentsOwner) {
+    subAgentsOwner = owner;
+    subAgentsCheckedAt = 0;
+    subAgentsPending = null;
+  }
+  if (subAgentsPending) return subAgentsPending;
+  if (Date.now() - subAgentsCheckedAt < SUB_AGENTS_CACHE_MS) return Promise.resolve();
+  const request = (async () => {
+    try {
+      const [agents, options] = await Promise.all([
+        window.LingonAuth.api('/api/sub-agents'),
+        window.LingonAuth.api('/api/trigger-options'),
+      ]);
+      if (owner !== billingIdentity()) return;
+      state.subAgents = Array.isArray(agents.subAgents) ? agents.subAgents : [];
+      state.triggerOptions = options || state.triggerOptions;
+      subAgentsCheckedAt = Date.now();
+      if (state.subAgentComposer) {
+        const nameInput = $('#subname');
+        const promptInput = $('#subprompt');
+        if (nameInput) state.subAgentDraftName = nameInput.value;
+        if (promptInput) state.subAgentDraft = promptInput.value;
+      }
+      save();
+      if (repaint && state.canvasOpen && state.canvasTab === 'subagents') paintCanvas();
+    } catch (e) { if (owner === billingIdentity()) toast(e.message || 'Could not load sub-agents.'); }
+  })().finally(() => { if (subAgentsPending === request) subAgentsPending = null; });
+  subAgentsPending = request;
+  return request;
 }
 
 /* ---------------- Belna Apps via Composio (per-user OAuth) ---------------- */
-async function refreshComposioApps() {
-  if (!signedIn()) return;
+let composioRefreshPending = null;
+let composioRefreshOwner = null;
+let composioCheckedAt = 0;
+const COMPOSIO_CACHE_MS = 30000;
+function refreshComposioApps(force = false) {
+  const owner = billingIdentity();
+  if (!owner) return Promise.resolve();
+  if (owner !== composioRefreshOwner) {
+    composioRefreshOwner = owner;
+    composioCheckedAt = 0;
+    composioRefreshPending = null;
+  }
+  if (composioRefreshPending) return composioRefreshPending;
+  if (!force && Date.now() - composioCheckedAt < COMPOSIO_CACHE_MS) return Promise.resolve();
+  // Mark the attempt before painting; an empty Apps result must not start a loop.
+  composioCheckedAt = Date.now();
   state.composioLoading = true;
   if (state.view === 'apps' && $('#main')) paintApps($('#main'));
-  try {
-    const j = await window.LingonAuth.api('/api/composio/apps');
-    if (Array.isArray(j.apps)) state.composioApps = j.apps;
-  } catch (e) {
-    toast(e.message || 'Could not load apps.');
-  } finally {
-    state.composioLoading = false;
-    save();
-    if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+  const request = (async () => {
     try {
-      const o = await window.LingonAuth.api('/api/trigger-options');
-      state.triggerOptions = o || state.triggerOptions;
-      save();
-    } catch {}
-  }
+      const j = await window.LingonAuth.api('/api/composio/apps');
+      if (owner === billingIdentity() && Array.isArray(j.apps)) state.composioApps = j.apps;
+    } catch (e) {
+      if (owner === billingIdentity()) toast(e.message || 'Could not load apps.');
+    } finally {
+      if (owner === billingIdentity()) {
+        state.composioLoading = false;
+        save();
+        if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+        if (state.canvasOpen && state.canvasTab === 'payments' && $('#cbody')) $('#cbody').innerHTML = paymentsTabContent();
+        if (force) {
+          try {
+            const o = await window.LingonAuth.api('/api/trigger-options');
+            if (owner === billingIdentity()) { state.triggerOptions = o || state.triggerOptions; save(); }
+          } catch {}
+        }
+      }
+    }
+  })().finally(() => { if (composioRefreshPending === request) composioRefreshPending = null; });
+  composioRefreshPending = request;
+  return request;
 }
 
 async function connectComposioApp(toolkit, authConfigId) {
@@ -400,7 +477,7 @@ function subAgentTriggerLabel(subAgent) {
 
 function expirePending(){
   state.chats.forEach(c => (c.messages || []).forEach(m => {
-    if (m.kind === 'card' && m.card.status === 'pending') m.card.status = 'expired';
+    if (m.kind === 'card' && m.card.status === 'pending' && !m.card.onboarding) m.card.status = 'expired';
   }));
 }
 
@@ -417,7 +494,7 @@ function toast(msg){
 const waits = {};
 const wkey = (chatId, msgId) => chatId + '/' + msgId;
 
-const root = document.getElementById('root');
+let root = document.getElementById('root');
 const chat = () => state.chats.find(c => c.id === state.activeChat);
 const isActive = c => state.view === 'chat' && state.activeChat === c.id;
 
@@ -427,10 +504,84 @@ const isActive = c => state.view === 'chat' && state.activeChat === c.id;
    leaks chats/agents between real accounts, and no code path can claim or
    chat without a signed-in user. */
 const signedIn = () => !!(window.LingonAuth && window.LingonAuth.signedIn());
+const needsOnboarding = () => !designPreview && (!state.onboarded || !state.agent || state.agent.provisional);
 const currentUserId = () => {
   try { return (window.LingonAuth && window.LingonAuth.get() && window.LingonAuth.get().user && window.LingonAuth.get().user.id) || null; }
   catch { return null; }
 };
+function designPreviewRequested(){
+  try {
+    const p = String(new URLSearchParams(location.search).get('preview') || '').toLowerCase();
+    if (p === '1' || p === 'app' || p === 'agent' || p === 'chat') return true;
+    const h = String(location.hash || '').toLowerCase();
+    return h === '#preview' || h === '#preview=app';
+  } catch { return false; }
+}
+function seedDesignPreview(){
+  const now = Date.now();
+  const chatId = 'preview-gothenburg';
+  state = Object.assign(fresh(), {
+    onboarded:true,
+    ownerId:'preview',
+    agent:{ name:'Your agent', color:'lingon', pers:'Playful', claimedAt:now },
+    view:'chat',
+    canvasOpen:true,
+    canvasTab:'canvas',
+    theme:state.theme || 'grey',
+    userProfile:{ name:'You' },
+    vault:{
+      secrets:[],
+      apps:[],
+      approvals:[{ id:'prev-allow', label:'Book Gothenburg movers', at:now - 40000 }],
+      mode:'default',
+    },
+    chats:[
+      {
+        id:chatId,
+        title:'Move to Gothenburg',
+        createdAt:now - 120000,
+        messages:[
+          { id:'pm1', role:'user', kind:'text', text:'Plan my move to Gothenburg next month — movers, addresses, budget' },
+          { id:'pm2', role:'agent', kind:'text', mood:'happy', text:'Done. Moving checklist with dates, 3 movers compared on price, address-change drafts, and a budget table — all on your canvas. Nothing sent without your yes.' },
+          { id:'pm3', role:'user', kind:'text', text:'Also remind me to water the plants?' },
+          { id:'pm4', role:'agent', kind:'text', mood:'idle', text:"Remembered. I'll nudge you every Sunday evening." },
+          { id:'pm5', role:'agent', kind:'card', card:{ type:'approval', status:'approved', title:'Change of address drafts', body:'Skatteverket + bank + subscriptions' } },
+        ],
+        trace:[
+          { ic:'search', t:'Compared 3 Gothenburg movers' },
+          { ic:'file', t:'Drafted address-change letters' },
+          { ic:'shieldcheck', t:'Paused before booking' },
+        ],
+        artifact:{ kind:'plan', title:'Gothenburg move plan', items:['Compare movers by price and van size','Draft address changes — nothing sent without your yes','Budget table on the canvas'] },
+      },
+      { id:'preview-plants', title:'Sunday plant reminder', messages:[], trace:[], artifact:null, createdAt:now - 86400000 },
+      { id:'preview-brief', title:'Weekly brief', messages:[], trace:[], artifact:null, source:'automation', createdAt:now - 172800000 },
+    ],
+    activeChat:chatId,
+    subAgents:[{
+      id:'preview-sa',
+      chatId:'preview-plants',
+      name:'Sunday plant reminder',
+      prompt:'Nudge every Sunday evening to water the plants.',
+      enabled:true,
+      trigger:{ type:'schedule', intervalMinutes:10080 },
+      nextRunAt:now + 2 * 86400000,
+      lastStatus:'done',
+    }],
+  });
+}
+function applyDesignPreview(){
+  if (!designPreviewRequested()) return;
+  if (signedIn()){
+    state.view = 'chat';
+    state.canvasOpen = true;
+    state.canvasTab = 'canvas';
+    if (!state.agent) state.agent = { name:'Your agent', color:'lingon', pers:'Playful', provisional:true, claimedAt:Date.now() };
+    return;
+  }
+  if (!designPreview) seedDesignPreview();
+  designPreview = true;
+}
 let sandboxLeaseId = null;
 let sandboxLeaseTimer = null;
 function sandboxLeaseRequest(action) {
@@ -475,6 +626,10 @@ function ensureOwnerScope(){
 
 function render(){
   applyTheme();
+  if (designPreviewRequested()){
+    applyDesignPreview();
+    return renderApp();
+  }
   if (!signedIn()) {
     stopSandboxLease();
     const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
@@ -482,15 +637,8 @@ function render(){
   }
   ensureOwnerScope();
   startSandboxLease();
-  if (state.onboarded && state.agent && !state.agent.provisional) return renderApp();
-  if (state.pendingPrompt && (!state.onboarded || !state.agent || (state.agent && state.agent.provisional))){
-    // Signed-in with a saved homepage prompt: message goes to the agent chat
-    // first, then in-chat onboarding runs before the agent starts the task.
-    startPendingPromptFlow();
-    return;
-  }
-  if (state.onboarded && state.agent) return renderApp();
-  return renderLanding();
+  if (needsOnboarding()) return startPendingPromptFlow();
+  return renderApp();
 }
 
 /* ================================================================
@@ -505,7 +653,6 @@ function renderAuth(){
   try { lastGoogle = localStorage.getItem('belna.lastProvider') === 'google'; } catch {}
   root.innerHTML = `
   <div class="fadeup authpage">
-    <div class="auth-top"><span>Account &amp; Credit Usage</span><a href="/pricing">Open Docs &#8599;</a></div>
     <div class="authcard">
       <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : 'Log in to manage profile and billing'}</h1>
       ${state.pendingPrompt ? `<div class="kv" style="margin-top:16px;text-align:left"><div class="row"><span style="color:var(--mut)">${icon('chatb',16)}</span><div><b style="font-weight:600">${esc(state.pendingPrompt.length > 140 ? state.pendingPrompt.slice(0, 140) + '…' : state.pendingPrompt)}</b><div class="sub">Your message is saved — it will appear in the agent chat right after you sign in, before anything runs.</div></div></div></div>` : ''}
@@ -649,7 +796,7 @@ async function doAuth(kind){
    - Scopes local state to the signed-in user (no cross-account leakage).
    - If a homepage prompt is pending and the account is new (not onboarded),
      the message is placed into the agent chat FIRST, then in-chat onboarding
-     (name / appearance / personality) runs BEFORE the agent starts the task.
+     (name / color / passport) runs BEFORE the agent starts the task.
    - Otherwise normal render. */
 async function afterSignIn(user){
   try {
@@ -657,7 +804,10 @@ async function afterSignIn(user){
     if (user && user.id && state.ownerId !== user.id){ state.ownerId = user.id; }
     state.view = 'chat';
     save();
-    await syncFromBackend();
+    const owner = billingIdentity();
+    syncFromBackend(true).then(() => {
+      if (owner === billingIdentity() && $('#side')) paintSide();
+    }).catch(() => {});
     if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
       const p = state.pendingPrompt;
       toast('Signed in as ' + (user.email || 'you'));
@@ -676,14 +826,60 @@ async function afterSignIn(user){
    BILLING (real credits + gifts, no fake charges)
 ================================================================ */
 let billingCache = null;
+let billingOwner = null;
+let billingFetchedAt = 0;
+let billingPending = null;
+let billingGeneration = 0;
+const BILLING_CACHE_MS = 10000;
+function billingIdentity(){
+  const session = window.LingonAuth.get();
+  return session && session.access_token ? (session.user && session.user.id) || session.access_token : null;
+}
+function setBillingCache(billing){
+  billingOwner = billingIdentity();
+  billingCache = billing || null;
+  billingFetchedAt = Date.now();
+  billingGeneration++;
+  billingPending = null;
+}
+function invalidateBilling(){
+  billingFetchedAt = 0;
+  billingGeneration++;
+  billingPending = null;
+}
 async function getBilling(){
-  if (!window.LingonAuth.signedIn()) return null;
-  try {
-    billingCache = await window.LingonAuth.api('/api/billing');
-    return billingCache;
-  } catch { return billingCache; }
+  const owner = billingIdentity();
+  if (!owner) { setBillingCache(null); return null; }
+  if (owner !== billingOwner) { setBillingCache(null); billingOwner = owner; billingFetchedAt = 0; }
+  if (billingCache && Date.now() - billingFetchedAt < BILLING_CACHE_MS) return billingCache;
+  if (billingPending) return billingPending;
+  const generation = billingGeneration;
+  const request = window.LingonAuth.api('/api/billing').then((billing) => {
+    if (billingOwner !== owner || billingGeneration !== generation) return null;
+    billingCache = billing;
+    billingFetchedAt = Date.now();
+    return billing;
+  }).catch(() => billingOwner === owner ? billingCache : null).finally(() => {
+    if (billingPending === request) billingPending = null;
+  });
+  billingPending = request;
+  return request;
 }
 function fmtC(n){ return (Math.round(Number(n || 0) * 100) / 100).toString(); }
+function creditView(b){
+  const amount = n => Number.isFinite(Number(n)) ? Math.max(0, Number(n)) : 0;
+  const remaining = amount(b.credits), used = amount(b.creditsUsed), granted = amount(b.creditsGranted);
+  return { remaining, used, granted, percent: granted ? Math.min(100, remaining / granted * 100) : 0,
+    tone: remaining <= 0 ? 'empty' : remaining <= 5 ? 'low' : 'ready' };
+}
+function creditMeterHtml(v){
+  return `<div class="credit-meter" role="meter" aria-label="Credits remaining" aria-valuemin="0" aria-valuemax="${Math.max(v.granted, v.remaining, 1)}" aria-valuenow="${v.remaining}" aria-valuetext="${fmtC(v.remaining)} credits left; ${fmtC(v.used)} used"><span style="width:${v.percent}%"></span></div>`;
+}
+function billingPlanName(b){
+  const plans = Array.isArray(b.plans) ? b.plans : Object.values(b.plans || {});
+  const plan = plans.find(p => p.id === b.plan);
+  return (plan && plan.name) || ({ free:'Free', pro:'Pro', max:'Max' })[b.plan] || b.plan || 'Free';
+}
 function pctOff(p){
   const was = Number(p && p.was), price = Number(p && p.price);
   if (!was || !(was > price) || !isFinite(was) || !isFinite(price)) return '';
@@ -710,6 +906,36 @@ function giftCardHtml(p){
   if (!amt) return '';
   return `<div class="gift-strip"><span class="gift-thumb">$${amt}</span>`
     + `<span class="gift-strip-text">+ FREE $${amt} gift card</span></div>`;
+}
+function billingShopHtml(){
+  const packOpts = EXTRA_CREDIT_TIERS.filter((t) => t.credits).map((t) =>
+    `<option value="${t.credits}">${t.credits} credits — $${t.price}</option>`
+  ).join('');
+  return `<div class="billing-shop">
+    <section class="billing-extra" aria-labelledby="topup-title">
+      <span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span>
+      <h3 id="topup-title">A little extra goes a long way</h3>
+      <p>Have something bigger in mind? Add credits whenever you need them.</p>
+      <label class="billing-label" for="buypack">Choose your credit pack</label>
+      <select class="field" id="buypack">${packOpts}</select>
+      <button class="btn billing-primary" data-act="buycredits">Add credits ${icon('plus',14)}</button>
+      <span class="billing-fine">One-time purchase · your plan stays the same</span>
+    </section>
+    <section class="billing-extra billing-gifts" aria-labelledby="gift-title">
+      <span class="billing-extra-icon" aria-hidden="true">${icon('gift',20)}</span>
+      <h3 id="gift-title">Good ideas are better shared</h3>
+      <p>Give someone a little help with their next big idea.</p>
+      <div class="billing-gift-buttons">
+        <button class="btn ghost" data-act="buygift" data-amt="50">Gift $50 ${icon('aur',14)}</button>
+        <button class="btn ghost" data-act="buygift" data-amt="100">Gift $100 ${icon('aur',14)}</button>
+      </div>
+      <div class="billing-redeem">
+        <label class="billing-label" for="giftcode">Have a gift code? This one's for you.</label>
+        <div class="billing-redeem-form"><input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+        <button class="btn ghost small" data-act="redeem">Redeem</button></div>
+      </div>
+    </section>
+  </div>`;
 }
 function creditSliderHtml(p){
   const id = String(p.id || '');
@@ -804,77 +1030,79 @@ function wireBillingSliders(root){
 }
 function planCards(b){
   const ids = ['free', 'pro', 'max'];
-  const list = Array.isArray(b && b.plans) ? b.plans : ids.map((id) => (b && b.plans && b.plans[id]) || { id, name: id });
+  const list = Array.isArray(b && b.plans) ? b.plans : Object.values((b && b.plans) || {});
   const byId = {};
   list.forEach((p) => { if (p && p.id) byId[p.id] = p; });
   const pFree = byId.free || { id: 'free', name: 'Free', price: 0, was: null, credits: 20, giftUsd: 0 };
-  const pPro = byId.pro || { id: 'pro', name: 'Pro', price: 30, was: 50, credits: 60, giftUsd: 50, interval: 'month' };
-  const pMax = byId.max || { id: 'max', name: 'Max', price: 50, was: 100, credits: 100, giftUsd: 100, interval: 'month' };
-  const isCur = (id) => b && b.plan === id;
-  const curChip = '<span class="chip green plan-state">current</span>';
-  const freeBtn = isCur('free')
-    ? curChip
-    : '<span class="chip plan-state">default</span>';
-  const proBtn = isCur('pro')
-    ? curChip
-    : `<button class="btn" data-act="checkout" data-p="pro">Get ${esc(pPro.name || 'Pro')}</button>`;
-  const maxBtn = isCur('max')
-    ? curChip
-    : `<button class="btn ghost" data-act="checkout" data-p="max">Get ${esc(pMax.name || 'Max')}</button>`;
-  const proPrice = `$${pPro.price}${pPro.was ? ` <s>$${pPro.was}</s>` : ''} ${pctOff(pPro)}<span class="mut" style="font-size:14px">/mo</span>`;
-  const maxPrice = `$${pMax.price}${pMax.was ? ` <s>$${pMax.was}</s>` : ''} ${pctOff(pMax)}<span class="mut" style="font-size:14px">/mo</span>`;
-  return `<div class="pcards">`
-    + `<div class="pcard"><div class="pname">${esc(pFree.name || 'Free')}</div><div class="pprice">$${pFree.price}</div>`
-    + `<p class="pdesc">${fmtC(pFree.credits)} starter credits. Sign in and start.</p>`
-    + `<ul><li><span>✓</span>Have your own agent</li></ul>`
-    + freeBtn + `</div>`
-    + `<div class="pcard pop"><span class="poptag">MOST POPULAR</span><div class="pname">${esc(pPro.name || 'Pro')}</div><div class="pprice">${proPrice}</div>`
-    + `<p class="pdesc">${fmtC(pPro.credits)} credits every month.</p>`
-    + `<ul><li><span>✓</span>Everything in Free</li><li><span>✓</span>${fmtC(pPro.credits)} credits monthly</li><li><span>✓</span>Priority harness capacity</li></ul>`
-    + creditSliderHtml(pPro) + proBtn + giftCardHtml(pPro) + `</div>`
-    + `<div class="pcard"><div class="pname">${esc(pMax.name || 'Max')}</div><div class="pprice">${maxPrice}</div>`
-    + `<p class="pdesc">${fmtC(pMax.credits)} credits every month.</p>`
-    + `<ul><li><span>✓</span>Everything in Pro</li><li><span>✓</span>${fmtC(pMax.credits)} credits monthly</li><li><span>✓</span>Highest harness capacity</li></ul>`
-    + creditSliderHtml(pMax) + maxBtn + giftCardHtml(pMax) + `</div>`
-    + `</div>`;
+  const pPro = byId.pro || { id: 'pro', name: 'Pro', price: 50, was: null, credits: 60, giftUsd: 0, interval: 'month' };
+  const pMax = byId.max || { id: 'max', name: 'Max', price: 100, was: null, credits: 100, giftUsd: 0, interval: 'month' };
+  const descriptions = { free:'A little space to get acquainted.', pro:'For your everyday ideas and ambitions.', max:'For the bigger things you have in mind.' };
+  const features = { free:['Your own personal agent', 'Make yourself at home'], pro:['Everything in Free', 'Priority capacity for your agent'], max:['Everything in Pro', 'Our highest agent capacity'] };
+  return `<div class="pcards">${[pFree,pPro,pMax].map((p, i) => {
+    const id = ids[i], current = b && b.plan === id;
+    const action = current ? `<span class="plan-state">${icon('check',14)} Your current plan</span>`
+      : id === 'free' ? '<span class="plan-state plan-included">Your starting point</span>'
+      : `<button class="btn ${id === 'pro' ? 'billing-primary' : 'ghost'}" data-act="checkout" data-p="${id}">Choose ${esc(p.name)} ${icon('aur',14)}</button>`;
+    return `<article class="pcard${current ? ' is-current' : ''}${id === 'pro' ? ' is-featured' : ''}">
+      <div class="billing-plan-heading"><h3 class="pname">${esc(p.name)}</h3>${current ? '<span class="billing-plan-tag">Your plan</span>' : id === 'pro' ? '<span class="billing-plan-tag">A little more room</span>' : ''}</div>
+      <p class="pdesc">${descriptions[id]}</p>
+      <div class="pprice">$${fmtC(p.price)}${p.was ? ` <s>$${fmtC(p.was)}</s>` : ''}<span>${id === 'free' ? '/ forever' : '/ month'}</span></div>${pctOff(p)}
+      <div class="billing-plan-credits">${icon('spark',16)} <b>${fmtC(p.credits)}</b> ${id === 'free' ? 'starter credits' : 'credits / month'}</div>
+      <ul>${features[id].map(text => `<li>${icon('check',13)} ${text}</li>`).join('')}</ul>
+      ${id !== 'free' && !current ? `<details class="billing-plan-extras"><summary>Add extra credits <span>Optional</span></summary>${creditSliderHtml(p)}</details>` : ''}
+      ${action}${giftCardHtml(p)}
+    </article>`;
+  }).join('')}</div>`;
 }
 function billSummary(b){
+  const v = creditView(b), agent = state.agent || {};
+  const firstName = currentUser().name.trim().split(/\s+/)[0];
   const manage = b && b.plan !== 'free'
-    ? ` <button class="btn ghost small" data-act="portal" style="margin-left:8px">Manage subscription</button>`
+    ? `<button class="billing-manage" data-act="portal">Manage subscription ${icon('aur',14)}</button>`
     : '';
-  const pct = b.creditsGranted ? Math.min(100, Math.max(0, b.creditsUsed / b.creditsGranted * 100)) : 0;
-  const remaining = Number(b.credits) || 0;
-  const barColor = remaining > 5 ? 'var(--green)' : remaining > 0 ? '#f5a623' : '#e74c3c';
-  return `<div class="kv">
-    <div class="row"><span style="color:var(--mut)">${icon('spark',16)}</span>
-      <div style="flex:1"><b>${esc((b.plan || 'free').toUpperCase())}</b> plan · <span style="color:var(--soft)">${esc(b.status || 'active')}</span>${manage}
+  const note = v.tone === 'empty' ? 'A fresh start is a top-up away.' : v.tone === 'low' ? 'Running a little low. Top up whenever you’re ready.' : `Ready for your next idea${firstName && firstName !== 'Guest' ? ', ' + esc(firstName) : ''}.`;
+  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Your credit balance">
+    <div class="billing-balance-top"><span class="billing-plan-pill">${Mascot.logo(17)} ${esc(billingPlanName(b))} plan</span><span class="billing-status">${esc(b.status || 'active')}</span>${manage}</div>
+    <div class="billing-balance-main">
+      <div class="billing-balance-copy"><span class="billing-label">Your credit balance</span>
+        <div class="billing-balance-number"><strong>${fmtC(v.remaining)}</strong><span>credits left</span></div>
+        <p class="billing-balance-note">${note}</p>
       </div>
-      <div class="rgt"><span class="chip ${remaining > 5 ? 'green' : ''}">${fmtC(b.credits)} credits left</span></div>
+      <div class="billing-companion" aria-hidden="true"><span class="billing-companion-orbit"></span>${Mascot.svg(agent.color || 'lingon',v.tone === 'ready' ? 'happy' : 'idle',116)}<span>You + ${esc(agent.name || 'your agent')}</span></div>
     </div>
-    <div style="padding:4px 0 8px">
-      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mut);margin-bottom:6px"><span>Credit usage</span><span>${fmtC(b.creditsUsed)} / ${fmtC(b.creditsGranted)}</span></div>
-      <div class="ubar" style="height:8px;border-radius:99px;background:var(--line2);overflow:hidden"><i style="display:block;height:100%;background:${barColor};border-radius:99px;width:${pct}%"></i></div>
-    </div>
+    <div class="billing-balance-bottom"><div class="billing-balance-meter">
+      <div class="billing-meter-label"><span><b>${fmtC(v.used)}</b> of ${fmtC(v.granted)} credits used</span><span>${Math.round(v.percent)}% left</span></div>${creditMeterHtml(v)}
+    </div><button class="btn billing-primary small" data-act="billing-topup">${icon('plus',14)} Add credits</button></div>
+  </section>`;
+}
+function billingLoadingHtml(){
+  return `<div class="billing-loading" role="status"><span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span><span>Getting your credits ready…</span></div>`;
+}
+function billingBodyHtml(){
+  const b = billingOwner === billingIdentity() ? billingCache : null;
+  return `<div class="billing-content">
+    <header class="billing-intro"><span class="billing-eyebrow">Billing & credits</span><h2>A little fuel for big ideas.</h2><p>For everything you and ${esc((state.agent && state.agent.name) || 'your agent')} want to do next.</p></header>
+    <div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div>
+    <section class="billing-plans" aria-labelledby="billing-plans-title"><div class="billing-section-heading"><h3 id="billing-plans-title">Find your kind of room</h3><p>Start small. Grow when you’re ready.</p></div><div id="plancards">${b ? planCards(b) : ''}</div></section>
+    ${billingShopHtml()}
   </div>`;
 }
-function paintBilling(M){
-  M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Billing</h1><span class="chip">${icon('card',12)} credits</span></div>
-    <p class="psub">Free starts with <b>20 credits</b> — have your own agent. Pro <b>$30/mo</b> → 60 credits monthly. Max <b>$50/mo</b> → 100 credits monthly. Add extra credits with the dropdown. Gift codes add credits when redeemed.</p>
-    <div id="billbody"><div class="row mut">Loading…</div></div>
-    <div id="plancards" style="margin-top:18px"></div>
-    <div class="kv billing-redeem"><div class="row">
-      <span class="billing-redeem-icon">${icon('gift',18)}</span>
-      <input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX">
-      <button class="btn small" data-act="redeem">${icon('gift',14)} Redeem gift</button>
-    </div></div>
-  </div></div>`;
-  getBilling().then((b) => {
-    const el = $('#billbody');
-    if (el && b) el.innerHTML = billSummary(b);
-    const pc = $('#plancards');
-    if (pc && b) { pc.innerHTML = planCards(b); wireBillingSliders(pc); }
+function loadBillingContent(){
+  wireBillingSliders($('#plancards'));
+  const body = $('#billbody'), cards = $('#plancards');
+  getBilling().then(b => {
+    if (!body || !body.isConnected) return;
+    if (!b) {
+      body.innerHTML = `<div class="billing-loading" role="status"><span>We couldn’t load your balance just now.</span><button class="btn ghost small" data-act="billing-refresh">Try again</button></div>`;
+      return;
+    }
+    body.innerHTML = billSummary(b);
+    if (cards && cards.isConnected) { cards.innerHTML = planCards(b); wireBillingSliders(cards); }
   });
+}
+function paintBilling(M){
+  M.innerHTML = `<div class="page"><div class="pageinner">${billingBodyHtml()}</div></div>`;
+  loadBillingContent();
 }
 
 /* ================================================================
@@ -981,11 +1209,62 @@ const STAR_SKY_SVG = `<svg viewBox="0 0 1672 941" preserveAspectRatio="xMidYMid 
 </g>
 </svg>`;
 
+function landingAppPreview(){
+  const agent = Mascot.svg('lingon', 'happy', 30);
+  const hero = Mascot.svg('lingon', 'idle', 84);
+  const tiny = Mascot.svg('lingon', 'idle', 18);
+  return `<figure class="app-preview" aria-label="Preview of the Belna agent chat and right-side menu">
+    <aside class="ap-side">
+      <div class="sidebrand">${Mascot.logo(24)}<span>belna</span></div>
+      <span class="btn ap-static">${icon('plus',14)} New chat</span>
+      <div class="slabel">Chats</div>
+      <div class="sitem chatitem on">${icon('chatb',14)}<span>Move to Gothenburg</span></div>
+      <div class="sitem chatitem">${icon('chatb',14)}<span>Sunday plant reminder</span></div>
+      <div class="sitem chatitem">${icon('clock',14)}<span>Weekly brief</span></div>
+    </aside>
+    <div class="ap-chat">
+      <div class="floathead"><div class="fav">${Mascot.svg('lingon','idle',40)}</div><div class="pill">Your agent<span class="st">Available</span></div></div>
+      <div class="chathead"><span class="ttl">Move to Gothenburg</span><span class="sp"></span><span class="iconbtn ap-static">${icon('panel',16)}</span></div>
+      <div class="thread"><div class="threadinner">
+        <div class="msg user"><div class="message-stack"><div class="bub">Plan my move to Gothenburg next month — movers, addresses, budget</div></div></div>
+        <div class="msg agent"><div class="ava">${agent}</div><div class="body message-stack"><div class="bub">Done. Moving checklist with dates, 3 movers compared on price, address-change drafts, and a budget table — all on your canvas. Nothing sent without your yes.</div></div></div>
+        <div class="msg user"><div class="message-stack"><div class="bub">Also remind me to water the plants?</div></div></div>
+        <div class="msg agent"><div class="ava">${agent}</div><div class="body message-stack"><div class="bub">Remembered. I'll nudge you every Sunday evening.</div></div></div>
+      </div></div>
+      <div class="composerwrap"><div class="composer"><div class="promptbox">
+        <div class="ap-fake-input">Ask your agent anything…</div>
+        <div class="pb-row"><span class="iconbtn ap-static">${icon('plus',16)}</span><span class="micbtn ap-static">${icon('up',17)}</span></div>
+      </div></div></div>
+    </div>
+    <aside class="ap-rail">
+      <div class="canvas-head">
+        <div class="agent-hero">
+          <div class="agent-hero-fig">${hero}<span class="iconbtn agent-hero-edit ap-static">${icon('pencil',14)}</span></div>
+          <b class="agent-hero-name">Your agent</b>
+          <span class="agent-hero-status"><i></i>Connected</span>
+        </div>
+        <div class="canvas-head-row">
+          <div class="seg canvas-seg">
+            <span class="on">${icon('board',14)} Canvas</span>
+            <span>${icon('clock',14)} Automations</span>
+            <span>${icon('mail',14)} Mail</span>
+            <span>${icon('file',14)} Library</span>
+            <span>${icon('shieldcheck',14)} Approvals</span>
+          </div>
+        </div>
+      </div>
+      <div class="cbody">
+        <div class="cempty">${tiny}<div style="font-weight:700;margin-top:12px">The canvas</div><div class="mut2">Charts, live pages, diffs and plans land here.</div></div>
+      </div>
+    </aside>
+  </figure>`;
+}
+
 function renderLanding(){
   root.innerHTML = `
   <div class="fadeup">
     <div class="anav"><nav class="nav">
-      <a class="abrand" href="/" data-act="top">belna</a>
+      <a class="abrand" href="/" data-act="top">${Mascot.logo(28)}belna</a>
       <div class="navlinks"><a href="/#agent" data-act="scroll" data-t="#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div class="anav-cta">
         <a class="btn ghost small" href="/" data-act="signin-nav">Sign in</a>
@@ -1105,48 +1384,27 @@ function renderLanding(){
 
     <section class="asection" id="safety" aria-label="Safe Swedish AI">
       <h2>Safe Swedish AI</h2>
-      <div class="split">
-        <div>
-          <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
-
-        </div>
-        <div class="panel model-card">
-          <div class="mc-head">
-            <span class="mc-brand">${Mascot.logo(28)}<span><b>Arche 1.0</b><i>by Belna · Safe Swedish AI</i></span></span>
-          </div>
-          <div class="mc-title">Arche 1.0 vs frontier models</div>
-          <div class="mc-table"><table class="btable">
-            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
-            <tbody>
-              <tr><td>GPQA Diamond</td><td class="star">93.5</td><td>94.1</td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
-              <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td>88.8</td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
-              <tr><td>BrowseComp</td><td class="star">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
-              <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td>85.0</td><td>83.4</td></tr>
-              <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
-            </tbody>
-          </table></div>
-          <div class="fineprint mc-foot"><span>Full results and methodology in <a href="/research-arche-1-0">Research → Arche 1.0</a></span><span class="mc-foot-brand">${Mascot.logo(20)} BELNA</span></div>
-        </div>
+      <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
+      <div class="panel model-card">
+        <div class="mc-title">Arche 1.0 vs frontier models</div>
+        <div class="mc-table"><table class="btable">
+          <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
+          <tbody>
+            <tr><td>GPQA Diamond</td><td class="star">93.5</td><td>94.1</td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
+            <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td>88.8</td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
+            <tr><td>BrowseComp</td><td class="star">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
+            <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td>85.0</td><td>83.4</td></tr>
+            <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
+          </tbody>
+        </table></div>
+        <div class="fineprint mc-foot"><span>Full results and methodology in <a href="/research-arche-1-0">Research → Arche 1.0</a></span></div>
       </div>
     </section>
 
-    <section class="asection" id="agent" aria-label="Your personal AI Agent">
+    <section class="asection asection-preview" id="agent" aria-label="Your personal AI Agent">
       <h2>Your personal AI Agent.</h2>
-      <div class="split">
-        <div>
-          <p class="lede">If you can think it, your Agent can make it real life.</p>
-
-        </div>
-        <div class="panel">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">${Mascot.svg('lingon','happy',34)}<div><b>Example from inside the app</b><div class="mut" style="font-size:12.5px">Your agent, working for real</div></div></div>
-          <div class="mockchat">
-            <div class="mbub u">Plan my move to Gothenburg next month — movers, addresses, budget</div>
-            <div class="mbub a"><b>Your agent</b>Done. Moving checklist with dates, 3 movers compared on price, address-change drafts, and a budget table — all on your canvas. Nothing sent without your yes.</div>
-            <div class="mbub u">Also remind me to water the plants?</div>
-            <div class="mbub a"><b>Your agent</b>Remembered. I'll nudge you every Sunday evening.</div>
-          </div>
-        </div>
-      </div>
+      <p class="lede">If you can think it, your Agent can make it real life. <a href="?preview=app">Open the app preview</a></p>
+      ${landingAppPreview()}
     </section>
 
     <section class="cta2" id="cta" aria-label="Start">
@@ -1167,11 +1425,11 @@ function renderLanding(){
     </section>
 
     <footer class="afooter"><div class="fin">
-      <div><div class="abrand">belna</div></div>
-      <div><h4>Product</h4><a href="/#safety">Safe Swedish AI</a><a href="/#agent">Personal Agent</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
+      <div><div class="abrand">${Mascot.logo(28)}belna</div></div>
+      <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div><h4>Company</h4><a href="/#cta" data-act="open-app">Get started</a><a href="/" data-act="signin-nav">Sign in</a></div>
       <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div>
-    </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
+    </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
   </div>`;
   const wire = (formId, inputId) => {
     const f = document.getElementById(formId);
@@ -1224,121 +1482,92 @@ async function landingRun(prompt){
   await sendPromptDirect(c, prompt);
 }
 
-/* Pending homepage prompt → real account chat → in-chat onboarding → run.
-   The user's message is placed in the agent chat FIRST (visible), then
-   onboarding (name / appearance / personality) runs IN THE CHAT before the
-   agent starts the actual request. No Engine work happens before onboarding. */
-async function startPendingPromptFlow(pendingOverride){
-  if (!signedIn()){
-    if (typeof pendingOverride === 'string' && pendingOverride) { state.pendingPrompt = pendingOverride; save(); }
-    renderAuth();
-    return;
-  }
+/* One persisted onboarding chat for every new account, with or without a request. */
+function startPendingPromptFlow(pendingOverride){
+  if (!signedIn()) { renderAuth(); return; }
   ensureOwnerScope();
-  const pendingText = (typeof pendingOverride === 'string' && pendingOverride) ? pendingOverride : state.pendingPrompt;
-  if (!pendingText){ render(); return; }
-  if (!state.agent || state.agent.provisional){
-    if (!state.agent) state.agent = { name: 'Your agent', color: 'lingon', pers: 'Playful', provisional: true, claimedAt: Date.now() };
-    else if (!state.agent.provisional && !state.onboarded){ state.agent.provisional = true; }
+  if (typeof pendingOverride === 'string' && pendingOverride.trim()) state.pendingPrompt = pendingOverride.trim();
+  if (!state.agent) state.agent = { name:'Your agent', color:'lingon', pers:'Playful', provisional:true };
+  state.agent.provisional = true;
+  let c = state.chats.find(item => item.onboarding);
+  if (!c) {
+    c = { id:uid(), title:'Meet your agent', messages:[], trace:[], artifact:null, createdAt:Date.now(), onboarding:true };
+    state.chats.unshift(c);
   }
-  const title = pendingText.length > 42 ? pendingText.slice(0, 42) + '…' : pendingText;
-  let c = chat();
-  if (!c || (c.messages && c.messages.length > 0) || c.onboarding){
-    c = { id: uid(), title, messages: [], trace: [], artifact: null, createdAt: Date.now(), onboarding: true };
-    state.chats.unshift(c); state.activeChat = c.id;
-  } else {
-    c.title = title; c.onboarding = true;
+  if (state.pendingPrompt && !c.messages.some(m => m.role === 'user' && m.text === state.pendingPrompt)) {
+    c.messages.push({ id:uid(), role:'user', kind:'text', text:state.pendingPrompt });
   }
-  if (!c.messages.some(mm => mm.kind === 'text' && mm.role === 'user' && mm.text === pendingText)){
-    c.messages.push({ id: uid(), role: 'user', kind: 'text', text: pendingText });
-  }
-  state.pendingPrompt = pendingText;
-  state.view = 'chat'; save();
-  renderApp();
-  await runInChatOnboarding(c);
+  state.activeChat = c.id; state.view = 'chat'; state.canvasOpen = false;
+  mobileNavOpen = false;
+  runInChatOnboarding(c);
+  save(); renderApp();
 }
 
 function pendingQuestion(c){
-  if (!c) return null;
-  for (let i = (c.messages || []).length - 1; i >= 0; i--){
-    const mm = c.messages[i];
-    if (mm.kind === 'card' && mm.card && mm.card.type === 'question' && mm.card.status === 'pending') return { c, m: mm };
-  }
-  return null;
+  return c && (c.messages || []).slice().reverse().map(m => ({c,m})).find(({m}) => m.card?.type === 'question' && m.card.status === 'pending');
 }
 
-async function runInChatOnboarding(c){
-  if (!signedIn()){
-    c.onboarding = false;
-    const firstUser = (c.messages || []).find(mm => mm.role === 'user' && mm.kind === 'text');
-    if (firstUser) state.pendingPrompt = firstUser.text;
-    save(); renderAuth();
-    toast('Sign in required — your message is saved.');
-    return;
-  }
-  c.busy = true; c.onboarding = true; save();
-  const rt = makeRT(c);
-  try {
-    const short = c.messages.find(mm => mm.role === 'user' && mm.kind === 'text');
-    const rawShort = short ? String(short.text) : '';
-    const shortTxt = rawShort.length > 90 ? rawShort.slice(0, 90) + '…' : rawShort;
-    await rt.say(`Got it — I’ve put “${shortTxt}” in our chat and I’ll run it for real in a moment. First, let’s claim your agent (30 seconds) so it’s truly yours. No demo accounts — this stays tied to your signed-in account.`, { mood: 'happy' });
-    await rt.say(`What should I call myself? Pick a suggestion or just type a name below.`, { mood: 'think' });
-    const nameQ = rt.card({ type: 'question', q: 'Choose your agent’s name (or type your own below)', options: ['Sigge', 'Nova', 'Astrid', 'Mio'], status: 'pending' });
-    nameQ.msg.card.onboarding = true;
-    const nameAns = await nameQ.wait();
-    let nm = String((nameAns && nameAns.choice) || '').trim().slice(0, 18) || 'Sigge';
-    state.agent.name = nm; save(); paintSide(); try { paintCanvas(); } catch {}
-    await rt.say(`Love it — I’m ${nm}.`, { mood: 'happy' });
-    await rt.say(`How should I look? Pick a color — you can change it anytime in Settings → Profiles.`, { mood: 'think' });
-    const colorNames = Mascot.keys.map(k => Mascot.PALETTE[k].name);
-    const colQ = rt.card({ type: 'question', q: `Pick ${nm}’s look (or type a color name)`, options: colorNames.slice(0, 4), status: 'pending' });
-    colQ.msg.card.onboarding = true;
-    const colAns = await colQ.wait();
-    const choiceStr = String((colAns && colAns.choice) || '');
-    let colorKey = Mascot.keys.find(k => Mascot.PALETTE[k].name.toLowerCase() === choiceStr.toLowerCase())
-      || Mascot.keys.find(k => k === choiceStr.toLowerCase())
-      || Mascot.keys.find(k => Mascot.PALETTE[k].name.toLowerCase().includes(choiceStr.toLowerCase()));
-    if (!colorKey || !Mascot.PALETTE[colorKey]) colorKey = 'lingon';
-    state.agent.color = colorKey; save(); paintSide(); try { paintCanvas(); } catch {}
-    await rt.say(`Looking sharp.`, { mood: 'happy' });
-    const perQ = rt.card({ type: 'question', q: `Pick a character for ${nm} (or type your own)`, options: PERS.slice(), status: 'pending' });
-    perQ.msg.card.onboarding = true;
-    const perAns = await perQ.wait();
-    let pers = String((perAns && perAns.choice) || 'Playful');
-    const pm = PERS.find(p => p.toLowerCase() === pers.toLowerCase());
-    pers = pm || 'Playful';
-    const uidNow = currentUserId();
-    state.agent = { name: nm, color: colorKey, pers, claimedAt: Date.now(), ownerId: uidNow };
-    state.ownerId = uidNow || state.ownerId;
-    state.onboarded = true;
-    try { ensureMailbox(nm); } catch {}
-    try { state.memory.unshift({ id: uid(), text: `Agent claimed and named “${nm}” — ${Mascot.PALETTE[colorKey].name.toLowerCase()}, ${pers.toLowerCase()}.`, src: 'onboarding', at: Date.now() }); } catch {}
-    const pendingText = state.pendingPrompt
-      || ((c.messages || []).find(mm => mm.role === 'user' && mm.kind === 'text') || {}).text
-      || '';
-    state.pendingPrompt = null;
-    // Complete onboarding before handing the request to the interruptible
-    // coordinator. The delegated worker owns the long-running task state.
-    save();
-    paintSide(); try { paintCanvas(); } catch {}
-    await rt.say(`Done — I’m ${nm}, all yours. Now running your request for real (no demos, no fakes).`, { mood: 'happy' });
-    c.onboarding = false;
-    save();
-    if (pendingText){
-      if (state.view !== 'chat') state.view = 'chat';
-      c.busy = false;
-      paintSide(); paintMain();
-      await runAgentOn(c, pendingText);
-    } else {
-      c.busy = false; save();
-      runGreet(c);
+function runInChatOnboarding(c){
+  c.busy = false;
+  // Migrate interrupted setup from the previous question flow.
+  if (!c.onboardingAnswers) {
+    c.onboardingAnswers = {};
+    for (const m of c.messages) {
+      if (!m.card?.onboarding) continue;
+      if (m.card.status === 'answered' && m.card.choice) {
+        if (/look|color/i.test(m.card.q)) c.onboardingAnswers.color = Mascot.keys.find(k => Mascot.PALETTE[k].name === m.card.choice);
+        else if (/name/i.test(m.card.q)) c.onboardingAnswers.name = String(m.card.choice).trim().slice(0,18);
+      }
     }
-  } catch (e){
-    console.error(e);
-    c.onboarding = false; c.busy = false; save();
-    try { paintMain(); paintSide(); } catch {}
+    c.messages = c.messages.filter(m => !m.card?.onboarding || m.card.status === 'answered');
   }
+  const answers = c.onboardingAnswers;
+  if (c.messages.some(m => m.card?.onboarding && m.card.status === 'pending')) return;
+  const say = text => c.messages.push({ id:uid(), role:'agent', kind:'text', text, mood:'happy' });
+  const card = data => c.messages.push({ id:uid(), kind:'card', card:{...data, onboarding:true, status:'pending'} });
+  if (!answers.name) {
+    if (!c.onboardingWelcomed) {
+      say(state.pendingPrompt ? 'Hej! I’ve saved your request. Let’s make your agent yours before I get started.' : 'Hej! Let’s set up your personal agent. First, give me a name.');
+      c.onboardingWelcomed = true;
+    }
+    card({ type:'question', step:'name', q:'What should I call myself?', options:['Alex','Rosa','Tao'], customName:true });
+  } else if (!answers.color) {
+    state.agent.name = answers.name;
+    card({ type:'question', step:'color', q:'Pick a color for ' + answers.name, options:Mascot.keys.map(k => Mascot.PALETTE[k].name), mascotColors:true });
+  } else {
+    state.agent.name = answers.name; state.agent.color = answers.color;
+    say('Hej ' + currentUser().name + '! I’m ' + answers.name + ', your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. Tell me what you want done, and I’ll take it from there. I’ll ask for access or approval when needed.');
+    card({ type:'passport', title:'My passport', note:'Meet your agent and see what I can do in the right-side menu.' });
+  }
+}
+
+function answerOnboarding(c, m, value){
+  if (!signedIn() || !needsOnboarding() || !c?.onboarding || !m?.card?.onboarding || m.card.status !== 'pending' || m.card.type !== 'question') return;
+  const choice = String(value || '').trim().slice(0, m.card.step === 'name' ? 18 : 60);
+  if (!choice) { toast('Type a name or choose a suggestion.'); return; }
+  if (m.card.step === 'color') {
+    const key = Mascot.keys.find(k => k.toLowerCase() === choice.toLowerCase() || Mascot.PALETTE[k].name.toLowerCase() === choice.toLowerCase());
+    if (!key) { toast('Choose one of the colors shown.'); return; }
+    c.onboardingAnswers.color = key;
+  } else c.onboardingAnswers.name = choice;
+  m.card.choice = choice; m.card.status = 'answered';
+  runInChatOnboarding(c); save(); renderApp();
+}
+
+async function openOnboardingPassport(c, m){
+  if (!signedIn() || !c?.onboarding || m?.card?.type !== 'passport' || m.card.status !== 'pending') return;
+  const answers = c.onboardingAnswers;
+  if (!answers?.name || !Mascot.PALETTE[answers.color]) return;
+  const ownerId = currentUserId();
+  state.agent = { name:answers.name, color:answers.color, pers:'Playful', ownerId, claimedAt:Date.now() };
+  state.onboarded = true; c.onboarding = false; c.busy = false; m.card.status = 'done';
+  state.memory.unshift({ id:uid(), text:'Agent named “' + answers.name + '” — ' + Mascot.PALETTE[answers.color].name + '.', src:'onboarding', at:Date.now() });
+  const pending = state.pendingPrompt;
+  state.pendingPrompt = null;
+  state.canvasOpen = true; state.canvasTab = 'passport';
+  save(); renderApp();
+  ensureMailbox(answers.name).catch(() => {});
+  if (pending) await runAgentOn(c, pending);
 }
 
 function runningTask(c){
@@ -1443,8 +1672,6 @@ async function sendPromptDirect(c, text){
 /* ================================================================
    ONBOARDING
 ================================================================ */
-let ob = null;
-const NAMES = ['Sigge','Nova','Astrid','Nisse','Mio','Saga','Otto','Vera','Lingo','Belle'];
 const PERS = ['Playful','Precise','Calm','Bold'];
 const THEMES = [
   { id:'grey', name:'Standard Grey', c:'#5A5D63' },
@@ -1459,95 +1686,25 @@ function applyTheme(){
   try { document.body.setAttribute('data-accent', state.theme); } catch {}
 }
 
-function openOnboarding(){
-  // Real accounts only — no demo/sample onboarding without sign-in.
-  if (!signedIn()){ renderAuth(); toast('Sign up or log in first — your agent belongs to a real account.'); return; }
-  ensureOwnerScope();
-  ob = { step:0, name:'', color:'lingon', pers:'Playful' };
-  const back = el('<div class="modalback"><div class="modal" id="modal"></div></div>');
-  document.body.appendChild(back);
-  obStep();
-}
-function obStep(){
-  const M = $('#modal');
-  const dots = `<div class="ob-dots">${[0,1,2,3].map(i => `<i class="${i <= ob.step ? 'on' : ''}"></i>`).join('')}</div>`;
-  let html = '';
-  if (ob.step === 0){
-    html = `<h2 style="text-align:center">Say hej to your agent</h2>
-      <p class="msub" style="text-align:center">Unclaimed, unnamed, and waiting for exactly one person: you.</p>
-      <div class="ob-stage" id="obstage">${Mascot.svg(ob.color,'wave',150,'mascot-bob')}</div>
-      <div class="mfoot" style="justify-content:center"><button class="btn" data-act="ob-claim">${icon('spark',15)} Claim this agent</button></div>${dots}`;
-  } else if (ob.step === 1){
-    html = `<h2 style="text-align:center">Name them</h2>
-      <p class="msub" style="text-align:center">Anything goes — they'll answer to it forever after.</p>
-      <div class="ob-stage">${Mascot.svg(ob.color,'happy',96,'mascot-bob')}</div>
-      <div class="ob-name-row"><input class="field" id="obname" maxlength="18" placeholder="Untitled agent" value="${esc(ob.name)}"><button class="iconbtn" data-act="ob-dice" title="Surprise me" style="flex:none;width:46px;height:46px">${icon('dice',18)}</button></div>
-      <div class="mfoot"><button class="btn ghost" data-act="ob-back">Back</button><button class="btn" data-act="ob-next">Continue</button></div>${dots}`;
-  } else if (ob.step === 2){
-    html = `<h2 style="text-align:center">Make them yours</h2>
-      <p class="msub" style="text-align:center">Pick a color and a character. You can change both later.</p>
-      <div class="ob-stage">${Mascot.svg(ob.color,'idle',110,'mascot-bob')}</div>
-      <div class="swatches">${Mascot.keys.map(k => `<button class="swatch ${k === ob.color ? 'on' : ''}" data-act="ob-color" data-c="${k}" title="${Mascot.PALETTE[k].name}"><span style="width:30px;height:30px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
-      <div class="persrow">${PERS.map(p => `<button class="pers ${p === ob.pers ? 'on' : ''}" data-act="ob-pers" data-p="${p}">${p}</button>`).join('')}</div>
-      <div class="mfoot"><button class="btn ghost" data-act="ob-back">Back</button><button class="btn" data-act="ob-next">Continue</button></div>${dots}`;
-  } else {
-    html = `<h2 style="text-align:center">How ${esc(ob.name || 'your agent')} keeps you safe</h2>
-      <div class="safetylist">
-        <div class="row">${icon('lock',16)}<span><b>Sealed vault.</b> Secrets are encrypted; the agent only receives masked references.</span></div>
-        <div class="row">${icon('shieldcheck',16)}<span><b>Approvals.</b> Sensitive actions pause for your yes, unless you always-allow them.</span></div>
-        <div class="row">${icon('box',16)}<span><b>Sandbox.</b> Browser, code and computer use run contained — every step visible in the trace.</span></div>
-        <div class="row">${icon('book',16)}<span><b>Memory you control.</b> It remembers across chats; you can review and delete anything.</span></div>
-      </div>
-      <div class="mfoot"><button class="btn ghost" data-act="ob-back">Back</button><button class="btn" data-act="ob-done">Enter Lingon ${icon('aur',15)}</button></div>${dots}`;
-  }
-  M.innerHTML = html;
-  if (ob.step === 1) $('#obname').focus();
-}
-function confetti(){
-  const st = $('#obstage') || $('#modal');
-  const colors = ['#4A7FD4','#E8B33C','#5B6EE1','#6FBF73','#9B6BD3'];
-  for (let i = 0; i < 18; i++){
-    const c = el(`<span class="confetti" style="left:50%;top:40%;background:${colors[i % 5]};--dx:${(Math.random()*260-130)|0}px;--dy:${(Math.random()*200-60)|0}px"></span>`);
-    st.appendChild(c); setTimeout(() => c.remove(), 950);
-  }
-}
-function finalizeOnboarding(){
-  // Real accounts only — never create demo/sample agents.
-  if (!signedIn()){
-    const back0 = $('.modalback'); if (back0) back0.remove();
-    renderAuth();
-    toast('Sign up or log in first — no demo accounts.');
-    return;
-  }
-  ensureOwnerScope();
-  if (!ob) ob = { name: '', color: 'lingon', pers: 'Playful' };
-  const uidNow = currentUserId();
-  state.onboarded = true;
-  state.agent = { name: (ob.name || '').trim() || 'Sigge', color: ob.color || 'lingon', pers: ob.pers || 'Playful', claimedAt: Date.now(), ownerId: uidNow };
-  state.ownerId = uidNow || state.ownerId;
-  try { ensureMailbox(state.agent.name); } catch {}
-  state.memory.unshift({ id: uid(), text: `Agent claimed and named “${state.agent.name}” — ${Mascot.PALETTE[state.agent.color].name.toLowerCase()}, ${state.agent.pers.toLowerCase()}.`, src:'onboarding', at: Date.now() });
-  const c = { id: uid(), title:'First chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
-  state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat';
-  const prompt = state.pendingPrompt; state.pendingPrompt = null;
-  save();
-  const back = $('.modalback'); if (back) back.remove();
-  render();
-  if (prompt) sendPrompt(prompt); else runGreet(c);
-}
+function openOnboarding(){ return startPendingPromptFlow(); }
 
 /* ================================================================
    APP SHELL
 ================================================================ */
 function renderApp(){
-  // Real accounts only — never render the agent UI signed-out.
-  if (!signedIn()){ renderAuth(); return; }
+  if (designPreviewRequested()) applyDesignPreview();
+  if (!signedIn() && !designPreview){ renderAuth(); return; }
   ensureOwnerScope();
+  if (needsOnboarding()) {
+    if (!chat()?.onboarding) return startPendingPromptFlow();
+    state.view = 'chat';
+  }
   if (!state.agent) state.agent = { name: 'Your agent', color: 'lingon', pers: 'Playful', provisional: true, claimedAt: Date.now() };
   applyTheme();
   belnaStopLandingFx();
   root.innerHTML = `
-  <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''}" id="app">
+  ${designPreview ? '<div class="design-preview-banner">Design preview — agent chat + right-side menu · not a live account</div>' : ''}
+  <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${designPreview ? 'design-preview' : ''}" id="app">
     <button class="mobile-nav-toggle" data-act="togglemenu" aria-label="${mobileNavOpen ? 'Close navigation' : 'Open navigation'}" aria-expanded="${mobileNavOpen}">${icon(mobileNavOpen ? 'x' : 'menu',20)}</button>
     <button class="side-scrim" data-act="togglemenu" aria-label="Close navigation"></button>
     <aside class="side" id="side"></aside>
@@ -1570,7 +1727,7 @@ function artifactRows(){
   state.chats.forEach(c => {
     if (c.artifact) rows.push({ title: c.artifact.title, kind: c.artifact.kind, chat: c.title, chatId: c.id });
     (c.messages || []).forEach(m => {
-      if (m.kind === 'card' && m.card.type === 'file') rows.push({ title: m.card.name, kind: 'file', chat: c.title, chatId: c.id, card: m.card });
+      if (m.kind === 'card' && (m.card.type === 'file' || m.card.type === 'canvas')) rows.push({ title: m.card.name || m.card.title, kind: m.card.type, chat: c.title, chatId: c.id, messageId:m.id, card: m.card });
     });
   });
   return rows;
@@ -1602,7 +1759,7 @@ function paintSide(){
         </button>`).join('') || '<div class="empty" style="padding:20px">No chats yet</div>'}
     </div>
     <div class="sidebottom">
-      <div class="usagecard" id="usagecard"><span class="mut" style="font-size:12px">Loading usage…</span></div>
+      <div class="usagecard" id="usagecard">${billingOwner === billingIdentity() && billingCache ? usageCardHtml(billingCache) : '<span class="usage-loading" role="status">Getting your credits ready…</span>'}</div>
       <div class="userwrap">
         ${state.userMenuOpen ? `<div class="usermenu pop">
           <button class="sitem" data-act="nav" data-view="settings">${icon('gear',15)} Settings</button>
@@ -1620,16 +1777,20 @@ function paintSide(){
     getBilling().then(b => {
       const box = $('#usagecard');
       if (!box) return;
-      if (b) {
-        const pct = b.creditsGranted ? Math.min(100, Math.max(0, b.creditsUsed / b.creditsGranted * 100)) : 0;
-        const remaining = Number(b.credits) || 0;
-        const barColor = remaining > 5 ? 'var(--green)' : remaining > 0 ? '#f5a623' : '#e74c3c';
-        box.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:11px;font-weight:700;color:var(--mut)">Credit usage</span><span class="uplan">${esc(String(b.plan).toUpperCase())}</span></div><div class="ubar"><i style="width:${pct}%;background:${barColor}"></i></div><div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span class="chip ${remaining > 5 ? 'green' : ''}" style="font-size:11px">${fmtC(b.credits)} left</span><span style="font-size:11px;color:var(--mut)">${fmtC(b.creditsUsed)} / ${fmtC(b.creditsGranted)}</span></div>`;
-      } else {
-        box.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:11px;font-weight:700;color:var(--mut)">Credit usage</span><span class="uplan">FREE</span></div><div class="ubar"><i style="width:4%;background:var(--green)"></i></div><div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span class="chip green" style="font-size:11px">20 left</span><span style="font-size:11px;color:var(--mut)">0 / 20</span></div>`;
-      }
+      box.innerHTML = b ? usageCardHtml(b) : `<button class="usage-unavailable" data-act="nav" data-view="billing">View your credits ${icon('aur',14)}</button>`;
     }).catch(() => {});
   } catch {}
+}
+function usageCardHtml(b){
+  const v = creditView(b), a = state.agent || {};
+  const note = v.tone === 'empty' ? 'Ready for a top-up' : v.tone === 'low' ? 'A little low on credits' : `${fmtC(v.used)} of ${fmtC(v.granted)} used`;
+  return `<div class="usage-content credit-tone-${v.tone}">
+    <div class="usage-heading"><span>Your credits</span><span class="usage-plan">${esc(billingPlanName(b))}</span></div>
+    <div class="usage-balance"><strong>${fmtC(v.remaining)}</strong><span>credits left</span></div>
+    ${creditMeterHtml(v)}<div class="usage-caption">${note}</div>
+    <div class="usage-footer"><span class="usage-companion">${Mascot.svg(a.color || 'lingon','happy',28)}<span>You + ${esc(a.name || 'your agent')}</span></span>${icon('aur',14)}</div>
+    <button class="usage-link" data-act="nav" data-view="billing" aria-label="View billing and credits" title="View billing and credits"></button>
+  </div>`;
 }
 
 function paintMain(){
@@ -1648,6 +1809,8 @@ function paintMain(){
 /* floating agent status (chat only) */
 function statusFor(c){
   if (!c) return '';
+  if (Engine.managed && Object.values(c.managedTasks || {}).some(t=>['queued','running','waiting_approval','stopping'].includes(t.status))) return Engine.isRunning(c.id) ? 'Replying' : 'Working · available';
+  if (Engine.managed && c.managedStatus === 'completed') return 'Available';
   for (let i = c.messages.length - 1; i >= 0; i--){
     const m = c.messages[i];
     if (m.kind === 'card' && m.card.status === 'pending'){
@@ -1669,6 +1832,16 @@ function updateFloat(){
   const s = $('#floatstatus');
   if (s) s.textContent = statusFor(chat());
 }
+function syncComposerActions(c){
+  const input = $('#cprompt');
+  const send = $('#csend');
+  const stop = $('#cstop');
+  if (!input || !send || !stop) return;
+  const running = !!(Engine.managed && Engine.isRunning?.(c?.id));
+  const hasDraft = !!input.value.trim() || pendingFiles.length > 0;
+  stop.hidden = !running || hasDraft;
+  send.hidden = running && !hasDraft;
+}
 
 /* ---------------- chat view ---------------- */
 function paintChat(M){
@@ -1677,6 +1850,11 @@ function paintChat(M){
     M.innerHTML = `<div class="empty" style="margin:auto">${Mascot.svg(state.agent.color,'idle',90,'mascot-bob')}<div style="margin-top:14px;font-weight:700">No chat open</div><div class="t2">Start one and ${esc(state.agent.name)} is on it.</div><button class="btn" data-act="newchat">${icon('plus',15)} New chat</button></div>`;
     return;
   }
+  const oldPrompt = M.dataset.chatId === c.id ? M.querySelector('#cprompt') : null;
+  const draft = oldPrompt?.value || '';
+  const focused = oldPrompt && document.activeElement === oldPrompt;
+  const selectionStart = focused ? oldPrompt.selectionStart : 0;
+  const selectionEnd = focused ? oldPrompt.selectionEnd : 0;
   M.innerHTML = `
     <div class="floathead"><div class="fav">${Mascot.svg(state.agent.color,'idle',40)}</div><div class="pill">${esc(state.agent.name)}<span class="st" id="floatstatus"></span></div></div>
     <div class="chathead">
@@ -1684,13 +1862,14 @@ function paintChat(M){
       ${c.source === 'automation' ? `<span class="chip">${icon('clock',12)} sub-agent</span>` : ''}
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
-      ${Engine.managed ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button><button class="btn ghost tiny" data-act="managed-stop">Stop</button>` : ''}
+      ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('panel',16)}</button>
     </div>
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
       ${c.messages.map(m => msgNode(c, m).outerHTML).join('')}
     </div></div>
     <div class="composerwrap"><div class="composer">
+      ${c.taskReply ? `<div class="reply-draft"><span><b>${c.taskReplyScope==='team'?'Updating the shared goal':'Changing this task'}</b><small>${esc(c.managedTasks?.[c.taskReply]?.title || 'Task')}</small></span><button type="button" class="iconbtn" data-act="task-change-cancel" data-chat="${c.id}" aria-label="Cancel task change">${icon('x',14)}</button></div>` : ''}
       ${c.replyingTo ? `<div class="reply-draft"><span><b>Replying to ${c.replyingTo.role === 'user' ? 'yourself' : esc(state.agent.name)}</b><small>${esc(c.replyingTo.text)}</small></span><button type="button" class="iconbtn" data-act="cancelreply" data-chat="${c.id}" title="Cancel reply" aria-label="Cancel reply">${icon('x',14)}</button></div>` : ''}
       <form class="promptbox" id="cform">
         <textarea id="cprompt" rows="1" placeholder="Ask ${esc(state.agent.name)} anything…"></textarea>
@@ -1698,16 +1877,24 @@ function paintChat(M){
         <div class="pb-row">
           <span class="iconbtn" data-act="attach" title="Attach files">${icon('plus',16)}</span>
           <span style="display:flex;gap:10px;align-items:center">
-            <button type="submit" class="micbtn" title="Send">${icon('up',17)}</button>
+            <button type="button" class="micbtn" id="cstop" data-act="managed-stop" title="Stop response" aria-label="Stop response">${icon('stop',17)}</button>
+            <button type="submit" class="micbtn" id="csend" title="Send" aria-label="Send">${icon('up',17)}</button>
           </span>
         </div>
       </form>
     </div></div>`;
+  M.dataset.chatId = c.id;
   const th = $('#thread'); th.scrollTop = th.scrollHeight;
   updateFloat();
+  const prompt = $('#cprompt');
+  prompt.value = draft;
+  if (focused) { prompt.focus({ preventScroll:true }); prompt.setSelectionRange(selectionStart, selectionEnd); }
   $('#cform').addEventListener('submit', e => { e.preventDefault(); const v = $('#cprompt').value.trim(); if (v || pendingFiles.length){ $('#cprompt').value = ''; sendPrompt(v, pendingFiles.slice()); clearFiles(); } });
   $('#cprompt').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#cform').requestSubmit(); } });
+  prompt.addEventListener('input', () => syncComposerActions(c));
   wirePromptBox($('#cform'), $('#cprompt'));
+  paintAttachPills();
+  if (Engine.managed && signedIn() && !needsOnboarding()) void Engine.recoverTasks?.(makeRT(c));
 }
 
 const REACTIONS = [
@@ -1733,7 +1920,7 @@ function messageActionsHTML(c, m){
 }
 function msgNode(c, m){
   if (m.kind === 'text' && m.role === 'user'){
-    const filesHtml = (m.files && m.files.length) ? `<div class="msg-files">${m.files.map(f => `<span class="attach-pill sent">${icon('file',12)}<span class="ap-name">${esc(f.name.length > 24 ? f.name.slice(0,21)+'…' : f.name)}</span><span class="ap-size">${fmtBytes(f.size)}</span></span>`).join('')}</div>` : '';
+    const filesHtml = (m.files && m.files.length) ? `<div class="msg-files">${m.files.map((f,i) => `<button class="attach-pill sent" data-act="canvas-upload" data-chat="${c.id}" data-msg="${m.id}" data-i="${i}" title="View in Canvas">${icon('file',12)}<span class="ap-name">${esc(f.name.length > 24 ? f.name.slice(0,21)+'…' : f.name)}</span><span class="ap-size">${fmtBytes(f.size)}</span></button>`).join('')}</div>` : '';
     return el(`<div class="msg user" data-mid="${m.id}"><div class="message-stack"><div class="bub">${replyPreviewHTML(m)}${filesHtml}${esc(m.text)}</div>${messageActionsHTML(c, m)}</div></div>`);
   }
   if (m.kind === 'text')
@@ -1743,7 +1930,7 @@ function msgNode(c, m){
   if (m.kind === 'chips')
     return el('<div style="display:none"></div>');
   if (m.kind === 'card')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}</div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${['progress','browser','computer','file','artifact','canvas'].includes(m.card.type) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('panel',14)} Show in Canvas</button>`}</div></div>`);
   return el('<div></div>');
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
@@ -1771,6 +1958,25 @@ function cardNode(c, m){
     : stChip(cd);
   const hd = (ic, bg, fg, title, sub) => `<div class="hd"><div class="tile" style="background:${bg};color:${fg}">${ic}</div><div><b>${title}</b><div class="sub">${sub}</div></div><div class="st">${chip}</div></div>`;
   const pending = cd.status === 'pending';
+
+  if (cd.type === 'task') {
+    const ongoing=['queued','running','waiting_approval','stopping'].includes(cd.status);
+    const teamId=c.managedTasks?.[cd.taskId]?.teamId;
+    const hasPeers=teamId && Object.values(c.managedTasks || {}).filter(t=>t.teamId===teamId).length>1;
+    const labels={queued:'Queued',running:'Working',waiting_approval:'Needs approval',stopping:'Stopping',stopped:'Stopped',completed:'Completed',partial:'Work limit reached · findings saved',failed:'Could not finish',needs_review:'Check outcome'};
+    return `<div class="acard">${hd(icon('box',20),'var(--acc-soft)','var(--acc)',esc(cd.title),'You can keep chatting here')}
+      <div class="bd"><b>${esc(labels[cd.status] || cd.status)}</b>${cd.connectionLost ? '<div class="mut">Reconnecting to your saved task…</div>' : ''}${cd.summary ? `<p>${esc(cd.summary)}</p>` : ''}</div>
+      ${cd.status==='partial' ? `<div class="stack"><button class="btn ghost" data-act="task-continue" data-chat="${k}" data-msg="${mid}">Continue task</button></div>` : ''}
+      ${hasPeers ? `<div class="stack"><button class="btn ghost" data-act="task-change-team" data-chat="${k}" data-msg="${mid}">Update shared goal</button></div>` : ''}
+      ${ongoing ? `<div class="stack"><button class="btn ghost" data-act="task-change" data-chat="${k}" data-msg="${mid}">Change task</button><button class="btn ghost" data-act="task-stop" data-chat="${k}" data-msg="${mid}" ${cd.status==='stopping'?'disabled':''}>Stop task</button></div>` : ''}</div>`;
+  }
+
+  if (cd.type === 'progress') return `<div class="acard progress-card ${cd.status === 'running' ? 'is-running' : 'is-finished'} is-${cd.status || 'done'}" ${cd.status === 'running' ? 'role="status" aria-live="polite"' : ''}>
+    <span class="progress-card-icon">${icon(cd.status === 'running' ? 'spark' : cd.status === 'done' ? 'check' : 'x',16)}</span>
+    <span>${esc(cd.label || 'Working on it')}</span>
+    ${cd.status === 'running' ? '<span class="progress-card-dots"><i></i><i></i><i></i></span>' : ''}
+    ${cd.status === 'interrupted' || cd.status === 'failed' ? `<span class="progress-card-state">${esc(cd.status)}</span>` : ''}
+  </div>`;
 
   if (cd.type === 'approval' && cd.managedCallId) return `<div class="acard">
     ${hd(icon('shieldcheck',20),'var(--acc-soft)','var(--acc)',esc(cd.title),'Approve this exact action')}
@@ -1800,16 +2006,23 @@ function cardNode(c, m){
     </div>
     ${pending ? `<div class="stack"><button class="btn" data-act="save-secret" data-chat="${k}" data-msg="${mid}">${icon('lock',14)} Save to vault</button><button class="btn ghost" data-act="skip-secret" data-chat="${k}" data-msg="${mid}">Skip</button></div>` : (cd.status === 'saved' ? `<div class="ft"><span class="note mono">${esc(cd.ref)} · ••••••••</span></div>` : '')}</div>`;
 
+  if (cd.type === 'passport') return `<div class="acard">
+    ${hd(icon('user',20),'var(--acc-soft)','var(--acc)','My passport',state.agent.name)}
+    <div class="bd">${esc(cd.note)}</div>
+    <div class="stack"><button class="btn" data-act="open-passport" data-chat="${k}" data-msg="${mid}">Open My passport ${icon('aur',15)}</button></div></div>`;
+
   if (cd.type === 'question') return `<div class="acard">
     ${hd(icon('spark',20),'var(--acc-soft)','var(--acc)','Question', state.agent.name + ' is asking')}
     <div class="bd"><b>${esc(cd.q)}</b>
     <div class="qopts" style="margin-top:10px">${cd.options.map(o => {
       const on = cd.status === 'answered' && cd.choice === o;
       const dim = cd.status === 'answered' && cd.choice !== o;
+      const color = cd.mascotColors && Mascot.keys.find(k => Mascot.PALETTE[k].name === o);
+      const label = (color ? Mascot.svg(color,'happy',44) : '') + esc(o);
       return pending
-        ? `<button class="qopt" data-act="qopt" data-chat="${k}" data-msg="${mid}" data-o="${esc(o)}">${esc(o)}<span class="tick">${icon('check',12)}</span></button>`
-        : `<span class="qopt ${on ? 'on' : 'dim'}" style="cursor:default">${esc(o)}<span class="tick">${icon('check',12)}</span></span>`;
-    }).join('')}</div></div></div>`;
+        ? `<button class="qopt" data-act="qopt" data-chat="${k}" data-msg="${mid}" data-o="${esc(o)}">${label}<span class="tick">${icon('check',12)}</span></button>`
+        : `<span class="qopt ${on ? 'on' : 'dim'}" style="cursor:default">${label}<span class="tick">${icon('check',12)}</span></span>`;
+    }).join('')}${cd.customName ? (pending ? `<form class="qopt qcustom" data-onboarding-name data-chat="${k}" data-msg="${mid}"><input name="agentName" aria-label="Type your own name" placeholder="Type your own" maxlength="18" required value="${esc(cd.draft || '')}"><button class="btn small" type="submit">Use name</button></form>` : (!cd.options.includes(cd.choice) ? `<span class="qopt on">${esc(cd.choice)}<span class="tick">${icon('check',12)}</span></span>` : '')) : ''}</div></div></div>`;
 
   if (cd.type === 'subagents') return `<div class="acard">
     ${hd(icon('box',20),'var(--line2)','var(--mut)',cd.agents.length === 1 ? 'Delegated task' : 'Parallel tasks',cd.agents.length === 1 ? 'main agent remains available' : 'working concurrently')}
@@ -1819,28 +2032,30 @@ function cardNode(c, m){
     </div>`).join('')}</div></div>`;
 
   if (cd.type === 'browser') return `<div class="acard">
-    ${hd(icon('globe',20),'var(--ink)','#fff','Browser', esc(cd.note))}
-    <div class="bd"><div class="win"><div class="bar"><i></i><i></i><i></i><span class="url">${esc(cd.url)}</span></div>
-    ${cd.screenshot ? `<div class="shot"><img src="${cd.screenshot}" alt="Rendered page screenshot" loading="lazy"></div>` : ''}
-    <div class="scr">${cd.status === 'done' ? `<span style="color:var(--green)">${icon('check',14)}</span>` : `<span class="spin">${icon('refresh',14)}</span>`} ${esc(cd.note)}</div></div></div>
-    <div class="stack">${cd.liveId ? `<button class="btn" data-act="watchlive">Watch live</button>` : ''}<button class="btn ghost" data-act="viewcanvas">Follow in canvas</button></div></div>`;
+    ${hd(icon('globe',20),'var(--ink)','#fff','Browser', esc(cd.note || ''))}
+    <div class="bd"><span class="rurl">${esc(cd.url || 'Browser session')}</span></div>
+    <div class="stack"><button class="btn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${cd.liveId || cd.status === 'running' ? 'Open live view' : 'View in Canvas'}</button></div></div>`;
 
   if (cd.type === 'computer') return `<div class="acard">
     ${hd(icon('term',20),'var(--ink)','#fff',cd.managed ? 'Agent tool output' : 'Read-only tool output',cd.managed ? 'Actual managed sandbox or search result' : 'Computed from the approved API response')}
-    <div class="bd"><div class="term">${cd.lines.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}${cd.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div></div></div>`;
+    <div class="bd mut">${cd.status === 'running' ? 'Computer is working…' : `${(cd.lines || []).length} output lines ready`}</div>
+    <div class="stack"><button class="btn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${cd.pcId || cd.status === 'running' ? 'Open live view' : 'View in Canvas'}</button></div></div>`;
 
   if (cd.type === 'file') return `<div class="acard"><div class="filrow">
     <div class="fic">${icon('file',17)}</div>
     <div><b>${esc(cd.name)}</b><div class="sz">${fmtBytes(cd.size || 0)} · saved to Files</div></div>
-    <div class="acts"><button class="iconbtn" data-act="download" data-chat="${k}" data-msg="${mid}" title="Download">${icon('down',15)}</button></div>
+    <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="View in Canvas">${icon('panel',15)}</button><button class="iconbtn" data-act="download" data-chat="${k}" data-msg="${mid}" title="Download">${icon('down',15)}</button></div>
   </div></div>`;
+
+  if (cd.type === 'canvas') return `<div class="acard">${hd(icon('board',20),'var(--acc-soft)','var(--acc)',esc(cd.title || 'Canvas item'),esc(cd.format || 'document'))}
+    <div class="bd mut">${esc(String(cd.content || '').slice(0, 180))}</div><div class="stack"><button class="btn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">Open in Canvas</button></div></div>`;
 
   if (cd.type === 'artifact') return `<div class="acard">
     <div class="bd" style="padding-top:14px">${prevFor(c, cd)}</div>
     <div class="filrow" style="border-top:1px solid var(--line2);padding-top:12px">
       <div class="fic" style="background:var(--green-soft);color:var(--green)">${icon('spark',16)}</div>
       <div><b>${esc(cd.title)}</b><div class="sz">Artifact</div></div>
-      <div class="acts"><button class="iconbtn" data-act="viewcanvas" title="View on canvas">${icon('panel',14)}</button><button class="dotmenu" data-act="artmenu" title="More">•••</button></div>
+      <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="View on canvas">${icon('panel',14)}</button><button class="dotmenu" data-act="artmenu" title="More">•••</button></div>
     </div></div>`;
 
   if (cd.type === 'memory') return `<div class="acard">
@@ -1864,27 +2079,91 @@ function prevFor(c, cd){
 }
 
 /* ---------------- runtime for the engine ---------------- */
+const managedRunTokens = new WeakMap();
 function makeRT(c){
   const active = () => isActive(c);
   const threadInner = () => $('#tinner');
   const scroll = () => { const t = $('#thread'); if (t) t.scrollTop = t.scrollHeight; };
-  const append = n => { if (active() && threadInner()){ threadInner().appendChild(n); scroll(); updateFloat(); } };
+  const append = n => { if (active() && threadInner()){ const t=$('#thread');const atBottom=!t || t.scrollHeight-t.scrollTop-t.clientHeight<100;threadInner().appendChild(n); if(atBottom)scroll(); updateFloat(); } };
+  const runToken = uid();
+  let answerReady = false;
+  let currentProgress = null;
+  const finishProgress = (status = 'done') => {
+    if (currentProgress?.card.status === 'running') {
+      currentProgress.card.status = status;
+      replaceNode(c, currentProgress);
+      save();
+    }
+    currentProgress = null;
+  };
+
 
   const rt = {
     chat: c, agent: state.agent, vault: state.vault,
     isFirst: c.messages.filter(m => m.role === 'user').length <= 1,
-    managedEvent(event){
+    managedTask(task){
+      c.managedTasks=c.managedTasks || {};
+      const previous=c.managedTasks[task.id];
+      const cursor=previous?.sequence || 0;
+      const newer=!previous || Number(task.revision)>=Number(previous.revision);
+      const snapshot=newer ? {...task} : {...previous};
+      delete snapshot.events;
+      // Events are immutable and ordered. A late advance response cannot
+      // overwrite a newer control decision or replay an already shown card.
+      let sequence=cursor;
+      for(const event of (task.events || []).slice().sort((a,b)=>a.seq-b.seq)) {
+        if(event.seq<=sequence)continue;
+        if(event.seq!==sequence+1)break;
+        rt.managedEvent(event,{id:task.id,version:event.version || task.version});sequence=event.seq;
+      }
+      snapshot.sequence=sequence;c.managedTasks[task.id]=snapshot;
+      let m=c.messages.find(x=>x.managedId===`task_${task.id}`);
+      const card={type:'task',taskId:task.id,title:snapshot.title,status:snapshot.status,summary:snapshot.summary};
+      if(!m) {m={id:uid(),managedId:`task_${task.id}`,kind:'card',card};c.messages.push(m);append(msgNode(c,m));}
+      else {m.card=card;replaceNode(c,m);}
+      save();if(active()){updateFloat();syncComposerActions(c);}
+    },
+    taskConnection(taskId,connected){
+      const m=c.messages.find(x=>x.managedId===`task_${taskId}`);
+      if(m){m.card.connectionLost=!connected;replaceNode(c,m);save();}
+    },
+    managedEvent(event, task){
       if (event.type === 'heartbeat') return;
-      if (event.type === 'session') c.managedStatus = event.status;
+      if (event.type === 'session' && event.status === 'running') {
+        if (managedRunTokens.get(c) !== runToken) {
+          for (const m of c.messages) {
+            if (!m.card?.taskId && m.card?.type === 'progress' && m.card.status === 'running') {
+              m.card.status = 'interrupted';
+              replaceNode(c,m);
+            }
+          }
+        }
+        managedRunTokens.set(c, runToken);
+        c.managedStatus = 'running';
+      }
+      if (!task && managedRunTokens.get(c) !== runToken && !(answerReady && ['card', 'artifact', 'trace'].includes(event.type))) return;
+      if (event.type === 'progress' && typeof event.label === 'string') {
+        // Internal stages do not create user updates. Published cards stay in
+        // history; new task updates arrive as evidence-backed milestone cards.
+        return;
+      }
+      if (event.type === 'stopped') c.managedStatus = 'stopped';
       if (event.type === 'paused') c.managedStatus = 'paused';
       if (event.type === 'done') c.managedStatus = event.status;
+      if (['stopped', 'paused', 'done', 'error'].includes(event.type)) finishProgress(event.type === 'error' ? 'failed' : event.type === 'stopped' ? 'interrupted' : 'done');
       if (event.type === 'trace') { rt.trace(event.trace.ic || 'box', event.trace.t); return; }
-      if (event.type === 'artifact') { rt.artifact(event.artifact); return; }
+      if (event.type === 'artifact') { rt.artifact(event.artifact,{background:!!task}); return; }
       if (event.type === 'decision') {
-        const m = c.messages.find(x => x.card?.managedCallId === event.callId);
+        const m = c.messages.find(x => x.card?.managedCallId === event.callId && (!task || x.card.taskId===task.id));
         if (m) { m.card.status = event.status; m.card.choice = event.answer; if(event.ref)m.card.ref=event.ref; replaceNode(c,m); }
       }
       if (event.type === 'message' || event.type === 'message_delta') {
+        if (!task && event.phase === 'final_answer') {
+          answerReady = true;
+          c.managedStatus = 'completed';
+          finishProgress();
+          if (active()) { updateFloat(); syncComposerActions(c); }
+        }
         let m = c.messages.find(x => x.managedId === event.id);
         if (!m) { m = { id:uid(), managedId:event.id, role:'agent', kind:'text', text:'' }; c.messages.push(m); append(msgNode(c,m)); }
         m.text = event.type === 'message_delta' ? m.text + event.delta : event.text;
@@ -1892,10 +2171,17 @@ function makeRT(c){
       }
       if (event.type === 'card') {
         let m = c.messages.find(x => x.managedId === event.id);
-        const card = { ...event.card, managedCallId:event.callId };
+        const card = { ...event.card, managedCallId:event.callId, taskId:task?.id, taskVersion:task?.version };
         if (!m) { m = { id:uid(), managedId:event.id, kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
         else { m.card = card; replaceNode(c,m); }
         if (card.type === 'memory' && !state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
+        if (card.type === 'canvas' && active() && !task) {
+          c.canvasSelectedMessageId = m.id;
+          state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
+          $('#app')?.classList.remove('nocanvas');
+          paintCanvas();
+        }
+        else if (active() && state.canvasOpen && c.canvasSelectedMessageId && ['browser','computer'].includes(card.type)) paintCanvas();
       }
       if (event.type === 'error') {
         c.managedStatus = 'failed';
@@ -1904,7 +2190,8 @@ function makeRT(c){
         rt.trace('alert', event.error);
       }
       save();
-      if (['done','paused','error'].includes(event.type) && active()) { paintMain(); paintSide(); }
+      if (event.type === 'session' && active()) syncComposerActions(c);
+      if (['done','paused','error','stopped'].includes(event.type) && active()) { invalidateBilling(); paintMain(); paintSide(); }
     },
     recall: () => state.memory.slice(),
     hasApp: n => false,
@@ -1920,13 +2207,16 @@ function makeRT(c){
     remember(text, src){ state.memory.unshift({ id: uid(), text, src: src || 'chat', at: Date.now() }); save(); },
     trace(ic, t){
       c.trace = c.trace || []; c.trace.push({ ic, t, at: Date.now() });
-      if (active() && state.canvasTab === 'trace') paintCanvas();
       save();
     },
-    artifact(a){
-      c.artifact = a; state.canvasOpen = true; state.canvasTab = 'canvas';
-      const app = $('#app'); if (app) app.classList.remove('nocanvas');
-      paintCanvas(); save();
+    artifact(a,opts={}){
+      c.artifact = a;
+      if(!opts.background){c.canvasSelectedMessageId = null; delete c.canvasSelectedFileIndex;}
+      if(active()) {
+        if(!opts.background){state.canvasOpen = true;state.canvasTab = 'canvas';const app = $('#app');if(app)app.classList.remove('nocanvas');}
+        if(state.canvasOpen && state.canvasTab==='canvas')paintCanvas();
+      }
+      save();
     },
     chips(){ /* suggestion chips removed — no-op for backward compat */ },
     // iPhone-style typing indicator: an agent bubble with ONLY three dots.
@@ -2095,21 +2385,22 @@ function replaceNode(c, m){
   if (old) old.replaceWith(msgNode(c, m));
   updateFloat();
   // Live-follow: browser/computer progress also renders in the canvas timeline.
-  if (m.kind === 'card' && (m.card.type === 'browser' || m.card.type === 'computer')
-      && state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && isActive(c)) paintCanvas();
+  if (m.kind === 'card' && state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && isActive(c)) paintCanvas();
 }
 
-/* Run timeline: browser visits + computer runs from this chat, so users can
-   follow tool use live in the canvas — same data as the chat cards. */
+/* Visual browser and computer activity lives in the canvas. Older chats may
+   still contain these cards in their message history. */
 function runTimelineHTML(c){
   if (!c) return '';
-  const runs = (c.messages || []).filter(m => m.kind === 'card' && (m.card.type === 'browser' || m.card.type === 'computer'));
+  const shown = new Set((c.messages || []).map(m => m.managedId).filter(Boolean));
+  const runs = (c.canvasRuns || []).filter(run => !shown.has(run.id));
   if (!runs.length) return '';
   return `<div class="runbox"><div class="runhead">${icon('box',14)} Live run — browser &amp; computer use</div>` + runs.map(m => {
     const cd = m.card;
     if (cd.type === 'browser') return `<div class="runrow"><span class="rtile">${icon('globe',14)}</span><div class="rbody">
-      <div class="rurl">${esc(cd.url)}</div><div class="rnote">${cd.status === 'done' ? 'rendered' : 'opening…'} · ${esc(cd.note)}</div>
-      ${cd.screenshot ? `<div class="shot"><img src="${cd.screenshot}" alt="Rendered page screenshot" loading="lazy"></div>` : ''}</div></div>`;
+      <div class="rurl">${esc(cd.url || 'VM browser')}</div><div class="rnote">${cd.status === 'done' ? 'rendered' : cd.status === 'failed' ? 'failed' : 'working…'} · ${esc(cd.note)}</div>
+      ${cd.screenshot ? `<div class="shot"><img src="${cd.screenshot}" alt="Rendered page screenshot" loading="lazy"></div>` : ''}
+      ${cd.liveId ? `<button class="btn ghost small" data-act="watchlive">Watch live</button>` : ''}</div></div>`;
     return `<div class="runrow"><span class="rtile dark">${icon('term',14)}</span><div class="rbody">
       <div class="term mini">${cd.lines.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}</div></div></div>`;
   }).join('') + `</div>`;
@@ -2126,25 +2417,18 @@ function resolveCard(c, m, payload, status){
 async function sendPrompt(text, files){
   if (!signedIn()){ state.pendingPrompt = text; save(); renderAuth(); toast('Sign up or log in — your message is saved and will be sent after.'); return; }
   ensureOwnerScope();
-  if (!state.onboarded || !state.agent || state.agent.provisional){
-    state.pendingPrompt = text; save();
-    await startPendingPromptFlow(text);
+  const c = chat();
+  if (needsOnboarding()) {
+    if (c?.onboarding) {
+      const pq = pendingQuestion(c);
+      if (pq) answerOnboarding(c, pq.m, text);
+      else toast('Open My passport to finish setup.');
+    } else startPendingPromptFlow(text);
     return;
   }
-  const c = chat(); if (!c) return;
-  // Typed answers during in-chat onboarding resolve the pending question
-  // instead of starting a new agent run.
-  if (c.onboarding){
-    const pq = pendingQuestion(c);
-    c.messages.push({ id: uid(), role: 'user', kind: 'text', text, files: files && files.length ? files : undefined, replyTo: c.replyingTo || undefined });
-    c.replyingTo = null;
-    save();
-    if (state.view !== 'chat'){ state.view = 'chat'; }
-    paintSide(); paintMain();
-    if (pq) resolveCard(pq.c, pq.m, { choice: String(text).trim().slice(0, 60) || text }, 'answered');
-    return;
-  }
+  if (!c) return;
   const currentTask = runningTask(c);
+  const taskReply=c.taskReply;
   const route = Engine.routeMessage(currentTask, text);
   if (route === 'new-chat') {
     const next = { id: uid(), title: text.length > 42 ? text.slice(0, 42) + '…' : text, messages:[], trace:[], artifact:null, createdAt:Date.now() };
@@ -2161,6 +2445,11 @@ async function sendPrompt(text, files){
   save();
   if (state.view !== 'chat'){ state.view = 'chat'; }
   paintSide(); paintMain();
+  if (Engine.managed && taskReply) {
+    try {await Engine.controlTask(makeRT(c),taskReply,c.taskReplyScope==='team'?'steer_team':'steer',{instruction:text});c.taskReply=null;c.taskReplyScope=null;save();paintMain();}
+    catch(error){toast(error.message);}
+    return;
+  }
   if (route === 'interrupt') {
     stopDelegatedTask(c);
     await makeRT(c).say(`Stopped. The delegated worker has been interrupted, and I'm ready for your next message.`, { mood: 'idle' });
@@ -2210,43 +2499,97 @@ function newChat(){
 }
 
 /* ---------------- canvas + right-side agent slider ---------------- */
-function agentSliderContent(){
-  const t = state.agentTab || 'appearance';
+function agentAppearanceForm(a){
+  return `<div class="agent-edit-form">
+    <label class="alabel">Agent name</label>
+    <input class="field" id="agentname" maxlength="18" value="${esc(a.name)}">
+    <label class="alabel">Mascot appearance</label>
+    <div class="swatches" style="justify-content:flex-start;margin-top:8px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}" title="${Mascot.PALETTE[k].name}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
+    <label class="alabel">Personality</label>
+    <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
+  </div>`;
+}
+function canvasHeroHTML(){
   const a = state.agent;
-  let body = '';
-  if (t === 'appearance'){
-    body = `
-      <div class="aslider-sec">
-        <div style="display:flex;gap:12px;align-items:center">${Mascot.svg(a.color,'happy',54)}<div><b>${esc(a.name)}</b><div><span class="chip">Arche 1.0</span></div>${mailCache && mailCache.address ? `<div class="sub mono" style="margin-top:4px">${esc(mailCache.address)}</div>` : ''}</div></div>
-        <label class="alabel">Agent name</label>
-        <input class="field" id="agentname" maxlength="18" value="${esc(a.name)}">
-        <label class="alabel">Mascot appearance</label>
-        <div class="swatches" style="justify-content:flex-start;margin-top:8px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}" title="${Mascot.PALETTE[k].name}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
-        <label class="alabel">Personality</label>
-        <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
-      </div>`;
-  } else if (t === 'library'){
-    const arts = artifactRows();
-    body = `<div class="aslider-sec"><label class="alabel">Artifacts &amp; files (${arts.length})</label>
-      <div class="kv">${arts.map(r => `<div class="row"><span style="color:var(--mut)">${icon(r.kind === 'file' ? 'file' : 'spark',15)}</span><div><b>${esc(r.title)}</b><div class="sub">${esc(r.kind)} · from “${esc(r.chat)}”</div></div></div>`).join('') || '<div class="row mut">No artifacts or files yet.</div>'}</div>
-      </div>`;
-  } else if (t === 'approvals') {
-    const ap = approvalRows();
-    body = `<div class="aslider-sec"><label class="alabel">Approval history (${ap.length + state.vault.approvals.length})</label>
-      <div class="kv">
-        ${state.vault.approvals.map(x => `<div class="row"><span style="color:var(--green)">${icon('check',15)}</span><div><b>${esc(x.label)}</b><div class="sub">always allowed · ${fmtWhen(x.at)}</div></div><div class="rgt"><button class="btn ghost small" data-act="revoke" data-id="${x.id}">Revoke</button></div></div>`).join('')}
-        ${ap.map(x => `<div class="row"><span style="color:var(--mut)">${icon('shieldcheck',15)}</span><div><b>${esc(x.title)}</b><div class="sub">${esc(x.status)} · “${esc(x.chat)}”</div></div></div>`).join('') || (state.vault.approvals.length ? '' : '<div class="row mut">No approvals yet — sensitive actions will pause for you here.</div>')}
-      </div></div>`;
-  }
-  return `<div class="aslider fill">
-    <div class="seg canvas-seg">
-      <button class="${t === 'appearance' ? 'on' : ''}" data-act="agenttab" data-t="appearance">${icon('user',14)} Appearance</button>
-      <button class="${t === 'approvals' ? 'on' : ''}" data-act="agenttab" data-t="approvals">${icon('shieldcheck',14)} Approvals</button>
-      <button class="${t === 'library' ? 'on' : ''}" data-act="agenttab" data-t="library">${icon('file',14)} Library</button>
-    </div>${body}</div>`;
+  if (!a) return '';
+  const editing = !!state.agentEdit;
+  const st = statusFor(chat());
+  const statusLabel = (!st || st === 'Available') ? 'Connected' : st;
+  const live = statusLabel !== 'Connected';
+  return `<div class="agent-hero">
+    <div class="agent-hero-fig">
+      ${Mascot.svg(a.color, editing ? 'happy' : 'idle', 84)}
+      <button class="iconbtn agent-hero-edit${editing ? ' on' : ''}" data-act="agent-edit" title="Edit appearance">${icon('pencil',14)}</button>
+    </div>
+    <b class="agent-hero-name">${esc(a.name)}</b>
+    <span class="agent-hero-status${live ? ' busy' : ''}"><i></i>${esc(statusLabel)}</span>
+    ${mailCache && mailCache.address ? `<div class="sub mono agent-hero-mail">${esc(mailCache.address)}</div>` : ''}
+    ${editing ? agentAppearanceForm(a) : ''}
+  </div>`;
+}
+function passportTabContent(){
+  const a = state.agent;
+  return `<section class="aslider-sec passport-panel"><h2>My passport</h2>
+    <p>Hej, I’m ${esc(a.name)} — your personal agent.</p>
+    <div class="kv">
+      <div class="row">${icon('user',16)}<div><b>Your agent</b><div class="sub">${esc(a.name)} · ${esc(Mascot.PALETTE[a.color]?.name || a.color)}</div></div></div>
+      <div class="row">${icon('lock',16)}<div><b>My own secure computer</b><div class="sub">A workspace for browsing, coding, and creating files on your behalf.</div></div></div>
+      <div class="row">${icon('spark',16)}<div><b>What I can do</b><div class="sub">Research, write, build, organize tasks, and work with your connected apps.</div></div></div>
+      <div class="row">${icon('shieldcheck',16)}<div><b>You’re in control</b><div class="sub">I’ll ask for access or approval when needed. Review my work, memory, and approvals here.</div></div></div>
+    </div></section>`;
+}
+function libraryTabContent(){
+  const arts = artifactRows();
+  return `<div class="aslider-sec"><label class="alabel">Artifacts &amp; files (${arts.length})</label>
+    <div class="kv">${arts.map(r => `<div class="row"><span style="color:var(--mut)">${icon(r.kind === 'file' ? 'file' : 'spark',15)}</span><div><b>${esc(r.title)}</b><div class="sub">${esc(r.kind)} · from “${esc(r.chat)}”</div></div><div class="rgt"><button class="btn ghost small" data-act="library-open" data-chat="${r.chatId}"${r.messageId ? ` data-msg="${r.messageId}"` : ''}>Open</button></div></div>`).join('') || '<div class="row mut">No artifacts or files yet.</div>'}</div>
+    </div>`;
+}
+function approvalsTabContent(){
+  const ap = approvalRows();
+  return `<div class="aslider-sec"><label class="alabel">Approval history (${ap.length + state.vault.approvals.length})</label>
+    <div class="kv">
+      ${state.vault.approvals.map(x => `<div class="row"><span style="color:var(--green)">${icon('check',15)}</span><div><b>${esc(x.label)}</b><div class="sub">always allowed · ${fmtWhen(x.at)}</div></div><div class="rgt"><button class="btn ghost small" data-act="revoke" data-id="${x.id}">Revoke</button></div></div>`).join('')}
+      ${ap.map(x => `<div class="row"><span style="color:var(--mut)">${icon('shieldcheck',15)}</span><div><b>${esc(x.title)}</b><div class="sub">${esc(x.status)} · “${esc(x.chat)}”</div></div></div>`).join('') || (state.vault.approvals.length ? '' : '<div class="row mut">No approvals yet — sensitive actions will pause for you here.</div>')}
+    </div></div>`;
 }
 
-/* Sub Agents panel — now a top-level canvas tab next to Trace. */
+function paymentsTabContent(){
+  const stripe = composioAppByToolkit('stripe');
+  const connected = !!stripe?.connected;
+  const checking = state.composioLoading;
+  const status = checking ? 'Checking…' : connected ? 'Connected' : stripe ? 'Ready to connect' : 'Unavailable';
+  return `<div class="payments-panel">
+    <div class="payments-intro">
+      <span class="payments-intro-icon">${icon('wallet',24)}</span>
+      <h2>Let your agent earn for you</h2>
+      <p>Connect payment tools so your agent can help with the work that brings in revenue.</p>
+    </div>
+    <article class="payments-option">
+      <div class="payments-option-head">
+        <span class="payments-option-icon stripe-mark">${stripe ? appLogoHtml(stripe) : 'S'}</span>
+        <div><h3>Stripe</h3><p>Connect Stripe for payment and revenue tasks.</p></div>
+        <span class="chip ${connected ? 'green' : ''}">${status}</span>
+      </div>
+      <div class="payments-option-actions">
+        ${connected
+          ? `<button class="btn ghost small" data-act="payments-stripe-apps">Manage connection</button>`
+          : stripe
+            ? `<button class="btn small" data-act="connect-app" data-toolkit="stripe" data-auth="${esc(stripe.authConfigId || '')}">Connect Stripe</button>`
+            : `<button class="btn small" disabled>Connect Stripe</button><span class="payments-note">${checking ? 'Checking Stripe availability…' : 'Stripe connection is not available on this server yet.'}</span>`}
+        <button class="btn ghost small" data-act="refresh-apps" aria-label="Refresh Stripe connection">${icon('refresh',14)} Refresh</button>
+      </div>
+    </article>
+    <article class="payments-option payments-option-soon">
+      <div class="payments-option-head">
+        <span class="payments-option-icon">${icon('card',20)}</span>
+        <div><h3>Card</h3><p>Let your agent spend for you.</p></div>
+        <span class="chip">Coming soon</span>
+      </div>
+    </article>
+  </div>`;
+}
+
+/* Sub Agents / Automations panel. */
 function subAgentsTabContent(){
   const agents = state.subAgents || [];
   const kind = state.subAgentTriggerType || 'schedule';
@@ -2284,6 +2627,10 @@ function liveIdFor(c){
     const m = c.messages[i];
     if (m.kind === 'card' && m.card.type === 'browser' && m.card.liveId) return m.card.liveId;
   }
+  for (let i = (c.canvasRuns || []).length - 1; i >= 0; i--){
+    const card = c.canvasRuns[i].card;
+    if (card.type === 'browser' && card.liveId) return card.liveId;
+  }
   return null;
 }
 function computerLinesFor(c){
@@ -2311,17 +2658,19 @@ function liveClose(){
   try { pcWS && pcWS.close(); } catch {}
   liveWS = null; liveIdShown = null; liveControl = false; pcWS = null; pcIdShown = null;
 }
-function paintLive(body, c){
-  const id = liveIdFor(c);
+function paintLive(body, c, selectedId){
+  const id = selectedId || liveIdFor(c);
   const terms = computerLinesFor(c);
   if (!id){
     if (liveIdShown) liveClose();
     body.innerHTML = `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">No live session</div><div class="mut2">Ask for research and the agent's real browser appears here — watch it, take over, hand back.</div></div>`;
     return;
   }
-  const poster = (c.messages || []).reduce((acc, m) => (m.kind === 'card' && m.card.type === 'browser' && m.card.screenshot) ? m.card.screenshot : acc, '');
+  const browserCards = [...(c.messages || []).filter(m => m.kind === 'card'), ...(c.canvasRuns || [])];
+  const poster = browserCards.filter(m => !selectedId || m.card.liveId === selectedId).reduce((acc, m) => (m.card.type === 'browser' && m.card.screenshot) ? m.card.screenshot : acc, '');
   window.__liveFrames = 0;
   body.innerHTML = `
+    <button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>
     <div class="livewrap" id="livewrap">
       <div class="livebar"><span class="url" id="liveurl">connecting…</span><span class="chip purple" id="livestate">connecting</span></div>
       <div class="liveview" id="liveview">
@@ -2334,13 +2683,13 @@ function paintLive(body, c){
         <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
         <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">streaming the real page</div></div>
         <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
-        <button class="btn ghost small" data-act="closestop-live">Close</button>
+        <button class="btn ghost small" data-act="canvas-back">Back</button>
       </div>
     </div>`;
   liveConnect(id);
 }
 function liveConnect(id){
-  if (liveWS && liveIdShown === id){ pcConnect(); return; }
+  if (liveWS && liveIdShown === id){ bindLiveInput(liveWS); liveState(liveControl ? 'user' : 'idle'); pcConnect(); return; }
   liveClose();
   const sess = window.LingonAuth && window.LingonAuth.get();
   if (!sess || !sess.access_token){ $('#livestate').textContent = 'sign in expired'; return; }
@@ -2355,7 +2704,13 @@ function liveConnect(id){
     if (m.state) liveState(m.state, m);
   };
   ws.onclose = () => { if (st()){ st().textContent = 'session ended'; } const b = $('#takebtn'); if (b){ b.disabled = true; } };
+  bindLiveInput(ws);
+  pcConnect();
+}
+
+function bindLiveInput(ws){
   const view = $('#liveview'), cur = $('#bigcursor');
+  if (!view || !cur) return;
   let lastMove = 0;
   const pos = (e) => {
     const r = view.getBoundingClientRect();
@@ -2375,14 +2730,13 @@ function liveConnect(id){
     if (e.key.length === 1) liveSend({ type: 'type', text: e.key });
     else if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Delete'].includes(e.key)){ e.preventDefault(); liveSend({ type: 'key', key: e.key }); }
   };
-  pcConnect();
 }
 /* Computer stream: appends real sandbox output lines as runs happen. */
-function pcConnect(){
+function pcConnect(selectedId){
   const c = chat();
-  const pcId = pcIdFor(c);
-  const out = $('#pcout');
-  if (!pcId || !out) return;
+  const pcId = selectedId || pcIdFor(c);
+  const out = () => $('#pcout');
+  if (!pcId || !out()) return;
   if (pcWS && pcIdShown === pcId) return;
   try { pcWS && pcWS.close(); } catch {}
   const sess = window.LingonAuth && window.LingonAuth.get();
@@ -2392,11 +2746,11 @@ function pcConnect(){
   pcWS = ws; pcIdShown = pcId;
   ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.hello && m.log && out) out.innerHTML = m.log.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('');
-    if (Array.isArray(m.out) && out){
-      if (out.querySelector('.mut') && out.children.length <= 1) out.innerHTML = '';
-      m.out.forEach(L => { out.insertAdjacentHTML('beforeend', `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`); });
-      out.scrollTop = out.scrollHeight;
+    if (m.hello && m.log && out()) out().innerHTML = m.log.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('');
+    if (Array.isArray(m.out) && out()){
+      if (out().querySelector('.mut') && out().children.length <= 1) out().innerHTML = '';
+      m.out.forEach(L => { out().insertAdjacentHTML('beforeend', `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`); });
+      out().scrollTop = out().scrollHeight;
     }
     if (m.state) liveState(m.state === 'user' ? 'user' : m.state);
   };
@@ -2432,35 +2786,82 @@ async function liveSend(ev){
   } catch {}
 }
 let mailCache = null;
-async function ensureMailbox(name){
-  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return mailCache;
-  const agentName = String(name || (state.agent && state.agent.name) || 'Agent').trim();
-  try {
-    mailCache = await window.LingonAuth.api('/api/mail/ensure', { method:'POST', body: JSON.stringify({ agentName }) });
-  } catch (e) {
-    mailCache = Object.assign({ error: e.message, configured:false, address:null, messages:[], drafts:[], unread:0 }, mailCache || {});
+let mailOwner = null;
+let mailboxEnsuredName = null;
+let mailboxPending = null;
+let mailFetchPending = null;
+let mailFetchSeq = 0;
+function scopeMailCache(){
+  const owner = billingIdentity();
+  if (owner !== mailOwner) {
+    mailOwner = owner;
+    mailCache = null;
+    mailboxEnsuredName = null;
+    mailboxPending = null;
+    mailFetchPending = null;
+    mailFetchSeq++;
   }
-  return mailCache;
+  return owner;
+}
+async function ensureMailbox(name){
+  const owner = scopeMailCache();
+  if (!owner) return null;
+  const agentName = String(name || (state.agent && state.agent.name) || 'Agent').trim();
+  if (mailboxEnsuredName === agentName && mailCache) return mailCache;
+  if (mailboxPending) {
+    if (mailboxPending.name === agentName) return mailboxPending.promise;
+    await mailboxPending.promise;
+    if (owner !== billingIdentity()) return null;
+  }
+  const seq = mailFetchSeq;
+  const request = window.LingonAuth.api('/api/mail/ensure', { method:'POST', body: JSON.stringify({ agentName }) })
+    .then((data) => {
+      if (owner !== billingIdentity()) return null;
+      if (seq === mailFetchSeq) mailCache = data;
+      mailboxEnsuredName = agentName;
+      return data;
+    }).catch((e) => {
+      if (owner !== billingIdentity()) return null;
+      if (seq === mailFetchSeq) mailCache = { configured:false, address:null, messages:[], drafts:[], unread:0, ...(mailCache || {}), error:e.message };
+      return mailCache;
+    }).finally(() => { if (mailboxPending?.promise === request) mailboxPending = null; });
+  mailboxPending = { name: agentName, promise: request };
+  return request;
 }
 async function getMail(force, folder){
-  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return mailCache;
+  const owner = scopeMailCache();
+  if (!owner) return null;
   const tab = folder || state.mailTab || 'inbox';
   if (mailCache && !force && mailCache.folder === tab && tab !== 'write') return mailCache;
-  try {
-    const name = (state.agent && state.agent.name) || '';
-    if (tab === 'write') {
-      mailCache = await window.LingonAuth.api('/api/mail?folder=inbox&name=' + encodeURIComponent(name));
-      mailCache.folder = 'write';
-    } else {
-      mailCache = await window.LingonAuth.api('/api/mail?folder=' + encodeURIComponent(tab) + '&name=' + encodeURIComponent(name));
+  if (mailFetchPending?.owner === owner && mailFetchPending.tab === tab) return mailFetchPending.promise;
+  const seq = ++mailFetchSeq;
+  const request = (async () => {
+    try {
+      const name = (state.agent && state.agent.name) || '';
+      let result;
+      if (tab === 'write') {
+        result = await window.LingonAuth.api('/api/mail?folder=inbox&name=' + encodeURIComponent(name));
+        result.folder = 'write';
+      } else {
+        result = await window.LingonAuth.api('/api/mail?folder=' + encodeURIComponent(tab) + '&name=' + encodeURIComponent(name));
+      }
+      if (owner === billingIdentity() && seq === mailFetchSeq) mailCache = result;
+      return result;
+    } catch (e) {
+      if (owner !== billingIdentity()) return null;
+      const fallback = { configured:false, address:null, messages:[], drafts:[], unread:0, ...(mailCache || {}), error:e.message, folder:tab };
+      if (seq === mailFetchSeq) mailCache = fallback;
+      return fallback;
     }
-  } catch (e) {
-    mailCache = Object.assign({ error: e.message, configured:false, address:null, messages:[], drafts:[], unread:0, folder: tab }, mailCache || {});
-  }
-  return mailCache;
+  })().finally(() => { if (mailFetchPending?.promise === request) mailFetchPending = null; });
+  mailFetchPending = { owner, tab, promise: request };
+  return request;
 }
 async function openMailMessage(id){
+  const owner = scopeMailCache();
+  if (!owner) return null;
   const j = await window.LingonAuth.api('/api/mail/messages/' + encodeURIComponent(id));
+  if (owner !== billingIdentity()) return null;
   mailCache = mailCache || {};
   mailCache.selected = j.message;
   if (mailCache.messages) mailCache.messages = mailCache.messages.map((m) => m.id === id ? Object.assign({}, m, { isRead:true }) : m);
@@ -2507,6 +2908,7 @@ function mailReader(msg){
   </div>`;
 }
 function paintMail(body){
+  scopeMailCache();
   const tab = state.mailTab || 'inbox';
   const m = mailCache;
   const unread = m && m.unread ? m.unread : 0;
@@ -2548,200 +2950,152 @@ function paintMail(body){
   if (!m) getMail(true, tab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
 }
 
-let walletCache = null;
-async function getWallet(force){
-  if (!window.LingonAuth || !window.LingonAuth.signedIn()) return walletCache;
-  if (walletCache && !force) return walletCache;
-  try { walletCache = await window.LingonAuth.api('/api/wallet'); } catch (e) {
-    walletCache = Object.assign({ error: e.message, configured:false, card:{ status:'none' }, balances:[], activity:[] }, walletCache || {});
+const canvasFileCache = new Map();
+function canvasFileContent(c, m){
+  const card = m.card;
+  if (typeof card.content === 'string') return card.content;
+  if (card.dataUrl) return card.dataUrl;
+  if (!card.managedArtifactId) return '';
+  const key = `${c.id}:${card.managedArtifactId}`;
+  if (!canvasFileCache.has(key)) {
+    canvasFileCache.set(key, { loading:true });
+    window.LingonAuth.apiStream(`/api/agent/artifact?chatId=${encodeURIComponent(c.id)}&id=${encodeURIComponent(card.managedArtifactId)}`)
+      .then(async response => {
+        if (!response.ok) throw new Error('File preview could not be loaded.');
+        const blob = await response.blob();
+        if (blob.size > 10 * 1024 * 1024) throw new Error('This file is too large to preview.');
+        const content = /^(text\/|application\/(json|xml|javascript))/.test(blob.type) ? await blob.text() : await new Promise((resolve,reject) => {
+          const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob);
+        });
+        canvasFileCache.set(key, { content });
+      })
+      .catch(error => canvasFileCache.set(key, { error:error.message }))
+      .finally(() => { if (state.activeChat === c.id && c.canvasSelectedMessageId === m.id && state.canvasOpen) paintCanvas(); });
   }
-  return walletCache;
+  return canvasFileCache.get(key);
 }
-function shortAddr(a){
-  const s = String(a || '');
-  return s.length > 12 ? s.slice(0, 6) + '…' + s.slice(-4) : s;
+function canvasDocumentHTML(file, value){
+  const name = String(file.name || file.title || 'File');
+  const format = String(file.format || name.split('.').pop() || 'text').toLowerCase();
+  const raw = typeof value === 'string' ? value : value?.content || '';
+  const header = `<div class="arti-head"><b>${esc(name)}</b><span class="chip">${esc(format)}</span></div>`;
+  if (value?.loading) return header + '<div class="canvas-file-note">Loading preview…</div>';
+  if (value?.error) return header + `<div class="canvas-file-note">${esc(value.error)}</div>`;
+  if (/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(raw)) return header + `<img class="canvas-file-image" src="${esc(raw)}" alt="${esc(name)}">`;
+  if (/^data:application\/pdf;base64,/i.test(raw)) return header + `<iframe class="canvas-file-pdf" title="${esc(name)}" src="${esc(raw)}"></iframe>`;
+  let content = raw;
+  if (/^data:[^,]*;base64,/i.test(raw)) {
+    try { content = new TextDecoder().decode(Uint8Array.from(atob(raw.slice(raw.indexOf(',') + 1)), c => c.charCodeAt(0))); }
+    catch { return header + '<div class="canvas-file-note">Preview unavailable. Download this file to open it.</div>'; }
+  }
+  if (format === 'html' || format === 'htm' || format === 'svg') return header + `<div class="arti-frame"><iframe sandbox="allow-scripts" title="${esc(name)}" srcdoc="${esc(content)}"></iframe></div>`;
+  if (format === 'md' || format === 'markdown') return header + `<div class="canvas-document">${md(content)}</div>`;
+  return header + `<pre class="canvas-file-text">${esc(content || 'No preview available for this file.')}</pre>`;
 }
-function walletCardFace(w){
-  const a = state.agent || {};
-  const card = (w && w.card) || {};
-  const last4 = card.last4 ? String(card.last4) : '••••';
-  const status = card.status || 'none';
-  const stLabel = status === 'active' ? 'Active' : status === 'pending_kyc' ? 'KYC' : status === 'pending' ? 'Attached' : status === 'frozen' ? 'Frozen' : 'Ready';
-  return `<div class="awallet-card ${status}">
-    <div class="awallet-card-top"><span>${icon('wallet',14)} ${esc(a.name || 'Agent')} card</span><span class="chip">${esc(stLabel)}</span></div>
-    <div class="awallet-card-chip"></div>
-    <div class="awallet-card-no">•••• •••• •••• ${esc(last4)}</div>
-    <div class="awallet-card-bot">
-      <div><small>Holder</small><b>${esc(card.holderName || a.name || 'Agent')}</b></div>
-      <div><small>Tied to</small><b class="mono">${esc(shortAddr(w && w.address))}</b></div>
-    </div>
-  </div>`;
+function canvasGalleryHTML(c){
+  if (!c) return '';
+  const items = [];
+  for (const m of c.messages || []) {
+    if (m.kind === 'card') items.push({m, label:m.card.title || m.card.name || m.card.q || m.card.note || m.card.label || m.card.type, kind:m.card.type});
+    for (const [i,file] of (m.files || []).entries()) items.push({m, i, label:file.name, kind:'file'});
+  }
+  if (!items.length) return '';
+  return `<div class="canvas-gallery"><div class="runhead">${icon('board',14)} From this chat</div>${items.slice(-30).reverse().map(item => `<button class="canvas-gallery-item" data-act="${item.i === undefined ? 'canvas-card' : 'canvas-upload'}" data-chat="${c.id}" data-msg="${item.m.id}"${item.i === undefined ? '' : ` data-i="${item.i}"`}><span>${icon(item.kind === 'browser' ? 'globe' : item.kind === 'file' ? 'file' : item.kind === 'computer' ? 'term' : 'board',15)}</span><b>${esc(item.label)}</b><small>${esc(item.kind)}</small></button>`).join('')}</div>`;
 }
-function walletOverviewBody(w){
-  const ready = !!(w && w.address);
-  const a = state.agent || {};
-  const bals = (w && w.balances) || [];
-  const balRows = bals.map((b) => `<div class="row"><span style="color:var(--mut)">${icon('wallet',15)}</span><div><b>${esc(String(b.asset || '').toUpperCase())}</b><div class="sub">${esc(b.chain || w.chain || 'base')}</div></div><div class="rgt"><b>${esc(b.amount || '0')}</b>${b.usd ? `<div class="sub">$${esc(b.usd)}</div>` : ''}</div></div>`).join('')
-    || `<div class="row mut">${ready ? 'No on-chain balance yet — send USDC on Base to this address.' : 'Create the wallet to see balances.'}</div>`;
-  return `
-    <div class="warnband">${icon('shieldcheck',18)}<div><b>How ${esc(a.name || 'your agent')} spends</b>1. They ask in chat (“buy X for $Y”). 2. You tap Allow. 3. The wallet sends coins, or the card may charge that amount only. They never get the card number or the key.</div></div>
-    <div class="kv">
-      <div class="row"><span style="color:var(--mut)">${icon('wallet',16)}</span>
-        <div><b>${ready ? esc(a.name || 'Agent') + '’s wallet' : 'No wallet yet'}</b><div class="sub mono">${ready ? esc(w.address) : (w && w.configured === false ? 'Add PRIVY_APP_ID and PRIVY_APP_SECRET on the server' : 'Create a Privy wallet for this agent')}</div></div>
-        <div class="rgt">${ready ? `<button class="iconbtn" data-act="w-copy" title="Copy address">${icon('copy',14)}</button>` : `<button class="btn small" data-act="w-ensure">${icon('plus',14)} Create wallet</button>`}</div>
-      </div>
-      <div class="row"><span style="color:var(--mut)">${icon('shield',16)}</span>
-        <div><b>Daily spend cap</b><div class="sub">USDC the agent may send after you approve</div></div>
-        <div class="rgt"><input class="field" id="wlimit" type="number" min="1" max="500" step="1" value="${esc(w && w.dailyLimitUsd != null ? w.dailyLimitUsd : 50)}" style="max-width:88px"> <button class="btn ghost small" data-act="w-limit">Save</button></div>
-      </div>
-      <div class="row"><span style="color:var(--green)">${icon('check',16)}</span>
-        <div><b>Remaining today</b><div class="sub">$${esc((w && w.spentTodayUsd) || 0)} used</div></div>
-        <div class="rgt"><b>$${(w && w.remainingTodayUsd != null) ? esc(w.remainingTodayUsd) : '—'}</b></div>
-      </div>
-    </div>
-    <label class="alabel">Balances</label>
-    <div class="kv">${balRows}</div>
-    ${ready ? `<div class="psec"><label class="alabel">Send (you confirm)</label>
-      <div class="kv"><div class="row" style="background:var(--panel);flex-wrap:wrap;gap:8px">
-        <select class="field" id="wasset" style="max-width:110px"><option value="usdc">USDC</option><option value="eth">ETH</option></select>
-        <input class="field" id="wamt" placeholder="0.00" style="max-width:110px">
-        <input class="field mono" id="wto" placeholder="0x…" style="flex:1;min-width:160px">
-        <button class="btn small" data-act="w-send">${icon('up',14)} Send</button>
-      </div></div></div>` : ''}
-    <label class="alabel">Activity</label>
-    <div class="kv">${((w && w.activity) || []).map((t) => `<div class="row"><span style="color:var(--mut)">${icon('wallet',15)}</span><div><b>${esc(t.kind)} · ${esc(t.asset)} ${esc(t.amount)}</b><div class="sub">${esc(t.to || '')} · ${esc(t.status)}</div></div><div class="rgt"><span class="chip">${esc(t.status)}</span></div></div>`).join('') || '<div class="row mut">No transfers yet.</div>'}</div>`;
-}
-function walletCardBody(w){
-  const card = (w && w.card) || { status:'none' };
-  const bill = card.billing || {};
-  const attached = card.status && card.status !== 'none';
-  const buys = (w && w.purchases) || [];
-  return `
-    ${walletCardFace(w)}
-    <div class="warnband">${icon('card',18)}<div><b>Stripe one-time virtual cards.</b>You approve in chat → Stripe Issuing mints a single-use Visa locked to that amount. The agent only sees last four. You reveal the digits here to finish checkout. The model never gets the number.</div></div>
-    <div class="kv">
-      <div class="row"><span style="color:var(--mut)">${icon('card',16)}</span>
-        <div><b>${attached ? 'Standing card attached' : 'Attach the agent card'}</b><div class="sub">${w && w.address ? ('Wallet ' + esc(shortAddr(w.address))) : 'Create the wallet first'}</div></div>
-        <div class="rgt">${attached ? `<span class="chip green">${esc(card.status)}</span>` : `<button class="btn small" data-act="w-card" ${w && w.address ? '' : 'disabled'}>${icon('card',14)} Attach card</button>`}</div>
-      </div>
-    </div>
-    <label class="alabel">Billing (for Stripe Issuing)</label>
-    <div class="kv"><div class="row" style="background:var(--panel);flex-wrap:wrap;gap:8px">
-      <input class="field" id="w-line1" placeholder="Street" value="${esc(bill.line1 || '')}" style="flex:1;min-width:140px">
-      <input class="field" id="w-city" placeholder="City" value="${esc(bill.city || '')}" style="max-width:140px">
-      <input class="field" id="w-postal" placeholder="ZIP" value="${esc(bill.postal || '')}" style="max-width:90px">
-      <input class="field" id="w-country" placeholder="US" value="${esc(bill.country || 'US')}" style="max-width:70px">
-      <button class="btn ghost small" data-act="w-billing">Save</button>
-    </div></div>
-    <label class="alabel">One-time virtual cards</label>
-    <div class="kv">${buys.map((p) => `<div class="row"><span style="color:var(--mut)">${icon('card',15)}</span><div><b>$${esc(p.amount)} at ${esc(p.merchant)}</b><div class="sub">${p.issuing ? 'Stripe virtual · ' : ''}${p.last4 ? '•••• ' + esc(p.last4) : 'no last4'} · ${esc(p.reason || 'approved in chat')}${p.issuingError ? ' · ' + esc(p.issuingError) : ''}</div></div><div class="rgt">${p.issuing ? `<button class="btn ghost small" data-act="w-reveal" data-id="${esc(p.id)}">Reveal</button>` : ''}<span class="chip">${esc(p.status)}</span></div></div>`).join('') || '<div class="row mut">None yet. Approve a purchase in chat and Stripe will mint a one-time card.</div>'}
-    </div>
-    <div id="issuing-reveal" class="issuing-reveal" hidden>
-      <label class="alabel">Card number (you only)</label><div id="issuing-number" class="issuing-el"></div>
-      <div class="issuing-row"><div><label class="alabel">Expiry</label><div id="issuing-exp" class="issuing-el"></div></div><div><label class="alabel">CVC</label><div id="issuing-cvc" class="issuing-el"></div></div></div>
-    </div>`;
-}
-function loadStripeJs(){
-  return new Promise((resolve, reject) => {
-    if (window.Stripe) return resolve(window.Stripe);
-    const s = document.createElement('script');
-    s.src = 'https://js.stripe.com/v3/';
-    s.onload = () => resolve(window.Stripe);
-    s.onerror = () => reject(new Error('Could not load Stripe.'));
-    document.head.appendChild(s);
-  });
-}
-async function revealStripeCard(purchaseId){
-  const w = walletCache;
-  const buy = ((w && w.purchases) || []).find((p) => p.id === purchaseId);
-  if (!buy || !buy.stripeCardId) throw new Error('No Stripe virtual card on that purchase.');
-  if (!w.stripePk) throw new Error('Add STRIPE_PUBLISHABLE_KEY to the server to reveal the card.');
-  const StripeCtor = await loadStripeJs();
-  const stripe = StripeCtor(w.stripePk);
-  const nonceRes = await stripe.createEphemeralKeyNonce({ issuingCard: buy.stripeCardId });
-  const ek = await window.LingonAuth.api('/api/wallet/purchases/' + encodeURIComponent(purchaseId) + '/ephemeral', { method:'POST', body: JSON.stringify({ nonce: nonceRes.nonce }) });
-  const box = $('#issuing-reveal');
-  if (box) box.hidden = false;
-  const elements = stripe.elements();
-  const opts = { issuingCard: buy.stripeCardId, nonce: nonceRes.nonce, ephemeralKeySecret: ek.secret };
-  ['issuing-number','issuing-exp','issuing-cvc'].forEach((id) => { const n = document.getElementById(id); if (n) n.innerHTML = ''; });
-  if ($('#issuing-number')) elements.create('issuingCardNumberDisplay', opts).mount('#issuing-number');
-  if ($('#issuing-exp')) elements.create('issuingCardExpiryDisplay', opts).mount('#issuing-exp');
-  if ($('#issuing-cvc')) elements.create('issuingCardCvcDisplay', opts).mount('#issuing-cvc');
-}
-
-function paintWallet(body){
-  const tab = state.walletTab || 'wallet';
-  const w = walletCache;
-  const err = w && w.error ? `<div class="trigger-error">${esc(w.error)}</div>` : '';
-  const inner = !w
-    ? `<div class="cempty">${icon('wallet',28)}<div class="mut2">Loading wallet…</div></div>`
-    : tab === 'card' ? walletCardBody(w) : walletOverviewBody(w);
-  body.innerHTML = `<div class="aslider fill wallet-panel">
-    <div class="seg canvas-seg">
-      <button class="${tab === 'wallet' ? 'on' : ''}" data-act="wtab" data-t="wallet">${icon('wallet',14)} Wallet</button>
-      <button class="${tab === 'card' ? 'on' : ''}" data-act="wtab" data-t="card">${icon('card',14)} Card</button>
-      <button class="iconbtn" data-act="w-refresh" title="Refresh" style="margin-left:auto">${icon('refresh',14)}</button>
-    </div>${err}${inner}</div>`;
-  centerActiveSeg(body);
-  if (!w) getWallet(true).then(() => { if (state.canvasTab === 'wallet' && $('#cbody')) paintWallet($('#cbody')); });
+function paintCanvasSelection(body, c, m){
+  const file = c.canvasSelectedFileIndex !== undefined ? m.files?.[c.canvasSelectedFileIndex] : null;
+  if (file) {
+    body.innerHTML = `<button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>${canvasDocumentHTML(file, file.dataUrl || file.content || '')}`;
+    return;
+  }
+  const cd = m.card;
+  if (cd.type === 'browser' && cd.liveId) { paintLive(body, c, cd.liveId); return; }
+  const back = `<button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>`;
+  if (cd.type === 'browser') {
+    const index = c.messages.indexOf(m);
+    const related = c.messages.slice(index).filter(item => item.card?.type === 'browser' && (!cd.taskId || item.card.taskId === cd.taskId));
+    const latest = related.at(-1)?.card || cd;
+    const screenshot = [...related].reverse().find(item => item.card.screenshot)?.card.screenshot || cd.screenshot;
+    body.innerHTML = back + `<div class="arti-head"><b>Browser view</b><span class="chip">${esc(latest.status || '')}</span></div><div class="rurl">${esc(latest.url || cd.url || '')}</div><p class="rnote">${esc(latest.note || '')}</p>${screenshot ? `<img class="canvas-file-image" src="${esc(screenshot)}" alt="Browser screenshot">` : '<div class="canvas-file-note">Waiting for the browser image…</div>'}`;
+    return;
+  }
+  if (cd.type === 'computer') {
+    const index = c.messages.indexOf(m);
+    const related = c.messages.slice(index).filter(item => item.card?.type === 'computer' && (!cd.taskId || item.card.taskId === cd.taskId));
+    const latest = related.at(-1)?.card || cd;
+    const lines = related.flatMap(item => item.card.lines || []).slice(-40);
+    body.innerHTML = back + `<div class="arti-head"><b>Computer output</b><span class="chip">${esc(latest.status || '')}</span></div><div class="term mini" id="pcout">${lines.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('')}${latest.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div>`;
+    if (cd.pcId) pcConnect(cd.pcId);
+    return;
+  }
+  if (cd.type === 'file' || cd.type === 'canvas') {
+    body.innerHTML = back + canvasDocumentHTML(cd, cd.type === 'file' ? canvasFileContent(c,m) : cd.content);
+    return;
+  }
+  body.innerHTML = back + `<div class="canvas-selected-card">${cardNode(c,m)}</div>`;
 }
 
 function paintCanvas(){
   const cv = $('#canvas'); if (!cv) return;
-  // Migrate legacy 'live' tab to 'canvas'
-  if (state.canvasTab === 'live') state.canvasTab = 'canvas';
+  scopeMailCache();
+  if (state.canvasTab === 'agent') state.canvasTab = 'approvals';
+  if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
+  if (!['canvas', 'passport', 'subagents', 'mail', 'payments', 'library', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
   if (!state._showLiveInCanvas) state._showLiveInCanvas = false;
-  if (!(state.canvasTab === 'canvas' && state._showLiveInCanvas)){ if (liveWS) liveClose(); }
   const c = chat();
   const top = state.canvasTab || 'canvas';
+  const selected = c && (c.messages || []).find(m => m.id === c.canvasSelectedMessageId);
+  if (!(top === 'canvas' && (state._showLiveInCanvas || selected?.card?.liveId)) && (liveWS || pcWS)) liveClose();
   const liveId = liveIdFor(c);
   cv.innerHTML = `
     <div class="canvas-resize" id="canvasResize"></div>
     <div class="canvas-head">
-      <div class="seg canvas-seg">
-        <button class="${top === 'agent' ? 'on' : ''}" data-act="ctab" data-t="agent" title="Agent panel">${Mascot.svg(state.agent.color,'idle',18)}<span>${esc(state.agent.name)}</span></button>
-        <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
-        <button class="${top === 'trace' ? 'on' : ''}" data-act="ctab" data-t="trace">${icon('list',14)} Trace <span class="cnt">${(c && c.trace || []).length}</span></button>
-        <button class="${top === 'subagents' ? 'on' : ''}" data-act="ctab" data-t="subagents">${icon('clock',14)} Sub Agents <span class="cnt">${(state.subAgents || []).length}</span></button>
-        <button class="${top === 'mail' ? 'on' : ''}" data-act="ctab" data-t="mail">${icon('mail',14)} Mail${mailCache && mailCache.unread ? ` <span class="cnt">${mailCache.unread}</span>` : ''}</button>
-        <button class="${top === 'wallet' ? 'on' : ''}" data-act="ctab" data-t="wallet">${icon('wallet',14)} Wallet</button>
+      ${canvasHeroHTML()}
+      <div class="canvas-head-row">
+        <div class="seg canvas-seg">
+          <button class="${top === 'passport' ? 'on' : ''}" data-act="ctab" data-t="passport">${icon('user',14)} My passport</button>
+          <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('board',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
+          <button class="${top === 'subagents' ? 'on' : ''}" data-act="ctab" data-t="subagents">${icon('clock',14)} Automations <span class="cnt">${(state.subAgents || []).length}</span></button>
+          <button class="${top === 'mail' ? 'on' : ''}" data-act="ctab" data-t="mail">${icon('mail',14)} Mail${mailCache && mailCache.unread ? ` <span class="cnt">${mailCache.unread}</span>` : ''}</button>
+          <button class="${top === 'payments' ? 'on' : ''}" data-act="ctab" data-t="payments">${icon('wallet',14)} Payments</button>
+          <button class="${top === 'library' ? 'on' : ''}" data-act="ctab" data-t="library">${icon('file',14)} Library</button>
+          <button class="${top === 'approvals' ? 'on' : ''}" data-act="ctab" data-t="approvals">${icon('shieldcheck',14)} Approvals</button>
+        </div>
+        <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
       </div>
-      <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
     </div>
     <div class="cbody" id="cbody"></div>`;
   initCanvasResize();
   centerActiveSeg(cv);
+  const an = $('#agentname');
+  if (an) an.addEventListener('change', e => {
+    const v = e.target.value.trim(); if (!v) return;
+    state.agent.name = v; save(); paintSide(); paintMain(); paintCanvas();
+    ensureMailbox(v).then(() => { if ($('#cbody')) paintCanvas(); });
+    toast('Renamed — they answer to ' + v + ' now.');
+  });
   const body = $('#cbody');
+  if (top === 'passport') { body.innerHTML = passportTabContent(); return; }
   if (top === 'mail'){
     paintMail(body);
     return;
   }
-  if (top === 'wallet'){
-    paintWallet(body);
+  if (top === 'library'){
+    body.innerHTML = libraryTabContent();
     return;
   }
-  if (top === 'agent'){
-    body.innerHTML = agentSliderContent();
-    centerActiveSeg(body);
-    const an = $('#agentname');
-    if (an) an.addEventListener('change', e => {
-      const v = e.target.value.trim(); if (!v) return;
-      state.agent.name = v; save(); paintSide(); paintMain(); paintCanvas();
-      ensureMailbox(v).then(() => { if (state.canvasTab === 'agent' && $('#cbody')) paintCanvas(); });
-      toast('Renamed — they answer to ' + v + ' now.');
-    });
+  if (top === 'payments'){
+    body.innerHTML = paymentsTabContent();
+    if (!state.composioLoading && signedIn()) refreshComposioApps();
     return;
   }
-  if (state.canvasTab === 'trace'){
-    body.innerHTML = (c && c.trace && c.trace.length)
-      ? `<div class="tools" style="border:none;padding:0">${c.trace.map(t => `<div class="tline">${icon(t.ic,13)}<span>${esc(t.t)}</span></div>`).join('')}</div>`
-      : `<div class="cempty">${Mascot.svg(state.agent.color,'think',70,'mascot-bob')}<div class="mut2">Every tool call, guardrail and sub-agent step will appear here.</div></div>`;
+  if (top === 'approvals'){
+    body.innerHTML = approvalsTabContent();
     return;
   }
   if (state.canvasTab === 'subagents'){
     body.innerHTML = subAgentsTabContent();
-    refreshSubAgents(false);
+    refreshSubAgents();
     return;
   }
   if (top === 'live'){
@@ -2754,15 +3108,19 @@ function paintCanvas(){
     paintLive(body, c);
     return;
   }
+  if (selected && (selected.card || selected.files?.[c.canvasSelectedFileIndex])) {
+    paintCanvasSelection(body, c, selected);
+    return;
+  }
   const a = c && c.artifact;
-  const run = runTimelineHTML(c);
+  const run = canvasGalleryHTML(c) + runTimelineHTML(c);
   if (!a){
     body.innerHTML = run || `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">The canvas</div><div class="mut2">Charts, live pages, diffs and plans I create will render here while we chat.</div></div>`;
     return;
   }
   if (a.kind === 'chart'){
     const max = Math.max.apply(null, a.data.map(d => d.v));
-    body.innerHTML = `<div class="chartbox"><div class="ct">${esc(a.title)}</div><div class="cs">n = 1,392 qualifying comments · last 30 days</div>
+    body.innerHTML = run + `<div class="chartbox"><div class="ct">${esc(a.title)}</div><div class="cs">n = 1,392 qualifying comments · last 30 days</div>
       <div class="bars">${a.data.map((d, i) => `<div class="bcol"><span class="v">${d.v}%</span><div class="bar" style="height:${Math.round(d.v / max * 100)}%;background:${d.c};animation-delay:${i * 60}ms"></div><span class="l">${esc(d.l)}</span></div>`).join('')}</div>
       <div class="chartfoot">${esc(a.foot)}</div></div>`;
     return;
@@ -2816,7 +3174,7 @@ function initCanvasResize(){
 function fileRows(){
   const rows = [];
   state.chats.forEach(c => c.messages.forEach(m => {
-    if (m.kind === 'card' && m.card.type === 'file') rows.push({ ...m.card, chat: c.title });
+    if (m.kind === 'card' && m.card.type === 'file') rows.push({ ...m.card, chat: c.title, chatId:c.id, messageId:m.id });
   }));
   return rows;
 }
@@ -2846,14 +3204,13 @@ function paintVault(M){
     </div>`;
   } else if (tab === 'apps'){
     const connected = (state.composioApps || []).filter((a) => a.connected);
-    body = `<div class="warnband">${icon('shieldcheck',18)}<div><b>Apps moved to their own home.</b>Connections are per-account OAuth via Composio — Belna never sees your passwords. Manage everything under Apps.</div></div>
-    <div class="kv">
-      ${connected.map((a) => `<div class="row">
-        <img src="${esc(a.logo || '')}" alt="" style="width:26px;height:26px;border-radius:8px" onerror="this.style.display='none'">
-        <div><b>${esc(a.name || a.toolkit)}</b><div class="sub">connected · powers chat, sub-agents and triggers</div></div>
-        <div class="rgt"><span class="chip green">connected</span></div></div>`).join('') || '<div class="row mut">No apps connected yet.</div>'}
-      <div class="row" style="background:var(--panel)"><div><b>Connect apps</b><div class="sub">${connected.length} connected · ${(state.composioApps || []).length} available</div></div>
-      <div class="rgt"><button class="btn small" data-act="nav" data-view="apps">Open Apps</button></div></div>
+    const stack = connected.slice(0, 6).map((a) =>
+      `<span class="apps-stack-logo on" title="${esc(a.name || a.toolkit)}">${appLogoHtml(a)}</span>`
+    ).join('') || `<span class="apps-stack-logo ghost">${icon('box',16)}</span>`;
+    body = `<div class="apps-jump">
+      <div class="apps-stack">${stack}</div>
+      <div><b>${connected.length ? connected.length + ' live' : 'No connected apps'}</b></div>
+      <button class="btn small" data-act="nav" data-view="apps">Open Apps</button>
     </div>`;
   } else if (tab === 'approved'){
     body = `<div class="kv">
@@ -2869,7 +3226,7 @@ function paintVault(M){
     body = `<div class="kv">${rows.map((f, i) => `<div class="row">
       <span style="color:var(--mut)">${icon('file',16)}</span>
       <div><b>${esc(f.name)}</b><div class="sub">${fmtBytes(f.size || 0)} · from “${esc(f.chat)}”</div></div>
-      <div class="rgt"><button class="btn ghost small" data-act="dlfile" data-i="${i}">${icon('down',14)} Download</button></div></div>`).join('') || '<div class="row mut">No files yet — artifacts the agent produces land here.</div>'}</div>`;
+      <div class="rgt"><button class="btn ghost small" data-act="library-open" data-chat="${f.chatId}" data-msg="${f.messageId}">View</button><button class="btn ghost small" data-act="dlfile" data-i="${i}">${icon('down',14)} Download</button></div></div>`).join('') || '<div class="row mut">No files yet — artifacts the agent produces land here.</div>'}</div>`;
   }
 
   M.innerHTML = `<div class="page"><div class="pageinner">
@@ -3017,17 +3374,11 @@ function paintSettings(M){
       <div class="rgt"><input class="field" id="bprof" value="${esc(bp.profile)}" style="max-width:180px"></div></div>
     </div>`;
   } else if (tab === 'billing'){
-    body = `<div id="billbody"><div class="row mut">Loading…</div></div>
-      <div id="plancards" style="margin-top:18px"></div>
-      <div class="kv billing-redeem"><div class="row">
-        <span class="billing-redeem-icon">${icon('gift',18)}</span>
-        <input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX">
-        <button class="btn small" data-act="redeem">${icon('gift',14)} Redeem gift</button>
-      </div></div>`;
+    body = billingBodyHtml();
   }
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">User profiles, secrets, memory, browser profile and billing — all scoped to your account, never shared.</p>
+    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : 'User profiles, secrets, memory, browser profile and billing — all scoped to your account, never shared.'}</p>
     <div class="seg">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles">${icon('user',14)} Profiles</button>
       <button class="${tab === 'theme' ? 'on' : ''}" data-act="stab" data-t="theme">${icon('star',14)} Theme</button>
@@ -3056,23 +3407,31 @@ function paintSettings(M){
     state.browserProfile.profile = e.target.value.trim() || 'Default'; save(); toast('Browser profile saved.');
   });
   if (tab === 'billing'){
-    getBilling().then((b) => {
-      const elb = $('#billbody');
-      if (elb && b) elb.innerHTML = billSummary(b);
-      const pc = $('#plancards');
-      if (pc && b) { pc.innerHTML = planCards(b); wireBillingSliders(pc); }
-    });
+    loadBillingContent();
   }
 }
 
 /* ---------------- Apps — Belna connected apps via Composio ---------------- */
+function appLogoHtml(a){
+  return a && a.logo
+    ? `<img src="${esc(a.logo)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+    : `<span class="app-fallback">${esc(String((a && (a.name || a.toolkit)) || '?').slice(0, 1).toUpperCase())}</span>`;
+}
+function appsStackList(apps){
+  const featured = ['gmail','googlecalendar','slack','github','notion','outlook','linear','googledrive','jira','hubspot'];
+  const connected = apps.filter((a) => a.connected);
+  const extras = featured.map((t) => apps.find((a) => a.toolkit === t && !a.connected)).filter(Boolean);
+  const more = apps.filter((a) => !connected.includes(a) && !extras.includes(a));
+  return [...connected, ...extras, ...more].slice(0, 7);
+}
 function paintApps(M){
   const apps = Array.isArray(state.composioApps) ? state.composioApps : [];
   const q = String(state.appQuery || '').toLowerCase().trim();
   const filter = state.appFilter || 'all';
   const connectedCount = apps.filter((a) => a.connected).length;
+  const stack = appsStackList(apps);
 
-  let list = apps;
+  let list = apps.slice();
   if (filter === 'connected') list = list.filter((a) => a.connected);
   if (filter === 'available') list = list.filter((a) => !a.connected);
   if (q) {
@@ -3082,54 +3441,57 @@ function paintApps(M){
       String(a.description || '').toLowerCase().includes(q)
     );
   }
+  list.sort((a, b) => (Number(b.connected) - Number(a.connected)) || String(a.name || a.toolkit).localeCompare(String(b.name || b.toolkit)));
 
-  const cards = list.map((a) => {
-    const logo = a.logo
-      ? `<img src="${esc(a.logo)}" alt="" loading="lazy" onerror="this.style.display='none'">`
-      : `<span class="app-fallback">${esc(String(a.name || a.toolkit || '?').slice(0, 1).toUpperCase())}</span>`;
-    return `<article class="app-card ${a.connected ? 'is-connected' : ''}">
-      <div class="app-top"><span class="app-logo">${logo}</span>
-        ${a.connected ? '<span class="chip green">connected</span>' : '<span class="chip">not connected</span>'}
-      </div>
+  const cards = list.map((a) => `<article class="app-card ${a.connected ? 'is-connected' : ''}" data-toolkit="${esc(a.toolkit)}" title="${esc(a.name || a.toolkit)}">
+      <span class="app-logo">${appLogoHtml(a)}${a.connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
       <b>${esc(a.name || a.toolkit)}</b>
-      <p>${esc(String(a.description || 'Connect to let your Belna agent act on it.').slice(0, 140))}</p>
       <div class="app-actions">
         ${a.connected
-          ? `<button class="btn ghost small" data-act="disconnect-app" data-toolkit="${esc(a.toolkit)}">Disconnect</button>
-             <button class="btn small" data-act="automate-app" data-toolkit="${esc(a.toolkit)}">Automate</button>`
+          ? `<button class="btn small" data-act="automate-app" data-toolkit="${esc(a.toolkit)}">Automate</button>
+             <button class="iconbtn" data-act="disconnect-app" data-toolkit="${esc(a.toolkit)}" title="Disconnect">${icon('x',14)}</button>`
           : `<button class="btn small" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}">Connect</button>`}
       </div>
-    </article>`;
-  }).join('');
+    </article>`).join('');
+
+  const stackHtml = stack.map((a) =>
+    `<button type="button" class="apps-stack-logo ${a.connected ? 'on' : ''}" data-act="app-focus" data-toolkit="${esc(a.toolkit)}" title="${esc(a.name || a.toolkit)}">${appLogoHtml(a)}</button>`
+  ).join('');
+
+  let board = `<div class="apps-grid">${cards}</div>`;
+  if (state.composioLoading && !list.length) board = `<div class="apps-grid">${'<article class="app-card skel"></article>'.repeat(8)}</div>`;
+  else if (!state.composioLoading && !apps.length) board = `<div class="apps-empty">${icon('box',22)}<b>No apps yet</b><span>Connections aren't configured on this server.</span></div>`;
+  else if (!state.composioLoading && !list.length) board = `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
 
   M.innerHTML = `<div class="page"><div class="pageinner apps-page">
     <div class="phead apps-head">
       <div class="apps-title">
         <span class="apps-mascot">${Mascot.logo(34)}</span>
-        <div><h1>Apps</h1><div class="apps-sub">${connectedCount} connected · ${apps.length} available · <span class="belna-accent">belna</span> secure connections</div></div>
+        <h1>Apps</h1>
       </div>
-      <span style="display:flex;gap:8px;align-items:center">
-        <button class="btn ghost small" data-act="refresh-apps">${icon('refresh',14)} Refresh</button>
-        <button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button>
+      <span class="apps-head-acts">
+        <button class="iconbtn" data-act="refresh-apps" title="Refresh">${icon('refresh',16)}</button>
+        <button class="btn ghost small" data-act="nav" data-view="chat">Chat</button>
       </span>
     </div>
     <div class="apps-hero">
-      <div><b>Connect once — your agent does the work.</b><p>Secure per-account OAuth handled by Composio. Belna never sees your passwords, tokens stay with your account, and you can disconnect anytime. Connected apps power chat actions, sub-agents and triggers.</p></div>
-      <span class="chip acc">${icon('shieldcheck',12)} OAuth · per-user isolation</span>
-    </div>
-    <div class="apps-toolbar">
-      <input class="field apps-search" id="appquery" placeholder="Search apps — gmail, github, slack…" value="${esc(state.appQuery || '')}">
-      <div class="seg apps-filter">
-        <button class="${filter === 'all' ? 'on' : ''}" data-act="app-filter" data-f="all">All</button>
-        <button class="${filter === 'connected' ? 'on' : ''}" data-act="app-filter" data-f="connected">Connected (${connectedCount})</button>
-        <button class="${filter === 'available' ? 'on' : ''}" data-act="app-filter" data-f="available">Available</button>
+      <div class="apps-stack">${stackHtml || `<span class="apps-stack-logo ghost">${Mascot.logo(22)}</span>`}</div>
+      <div class="apps-live"><b>${connectedCount}</b><span>${connectedCount ? 'live' : 'No connected apps'}</span></div>
+      <div class="apps-marks">
+        <span title="Per-account OAuth. Belna never sees your passwords.">${icon('shieldcheck',14)} OAuth</span>
+        <span title="Tokens stay with your account.">${icon('lock',14)} Isolated</span>
+        <span title="Disconnect anytime.">${icon('x',14)} Revoke</span>
       </div>
     </div>
-    ${state.composioLoading ? '<div class="row mut" style="padding:18px">Loading your apps…</div>' : ''}
-    ${!state.composioLoading && !apps.length ? `<div class="kv"><div class="row mut">App connections are not configured yet. The server needs COMPOSIO_API_KEY.</div></div>` : ''}
-    ${!state.composioLoading && apps.length && !list.length ? '<div class="kv"><div class="row mut">No apps match your search.</div></div>' : ''}
-    <div class="apps-grid">${cards}</div>
-    <p class="fineprint">Trouble after connecting? Press Refresh — Composio confirms the connection, then chat, sub-agents and triggers can use it immediately.</p>
+    <div class="apps-toolbar">
+      <label class="apps-search-wrap">${icon('search',16)}<input class="field apps-search" id="appquery" placeholder="Gmail, Slack, GitHub…" value="${esc(state.appQuery || '')}"></label>
+      <div class="seg apps-filter">
+        <button class="${filter === 'all' ? 'on' : ''}" data-act="app-filter" data-f="all">All</button>
+        <button class="${filter === 'connected' ? 'on' : ''}" data-act="app-filter" data-f="connected">${icon('check',13)} ${connectedCount}</button>
+        <button class="${filter === 'available' ? 'on' : ''}" data-act="app-filter" data-f="available">Browse</button>
+      </div>
+    </div>
+    ${board}
   </div></div>`;
   const input = $('#appquery');
   if (input) {
@@ -3142,7 +3504,7 @@ function paintApps(M){
       if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
     });
   }
-  if (!apps.length && !state.composioLoading && signedIn()) refreshComposioApps();
+  if (!state.composioLoading && signedIn()) refreshComposioApps();
 }
 
 /* ================================================================
@@ -3153,9 +3515,25 @@ window.addEventListener('resize', () => {
 });
 window.addEventListener('focus', () => {
   startSandboxLease();
-  if (signedIn() && state.onboarded) syncFromBackend().then(() => { if ($('#side')) paintSide(); if (state.view === 'chat' && $('#main')) paintMain(); });
+  if (signedIn() && state.onboarded) syncFromBackend().then((updated) => { if (updated && $('#side')) paintSide(); });
+  if (signedIn() && state.canvasOpen && state.canvasTab === 'payments') refreshComposioApps(true);
 });
 window.addEventListener('pagehide', () => stopSandboxLease());
+document.addEventListener('submit', e => {
+  const form = e.target.closest('[data-onboarding-name]');
+  if (!form) return;
+  e.preventDefault();
+  const c = state.chats.find(c => c.id === form.dataset.chat);
+  const m = c?.messages.find(m => m.id === form.dataset.msg);
+  answerOnboarding(c, m, form.elements.agentName.value);
+});
+document.addEventListener('input', e => {
+  const form = e.target.closest('[data-onboarding-name]');
+  if (!form) return;
+  const c = state.chats.find(c => c.id === form.dataset.chat);
+  const m = c?.messages.find(m => m.id === form.dataset.msg);
+  if (m?.card.status === 'pending') { m.card.draft = e.target.value; save(); }
+});
 document.addEventListener('change', (e) => {
   if (e.target && e.target.id === 'subtrigger') {
     state.subAgentDraft = (($('#subprompt') || {}).value || '');
@@ -3174,6 +3552,16 @@ document.addEventListener('click', async e => {
   const act = b.dataset.act;
   const c = state.chats.find(x => x.id === b.dataset.chat);
   const m = c && c.messages.find(x => x.id === b.dataset.msg);
+
+  if (signedIn() && needsOnboarding() && !['qopt','open-passport','togglemenu','usermenu','signout'].includes(act)) {
+    e.preventDefault(); toast('Finish setting up your agent first.'); return;
+  }
+  if (act === 'qopt' && m?.card?.onboarding) { answerOnboarding(c, m, b.dataset.o); return; }
+  if (act === 'open-passport') {
+    if (!signedIn()) { renderAuth(); return; }
+    if (needsOnboarding()) { await openOnboardingPassport(c, m); return; }
+    state.canvasOpen = true; state.canvasTab = 'passport'; save(); renderApp(); return;
+  }
 
   if (act === 'rmfile'){ removeFile(+b.dataset.idx); return; }
   if (act === 'scroll'){ e.preventDefault(); const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
@@ -3194,7 +3582,7 @@ document.addEventListener('click', async e => {
       ensureOwnerScope();
       if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); }
       else if (state.pendingPrompt){ await startPendingPromptFlow(); }
-      else { renderLanding(); }
+      else { startPendingPromptFlow(); }
     } else { renderAuth(); }
     return;
   }
@@ -3215,18 +3603,6 @@ document.addEventListener('click', async e => {
     openOnboarding(); return;
   }
 
-  /* onboarding */
-  if (act === 'ob-claim'){ confetti(); ob.step = 1; obStep(); return; }
-  if (act === 'ob-dice'){ ob.name = NAMES[Math.floor(Math.random() * NAMES.length)]; $('#obname').value = ob.name; return; }
-  if (act === 'ob-back'){ ob.step = Math.max(0, ob.step - 1); obStep(); return; }
-  if (act === 'ob-next'){
-    if (ob.step === 1){ const v = $('#obname').value.trim(); ob.name = v || ob.name || NAMES[0]; }
-    ob.step++; obStep(); return;
-  }
-  if (act === 'ob-color'){ ob.color = b.dataset.c; obStep(); return; }
-  if (act === 'ob-pers'){ ob.pers = b.dataset.p; obStep(); return; }
-  if (act === 'ob-done'){ finalizeOnboarding(); return; }
-
   /* navigation */
   if (act === 'togglemenu'){ mobileNavOpen = !mobileNavOpen; renderApp(); return; }
   if (act === 'nav'){
@@ -3235,8 +3611,22 @@ document.addEventListener('click', async e => {
     if (state.view === 'apps') refreshComposioApps();
     return;
   }
-  if (act === 'refresh-apps'){ refreshComposioApps(); return; }
+  if (act === 'refresh-apps'){ refreshComposioApps(true); return; }
+  if (act === 'payments-stripe-apps'){
+    state.appQuery = 'stripe'; state.appFilter = 'all'; state.view = 'apps';
+    save(); renderApp(); refreshComposioApps(true); return;
+  }
   if (act === 'app-filter'){ state.appFilter = b.dataset.f || 'all'; save(); paintApps(document.getElementById('main')); return; }
+  if (act === 'app-focus'){
+    const tk = String(b.dataset.toolkit || '');
+    const card = document.querySelector(`.app-card[data-toolkit="${tk}"]`);
+    if (card){
+      card.classList.add('pulse');
+      card.scrollIntoView({ behavior:'smooth', block:'center' });
+      setTimeout(() => card.classList.remove('pulse'), 1100);
+    }
+    return;
+  }
   if (act === 'connect-app'){ connectComposioApp(b.dataset.toolkit, b.dataset.auth); return; }
   if (act === 'disconnect-app'){ disconnectComposioApp(composioAppByToolkit(b.dataset.toolkit)); return; }
   if (act === 'automate-app'){
@@ -3253,12 +3643,15 @@ document.addEventListener('click', async e => {
   if (act === 'goto-secrets'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); renderApp(); return; }
   if (act === 'btoggle'){ state.browserProfile[b.dataset.k] = !state.browserProfile[b.dataset.k]; save(); paintSettings($('#main')); return; }
   if (act === 'agentpanel'){
-    state.canvasTab = 'agent';
+    state.canvasTab = 'canvas';
     state.canvasOpen = true; const app = $('#app'); if (app) app.classList.remove('nocanvas');
     save(); paintCanvas(); return;
   }
-  if (act === 'agenttab'){
-    state.agentTab = b.dataset.t; state.canvasTab = 'agent'; save(); paintCanvas();
+  if (act === 'agent-edit'){
+    state.agentEdit = !state.agentEdit;
+    state.canvasOpen = true;
+    const app = $('#app'); if (app) app.classList.remove('nocanvas');
+    save(); paintCanvas();
     return;
   }
   if (act === 'new-subagent'){
@@ -3305,7 +3698,7 @@ document.addEventListener('click', async e => {
     b.disabled = true; b.innerHTML = `${icon('refresh',12)} Running…`;
     try {
       const result = await window.LingonAuth.api('/api/sub-agents/' + encodeURIComponent(agent.id) + '/run', { method:'POST', body:'{}' });
-      await syncFromBackend();
+      await syncFromBackend(true);
       state.activeChat = result.chatId || agent.chatId; state.view = 'chat'; save(); renderApp();
       toast(`${agent.name} completed its run.`);
     } catch (err) { b.disabled = false; toast(err.message); }
@@ -3313,7 +3706,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'open-subagent'){
     const agent = state.subAgents.find((item) => item.id === b.dataset.id); if (!agent) return;
-    await syncFromBackend();
+    await syncFromBackend(true);
     if (!state.chats.some((item) => item.id === agent.chatId)) state.chats.unshift({ id:agent.chatId, title:agent.name, messages:[], trace:[], artifact:null, source:'automation', subAgentId:agent.id, createdAt:Date.now() });
     state.activeChat = agent.chatId; state.view = 'chat'; save(); renderApp(); return;
   }
@@ -3340,7 +3733,15 @@ document.addEventListener('click', async e => {
     save(); renderApp(); return;
   }
   if (act === 'togglecanvas'){ state.canvasOpen = !state.canvasOpen; save(); $('#app').classList.toggle('nocanvas', !state.canvasOpen); paintCanvas(); return; }
-  if (act === 'ctab'){ state.canvasTab = b.dataset.t; if (b.dataset.t !== 'canvas') state._showLiveInCanvas = false; save(); paintCanvas(); if (b.dataset.t === 'subagents') refreshSubAgents(); if (b.dataset.t === 'wallet') getWallet(true).then(() => { if (state.canvasTab === 'wallet' && $('#cbody')) paintWallet($('#cbody')); }); if (b.dataset.t === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); }); return; }
+  if (act === 'ctab'){
+    const next = b.dataset.t === 'agent' || b.dataset.t === 'trace' || b.dataset.t === 'wallet' ? 'canvas' : b.dataset.t;
+    state.canvasTab = next;
+    if (next !== 'canvas') state._showLiveInCanvas = false;
+    save(); paintCanvas();
+    if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
+    if (next === 'payments') refreshComposioApps(true);
+    return;
+  }
   if (act === 'mtab'){
     state.mailTab = b.dataset.t || 'inbox';
     if (mailCache) mailCache.selected = null;
@@ -3419,59 +3820,28 @@ document.addEventListener('click', async e => {
     }).catch((err) => { b.disabled = false; toast(err.message); });
     return;
   }
-  if (act === 'wtab'){ state.walletTab = b.dataset.t || 'wallet'; save(); if ($('#cbody')) paintWallet($('#cbody')); return; }
-  if (act === 'w-refresh'){ getWallet(true).then(() => { if ($('#cbody')) paintWallet($('#cbody')); }); return; }
-  if (act === 'w-copy'){
-    const addr = walletCache && walletCache.address;
-    if (!addr){ toast('No wallet address yet.'); return; }
-    copyText(addr).then(() => toast('Wallet address copied')).catch(() => toast('Could not copy'));
-    return;
+  if (act === 'library-open' && c){
+    state.activeChat = c.id; state.view = 'chat'; state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
+    c.canvasSelectedMessageId = m?.card ? m.id : null; delete c.canvasSelectedFileIndex;
+    save(); renderApp(); return;
   }
-  if (act === 'w-ensure'){
-    b.disabled = true;
-    window.LingonAuth.api('/api/wallet/ensure', { method:'POST', body:'{}' }).then((j) => {
-      walletCache = j; if ($('#cbody')) paintWallet($('#cbody')); toast('Agent wallet is ready.');
-    }).catch((err) => { b.disabled = false; toast(err.message); });
-    return;
+  if (act === 'canvas-card' && c && m?.card){
+    state.activeChat = c.id;
+    c.canvasSelectedMessageId = m.card.type === 'artifact' && c.artifact?.title === m.card.title ? null : m.id;
+    delete c.canvasSelectedFileIndex;
+    state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
+    $('#app')?.classList.remove('nocanvas'); save(); paintCanvas(); return;
   }
-  if (act === 'w-card'){
-    b.disabled = true;
-    window.LingonAuth.api('/api/wallet/card', { method:'POST', body: JSON.stringify({ holderName: (state.agent && state.agent.name) || '' }) }).then((j) => {
-      walletCache = j.wallet || j; state.walletTab = 'card'; save(); if ($('#cbody')) paintWallet($('#cbody')); toast('Card attached to the agent wallet.');
-    }).catch((err) => { b.disabled = false; toast(err.message); });
-    return;
+  if (act === 'canvas-upload' && c && m?.files?.[Number(b.dataset.i)]){
+    state.activeChat = c.id; c.canvasSelectedMessageId = m.id; c.canvasSelectedFileIndex = Number(b.dataset.i);
+    state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
+    $('#app')?.classList.remove('nocanvas'); save(); paintCanvas(); return;
   }
-  if (act === 'w-billing'){
-    const billing = { line1: (($('#w-line1')||{}).value||'').trim(), city: (($('#w-city')||{}).value||'').trim(), postal: (($('#w-postal')||{}).value||'').trim(), country: (($('#w-country')||{}).value||'US').trim() };
-    window.LingonAuth.api('/api/wallet/billing', { method:'POST', body: JSON.stringify({ billing, holderName: (state.agent && state.agent.name) || '' }) }).then((j) => {
-      walletCache = j; if ($('#cbody')) paintWallet($('#cbody')); toast('Billing saved for Stripe Issuing.');
-    }).catch((err) => toast(err.message));
-    return;
+  if (act === 'canvas-back'){
+    const current = chat(); if (current) { current.canvasSelectedMessageId = null; delete current.canvasSelectedFileIndex; }
+    state._showLiveInCanvas = false; liveClose(); save(); paintCanvas(); return;
   }
-  if (act === 'w-reveal'){
-    revealStripeCard(b.dataset.id).catch((err) => toast(err.message));
-    return;
-  }
-  if (act === 'w-limit'){
-    const n = Number((($('#wlimit') || {}).value) || 0);
-    window.LingonAuth.api('/api/wallet/limit', { method:'POST', body: JSON.stringify({ dailyLimitUsd: n }) }).then((j) => {
-      walletCache = j; if ($('#cbody')) paintWallet($('#cbody')); toast('Daily spend cap saved.');
-    }).catch((err) => toast(err.message));
-    return;
-  }
-  if (act === 'w-send'){
-    const to = (($('#wto') || {}).value || '').trim();
-    const amount = Number((($('#wamt') || {}).value) || 0);
-    const asset = (($('#wasset') || {}).value) || 'usdc';
-    if (!to || !(amount > 0)){ toast('Enter a destination and amount.'); return; }
-    if (!window.confirm('Send ' + amount + ' ' + asset.toUpperCase() + ' from the agent wallet? This cannot be undone.')) return;
-    b.disabled = true;
-    window.LingonAuth.api('/api/wallet/transfer', { method:'POST', body: JSON.stringify({ to, amount, asset, confirm:true }) }).then((j) => {
-      walletCache = j.wallet || walletCache; if ($('#cbody')) paintWallet($('#cbody')); toast('Sent.');
-    }).catch((err) => { b.disabled = false; toast(err.message); });
-    return;
-  }
-  if (act === 'viewcanvas'){ state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
+  if (act === 'viewcanvas'){ const current = chat(); if (current) { current.canvasSelectedMessageId = null; delete current.canvasSelectedFileIndex; } state._showLiveInCanvas = false; state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
   if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = true; $('#app') && $('#app').classList.remove('nocanvas'); save(); paintCanvas(); return; }
   if (act === 'takeover'){ liveTakeover(); return; }
   if (act === 'closestop-live'){
@@ -3508,6 +3878,13 @@ document.addEventListener('click', async e => {
   if (act === 'copycode'){ const t = $('#codebox'); if (t) await copyText(t.textContent); toast('Copied'); return; }
 
   /* card resolutions (real accounts only — no anonymous approvals) */
+  if (act === 'task-change-cancel' && c) {c.taskReply=null;c.taskReplyScope=null;save();paintMain();return;}
+  if (['task-change','task-change-team'].includes(act) && m?.card?.taskId) {c.taskReply=m.card.taskId;c.taskReplyScope=act==='task-change-team'?'team':'task';save();paintMain();$('#cprompt')?.focus();return;}
+  if (['task-stop','task-continue'].includes(act) && m?.card?.taskId) {
+    b.disabled=true;
+    try {await Engine.controlTask(makeRT(c),m.card.taskId,act==='task-stop'?'cancel':'continue');}catch(error){toast(error.message);}
+    finally{b.disabled=false;}return;
+  }
   if (act === 'managed-stop') { await Engine.stop(makeRT(chat())); return; }
   if (act === 'managed-resume') { await Engine.resume(makeRT(chat())); return; }
   if (m?.card?.managedCallId && ['save-secret','skip-secret'].includes(act)) {
@@ -3529,7 +3906,10 @@ document.addEventListener('click', async e => {
     if (!signedIn()) { renderAuth(); return; }
     b.disabled = true;
     const allow = act !== 'managed-deny';
-    await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow, answer:act === 'qopt' ? b.dataset.o : undefined });
+    try {
+      if(m.card.taskId) await Engine.controlTask(makeRT(c),m.card.taskId,'decide',{callId:m.card.managedCallId,allow,version:m.card.taskVersion});
+      else await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow, answer:act === 'qopt' ? b.dataset.o : undefined });
+    }catch(error){toast(error.message);}
     b.disabled = false;
     replaceNode(c,m); save(); return;
   }
@@ -3600,15 +3980,45 @@ document.addEventListener('click', async e => {
     render();
     return;
   }
+  if (act === 'billing-topup'){
+    const pack = $('#buypack');
+    if (pack) { pack.scrollIntoView({ block:'center', behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); pack.focus({ preventScroll:true }); }
+    return;
+  }
+  if (act === 'billing-refresh'){
+    invalidateBilling(); paintSide();
+    if (state.view === 'settings') paintSettings($('#main')); else paintBilling($('#main'));
+    return;
+  }
   if (act === 'redeem'){
     const code = (($('#giftcode') || {}).value || '').trim();
     if (!code){ toast('Paste a gift code first.'); return; }
+    const owner = billingIdentity();
     try {
       const j = await window.LingonAuth.api('/api/billing/redeem', { method: 'POST', body: JSON.stringify({ code }) });
-      billingCache = j.billing;
+      if (owner !== billingIdentity()) return;
+      setBillingCache(j.billing);
       toast(`Redeemed ${fmtC(j.credits)} credits ($${j.amount} gift).`);
       if (state.view === 'settings') paintSettings($('#main')); else paintBilling($('#main'));
       paintSide();
+    } catch (e) { toast(e.message); }
+    return;
+  }
+  if (act === 'buycredits'){
+    try {
+      const pack = Number((($('#buypack') || {}).value) || 0);
+      if (!pack){ toast('Pick a credit pack.'); return; }
+      const j = await window.LingonAuth.api('/api/billing/credits', { method: 'POST', body: JSON.stringify({ extraCredits: pack }) });
+      if (j.url) { window.location.href = j.url; return; }
+      toast(j.note || 'Checkout started.');
+    } catch (e) { toast(e.message); }
+    return;
+  }
+  if (act === 'buygift'){
+    try {
+      const j = await window.LingonAuth.api('/api/billing/gift', { method: 'POST', body: JSON.stringify({ amount: Number(b.dataset.amt || 0) }) });
+      if (j.url) { window.location.href = j.url; return; }
+      toast(j.note || 'Checkout started.');
     } catch (e) { toast(e.message); }
     return;
   }
@@ -3663,6 +4073,24 @@ function dl(name, content){
   toast('Downloading ' + name);
 }
 
+function handleBillingReturn(flag, q){
+  const sid = q && q.get('session_id');
+  if (flag === 'cancelled') { setTimeout(() => toast('Checkout cancelled — no charge made.'), 800); return; }
+  if (flag === 'portal') { setTimeout(() => toast('Subscription updated.'), 800); return; }
+  if ((flag === 'gift' || flag === 'credits' || flag === 'success') && sid && window.LingonAuth.signedIn()) {
+    const owner = billingIdentity();
+    window.LingonAuth.api('/api/billing/checkout-result?session_id=' + encodeURIComponent(sid)).then((j) => {
+      if (owner !== billingIdentity()) return;
+      if (j.billing) { setBillingCache(j.billing); if ($('#side')) paintSide(); }
+      if (j.gift && j.gift.code) toast('Gift card ready: ' + j.gift.code + ' — redeem or share it.');
+      else if (j.kind === 'credits') toast('Credits added. See Billing.');
+      else toast('Payment complete — your credits are on the way. See Billing.');
+    }).catch((e) => toast(e.message || 'Payment complete. See Billing.'));
+    return;
+  }
+  if (flag === 'success') setTimeout(() => toast('Payment complete — your monthly credits are on the way. See Billing.'), 800);
+}
+
 /* ---------------- boot (OAuth hash callback first) ---------------- */
 async function bootHash(){
   // returns 'error' | 'google' | 'none' so boot can route correctly
@@ -3682,15 +4110,13 @@ async function bootHash(){
         const me = await window.LingonAuth.api('/api/auth/me');
         window.LingonAuth.set({ access_token, refresh_token, user: me.user });
         try { window.LingonConfig.userId = me.user.id; localStorage.setItem('belna.lastProvider', 'google'); } catch {}
-        try { await syncFromBackend(); } catch {}
-        // Route Google sign-ins through the same post-auth flow so a homepage
-        // prompt lands in the agent chat with in-chat onboarding first.
+        // Scope persisted state before the background sync can merge remote data.
         try { ensureOwnerScope(); if (me.user && me.user.id) { state.ownerId = me.user.id; state.view = 'chat'; save(); } } catch {}
-        if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
-          setTimeout(() => { toast('Signed in as ' + me.user.email); startPendingPromptFlow(); }, 400);
-        } else {
-          setTimeout(() => toast('Signed in as ' + me.user.email), 400);
-        }
+        const owner = billingIdentity();
+        syncFromBackend(true).then(() => {
+          if (owner === billingIdentity() && $('#side')) paintSide();
+        }).catch(() => {});
+        setTimeout(() => toast('Signed in as ' + me.user.email), 400);
         return 'google';
       } catch {
         window.LingonAuth.set(null);
@@ -3700,9 +4126,13 @@ async function bootHash(){
   } catch {}
   return 'none';
 }
-bootHash().then((st) => {
+const bootReady = bootHash().then((st) => {
   expirePending();
   applyTheme();
+  // Navigation can remove the React host while the scripts/auth are loading.
+  // A later mount will attach the already initialized app to its new host.
+  root = document.getElementById('root');
+  if (!root) return;
   if (st && String(st).startsWith('error:')) {
     const msg = String(st).slice(6);
     // Land on the auth card so the failure is visible in context.
@@ -3712,46 +4142,22 @@ bootHash().then((st) => {
     else setTimeout(() => toast('Sign-in failed: ' + msg), 400);
     return;
   }
-  if (st === 'google'){
-    // afterSignIn routing already kicked off in bootHash (incl. pending prompt
-    // → chat + in-chat onboarding). Just ensure correct view if no pending.
-    if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
-      // startPendingPromptFlow already running via timeout above; ensure render fallback
-      if (!document.getElementById('app')) renderApp();
-    } else {
-      render();
-    }
-    try {
-      const q = new URLSearchParams(window.location.search);
-      const f = q.get('billing');
-      if (f) {
-        window.history.replaceState(null, '', window.location.pathname);
-        if (f === 'success') setTimeout(() => toast('Payment complete — your monthly credits are on the way. See Billing.'), 800);
-        else if (f === 'cancelled') setTimeout(() => toast('Checkout cancelled — no charge made.'), 800);
-        else if (f === 'portal') setTimeout(() => toast('Subscription updated.'), 800);
-      }
-    } catch {}
-    return;
-  }
-  // No OAuth callback: signed-in users with a pending homepage prompt go
-  // straight to chat + in-chat onboarding (message first, then setup).
-  if (signedIn()){
-    ensureOwnerScope();
-    if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
-      startPendingPromptFlow();
-      return;
-    }
-  }
   render();
   try {
     const q = new URLSearchParams(window.location.search);
     const f = q.get('billing');
     if (f) {
       window.history.replaceState(null, '', window.location.pathname);
-      if (f === 'success') setTimeout(() => toast('Payment complete — your monthly credits are on the way. See Billing.'), 800);
-      else if (f === 'cancelled') setTimeout(() => toast('Checkout cancelled — no charge made.'), 800);
-      else if (f === 'portal') setTimeout(() => toast('Subscription updated.'), 800);
+      handleBillingReturn(f, q);
     }
   } catch {}
 });
+window.LingonAppRuntime = {
+  async mount(element){
+    await bootReady;
+    if (root === element && root.childElementCount) return;
+    root = element;
+    render();
+  },
+};
 })();

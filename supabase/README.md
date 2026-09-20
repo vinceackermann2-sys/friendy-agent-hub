@@ -4,6 +4,8 @@
 2. SQL Editor → New query → run `supabase/schema.sql`, `schema2.sql`, `schema3.sql`, and `schema4.sql` in order.
    You must see “Success”. This creates profiles / agents / chats / messages /
    memories / vault_secrets / vault_apps / approvals.
+   Run `migrations/20260919120000_billing_totals.sql` after those files to
+   enable the fast billing summary.
    For an existing linked project, run `npx supabase db push` instead; deployable
    updates are tracked in `supabase/migrations/`.
 3. Project Settings → API → copy (new dashboard names):

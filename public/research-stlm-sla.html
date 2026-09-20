@@ -3,384 +3,249 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>STLM and Mini-SLA: Small Models That Reason | Belna Research</title>
-<meta name="description" content="Belna small-scale programme: STLM pins words to meaning with topology coordinates, Mini-SLA separates memory from compute with recurrent reasoning. Real results vs a matched Transformer baseline, with complete training code.">
-<meta name="keywords" content="STLM, Mini-SLA, small language models, negation reasoning, topology embeddings, explicit memory, Transformer comparison, reproducible training">
+<title>STLM and Mini-SLA — Model cards | Belna Research</title>
+<meta name="description" content="Model cards for STLM and Mini-SLA: small models that reason. Matched Transformer baselines, negation results, and one downloadable training folder.">
+<meta name="keywords" content="STLM, Mini-SLA, model card, small language models, negation reasoning, topology embeddings, reproducible training">
 <link rel="canonical" href="https://belna.se/research-stlm-sla.html">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<style>
-[id]{scroll-margin-top:90px}
-.rcard{background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:28px;margin-top:18px}
-.rcard h3{font-size:17px;font-weight:800;margin-bottom:10px}
-.rcard p{color:var(--mut);font-size:14.5px;line-height:1.65}
-.arch-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
-.arch-box{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}
-.arch-box h4{font-size:14px;font-weight:800;margin-bottom:6px}
-.arch-box p{font-size:13.5px;color:var(--mut);line-height:1.6}
-.arch-box .num{font-size:28px;font-weight:800;color:var(--ink);display:block;margin-bottom:4px}
-.stat-row{display:flex;gap:16px;flex-wrap:wrap;margin-top:18px}
-.stat-pill{flex:1;min-width:140px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center}
-.stat-pill .val{font-size:28px;font-weight:800;display:block}
-.stat-pill .lab{font-size:12px;color:var(--mut);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
-.stat-pill.win{background:#EDF3FE;border-color:#C6D8F5}
-.stat-pill.win .val{color:#1D5BBF}
-.stat-pill.lose .val{color:var(--mut)}
-.rtable{width:100%;border-collapse:collapse;font-size:14px}
-.rtable th,.rtable td{padding:12px 16px;text-align:center;border-top:1px solid var(--line2)}
-.rtable th:first-child,.rtable td:first-child{text-align:left}
-.rtable thead th{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--soft);border-top:none;background:var(--panel)}
-.rtable thead th.hl{background:#EDF3FE;color:#1D5BBF}
-.rtable td.hl{background:#F5F8FE;font-weight:700}
-.rtable tbody tr:hover td{background:#FAFAFB}
-.rtable tbody tr:hover td.hl{background:#E5ECFB}
-.rtable .win{font-weight:800;color:#1D5BBF}
-.rtable .dim{color:var(--soft)}
-.tag-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-.tag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:700;background:var(--line2);color:var(--mut)}
-.tag.blue{background:#EDF3FE;color:#1D5BBF}
-.tag.green{background:var(--green-soft);color:var(--green)}
-.verdict-box{background:#15284b;color:#fff;border-radius:20px;padding:32px;margin-top:24px}
-.verdict-box h3{font-size:20px;font-weight:800;margin-bottom:12px;color:#fff}
-.verdict-box p{color:#aac9df;font-size:14.5px;line-height:1.65}
-.verdict-box .vlist{list-style:none;margin:14px 0;display:flex;flex-direction:column;gap:8px}
-.verdict-box .vlist li{display:flex;gap:10px;align-items:flex-start;font-size:14px;color:#d0e3f5}
-.paper-nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
-.paper-nav a{font-size:13px;font-weight:700;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 14px;text-decoration:none}
-.paper-nav a:hover{color:var(--ink);border-color:#c9c9cf}
-.tldr{background:#EDF3FE;border:1px solid #C6D8F5;border-radius:18px;padding:24px 26px;margin-top:22px}
-.tldr h3{font-size:15px;font-weight:800;color:#1D5BBF;margin-bottom:10px}
-.tldr li{font-size:14.5px;line-height:1.65;color:#243b5c;margin:6px 0 6px 18px}
-.vs-grid{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:stretch;margin-top:18px}
-.vs-card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)}
-.vs-card h4{font-size:14px;font-weight:800}
-.vs-card p{font-size:13px;color:var(--mut);line-height:1.6;margin-top:6px}
-.vs-mid{display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#fff;background:var(--ink);border-radius:999px;width:44px;height:44px;align-self:center}
-.codeblock{background:#101828;border-radius:16px;margin-top:16px;overflow:hidden}
-.codeblock .chead{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid rgba(255,255,255,.1)}
-.codeblock .chead b{color:#fff;font-size:13px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace}
-.codeblock .chead span{color:#98A2B3;font-size:12px}
-.codeblock pre{margin:0;padding:20px;overflow-x:auto;color:#E6EAF2;font-size:13px;line-height:1.65;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
-.codeblock .c{color:#8b94a3}.codeblock .k{color:#c792ea}.codeblock .s{color:#a5d6a7}.codeblock .f{color:#82aaff}
-.stepnum{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--ink);color:#fff;font-size:13px;font-weight:800;margin-right:8px}
-@media(max-width:760px){.arch-grid{grid-template-columns:1fr}.stat-row{flex-direction:column}.vs-grid{grid-template-columns:1fr}.vs-mid{justify-self:center}}
-</style>
+<link rel="stylesheet" href="research.css">
 </head>
-<body>
-<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<body class="rx">
+<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
-<main class="legal" style="max-width:960px">
-<div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Research · Small-scale programme</div>
-<p class="mut" style="font-size:13.5px;margin-top:8px">10 min read · Code included</p>
-<h1 style="font-size:clamp(28px,5vw,38px)">Small models that actually reason: STLM and Mini-SLA</h1>
-<p class="mut" style="font-size:16.5px;line-height:1.6;max-width:700px">Not every insight needs a supercomputer. On a <b>single consumer GPU, in minutes</b>, we trained two tiny architectures — one that pins words to meaning, one that separates memory from thinking — and raced each against a <b>matched Transformer baseline</b> on the same data and seed. Both small models predict text better, and one of them solves negation with no help at all.</p>
-
-<div class="tag-row">
-<span class="tag blue">11–23M parameters</span>
-<span class="tag blue">Consumer GPU</span>
-<span class="tag">WikiText-2 + toy corpus</span>
-<span class="tag">Matched baselines</span>
-<span class="tag green">Fully reproducible</span>
+<main class="legal rx-page">
+<a class="rx-back" href="/research#research"><span class="arr">←</span> Research</a>
+<div class="rx-kicker">Model cards · Small-scale programme</div>
+<p class="rx-meta">STLM · Mini-SLA · 10 min read</p>
+<h1>Small models that actually reason.</h1>
+<p class="rx-lede">On a <b>single consumer GPU, in minutes</b>, two tiny architectures — one that pins words to meaning, one that separates memory from thinking — raced a <b>matched Transformer</b>. Same card for both: specs, architecture, results, take. Then one folder to download.</p>
+<div class="rx-tags">
+  <span class="rx-tag blue">11–23M parameters</span>
+  <span class="rx-tag">Consumer GPU</span>
+  <span class="rx-tag">Matched baselines</span>
+  <span class="rx-tag green">One download folder</span>
 </div>
-
-<nav class="paper-nav" aria-label="On this page">
-<a href="#tldr">2-minute version</a><a href="#stlm">STLM</a><a href="#sla">Mini-SLA</a><a href="#results">Results</a><a href="#verdict">Verdict</a><a href="#code">Training code</a>
+<nav class="rx-nav" aria-label="On this page">
+  <a href="#stlm">STLM</a><a href="#sla">Mini-SLA</a><a href="#protocol">Protocol</a><a href="#code">Download</a>
 </nav>
 
-<!-- ──────── TLDR ──────── -->
-<div class="tldr" id="tldr">
-<h3>⚡ The 2-minute version</h3>
-<ul>
-<li><b>STLM</b> (Semantic Topology Language Model) gives every word a coordinate on meaning axes like hot–cold and true–false. Result: perplexity <b>80.89 vs 111.45</b> against its baseline, embeddings where opposites are genuinely opposite (correlation 0.957 vs −0.069), and <b>35/35 on negation</b> with constraint guidance.</li>
-<li><b>Mini-SLA</b> loops a single Transformer layer 4 times around an explicit memory database with a symbolic negation router. At matched size (11.28M vs 11.22M params) it reaches perplexity <b>63.89 vs 111.45</b> — and cracks negation <b>35/35 with zero help at inference</b>.</li>
-<li><b>The honest trade-off, twice confirmed:</b> the plain Transformer still wins subject-verb grammar (46/50 both times). Meaning up, syntax slightly down.</li>
-<li><b>Everything below is reproducible</b> — the full training code ships inline in this article. No hidden repositories.</li>
-</ul>
+<div class="tldr">
+  <h3>At a glance</h3>
+  <ul>
+    <li><b>STLM</b> — perplexity 80.89 vs 111.45, meaning correlation 0.957 vs −0.069, 35/35 negation with axis guidance.</li>
+    <li><b>Mini-SLA</b> — perplexity 63.89 vs 111.45, 35/35 negation with <b>zero help</b> at inference.</li>
+    <li>The Transformer still wins grammar (46/50). Meaning up, syntax slightly down.</li>
+  </ul>
 </div>
 
-<!-- ──────── THE IDEA ──────── -->
-<h2 style="margin-top:44px">The idea in one picture</h2>
-<p>A plain Transformer stores everything it knows smeared across its weights — including the fact that <i>hot</i> is the opposite of <i>cold</i>. Our two small models refuse to do that. Each gives meaning an explicit home:</p>
-<div class="vs-grid">
-<div class="vs-card"><h4>🔁 Classic tiny Transformer</h4><p>All knowledge lives in the weights. <i>Hot</i> and <i>cold</i> appear in similar sentences, so the model files them as similar — and completes <i>"the door is not…"</i> with <i>open</i>. It scores 0/35 on negation.</p></div>
-<div class="vs-mid">VS</div>
-<div class="vs-card"><h4>🧭 STLM + Mini-SLA</h4><p><b>STLM</b> pins each word to coordinates on 7 meaning axes (temperature, size, brightness, speed, door-state, truth, life-state). <b>SLA</b> keeps facts in an explicit memory database and routes <i>not</i> through a symbolic switch that flips what it retrieves.</p></div>
+<article class="rx-sec" id="stlm">
+  <div class="rx-kicker" style="margin-top:56px">Model card 01</div>
+  <h2 style="margin-top:8px;font-size:clamp(26px,4vw,34px)">STLM</h2>
+  <p class="rx-lede">Semantic Topology Language Model. Same Transformer core as the baseline, plus a topology classifier, a coordinate regressor, and one reusable axis embedding per meaning.</p>
+  <div class="rx-tags">
+    <span class="rx-tag blue">~23M params</span>
+    <span class="rx-tag">7 meaning axes</span>
+    <span class="rx-tag">98.3% topology align</span>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">1</span><h2>Specs</h2></div>
+  <div class="rx-card">
+    <dl class="spec">
+      <div><dt>Core</dt><dd>Matched Transformer + topology heads</dd></div>
+      <div><dt>Axes</dt><dd>Temperature, size, brightness, speed, door, truth, life</dd></div>
+      <div><dt>Loss</dt><dd>LM + 0.4 × topology + seed-coordinate</dd></div>
+      <div><dt>Inference</dt><dd>Optional constraint bias along learned axes</dd></div>
+      <div><dt>Alignment</dt><dd>98.3% topology accuracy</dd></div>
+      <div><dt>Budget</dt><dd>Consumer GPU · minutes</dd></div>
+    </dl>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">2</span><h2>Architecture</h2></div>
+  <div class="diagram" aria-hidden="true">
+    <svg viewBox="0 0 840 230" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="24" y="86" width="130" height="58" rx="14" fill="#FBFBFC" stroke="#E7E7EA"/>
+      <text x="89" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Word</text>
+      <path d="M154 115H196" stroke="#4A7FD4" stroke-width="2"/><polygon points="196,111 206,115 196,119" fill="#4A7FD4"/>
+      <rect x="206" y="28" width="200" height="70" rx="14" fill="#EDF3FE" stroke="#C6D8F5"/>
+      <text x="306" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#1D5BBF">Which axis?</text>
+      <text x="306" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">topology classifier</text>
+      <rect x="206" y="132" width="200" height="70" rx="14" fill="#E9F4EE" stroke="#BFE0CC"/>
+      <text x="306" y="162" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">Where on it?</text>
+      <text x="306" y="182" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">coordinate regressor</text>
+      <path d="M406 63H470" stroke="#4A7FD4" stroke-width="2"/>
+      <path d="M406 167H470" stroke="#3E8E5A" stroke-width="2"/>
+      <rect x="470" y="70" width="160" height="90" rx="16" fill="#15284b"/>
+      <text x="550" y="112" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#fff">hot  ←→  cold</text>
+      <text x="550" y="134" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#aac9df">true  ←→  false</text>
+      <path d="M630 115H674" stroke="#4A7FD4" stroke-width="2"/><polygon points="674,111 684,115 674,119" fill="#4A7FD4"/>
+      <rect x="684" y="86" width="132" height="58" rx="14" fill="#fff" stroke="#E7E7EA"/>
+      <text x="750" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">LM logits</text>
+    </svg>
+    <p class="diagram-cap">Opposites live on opposite ends of an axis. The baseline files “hot” and “cold” as similar because they appear in similar sentences.</p>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">3</span><h2>Results</h2></div>
+  <div class="stat-row">
+    <div class="stat-pill win"><span class="val">80.89</span><span class="lab">STLM PPL</span></div>
+    <div class="stat-pill lose"><span class="val">111.45</span><span class="lab">Baseline PPL</span></div>
+    <div class="stat-pill win"><span class="val">0.957</span><span class="lab">Meaning corr.</span></div>
+    <div class="stat-pill lose"><span class="val">−0.069</span><span class="lab">Baseline corr.</span></div>
+  </div>
+  <div class="rx-card">
+    <div class="rx-scroll"><table class="rtable">
+      <thead><tr><th>Metric</th><th class="hl">STLM</th><th>Baseline</th><th>Winner</th></tr></thead>
+      <tbody>
+        <tr><td>Test perplexity, plain ↓</td><td class="hl win">80.89</td><td>111.45</td><td><span class="rx-tag blue">STLM</span></td></tr>
+        <tr><td>Test perplexity, constrained ↓</td><td class="hl win">69.09</td><td>—</td><td><span class="rx-tag blue">STLM</span></td></tr>
+        <tr><td>Top-1 next-word ↑</td><td class="hl win">15.30%</td><td>10.74%</td><td><span class="rx-tag blue">STLM</span></td></tr>
+        <tr><td>Top-5 next-word ↑</td><td class="hl win">34.37%</td><td>26.54%</td><td><span class="rx-tag blue">STLM</span></td></tr>
+        <tr><td>Meaning correlation (Pearson) ↑</td><td class="hl win">0.957</td><td>−0.069</td><td><span class="rx-tag blue">STLM</span></td></tr>
+        <tr><td>Negation suite, plain (35)</td><td class="hl">0 / 35</td><td>0 / 35</td><td><span class="rx-tag">Tie</span></td></tr>
+        <tr><td>Negation suite, constrained (35)</td><td class="hl win">35 / 35</td><td>0 / 35</td><td><span class="rx-tag blue">STLM</span></td></tr>
+        <tr><td>Grammar agreement (50)</td><td class="hl">40 / 50</td><td class="win">46 / 50</td><td><span class="rx-tag">TFM</span></td></tr>
+        <tr><td>Topology alignment ↑</td><td class="hl win">98.3%</td><td>n/a</td><td><span class="rx-tag blue">STLM</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="fineprint">Constraints only work because training aligned embeddings to axes — the same bias on the baseline stays at 0/35.</p>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">4</span><h2>Take</h2></div>
+  <div class="verdict">
+    <h3>Geometry for meaning, help still needed</h3>
+    <p>STLM’s vector space understands opposites. Negation still needs the constraint bias at inference (0/35 plain). Grammar stays with the Transformer.</p>
+  </div>
+</article>
+
+<article class="rx-sec" id="sla">
+  <div class="rx-kicker" style="margin-top:56px">Model card 02</div>
+  <h2 style="margin-top:8px;font-size:clamp(26px,4vw,34px)">Mini-SLA</h2>
+  <p class="rx-lede">One Transformer layer, applied four times, wrapped around an explicit key-value memory with ten entity slots. A symbolic router flips retrieval when <i>not</i> is in play.</p>
+  <div class="rx-tags">
+    <span class="rx-tag blue">11.28M params</span>
+    <span class="rx-tag">1 layer × 4</span>
+    <span class="rx-tag">No inference help</span>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">1</span><h2>Specs</h2></div>
+  <div class="rx-card">
+    <dl class="spec">
+      <div><dt>Parameters</dt><dd>11,281,469 vs baseline 11,217,337 (±0.6%)</dd></div>
+      <div><dt>Depth</dt><dd>1 layer × 4 recurrent passes</dd></div>
+      <div><dt>Memory</dt><dd>10 entity slots, gated writes, attention reads</dd></div>
+      <div><dt>Router</dt><dd>Blends read with −read when negation fires</dd></div>
+      <div><dt>Loss</dt><dd>Plain language-model loss only</dd></div>
+      <div><dt>Train time</dt><dd>567.8 s vs 498.3 s baseline</dd></div>
+    </dl>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">2</span><h2>Architecture</h2></div>
+  <div class="diagram" aria-hidden="true">
+    <svg viewBox="0 0 840 230" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="24" y="86" width="120" height="58" rx="14" fill="#FBFBFC" stroke="#E7E7EA"/>
+      <text x="84" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
+      <path d="M144 115H186" stroke="#4A7FD4" stroke-width="2"/><polygon points="186,111 196,115 186,119" fill="#4A7FD4"/>
+      <rect x="196" y="48" width="170" height="134" rx="16" fill="#EDF3FE" stroke="#C6D8F5"/>
+      <text x="281" y="92" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#1D5BBF">1 layer</text>
+      <text x="281" y="114" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" fill="#1D5BBF">× 4 loops</text>
+      <text x="281" y="148" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">shared weights</text>
+      <path d="M366 115H408" stroke="#4A7FD4" stroke-width="2"/><polygon points="408,111 418,115 408,119" fill="#4A7FD4"/>
+      <rect x="418" y="36" width="168" height="70" rx="14" fill="#fff" stroke="#E7E7EA"/>
+      <text x="502" y="66" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Memory · 10 slots</text>
+      <text x="502" y="86" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">write / read</text>
+      <rect x="418" y="124" width="168" height="70" rx="14" fill="#15284b"/>
+      <text x="502" y="154" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#fff">NOT router</text>
+      <text x="502" y="174" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#aac9df">read → −read</text>
+      <path d="M586 115H630" stroke="#4A7FD4" stroke-width="2"/><polygon points="630,111 640,115 630,119" fill="#4A7FD4"/>
+      <rect x="640" y="86" width="176" height="58" rx="14" fill="#E9F4EE" stroke="#BFE0CC"/>
+      <text x="728" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">35 / 35 negation</text>
+    </svg>
+    <p class="diagram-cap">Memory is a database. Compute is a loop. Negation is a switch — which is why SLA needs no constraint injection.</p>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">3</span><h2>Results</h2></div>
+  <div class="stat-row">
+    <div class="stat-pill win"><span class="val">63.89</span><span class="lab">SLA PPL</span></div>
+    <div class="stat-pill lose"><span class="val">111.45</span><span class="lab">Baseline PPL</span></div>
+    <div class="stat-pill win"><span class="val">35/35</span><span class="lab">Negation</span></div>
+    <div class="stat-pill lose"><span class="val">0/35</span><span class="lab">Baseline</span></div>
+  </div>
+  <div class="rx-card">
+    <div class="rx-scroll"><table class="rtable">
+      <thead><tr><th>Metric</th><th class="hl">Mini-SLA</th><th>Baseline</th><th>Winner</th></tr></thead>
+      <tbody>
+        <tr><td>Parameters</td><td class="hl">11,281,469</td><td>11,217,337</td><td><span class="rx-tag">±0.6%</span></td></tr>
+        <tr><td>Depth</td><td class="hl">1 × 4 passes</td><td>4 stacked layers</td><td></td></tr>
+        <tr><td>Test perplexity ↓</td><td class="hl win">63.89</td><td>111.45</td><td><span class="rx-tag blue">SLA</span></td></tr>
+        <tr><td>Top-1 next-word ↑</td><td class="hl win">24.18%</td><td>10.74%</td><td><span class="rx-tag blue">SLA</span></td></tr>
+        <tr><td>Top-5 next-word ↑</td><td class="hl win">48.72%</td><td>26.54%</td><td><span class="rx-tag blue">SLA</span></td></tr>
+        <tr><td>Negation (35), no help</td><td class="hl win">35 / 35</td><td>0 / 35</td><td><span class="rx-tag blue">SLA</span></td></tr>
+        <tr><td>Grammar agreement (50)</td><td class="hl">41 / 50</td><td class="win">46 / 50</td><td><span class="rx-tag">TFM</span></td></tr>
+        <tr><td>Training time ↓</td><td class="hl dim">567.8 s</td><td class="win">498.3 s</td><td><span class="rx-tag">TFM</span></td></tr>
+      </tbody>
+    </table></div>
+  </div>
+
+  <div class="rx-card">
+    <h3>Saved checkpoints, three-way</h3>
+    <div class="rx-scroll"><table class="rtable">
+      <thead><tr><th>Checkpoint</th><th class="hl">Params</th><th>Test PPL ↓</th><th>Top-1 ↑</th></tr></thead>
+      <tbody>
+        <tr><td>STLM (full, d=256)</td><td class="hl">23,472,141</td><td class="hl win">56.61</td><td class="hl win">29.64%</td></tr>
+        <tr><td>Baseline (d=128)</td><td class="hl">10,813,213</td><td class="hl">210.79</td><td class="hl">21.20%</td></tr>
+        <tr><td>Mini-SLA (d=128)</td><td class="hl">10,252,969</td><td class="hl">230.36</td><td class="hl">20.09%</td></tr>
+      </tbody>
+    </table></div>
+    <p class="fineprint">At ~10M params and 8 epochs the simpler baseline converges faster on raw prediction. Matched, fully-run comparisons above are the headline.</p>
+  </div>
+
+  <div class="rx-sec-head"><span class="rx-num">4</span><h2>Take</h2></div>
+  <div class="verdict">
+    <h3>Negation is solvable at tiny scale</h3>
+    <p>SLA goes 35/35 with no inference help. Memory networks are harder to optimize, and grammar still sits with the Transformer. An idea that works at 11M earns its GPU budget at 100M.</p>
+    <ul>
+      <li><span class="mark yes">+</span><span>Explicit meaning halves perplexity versus matched baselines.</span></li>
+      <li><span class="mark yes">+</span><span>Only SLA reasons fully autonomously on negation.</span></li>
+      <li><span class="mark no">−</span><span>Grammar 41–40 / 50 vs 46 / 50. Syntax dips when you structure for meaning.</span></li>
+    </ul>
+  </div>
+</article>
+
+<div class="rx-sec" id="protocol">
+  <div class="rx-sec-head"><span class="rx-num">5</span><h2>Shared protocol</h2></div>
+  <div class="rx-grid">
+    <div class="rx-box"><span class="num">25k+</span><p><b>Lines</b> — WikiText-2 + 214 state sentences + seed-graph negation templates</p></div>
+    <div class="rx-box"><span class="num">42</span><p><b>Same seed</b> — AdamW 2e-4, batch 32, clip 1.0, 85/5/10 split</p></div>
+    <div class="rx-box"><span class="num">8 ep</span><p><b>Matched runs</b> — context 96, one consumer GPU (12 epochs for full STLM)</p></div>
+    <div class="rx-box"><span class="num">Probes</span><p><b>Held-out</b> — 35 negation, 50 grammar, 30-pair meaning correlation</p></div>
+  </div>
 </div>
 
-<!-- ──────── ARCHITECTURES ──────── -->
-<h2 style="margin-top:44px">The two challengers</h2>
-<div class="arch-grid">
-<div class="arch-box" id="stlm">
-<h4>STLM — meaning has coordinates</h4>
-<p>Same Transformer core as the baseline, plus three small additions: a <b>topology classifier</b> per word (which meaning axis?), a <b>coordinate regressor</b> (where on the axis?), and one reusable axis embedding per topology.</p>
-<p style="margin-top:8px">Training loss is joint: <span class="mono">LM + 0.4 × topology + seed-coordinate</span>. At inference an optional constraint bias nudges generation along the learned axes. Topology alignment reaches <b>98.3%</b>.</p>
+<div class="rx-sec" id="code">
+  <div class="rx-sec-head"><span class="rx-num">6</span><h2>Download the folder</h2></div>
+  <p>One package — STLM core, Mini-SLA core, shared train-and-probe loop. Unzip and run.</p>
+  <div class="pack">
+    <div class="pack-copy">
+      <h3>belna-stlm-sla</h3>
+      <p>The protocol from these cards, as a folder. Same classes, losses and hyperparameters as the reported runs.</p>
+      <div class="pack-actions">
+        <a class="btn small" href="/research-code/belna-stlm-sla.zip" download>Download folder (.zip)</a>
+      </div>
+    </div>
+    <div class="pack-tree">
+      <div class="dir">belna-stlm-sla/</div>
+      <div class="file">  README.md <span class="muted">setup + launch</span></div>
+      <div class="file">  stlm_core.py</div>
+      <div class="file">  sla_core.py</div>
+      <div class="file">  train_and_probe.py</div>
+    </div>
+  </div>
 </div>
-<div class="arch-box" id="sla">
-<h4>Mini-SLA — memory, separated from thought</h4>
-<p><b>One</b> Transformer layer, applied <b>4 times recurrently</b>, wrapped around an explicit causal key-value memory with <b>10 entity slots</b>: gated writes in, attention reads out.</p>
-<p style="margin-top:8px">A <b>symbolic negation router</b> blends each retrieval with its negation whenever <i>not</i> is in play — which is why SLA needs no constraint injection at all. Pure language-model loss, nothing else.</p>
-</div>
-</div>
-
-<div class="rcard" style="margin-top:24px">
-<h3>🔬 A fair fight: matched experimental design</h3>
-<p>Same size class, same corpus, same seed, same optimizer — the only difference is the architecture:</p>
-<div class="arch-grid" style="margin-top:14px">
-<div class="arch-box"><span class="num">±0.6%</span><p><b>Parameters</b> — SLA 11,281,469 vs baseline 11,217,337<br>STLM uses the same core plus a small topology overhead</p></div>
-<div class="arch-box"><span class="num">25k+</span><p><b>Lines</b> — WikiText-2 plus 214 hand-written state lines<br>plus seed-graph augmented negation templates</p></div>
-<div class="arch-box"><span class="num">42</span><p><b>Same seed</b> — identical data splits (85/5/10)<br>AdamW, lr 2e-4, batch 32, 8 epochs, clip 1.0</p></div>
-<div class="arch-box"><span class="num">~9 min</span><p><b>Consumer GPU</b> — baseline 498 s, SLA 568 s<br>held-out test split, never trained on</p></div>
-</div>
-</div>
-
-<!-- ──────── RESULTS ──────── -->
-<h2 style="margin-top:48px" id="results">Results: matched comparisons</h2>
-<p>Lower perplexity (PPL) means better text prediction. Higher accuracy and correlation mean better understanding. Bold marks the winner.</p>
-
-<div class="stat-row">
-<div class="stat-pill win"><span class="val">63.89</span><span class="lab">Mini-SLA Perplexity</span></div>
-<div class="stat-pill lose"><span class="val">111.45</span><span class="lab">Baseline Perplexity</span></div>
-<div class="stat-pill win"><span class="val">0.957</span><span class="lab">STLM Meaning Correlation</span></div>
-<div class="stat-pill lose"><span class="val">−0.069</span><span class="lab">Baseline Correlation</span></div>
-</div>
-
-<div class="rcard">
-<h3>STLM vs matched Transformer baseline</h3>
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Metric</th><th class="hl">STLM</th><th>Baseline</th><th>Winner</th></tr></thead>
-<tbody>
-<tr><td>Test perplexity, plain ↓</td><td class="hl win">80.89</td><td>111.45</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-<tr><td>Test perplexity, constrained ↓</td><td class="hl win">69.09</td><td>—</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-<tr><td>Top-1 next-word ↑</td><td class="hl win">15.30%</td><td>10.74%</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-<tr><td>Top-5 next-word ↑</td><td class="hl win">34.37%</td><td>26.54%</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-<tr><td>Meaning correlation (Pearson) ↑</td><td class="hl win">0.957</td><td>−0.069</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-<tr><td>Meaning correlation (Spearman) ↑</td><td class="hl win">0.938</td><td>−0.053</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-<tr><td>Negation suite, plain (35)</td><td class="hl">0 / 35</td><td>0 / 35</td><td><span class="tag" style="font-size:11px">Tie</span></td></tr>
-<tr><td>Negation suite, constrained (35)</td><td class="hl win">35 / 35</td><td>0 / 35</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-<tr><td>Grammar agreement (50)</td><td class="hl">40 / 50</td><td class="win">46 / 50</td><td><span class="tag" style="font-size:11px">TFM</span></td></tr>
-<tr><td>Topology alignment ↑</td><td class="hl win">98.3%</td><td>n/a</td><td><span class="tag blue" style="font-size:11px">STLM</span></td></tr>
-</tbody>
-</table></div>
-<p style="margin-top:14px;font-size:12px;color:var(--soft);line-height:1.55">Constraints only work because STLM aligned its embeddings to coordinate axes during training — the same bias applied to the baseline changes nothing (0/35). Grammar is the one benchmark the baseline keeps.</p>
-</div>
-
-<div class="rcard">
-<h3>Mini-SLA vs matched Transformer baseline</h3>
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Metric</th><th class="hl">Mini-SLA</th><th>Baseline</th><th>Winner</th></tr></thead>
-<tbody>
-<tr><td>Parameters</td><td class="hl">11,281,469</td><td>11,217,337</td><td><span class="tag" style="font-size:11px">±0.6%</span></td></tr>
-<tr><td>Depth</td><td class="hl">1 layer × 4 passes</td><td>4 stacked layers</td><td></td></tr>
-<tr><td>Test perplexity ↓</td><td class="hl win">63.89</td><td>111.45</td><td><span class="tag blue" style="font-size:11px">SLA</span></td></tr>
-<tr><td>Top-1 next-word ↑</td><td class="hl win">24.18%</td><td>10.74%</td><td><span class="tag blue" style="font-size:11px">SLA</span></td></tr>
-<tr><td>Top-5 next-word ↑</td><td class="hl win">48.72%</td><td>26.54%</td><td><span class="tag blue" style="font-size:11px">SLA</span></td></tr>
-<tr><td>Negation suite (35), no help</td><td class="hl win">35 / 35</td><td>0 / 35</td><td><span class="tag blue" style="font-size:11px">SLA</span></td></tr>
-<tr><td>Grammar agreement (50)</td><td class="hl">41 / 50</td><td class="win">46 / 50</td><td><span class="tag" style="font-size:11px">TFM</span></td></tr>
-<tr><td>Training time ↓</td><td class="hl dim">567.8 s</td><td class="win">498.3 s</td><td><span class="tag" style="font-size:11px">TFM</span></td></tr>
-</tbody>
-</table></div>
-<p style="margin-top:14px;font-size:12px;color:var(--soft);line-height:1.55">The standout cell is negation: SLA solves all 35 probes autonomously — plain evaluation, no constraint bias — while the baseline scores zero. Memory-computation separation costs about 14% extra training time.</p>
-</div>
-
-<h2 style="margin-top:48px">Bonus: the saved checkpoints, three-way</h2>
-<p>Evaluating the actual saved checkpoints (different sizes, 8 epochs each) on identical test sentences — with one honest caveat attached:</p>
-<div class="rcard">
-<div style="overflow-x:auto"><table class="rtable">
-<thead><tr><th>Checkpoint</th><th class="hl">Params</th><th>Test PPL ↓</th><th>Top-1 ↑</th></tr></thead>
-<tbody>
-<tr><td><b>STLM</b> (full, d=256)</td><td class="hl">23,472,141</td><td class="hl win">56.61</td><td class="hl win">29.64%</td></tr>
-<tr><td><b>Baseline</b> (d=128)</td><td class="hl">10,813,213</td><td class="hl">210.79</td><td class="hl">21.20%</td></tr>
-<tr><td><b>Mini-SLA</b> (d=128)</td><td class="hl">10,252,969</td><td class="hl">230.36</td><td class="hl">20.09%</td></tr>
-</tbody>
-</table></div>
-<p style="margin-top:14px;font-size:12px;color:var(--soft);line-height:1.55">Caveat: at ~10M params and only 8 epochs, the simpler baseline optimizes faster on raw text prediction (210.79 vs 230.36) — memory networks need longer runs for their write/read heads to converge. All three checkpoints sit near chance on negation and grammar at this budget, which is exactly why the matched, fully-converged comparisons above are the headline results.</p>
-</div>
-
-<!-- ──────── VERDICT ──────── -->
-<div class="verdict-box" id="verdict" style="margin-top:48px">
-<h3>Honest verdict</h3>
-<p>Two tiny models, two real signals — and the same trade-off our 100M programme found.</p>
-<ul class="vlist">
-<li><span>✅</span><span><b>Explicit meaning beats smeared meaning.</b> Coordinates (STLM) and separate memory (SLA) both cut perplexity nearly in half versus matched baselines — 63.89 and 80.89 against 111.45.</span></li>
-<li><span>✅</span><span><b>Negation is solvable at tiny scale.</b> SLA goes 35/35 with no inference help; STLM goes 35/35 with axis guidance. The baseline scores 0/35 either way.</span></li>
-<li><span>✅</span><span><b>Embeddings with geometry.</b> STLM's 0.957 meaning correlation vs −0.069 says its vector space understands opposites — the baseline's does not.</span></li>
-</ul>
-<p style="margin-top:16px;color:#7fb3e0"><b>But:</b></p>
-<ul class="vlist">
-<li><span>❌</span><span>The Transformer keeps <b>grammar</b> both times (46/50 vs 40–41/50). Structuring for meaning costs a little syntax.</span></li>
-<li><span>❌</span><span>Memory networks are <b>harder to optimize</b> — at small budgets the plain baseline converges faster on raw prediction.</span></li>
-<li><span>❌</span><span>STLM still needs its <b>constraint bias at inference</b> for negation (0/35 plain). Only SLA reasons fully autonomously.</span></li>
-</ul>
-<p style="margin-top:18px;color:#d0e3f5"><b>Next step:</b> longer training runs for the memory heads, then scaling the SLA router idea upward. Small models are the perfect lab — an idea that works at 11M params earns its GPU budget at 100M.</p>
-</div>
-
-<h2 style="margin-top:48px">Training protocol</h2>
-<div class="rcard">
-<div class="arch-grid">
-<div class="arch-box"><h4>Data</h4><p>25,000 WikiText-2 lines + 214 hand-written state sentences + seed-graph negation templates across 7 topologies — word-level vocab, 38,941 tokens</p></div>
-<div class="arch-box"><h4>Optimizer</h4><p>AdamW, lr 2e-4, gradient clip 1.0 — identical for model and baseline, seed 42, 85/5/10 train/val/test split</p></div>
-<div class="arch-box"><h4>Batch</h4><p>Batch 32, context 96, 8 epochs for matched runs (12 for the full STLM) — one consumer GPU, minutes not days</p></div>
-<div class="arch-box"><h4>Probes</h4><p>35 negation minimal pairs, 50 grammar minimal pairs, 30-pair meaning-correlation suite, top-1/top-5 accuracy — all on held-out data</p></div>
-</div>
-</div>
-
-<!-- ──────── CODE ──────── -->
-<h2 style="margin-top:48px" id="code">Replicate it: the full training code</h2>
-<p>The exact protocol from this article, condensed from the working sources. Same classes, same losses, same hyperparameters — train a model and its baseline, then run the probes yourself.</p>
-
-<p style="margin-top:20px"><span class="stepnum">0</span><b>Requirements and launch</b></p>
-<div class="codeblock"><div class="chead"><b>terminal</b><span>CPU or one consumer GPU</span></div><pre>pip install torch numpy tqdm datasets
-
-python src/compare_comprehensive.py   # STLM vs baseline, 5 benches
-python src/compare_sla.py             # Mini-SLA vs baseline
-python src/train.py --epochs 12       # full STLM checkpoint</pre></div>
-
-<p style="margin-top:28px"><span class="stepnum">1</span><b>STLM core</b> — baseline Transformer plus topology coordinates and the joint loss.</p>
-<div class="codeblock"><div class="chead"><b>stlm_core.py</b><span>model + loss</span></div><pre><span class="k">import</span> torch
-<span class="k">import</span> torch.nn <span class="k">as</span> nn
-<span class="k">import</span> torch.nn.functional <span class="k">as</span> F
-
-<span class="k">class</span> <span class="f">STLMini</span>(nn.Module):
-    <span class="s">"""Baseline Transformer core plus meaning coordinates:</span>
-<span class="s">    one axis per topology, one classifier and one</span>
-<span class="s">    coordinate per vocabulary word."""</span>
-    <span class="k">def</span> <span class="f">__init__</span>(self, vocab, word_to_id, topologies,
-                 d_model=<span class="s">128</span>, n_layers=<span class="s">4</span>, n_heads=<span class="s">8</span>,
-                 max_len=<span class="s">96</span>, constraint_strength=<span class="s">0.35</span>):
-        super().__init__()
-        self.word_to_id = word_to_id
-        self.topo_to_id = {n: i <span class="k">for</span> i, n <span class="k">in</span> enumerate(topologies)}
-        self.token_emb = nn.Embedding(vocab, d_model)
-        self.pos_emb = nn.Embedding(max_len, d_model)
-        layer = nn.TransformerEncoderLayer(
-            d_model, n_heads, dim_feedforward=d_model * <span class="s">4</span>,
-            batch_first=<span class="s">True</span>, dropout=<span class="s">0.1</span>)
-        self.encoder = nn.TransformerEncoder(layer, n_layers)
-        self.lm_head = nn.Linear(d_model, vocab)
-        self.topology_coord = nn.Embedding(len(topologies), <span class="s">1</span>)
-        self.concept_topo = nn.Embedding(vocab, len(topologies))
-        self.concept_coord = nn.Embedding(vocab, <span class="s">1</span>)
-        self.strength = constraint_strength
-
-    <span class="k">def</span> <span class="f">forward</span>(self, input_ids, constraint_bonus=<span class="s">None</span>):
-        seqlen = input_ids.size(<span class="s">1</span>)
-        pos = torch.arange(seqlen, device=input_ids.device).unsqueeze(<span class="s">0</span>)
-        x = self.token_emb(input_ids) + self.pos_emb(pos)
-        mask = torch.triu(torch.ones(seqlen, seqlen,
-                                     device=input_ids.device)
-                          * float(<span class="s">"-inf"</span>), diagonal=<span class="s">1</span>)
-        logits = self.lm_head(self.encoder(x, mask=mask))
-        <span class="k">if</span> constraint_bonus <span class="k">is not</span> <span class="s">None</span>:
-            bonus = constraint_bonus
-            <span class="k">if</span> bonus.dim() == <span class="s">1</span>:
-                bonus = bonus.unsqueeze(<span class="s">0</span>)
-            logits = logits + self.strength * bonus.unsqueeze(<span class="s">1</span>)
-        <span class="k">return</span> logits
-
-    <span class="k">def</span> <span class="f">topology_loss</span>(self, input_ids):
-        <span class="s">"""Pull each token coordinate toward its topology axis."""</span>
-        probs = F.softmax(self.concept_topo(input_ids), dim=-<span class="s">1</span>)
-        coords = self.concept_coord(input_ids).squeeze(-<span class="s">1</span>)
-        axis = self.topology_coord.weight.squeeze(-<span class="s">1</span>)
-        target = torch.matmul(probs, axis)
-        <span class="k">return</span> F.mse_loss(coords, target)
-
-<span class="c"># Joint training loss (baseline uses plain lm_loss only):</span>
-<span class="c"># loss = lm_loss + 0.4 * model.topology_loss(x) + seed_coord_loss</span></pre></div>
-
-<p style="margin-top:28px"><span class="stepnum">2</span><b>Mini-SLA core</b> — one layer looped 4 times around an explicit memory with a negation router.</p>
-<div class="codeblock"><div class="chead"><b>sla_core.py</b><span>model, plain LM loss</span></div><pre><span class="k">import</span> torch
-<span class="k">import</span> torch.nn <span class="k">as</span> nn
-<span class="k">import</span> torch.nn.functional <span class="k">as</span> F
-
-<span class="k">class</span> <span class="f">MiniSLA</span>(nn.Module):
-    <span class="s">"""One Transformer layer, looped recurrently, wrapped around</span>
-<span class="s">    an explicit key-value memory with 10 entity slots and a</span>
-<span class="s">    symbolic negation router. No constraint injection needed."""</span>
-    <span class="k">def</span> <span class="f">__init__</span>(self, vocab, word_to_id, d_model=<span class="s">128</span>,
-                 n_heads=<span class="s">8</span>, max_len=<span class="s">96</span>,
-                 recurrent_steps=<span class="s">4</span>, num_entities=<span class="s">10</span>):
-        super().__init__()
-        self.word_to_id = word_to_id
-        self.recurrent_steps = recurrent_steps
-        self.num_entities = num_entities
-        self.token_emb = nn.Embedding(vocab, d_model)
-        self.pos_emb = nn.Embedding(max_len, d_model)
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model, n_heads, dim_feedforward=d_model * <span class="s">4</span>,
-            batch_first=<span class="s">True</span>, dropout=<span class="s">0.1</span>)
-        self.q_proj = nn.Linear(d_model, num_entities)
-        self.w_proj = nn.Linear(d_model, d_model)
-        self.g_proj = nn.Linear(d_model, <span class="s">1</span>)
-        self.mem_combine = nn.Linear(d_model, d_model)
-        self.router = nn.Linear(d_model, <span class="s">1</span>)
-        self.lm_head = nn.Linear(d_model, vocab)
-
-    <span class="k">def</span> <span class="f">forward</span>(self, input_ids, return_debug=<span class="s">False</span>):
-        bsz, seqlen = input_ids.shape
-        pos = torch.arange(seqlen, device=input_ids.device).unsqueeze(<span class="s">0</span>)
-        h = self.token_emb(input_ids) + self.pos_emb(pos)
-        mask = torch.triu(torch.ones(seqlen, seqlen,
-                                     device=input_ids.device)
-                          * float(<span class="s">"-inf"</span>), diagonal=<span class="s">1</span>)
-        <span class="k">for</span> _ <span class="k">in</span> range(self.recurrent_steps):
-            h = self.encoder_layer(h, src_mask=mask)
-        memory = torch.zeros(bsz, self.num_entities, h.size(-<span class="s">1</span>),
-                             device=input_ids.device)
-        reads, routes = [], []
-        <span class="k">for</span> t <span class="k">in</span> range(seqlen):
-            h_t = h[:, t, :]
-            probs = F.softmax(self.q_proj(h_t), dim=-<span class="s">1</span>)
-            probs = probs.unsqueeze(-<span class="s">1</span>)
-            read = (memory * probs).sum(dim=<span class="s">1</span>)
-            route = torch.sigmoid(self.router(h_t))
-            routes.append(route)
-            routed = (<span class="s">1.0</span> - route) * read + route * (-read)
-            reads.append(routed)
-            write = self.w_proj(h_t)
-            gate = torch.sigmoid(self.g_proj(h_t)).unsqueeze(-<span class="s">1</span>)
-            memory = ((<span class="s">1.0</span> - gate * probs) * memory
-                      + (gate * probs) * write.unsqueeze(<span class="s">1</span>))
-        combined = h + self.mem_combine(torch.stack(reads, dim=<span class="s">1</span>))
-        logits = self.lm_head(combined)
-        <span class="k">if</span> return_debug:
-            <span class="k">return</span> logits, memory, reads, routes
-        <span class="k">return</span> logits</pre></div>
-
-<p style="margin-top:28px"><span class="stepnum">3</span><b>Train + probe</b> — identical loop for model and baseline, then the held-out probes.</p>
-<div class="codeblock"><div class="chead"><b>train_and_probe.py</b><span>same loop, both models</span></div><pre><span class="k">import</span> math
-<span class="k">import</span> torch
-<span class="k">import</span> torch.nn <span class="k">as</span> nn
-<span class="k">import</span> torch.nn.functional <span class="k">as</span> F
-
-opt = torch.optim.AdamW(model.parameters(), lr=<span class="s">2e-4</span>)
-<span class="k">for</span> epoch <span class="k">in</span> range(<span class="s">1</span>, epochs + <span class="s">1</span>):
-    model.train()
-    <span class="k">for</span> input_ids, labels <span class="k">in</span> train_loader:
-        input_ids = input_ids.to(dev)
-        labels = labels.to(dev)
-        logits = model(input_ids)  <span class="c"># SLA: plain LM loss, no extras</span>
-        loss = F.cross_entropy(logits.reshape(-<span class="s">1</span>, logits.size(-<span class="s">1</span>)),
-                               labels.reshape(-<span class="s">1</span>),
-                               ignore_index=-<span class="s">100</span>)
-        <span class="c"># STLM instead: loss = lm + 0.4 * topology_loss + seed_loss</span>
-        opt.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), <span class="s">1.0</span>)
-        opt.step()
-    val_nll = evaluate(model, val_loader)  <span class="c"># mean NLL on held-out</span>
-    print(<span class="s">"epoch"</span>, epoch, <span class="s">"val_ppl"</span>, round(math.exp(val_nll), <span class="s">2</span>))
-
-<span class="c"># Probes (see src/compare_comprehensive.py for the full suites):</span>
-<span class="c"># - 35 negation pairs: hit when the top token is expected, not rejected</span>
-<span class="c"># - 50 grammar pairs: hit when P(correct) is above P(broken)</span>
-<span class="c"># - 30 meaning pairs: Pearson and Spearman over embedding similarity</span></pre></div>
-
 </main>
 
-<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/#safety">Safe Swedish AI</a><a href="/#agent">Personal Agent</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 </body>
 </html>

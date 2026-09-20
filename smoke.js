@@ -46,10 +46,9 @@ const { chromium } = require('playwright');
   await p.waitForTimeout(500);
   step('research flow finished');
 
-  // trace tab
-  await p.click('[data-act="ctab"][data-t="trace"]');
-  await p.waitForSelector('#cbody .tline');
-  step('trace tab has entries');
+  await p.click('[data-act="ctab"][data-t="approvals"]');
+  await p.waitForSelector('#cbody .aslider-sec');
+  step('approvals tab opened');
   await p.click('[data-act="ctab"][data-t="canvas"]');
 
   // vault: add secret, check masking
