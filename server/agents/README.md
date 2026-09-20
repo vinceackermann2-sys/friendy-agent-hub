@@ -18,6 +18,10 @@ task's findings can require a second call. Delegation acknowledgement needs no
 extra model call. There is no separate router, idle question agent, or update
 model running in the background.
 
+If task storage is unavailable, ordinary chat continues with a direct answer.
+The coordinator withholds delegation and task-control tools for that request
+and logs the storage error, so it cannot claim background work was started.
+
 `task-runtime.js` advances each saved task by one model or tool step. The main
 reply has a separate request and cancellation scope, so asking a question does
 not cancel or replay task work. Workers use the existing tools, memory ranking,

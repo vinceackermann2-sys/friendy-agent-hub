@@ -2,7 +2,7 @@
 
 An app where every user **claims, names and customizes their own personal agent**,
 then works with it through a chat full of rich action cards, with a **visual canvas**
-on the right and a **sealed vault** for secrets.
+on the right, separate **Apps** connections, and **Settings** for secrets and preferences.
 
 Styling follows the reference screenshots: off-white surfaces, black pill buttons,
 soft rounded cards, cute mascot characters, purple/lingon accents.
@@ -30,17 +30,17 @@ in `localStorage`.
    approvals (approve / always-allow / deny), connect-app, **secrets box**,
    questions, sub-agents, browser use, sandboxed computer use, files, artifacts,
    memory saves.
-4. **Canvas (right, chat-only)** — live artifacts: animated bar charts, sandboxed
-   HTML previews, diffs/code, plans — plus a **Trace** tab showing every tool call,
-   guardrail and sub-agent step. Artifact cards in chat carry inline previews.
-5. **Vault** — segmented tabs: **Apps · Secrets · Approved · Library (files)**.
-   Secrets masked (reveal is owner-only), always-allow rules revocable,
-   permission mode (Default / Ask always).
-6. **Memory** — real working memory the agent reads and writes: it recalls relevant
+4. **Canvas (right, chat-only)** — live artifacts, sandboxed HTML previews,
+   diffs/code, plans and task activity. Artifact cards in chat carry inline previews.
+5. **Apps** — connect multiple accounts to a supported app, inspect its available
+   tools, and turn individual tool permissions on or off.
+6. **Settings** — secrets, approvals, memory, files, profiles, billing and theme.
+   Secrets remain masked (reveal is owner-only) and always-allow rules are revocable.
+7. **Memory** — real working memory the agent reads and writes: it recalls relevant
    memories in answers, lists them on demand ("what do you remember?"), and remembers
    your choices; inspectable and deletable anytime.
-7. **Profile** — rename, recolor, re-personality your agent; release it anytime.
-8. **Sub Agents** — isolated automation chats in the right-side agent panel. A
+8. **Profile** — rename, recolor, re-personality your agent; release it anytime.
+9. **Sub Agents** — isolated automation chats in the right-side agent panel. A
    sub-agent can run on a schedule, on a real connected-app event, or after
    another sub-agent completes; chained handoffs are bounded by the harness.
 
@@ -52,14 +52,13 @@ in `localStorage`.
 - Sensitive actions pause for approval unless explicitly always-allowed (revocable).
 - Browser/computer/code run "in a sandboxed harness" with a visible trace.
 
-## Architecture / going real
+## Architecture
 
 - `mascot.js` — code-drawn recolorable **star** mascot (idle/happy/think/wave moods),
   also used as logo and floating chat status avatar.
-- `engine.js` — the agent brain. **This is the swap point for production:**
-  replace the simulated scenarios with a backend driving the OpenAI Agents API
-  (Codex-style sandbox, handoffs, guardrails, tracing). The `rt` runtime contract
-  (`say`, `tools`, `card`, `artifact`, `trace`, `remember`…) stays identical.
+- `engine.real.js` and `engine.managed.js` — browser adapters for the real
+  server-side Gemini agent and managed task runtime. The server owns auth,
+  tools, task state and the isolated Azure VM.
 - `app.js` — state, router, chat/cards/canvas/vault UI, persistence.
 - `styles.css` — the design system.
 
