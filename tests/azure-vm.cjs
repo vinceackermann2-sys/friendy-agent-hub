@@ -28,6 +28,11 @@ assert.throws(() => azure.buildRunScript('js', ''), /required/);
 assert.throws(() => azure.buildRunScript('js', 'x'.repeat(20001)), /20KB/);
 
 const sh = azure.buildShellScript('ls -la /etc/passwd');
+const taskA=azure.buildShellScript('pwd','task-a');
+const taskB=azure.buildRunScript('python','print(1)','task-b');
+assert.notEqual(taskA.match(/WORKDIR=(.*)/)[1],taskB.match(/WORKDIR=(.*)/)[1],'workers use separate task directories on the same VM');
+assert.match(taskA,/mktemp/);assert.match(taskB,/mktemp/);
+assert.doesNotMatch(azure.buildShellScript('pwd',"../;$(malicious)"),/malicious/,'task scope never interpolates shell syntax');
 assert.match(sh, /base64 -d/);
 assert.doesNotMatch(sh, /\/etc\/passwd/);
 assert.throws(() => azure.buildShellScript(''), /required/);

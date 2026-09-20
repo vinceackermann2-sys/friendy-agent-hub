@@ -437,6 +437,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 }
 .anav .nav{ padding:14px 24px; }
 .abrand{ display:flex; align-items:center; gap:9px; font-weight:800; font-size:18px; letter-spacing:-.02em; text-decoration:none; }
+.abrand svg,.belna-mark{ flex:none; display:block; max-width:none; }
 .anav-cta{ display:flex; gap:10px; align-items:center; }
 .ahero{
   min-height:calc(100svh - 65px);

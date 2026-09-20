@@ -1,5 +1,33 @@
 import type React from "react";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+
+declare global {
+  interface Window {
+    LingonAppRuntime?: { mount: (root: HTMLElement) => Promise<void> };
+  }
+}
+
+const scriptLoads = new Map<string, Promise<void>>();
+
+function loadScript(src: string) {
+  const pending = scriptLoads.get(src);
+  if (pending) return pending;
+  const request = new Promise<void>((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = src;
+    el.async = false;
+    el.dataset.lingon = src;
+    el.onload = () => resolve();
+    el.onerror = () => {
+      el.remove();
+      scriptLoads.delete(src);
+      reject(new Error(`Failed to load ${src}`));
+    };
+    document.body.appendChild(el);
+  });
+  scriptLoads.set(src, request);
+  return request;
+}
 
 const SCRIPTS = [
   "/lingon/config.js",
@@ -15,6 +43,7 @@ export const lingonHeadLinks: Array<
   React.DetailedHTMLProps<React.LinkHTMLAttributes<HTMLLinkElement>, HTMLLinkElement>
 > = [
   { rel: "stylesheet", href: "/lingon/styles.css" },
+  ...SCRIPTS.map((href) => ({ rel: "preload", href, as: "script" })),
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
   {
@@ -23,39 +52,40 @@ export const lingonHeadLinks: Array<
   },
   {
     rel: "icon",
-    href: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E",
+      href: "/favicon.svg",
   },
 ];
 
 export function LingonApp() {
+  const host = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState("loading");
   useEffect(() => {
     let cancelled = false;
-    const load = (src: string) =>
-      new Promise<void>((resolve, reject) => {
-        const existing = document.querySelector(`script[data-lingon="${src}"]`);
-        if (existing) return resolve();
-        const el = document.createElement("script");
-        el.src = src;
-        el.async = false;
-        el.dataset["lingon"] = src;
-        el.onload = () => resolve();
-        el.onerror = () => reject(new Error(`Failed to load ${src}`));
-        document.body.appendChild(el);
-      });
-
     (async () => {
       for (const src of SCRIPTS) {
         if (cancelled) return;
-        await load(src);
+        await loadScript(src);
       }
-    })().catch((e) => console.error(e));
+      if (cancelled || !host.current) return;
+      if (!window.LingonAppRuntime) throw new Error("App did not initialize");
+      await window.LingonAppRuntime.mount(host.current);
+      if (!cancelled) setStatus("ready");
+    })().catch((e) => {
+      console.error(e);
+      if (!cancelled) setStatus("error");
+    });
 
     return () => {
       cancelled = true;
     };
   }, []);
 
-  return <div id="root" />;
+  return <><div id="root" ref={host} />
+    {status === "error" ? <div role="alert" style={{ padding: 32 }}>
+      <p>We couldn’t open your agent. Your setup and saved request are still here.</p>
+      <button onClick={() => window.location.reload()}>Try again</button>
+    </div> : status === "loading" ? <p role="status" style={{ padding: 32 }}>Opening your agent…</p> : null}
+  </>;
 }
 
 export default LingonApp;

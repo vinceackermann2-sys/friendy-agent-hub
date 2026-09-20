@@ -19,20 +19,18 @@ const TOOLS = {
     name: 'web_search', type: 'web_search', approval: false,
     description: 'Live fetch of allowlisted public sources (HN, DuckDuckGo, Wikipedia).',
     run: async ({ urls }, ctx) => {
-      const out = [];
-      for (const u of urls.slice(0, 4)) {
+      return Promise.all(urls.slice(0, 4).map(async (u) => {
         const t0 = Date.now();
         try {
           const r = await fetchAllowlisted(u, { signal: ctx.signal });
           const text = (await r.text()).slice(0, 12000);
-          out.push({ url: u, ok: true, text });
           ctx.trace(entry('globe', `web_search: ${new URL(u).hostname} · ${Date.now() - t0}ms`));
+          return { url: u, ok: true, text };
         } catch (e) {
-          out.push({ url: u, ok: false, error: e.message });
           ctx.trace(entry('alert', `web_search failed: ${e.message}`));
+          return { url: u, ok: false, error: e.message };
         }
-      }
-      return out;
+      }));
     },
   },
   github_prs: {
@@ -96,7 +94,7 @@ const TOOLS = {
     name: 'shell', type: 'code', approval: false,
     description: 'Run a bash command in the user Azure VM workspace. Files persist on the VM disk.',
     run: async ({ command }, ctx) => {
-      const out = await execInSandbox(ctx.userId, 'shell', { command });
+      const out = await execInSandbox(ctx.userId, 'shell', { command }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('term', `shell: exit on ${out.vmName}`));
       return out;
     },
@@ -107,7 +105,7 @@ const TOOLS = {
     run: async ({ url }, ctx) => {
       const u = String(url || '');
       if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
-      const out = await execInSandbox(ctx.userId, 'computer_screenshot', { url: u });
+      const out = await execInSandbox(ctx.userId, 'computer_screenshot', { url: u, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `computer_screenshot: ${new URL(u).hostname}`));
       return out;
     },
@@ -120,8 +118,30 @@ const TOOLS = {
       if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
       if (ctx.signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
       if (!isAzureConfigured()) throw Object.assign(new Error('browser tool unavailable until Azure VM is configured'), { code: 'DISABLED' });
-      const out = await execInSandbox(ctx.userId, 'browser_open', { url: u });
+      const out = await execInSandbox(ctx.userId, 'browser_open', { url: u, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_open: ${new URL(u).hostname} on ${out.vmName}`));
+      return out;
+    },
+  },
+  browser_action: {
+    name: 'browser_action', type: 'browser', approval: false,
+    description: 'Click or scroll the current Azure VM browser page.',
+    run: async (args, ctx) => {
+      const type = String(args.type || '');
+      if (!['click', 'click_text', 'scroll'].includes(type)) throw Object.assign(new Error('Unsupported browser action.'), { code: 'BAD_INPUT' });
+      const event = { type };
+      if (type === 'click') {
+        if (!Number.isFinite(args.x) || !Number.isFinite(args.y) || args.x < 0 || args.x > 1280 || args.y < 0 || args.y > 900) throw Object.assign(new Error('Click coordinates must be inside the browser viewport.'), { code: 'BAD_INPUT' });
+        event.x = args.x; event.y = args.y;
+      } else if (type === 'scroll') {
+        if (!Number.isFinite(args.dy) || Math.abs(args.dy) > 3000) throw Object.assign(new Error('Invalid scroll distance.'), { code: 'BAD_INPUT' });
+        event.dy = args.dy;
+      } else if (type === 'click_text') {
+        event.text = String(args.text || '').slice(0, 200);
+        if (!event.text) throw Object.assign(new Error('Browser action text required.'), { code: 'BAD_INPUT' });
+      }
+      const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      ctx.trace(entry('globe', `browser_action: ${type} on ${out.vmName}`));
       return out;
     },
   },
@@ -129,7 +149,7 @@ const TOOLS = {
     name: 'code_run', type: 'code', approval: false,
     description: 'Execute js/python/bash ONLY inside the user Azure VM via Run Command. Disabled without Azure.',
     run: async (args, ctx) => {
-      const out = await execInSandbox(ctx.userId, 'code_run', args);
+      const out = await execInSandbox(ctx.userId, 'code_run', args, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('code', `code_run: ${out.language} on ${out.vmName}`));
       return out;
     },
@@ -158,6 +178,16 @@ const TOOLS = {
       const turns = await store.searchTurns(ctx.userId, String(query || '').slice(0, 200));
       ctx.trace(entry('file', `history_search: ${turns.length} past turns matched`));
       return turns.map((t) => ({ role: t.role, text: String(t.text).slice(0, 600) }));
+    },
+  },
+  canvas_show: {
+    name: 'canvas_show', type: 'function', approval: false,
+    description: 'Present a card or text file in the user Canvas.',
+    run: async ({ title, format, content }, ctx) => {
+      const allowed = new Set(['text','md','json','csv','html','svg','code']);
+      const out = { title:String(title || 'Canvas item').slice(0,120), format:allowed.has(format) ? format : 'text', content:String(content || '').slice(0,60000) };
+      ctx.trace(entry('board', `canvas_show: ${out.title}`));
+      return out;
     },
   },
   trigger_list: {

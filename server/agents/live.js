@@ -8,7 +8,8 @@ const { entry } = require('./tracing');
 const azure = require('./azure-vm');
 
 const sessions = new Map();
-const IDLE_MS = 90000;
+const toolSessions = new Map();
+const IDLE_MS = 600000;
 let sweepTimer = null;
 
 function uid() {
@@ -31,6 +32,11 @@ function broadcastFrame(s) {
 async function sweep() {
   const now = Date.now();
   for (const s of [...sessions.values()]) {
+    if (s.viewers.size) s.lastActive = now;
+    if (now - (s.lastRenewedAt || 0) > 45000) {
+      await azure.renewLease(s.userId, { leaseId:s.id }).catch(() => {});
+      s.lastRenewedAt = now;
+    }
     if (now - s.lastActive > IDLE_MS || s.fail) await stop(s);
   }
   if (!sessions.size && sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
@@ -45,10 +51,21 @@ async function start({ userId, trace }) {
   if (!azure.isAzureConfigured()) throw Object.assign(new Error('Live browser requires the user Azure VM.'), { code: 'DISABLED' });
   const id = 'live_' + uid();
   await azure.acquireLease(userId, { leaseId: id, kind: 'browser' });
-  const s = { id, remote: true, userId, url: 'about:blank', title: '', text: '', links: [], screenshot: '', working: false, userControl: false, viewers: new Set(), lastActive: Date.now(), fail: false };
+  const s = { id, remote: true, userId, url: 'about:blank', title: '', text: '', links: [], screenshot: '', working: false, userControl: false, viewers: new Set(), lastActive: Date.now(), lastRenewedAt:Date.now(), fail: false };
   sessions.set(id, s);
   ensureSweep();
   trace && trace(entry('globe', `live session ${id.slice(0, 12)} started on the user VM`));
+  return s;
+}
+
+async function forTool(userId, sessionId, trace, create = true) {
+  const key = `${userId}:${sessionId || 'default'}`;
+  const existing = toolSessions.get(key);
+  if (existing && sessions.has(existing.id)) return existing;
+  if (!create) throw Object.assign(new Error('Open a browser page before using browser_action.'), { code:'NO_BROWSER_SESSION' });
+  const s = await start({ userId, trace });
+  s.toolKey = key;
+  toolSessions.set(key, s);
   return s;
 }
 
@@ -59,6 +76,8 @@ async function updateFromVm(s, out, trace) {
   s.links = Array.isArray(out.links) ? out.links : [];
   s.screenshot = out.screenshot || s.screenshot;
   s.lastActive = Date.now();
+  await azure.renewLease(s.userId, { leaseId:s.id }).catch(() => {});
+  s.lastRenewedAt = Date.now();
   broadcast(s, { state: s.userControl ? 'user' : 'idle', url: s.url, title: s.title });
   broadcastFrame(s);
   trace && trace(entry('globe', `live VM page: ${new URL(s.url).hostname} · “${String(s.title).slice(0, 60)}”`));
@@ -67,6 +86,7 @@ async function updateFromVm(s, out, trace) {
 
 async function navigate(s, url, trace) {
   if (!hostAllowed(url)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
+  if (s.userControl) throw Object.assign(new Error('The user is controlling this browser. Wait until they give it back.'), { code:'USER_CONTROL' });
   s.working = true;
   s.lastActive = Date.now();
   broadcast(s, { state: 'working', url });
@@ -104,6 +124,19 @@ async function input(s, ev) {
   return { url: s.url, title: s.title };
 }
 
+async function agentInput(s, ev, trace) {
+  if (s.userControl) throw Object.assign(new Error('The user is controlling this browser. Wait until they give it back.'), { code:'USER_CONTROL' });
+  s.working = true;
+  broadcast(s, { state:'working', url:s.url });
+  try {
+    const out = await azure.execInSandbox(s.userId, 'browser_session', { sessionId:s.id, action:'input', event:ev || {} });
+    return await updateFromVm(s, out, trace);
+  } finally {
+    s.working = false;
+    broadcast(s, { state:s.userControl ? 'user' : 'idle', url:s.url });
+  }
+}
+
 function takeOver(s, on) {
   s.userControl = !!on;
   s.lastActive = Date.now();
@@ -120,9 +153,11 @@ function owned(id, userId) {
 async function stop(s) {
   if (!s || !sessions.has(s.id)) return;
   sessions.delete(s.id);
+  if (s.toolKey && toolSessions.get(s.toolKey) === s) toolSessions.delete(s.toolKey);
+  if (!sessions.size && sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
   for (const ws of s.viewers) { try { ws.close(); } catch {} }
   s.viewers.clear();
   await azure.releaseLease(s.userId, { leaseId: s.id }).catch(() => {});
 }
 
-module.exports = { start, navigate, content, screenshot, input, takeOver, get, owned, stop };
+module.exports = { start, forTool, navigate, content, screenshot, input, agentInput, takeOver, get, owned, stop };

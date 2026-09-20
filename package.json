@@ -11,8 +11,9 @@
     "prebuild": "node scripts/sync-lingon.mjs",
     "start": "node server/index.js",
     "preview": "vite preview",
-    "test": "node tests/agent-harness.cjs && node tests/agent-confidentiality.cjs && node tests/agent-wallet.cjs && node tests/agent-mail.cjs && node tests/composio-security.cjs && node tests/azure-vm.cjs && node tests/azure-vm-esm.mjs && node tests/vm-harness.cjs",
+    "test": "node tests/billing-totals.cjs && node tests/billing-cache.cjs && node tests/request-coalescing.cjs && node tests/agent-harness.cjs && node tests/agent-confidentiality.cjs && node tests/agent-wallet.cjs && node tests/agent-mail.cjs && node tests/composio-security.cjs && node tests/azure-vm.cjs && node tests/azure-vm-esm.mjs && node tests/vm-harness.cjs && node tests/vm-harness-latency.cjs && node tests/managed-stream.cjs && node tests/managed-progress-cards.cjs && node tests/chat-tasks.cjs && node tests/chat-tasks-sql.cjs && node tests/managed-tasks.cjs && node tests/canvas-cards.cjs && node tests/canvas-live.cjs && node tests/chat-task-teams.cjs",
     "test:azure": "node tests/azure-vm.cjs && node tests/vm-harness.cjs",
+    "test:onboarding": "node tests/onboarding.cjs",
     "azure:status": "node scripts/azure-provision.mjs",
     "azure:provision": "node scripts/azure-provision.mjs",
     "smoke:real": "node tests/smoke.real.js",
@@ -86,6 +87,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@eslint/js": "^9.32.0",
     "@lovable.dev/vite-tanstack-config": "^2.20.0",
     "@types/node": "^22.16.5",

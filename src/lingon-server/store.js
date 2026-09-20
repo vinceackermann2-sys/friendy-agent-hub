@@ -199,7 +199,6 @@ async function getSubscription(userId) {
   const s = supa();
   if (s) {
     try {
-      await ensureProfile(userId);
       const { data, error } = await s.from('subscriptions').select('*').eq('user_id', userId).single();
       if (!error && data) return data;
       if (error && error.code !== 'PGRST116') throw error;
@@ -698,6 +697,63 @@ async function logToolRun({ userId, sessionId, kind, name, status, detail, ms })
   d.runs.unshift(row);
   saveLocal(d);
   return row;
+}
+
+let billingTotalsRpcMissingUntil = 0;
+async function billingTotals(userId) {
+  const s = supa();
+  if (s) {
+    if (Date.now() >= billingTotalsRpcMissingUntil) {
+      const { data, error } = await s.rpc('billing_totals', { p_user_id: userId });
+      if (!error && data && data[0]) {
+        const row = data[0];
+        return {
+          granted: Number(row.granted || 0), used: Number(row.used || 0),
+          giftGranted: Number(row.gift_granted || 0), giftsUsd: Number(row.gifts_usd || 0),
+        };
+      }
+      if (error && error.code !== 'PGRST202') throw error;
+      billingTotalsRpcMissingUntil = Date.now() + 60_000;
+    }
+    const page = async (table, columns, key, cursorColumn, visit) => {
+      let cursor = null;
+      for (;;) {
+        let query = s.from(table).select(`${cursorColumn},${columns}`).eq(key, userId)
+          .order(cursorColumn, { ascending: true }).limit(1000);
+        if (cursor !== null) query = query.gt(cursorColumn, cursor);
+        const { data, error } = await query;
+        if (error) throw error;
+        for (const row of data || []) visit(row);
+        if (!data || data.length < 1000) break;
+        cursor = data[data.length - 1][cursorColumn];
+      }
+    };
+    const totals = { granted: 0, used: 0, giftGranted: 0, giftsUsd: 0 };
+    await Promise.all([
+      page('credit_grants', 'credits,reason', 'user_id', 'id', (row) => {
+        const credits = Number(row.credits || 0);
+        totals.granted += credits;
+        if (row.reason === 'gift_redeem') totals.giftGranted += credits;
+      }),
+      page('api_usage', 'cost_usd,credits_charged', 'user_id', 'id', (row) => {
+        totals.used += row.credits_charged == null ? Number(row.cost_usd || 0) * 2 : Number(row.credits_charged || 0);
+      }),
+      page('gift_cards', 'amount_usd', 'redeemed_by', 'code', (row) => {
+        totals.giftsUsd += Number(row.amount_usd || 0);
+      }),
+    ]);
+    return totals;
+  }
+  const d = loadLocal();
+  const owned = (row) => row.user_id === userId || row.userId === userId;
+  const grants = (d.grants || []).filter(owned);
+  return {
+    granted: grants.reduce((sum, row) => sum + Number(row.credits || 0), 0),
+    giftGranted: grants.filter((row) => row.reason === 'gift_redeem').reduce((sum, row) => sum + Number(row.credits || 0), 0),
+    used: (d.usage || []).filter(owned).reduce((sum, row) => sum + (row.credits_charged == null
+      ? Number(row.cost_usd || row.cost || 0) * 2 : Number(row.credits_charged || 0)), 0),
+    giftsUsd: (d.gifts || []).filter((row) => row.redeemed_by === userId).reduce((sum, row) => sum + Number(row.amount_usd || 0), 0),
+  };
 }
 
 async function creditsUsed(userId) {
@@ -1274,7 +1330,7 @@ export {
   listSecrets, addSecret, revealSecret, delSecret,
   supaConfigured,
   getSubscription, setSubscription, findUserByStripeCustomer,
-  logUsage, usageTotal, creditsUsed, creditsForUsageUsd, creditsForGift,
+  logUsage, usageTotal, creditsUsed, billingTotals, creditsForUsageUsd, creditsForGift,
   addGrant, grantsTotal, grantsTotalByReason, ensureFreeGrant, hasGrantRef,
   stripeEventSeen, markStripeEvent,
   createGift, redeemGift, giftsCredit, requestUpgrade,

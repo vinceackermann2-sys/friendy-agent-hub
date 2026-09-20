@@ -2,9 +2,9 @@
    Auth: Supabase JWT required on all stateful routes (user_id comes from the
    verified token, never from the client). Health + plans are public.
    Billing: credits (1 credit = $0.50 face, margin built in — users never see
-   raw API costs). Free: 20 starter credits. Pro $30/mo → 60 credits/mo +
-   $50 gift card. Max $50/mo → 100 credits/mo + $100 gift card. Real Stripe
-   subscriptions + webhooks; gift redeem adds credits.
+   raw API costs). Free: 20 starter credits. Pro $50/mo → 60 credits/mo.
+   Max $100/mo → 100 credits/mo. Real Stripe subscriptions + webhooks;
+   gift redeem adds credits.
    Harness: NOT Codex API — our own Gemini tool boundary (see harness.js).
 */
 require('dotenv').config();
@@ -12,7 +12,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { callGemini, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK } = require('./gemini');
-const { PLANS, costOf, creditsForGiftUsd } = require('./plans');
+const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd } = require('./plans');
 const store = require('./store');
 const stripeMod = require('./stripe');
 const { pubClient, adminClient, requireAuth } = require('./auth');
@@ -123,6 +123,13 @@ function safeLog(...a) {
 
 const azure = require('./agents/azure-vm');
 const vmHarness = require('./agents/vm-harness');
+const conversation = require('./agents/conversation');
+app.post('/api/internal/tasks-tick', rateLimit(120, 60000), async (req, res) => {
+  if (!(await azure.verifySweepToken(req.headers.authorization))) return res.status(401).json({ error:'Unauthorized.' });
+  try { res.json(await conversation.tasks.tick({drain:true})); } catch { res.status(503).json({ error:'Task worker unavailable.' }); }
+});
+app.use('/api/agent/conversation', rateLimit(120, 60000), requireAuth(conversation.handle));
+app.use('/api/agent/tasks', rateLimit(240, 60000), requireAuth(conversation.handle));
 app.post('/api/internal/vm-sweep', rateLimit(10, 60000), async (req, res) => {
   if (!(await azure.verifySweepToken(req.headers.authorization))) return res.status(401).json({ error: 'Unauthorized.' });
   try { return res.json({ ok: true, ...(await azure.sweepLeases({ limit: 20 })) }); }
@@ -151,6 +158,9 @@ app.get('/api/health', (req, res) => {
     harness: 'gemini-azure-vm-harness',
     sandbox: azure.isAzureConfigured() ? 'azure-vm-per-user' : 'local-per-user-fallback',
     plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval })),
+    prelander: PRELANDER_OFFERS,
+    creditPacks: CREDIT_PACKS,
+    giftAmounts: GIFT_AMOUNTS,
     stripe: stripeMod.isConfigured(),
     time: new Date().toISOString(),
   });
@@ -161,7 +171,7 @@ app.get('/api/auth/status', (req, res) => {
 });
 
 app.get('/api/plans', (req, res) => {
-  res.json({ plans: Object.values(PLANS) });
+  res.json({ plans: Object.values(PLANS), prelander: PRELANDER_OFFERS, creditPacks: CREDIT_PACKS, giftAmounts: GIFT_AMOUNTS });
 });
 
 // ---------- auth (proxy so keys stay server-side) ----------
@@ -347,22 +357,23 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
 
 // ---------- billing (credits — users never see raw API costs) ----------
 async function billingFor(userId) {
-  const sub = await store.getSubscription(userId);
-  const plan = PLANS[sub.plan] || PLANS.free;
+  const subPromise = store.getSubscription(userId);
   await store.ensureFreeGrant(userId);
+  const [sub, totals] = await Promise.all([subPromise, store.billingTotals(userId)]);
+  const plan = PLANS[sub.plan] || PLANS.free;
   // Backfill: gift codes redeemed before the credit ledger existed granted no
   // credits — top them up once at face value (2 credits per $1).
   try {
-    const giftsUsd = await store.giftsCredit(userId);
-    const giftGranted = await store.grantsTotalByReason(userId, 'gift_redeem');
-    const expected = creditsForGiftUsd(giftsUsd);
-    if (expected > giftGranted + 1e-9) {
-      await store.addGrant(userId, expected - giftGranted, 'gift_redeem', 'backfill:legacy');
+    const expected = creditsForGiftUsd(totals.giftsUsd);
+    if (expected > totals.giftGranted + 1e-9) {
+      const difference = expected - totals.giftGranted;
+      await store.addGrant(userId, difference, 'gift_redeem', 'backfill:legacy');
+      totals.granted += difference;
     }
   } catch {}
-  const granted = await store.grantsTotal(userId);
-  const usedCredits = await store.creditsUsed(userId);
-  const giftsRedeemedUsd = await store.giftsCredit(userId);
+  const granted = totals.granted;
+  const usedCredits = totals.used;
+  const giftsRedeemedUsd = totals.giftsUsd;
   const total = granted;
   const remaining = Math.max(0, total - usedCredits);
   return {
@@ -374,12 +385,16 @@ async function billingFor(userId) {
     currentPeriodEnd: sub.current_period_end || null,
     stripe: stripeMod.isConfigured(),
     plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval, blurb: p.blurb })),
+    prelander: PRELANDER_OFFERS,
+    creditPacks: CREDIT_PACKS,
+    giftAmounts: GIFT_AMOUNTS,
     // Legacy dollar fields (kept for old clients, derived — not shown in UI):
     credit: plan.credits / 2, gifts: giftsRedeemedUsd, used: usedCredits / 2, total: total / 2, remaining: remaining / 2,
     plansLegacy: PLANS,
   };
 }
 app.get('/api/billing', requireAuth(async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json(await billingFor(req.user.id));
 }));
 app.post('/api/billing/redeem', requireAuth(async (req, res) => {
@@ -390,13 +405,47 @@ app.post('/api/billing/redeem', requireAuth(async (req, res) => {
 // Real Stripe Checkout: returns a hosted payment URL for a monthly subscription.
 app.post('/api/billing/checkout', requireAuth(async (req, res) => {
   try {
-    const { plan } = req.body || {};
+    const { plan, extraCredits, promo } = req.body || {};
     const email = req.user.email || undefined;
-    const session = await stripeMod.createCheckout({ userId: req.user.id, email, plan, req });
+    const session = await stripeMod.createCheckout({ userId: req.user.id, email, plan, extraCredits, promo, req });
     res.json({ ok: true, url: session.url });
   } catch (e) {
     const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
     res.status(code).json({ error: e.message });
+  }
+}));
+app.post('/api/billing/credits', requireAuth(async (req, res) => {
+  try {
+    const extraCredits = (req.body || {}).extraCredits || (req.body || {}).packCredits;
+    const session = await stripeMod.createCreditsCheckout({ userId: req.user.id, email: req.user.email, packCredits: extraCredits, req });
+    res.json({ ok: true, url: session.url });
+  } catch (e) {
+    const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
+    res.status(code).json({ error: e.message });
+  }
+}));
+app.post('/api/billing/gift', requireAuth(async (req, res) => {
+  try {
+    const session = await stripeMod.createGiftCheckout({ userId: req.user.id, email: req.user.email, amountUsd: (req.body || {}).amount, req });
+    res.json({ ok: true, url: session.url });
+  } catch (e) {
+    const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
+    res.status(code).json({ error: e.message });
+  }
+}));
+app.get('/api/billing/checkout-result', requireAuth(async (req, res) => {
+  try {
+    const sessionId = String(req.query.session_id || req.query.sessionId || '');
+    const session = await stripeMod.loadSession(sessionId);
+    if (!session) return res.status(404).json({ error: 'Checkout not found.' });
+    if (session.client_reference_id && session.client_reference_id !== req.user.id
+      && session.metadata && session.metadata.user_id && session.metadata.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'This checkout belongs to another account.' });
+    }
+    const result = await stripeMod.fulfillCheckout(session);
+    res.json({ ok: true, ...result, billing: await billingFor(req.user.id) });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
   }
 }));
 // Stripe customer portal (manage / cancel subscription).
@@ -411,11 +460,11 @@ app.post('/api/billing/portal', requireAuth(async (req, res) => {
 }));
 // Legacy endpoint (pre-Stripe): upgrades now go through Stripe Checkout.
 app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
-  const { plan } = req.body || {};
+  const { plan, extraCredits, promo } = req.body || {};
   if (!PLANS[plan] || plan === 'free') return res.status(400).json({ error: 'Choose pro or max.' });
-  if (stripeMod.isConfigured() && stripeMod.priceFor(plan)) {
+  if (stripeMod.isConfigured() && stripeMod.priceFor(plan, promo)) {
     try {
-      const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, req });
+      const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, extraCredits, promo, req });
       return res.json({ ok: true, status: 'checkout', url: session.url, note: `Continue to Stripe to start ${PLANS[plan].name}.` });
     } catch (e) {
       return res.status(502).json({ error: e.message });
@@ -463,21 +512,7 @@ async function handleStripeEvent(s, event) {
   const t = event.type;
   const obj = event.data && event.data.object ? event.data.object : {};
   if (t === 'checkout.session.completed') {
-    const userId = (obj.metadata && obj.metadata.user_id) || obj.client_reference_id || null;
-    const plan = (obj.metadata && obj.metadata.plan) || null;
-    const customerId = typeof obj.customer === 'string' ? obj.customer : (obj.customer && obj.customer.id) || null;
-    const subId = typeof obj.subscription === 'string' ? obj.subscription : (obj.subscription && obj.subscription.id) || null;
-    const uid = userId || (customerId && await store.findUserByStripeCustomer(customerId));
-    if (!uid) return;
-    if (plan && PLANS[plan] && plan !== 'free') {
-      const prev = await store.getSubscription(uid);
-      await store.setSubscription(uid, plan, 'active', {
-        stripe_customer_id: customerId || prev.stripe_customer_id,
-        stripe_subscription_id: subId || prev.stripe_subscription_id,
-        gift_issued: prev.gift_issued,
-      });
-      await stripeMod.grantSubscriptionCredits(uid, plan, subId ? `start:${subId}` : `start:${event.id}`);
-    }
+    await stripeMod.fulfillCheckout(obj);
     return;
   }
   if (t === 'invoice.paid' || t === 'invoice.payment_succeeded') {
@@ -488,9 +523,9 @@ async function handleStripeEvent(s, event) {
     const sub = await store.getSubscription(uid);
     const plan = sub.plan;
     if (!PLANS[plan] || plan === 'free') return;
-    // First paid invoice also issues the one-time gift card.
     if (!sub.gift_issued) {
-      const gift = await stripeMod.issueFirstInvoiceGift(uid, plan);
+      const promo = !!(obj.subscription_details && obj.subscription_details.metadata && obj.subscription_details.metadata.promo === '1');
+      const gift = await stripeMod.issueFirstInvoiceGift(uid, plan, promo);
       if (gift) console.log(`[stripe] issued $${gift.amount_usd} gift ${gift.code} for ${uid} (${plan})`);
     }
     const periodRef = (obj.lines && obj.lines.data && obj.lines.data[0] && obj.lines.data[0].period && obj.lines.data[0].period.end)
@@ -1162,7 +1197,7 @@ app.get('/api/mail', requireAuth(async (req, res) => {
 app.post('/api/mail/ensure', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try {
     const box = await mail.ensureMailbox(req.user.id, (req.body || {}).agentName || req.body?.name);
-    res.json(await mail.snapshot(req.user.id, { ensureName: box.displayName }));
+    res.json(await mail.snapshot(req.user.id, { mailbox: box }));
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
 app.get('/api/mail/messages/:id', requireAuth(async (req, res) => {
@@ -1323,5 +1358,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`- Gemini: ${isConfigured() ? 'configured (' + MODEL_DEFAULT + ')' : 'MISSING — set GEMINI_API_KEY in .env'}`);
   console.log(`- Supabase: ${store.supaConfigured() ? 'configured' : 'local JSON fallback (server/data.json)'}`);
   Automations.startAutomationWorker();
+  conversation.startWorker();
   azure.startIdleWatcher();
 });

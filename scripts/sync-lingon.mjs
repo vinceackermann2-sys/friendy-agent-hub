@@ -30,9 +30,11 @@ for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.man
   copy(join('app', f), join('public', 'lingon', f));
 }
 // Static Belna pages served from the site root
-for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'security.html', 'terms.html', 'sitemap.xml']) {
+for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'sitemap.xml']) {
   copy(join('app', f), join('public', f));
 }
+copy(join('app', 'research-code', 'belna-100m.zip'), join('public', 'research-code', 'belna-100m.zip'));
+copy(join('app', 'research-code', 'belna-stlm-sla.zip'), join('public', 'research-code', 'belna-stlm-sla.zip'));
 
 // Lovable's live Vite server evaluates source files as ESM and cannot execute
 // the CommonJS provider directly. Generate an equivalent ESM copy for the
@@ -61,6 +63,21 @@ function syncAzureProvider() {
 }
 
 syncAzureProvider();
+
+// These modules are shared logic; generate the ESM port instead of maintaining
+// a second coordinator/state machine that can drift from the Node deployment.
+for (const name of ['task-store', 'task-runtime', 'conversation']) {
+  let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
+  src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
+    `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);
+  src = src.replace(/const (\w+) = require\('([^']+)'\);/g, (_, binding, spec) =>
+    spec === 'crypto' ? `import ${binding} from 'node:crypto';` : `import * as ${binding} from '${spec}.js';`);
+  src = src.replace('module.exports={createCoordinator,handle:coordinator.handle,tasks,startWorker};',
+    'const handle=coordinator.handle;\nexport {createCoordinator,handle,tasks,startWorker};');
+  src = src.replace(/module\.exports\s*=\s*\{/g, 'export {');
+  if (/require\(|module\.exports/.test(src)) throw new Error(`Unconverted CommonJS in ${name}`);
+  writeFileSync(join(root, `src/lingon-server/agents/${name}.js`), src, 'utf8');
+}
 
 // Backend confidentiality policy must match between server/ (Node) and
 // src/lingon-server/ (edge port) so chat + research behave the same way.

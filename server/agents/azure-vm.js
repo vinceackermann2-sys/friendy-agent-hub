@@ -147,7 +147,11 @@ function assertLocalPath(userId, rel) {
   return cleaned ? `${root}/${cleaned}` : root;
 }
 
-function buildRunScript(language, code) {
+function taskWorkspace(taskId) {
+  return '/home/lingon/workspace' + (taskId ? '/tasks/' + crypto.createHash('sha256').update(String(taskId)).digest('hex').slice(0,24) : '');
+}
+
+function buildRunScript(language, code, taskId) {
   const bin = LANGS[String(language || '').toLowerCase()];
   if (!bin) throw Object.assign(new Error('Unsupported language. Use js, python, or bash.'), { code: 'BAD_INPUT' });
   const src = String(code || '');
@@ -158,17 +162,19 @@ function buildRunScript(language, code) {
   const ext = bin === 'node' ? 'js' : bin === 'python3' ? 'py' : 'sh';
   return [
     'set -eu',
-    'WORKDIR=/home/lingon/workspace',
+    `WORKDIR=${taskWorkspace(taskId)}`,
     'mkdir -p "$WORKDIR"',
     'cd "$WORKDIR"',
-    `echo '${b64}' | base64 -d > "$WORKDIR/.job.${ext}"`,
-    `timeout 20s ${bin} "$WORKDIR/.job.${ext}"; EC=$?`,
-    `rm -f "$WORKDIR/.job.${ext}"`,
+    `JOB=$(mktemp "$WORKDIR/.job.XXXXXX.${ext}")`,
+    'trap \'rm -f "$JOB"\' EXIT',
+    `echo '${b64}' | base64 -d > "$JOB"`,
+    'set +e',
+    `timeout 20s ${bin} "$JOB"; EC=$?`,
     'exit $EC',
   ].join('\n');
 }
 
-function buildShellScript(command) {
+function buildShellScript(command, taskId) {
   const cmd = String(command || '');
   if (!cmd.trim()) throw Object.assign(new Error('Command is required.'), { code: 'BAD_INPUT' });
   if (cmd.length > 8000) throw Object.assign(new Error('Command exceeds 8KB sandbox limit.'), { code: 'BAD_INPUT' });
@@ -176,13 +182,14 @@ function buildShellScript(command) {
   if (/[^A-Za-z0-9+/=]/.test(b64)) throw Object.assign(new Error('Sandbox encode failed.'), { code: 'BAD_INPUT' });
   return [
     'set +e',
-    'WORKDIR=/home/lingon/workspace',
+    `WORKDIR=${taskWorkspace(taskId)}`,
     'mkdir -p "$WORKDIR"',
     'cd "$WORKDIR"',
-    `echo '${b64}' | base64 -d > /tmp/lingon-cmd.sh`,
-    'timeout 30s bash /tmp/lingon-cmd.sh',
+    'JOB=$(mktemp "$WORKDIR/.cmd.XXXXXX.sh")',
+    'trap \'rm -f "$JOB"\' EXIT',
+    `echo '${b64}' | base64 -d > "$JOB"`,
+    'timeout 30s bash "$JOB"',
     'EC=$?',
-    'rm -f /tmp/lingon-cmd.sh',
     'exit $EC',
   ].join('\n');
 }
@@ -222,6 +229,10 @@ function browserSessionId(value) {
     throw Object.assign(new Error('Invalid browser session id.'), { code: 'BAD_INPUT' });
   }
   return id;
+}
+
+function toolBrowserSessionId(userId, sessionId) {
+  return `tool_${userHash(`${userId}:${sessionId || 'default'}`)}`;
 }
 
 function buildBrowserSessionScript(action, args = {}) {
@@ -268,9 +279,10 @@ function buildBrowserSessionScript(action, args = {}) {
     "    await page.setViewport({ width: 1280, height: 900 });",
     "    if (payload.action === 'navigate') { await page.goto(payload.url, { waitUntil: 'domcontentloaded', timeout: 20000 }); await sleep(700); }",
     "    else if (payload.action === 'input') {",
-    "      if (state.url && state.url !== 'about:blank') await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 });",
+    "      if (state.url && state.url !== 'about:blank') { await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 }); if (Number.isFinite(state.scrollY)) await page.evaluate((y) => window.scrollTo(0, y), state.scrollY); }",
     "      const ev = payload.event || {};",
     "      if (ev.type === 'click') await page.mouse.click(Number(ev.x) || 0, Number(ev.y) || 0, { button: ev.button === 2 ? 'right' : 'left' });",
+    "      else if (ev.type === 'click_text') { const pos = await page.evaluate((text) => { const el = [...document.querySelectorAll('a,button,[role=button]')].find((node) => (node.innerText || '').trim() === text); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, String(ev.text || '')); if (!pos) throw new Error('Visible link or button text not found.'); await page.mouse.click(pos.x, pos.y); }",
     "      else if (ev.type === 'move') await page.mouse.move(Number(ev.x) || 0, Number(ev.y) || 0);",
     "      else if (ev.type === 'scroll') await page.mouse.wheel({ deltaY: Number(ev.dy) || 0 });",
     "      else if (ev.type === 'key') await page.keyboard.press(String(ev.key || 'Escape'));",
@@ -284,7 +296,8 @@ function buildBrowserSessionScript(action, args = {}) {
     "    const screenshot = await page.screenshot({ type: 'jpeg', quality: 55 });",
     "    const upload = await fetch(payload.uploadUrl, { method: 'PUT', headers: { 'content-type': 'image/jpeg', 'x-ms-blob-type': 'BlockBlob' }, body: screenshot });",
     "    if (!upload.ok) throw new Error('Screenshot upload failed: HTTP ' + upload.status + ' ' + (await upload.text()).slice(0, 300));",
-    "    fs.writeFileSync(stateFile, JSON.stringify({ url, title }));",
+    "    const scrollY = await page.evaluate(() => window.scrollY).catch(() => 0);",
+    "    fs.writeFileSync(stateFile, JSON.stringify({ url, title, scrollY }));",
     "    process.stdout.write(JSON.stringify({ ok: true, url, title, text, links, screenshotBytes: screenshot.length }));",
     "  } finally { await browser.close().catch(() => {}); }",
     "})().catch((error) => { process.stdout.write(JSON.stringify({ ok: false, error: String(error.message || error) })); process.exitCode = 1; });",
@@ -919,27 +932,36 @@ async function runBrowserSession(userId, sb, args) {
   }
 }
 
-async function execInSandbox(userId, tool, args = {}) {
+async function execInSandbox(userId, tool, args = {}, { alreadyRunning = false, taskId } = {}) {
   const sb = await getSandbox(userId);
-  const vmTools = new Set(['code_run', 'shell', 'browser_open', 'computer_screenshot', 'browser_session']);
+  const vmTools = new Set(['code_run', 'shell', 'browser_open', 'computer_screenshot', 'browser_action', 'browser_session']);
   if (!vmTools.has(tool)) return { mode: sb.mode, tool, note: 'executed by existing allowlisted tool path' };
   if (sb.mode !== 'azure') {
     throw Object.assign(new Error('This tool runs only inside the user Azure VM. Configure AZURE_* to enable it.'), { code: 'DISABLED' });
   }
-  await ensureRunning(userId);
+  // A newly acquired agent lease already confirmed power state. Other callers
+  // still verify it here before touching the VM.
+  if (!alreadyRunning) await ensureRunning(userId);
   if (tool === 'code_run') {
-    const out = await runCommand(userId, buildRunScript(args.language, args.code));
+    const out = await runCommand(userId, buildRunScript(args.language, args.code, taskId));
     return { mode: 'azure', vmName: sb.vmName, language: String(args.language || 'js'), ...out };
   }
   if (tool === 'shell') {
-    const out = await runCommand(userId, buildShellScript(args.command));
+    const out = await runCommand(userId, buildShellScript(args.command, taskId));
     return { mode: 'azure', vmName: sb.vmName, tool: 'shell', ...out };
   }
   if (tool === 'browser_open' || tool === 'computer_screenshot') {
     return runBrowserSession(userId, sb, {
-      sessionId: `oneshot_${userHash(userId).slice(0, 16)}`,
+      sessionId: toolBrowserSessionId(userId, args.sessionId),
       action: 'navigate',
       url: args.url,
+    });
+  }
+  if (tool === 'browser_action') {
+    return runBrowserSession(userId, sb, {
+      sessionId: toolBrowserSessionId(userId, args.sessionId),
+      action: 'input',
+      event: args.event,
     });
   }
   if (tool === 'browser_session') {

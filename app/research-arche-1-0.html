@@ -3,95 +3,154 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Arche 1.0 — Frontier Intelligence You Can Hand Real Work | Belna Research</title>
-<meta name="description" content="Arche 1.0 pairs open Kimi K3 weights with the Belna privacy-first agentic harness: frontier-class benchmark results, 1M-token context, Smart and Fast modes, approvals, sealed vault and visible trace.">
-<meta name="keywords" content="Arche 1.0, Belna, Kimi K3, open weights, agentic benchmarks, safe AI agents, Swedish AI">
+<title>Arche 1.0 — Model card | Belna Research</title>
+<meta name="description" content="Arche 1.0 model card: open Kimi K3 weights in the Belna privacy-first harness. Specs, architecture, and frontier agentic benchmarks.">
+<meta name="keywords" content="Arche 1.0, model card, Belna, Kimi K3, open weights, agentic benchmarks, safe AI agents">
 <link rel="canonical" href="https://belna.se/research-arche-1-0.html">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<style>
-.wow-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:20px}
-.wow-card{background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:24px}
-.wow-card .big{font-size:34px;font-weight:800;letter-spacing:-.02em;display:block}
-.wow-card p{font-size:13.5px;color:var(--mut);line-height:1.6;margin-top:8px}
-.harness-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px}
-.harness-box{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px}
-.harness-box h4{font-size:15px;font-weight:800;margin-bottom:6px}
-.harness-box p{font-size:13.5px;color:var(--mut);line-height:1.6}
-.btable-wrap{overflow-x:auto;border:1px solid #EAECF0;border-radius:14px;margin-top:16px}
-.btable-wrap .btable{font-size:14.5px}
-.btable-wrap .btable th,.btable-wrap .btable td{padding:13px 16px;text-align:center}
-.btable-wrap .btable th:first-child,.btable-wrap .btable td:first-child{text-align:left}
-@media(max-width:760px){.wow-grid,.harness-grid{grid-template-columns:1fr}}
-</style>
+<link rel="stylesheet" href="research.css">
 </head>
-<body>
-<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<body class="rx">
+<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
-<main class="legal" style="max-width:960px">
-<div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Research · Arche 1.0</div>
-<p class="mut" style="font-size:13.5px;margin-top:8px">6 min read</p>
-<h1 style="font-size:clamp(30px,5vw,42px);margin-top:10px">Frontier intelligence you can hand real work.</h1>
-<p class="mut" style="font-size:16.5px;line-height:1.6;max-width:700px;margin-top:12px">Most AI answers questions about work. <b>Arche 1.0 does the work</b> — 300 clicks across 4 apps replaced by one sentence. It runs world-class open weights inside a harness built for privacy and safety, and it scores shoulder-to-shoulder with the biggest closed models on the benchmarks that measure real doing.</p>
+<main class="legal rx-page">
+<a class="rx-back" href="/research#active"><span class="arr">←</span> Research · Active</a>
+<div class="rx-kicker">Model card · Production</div>
+<p class="rx-meta">Arche 1.0 · 6 min read</p>
+<h1>Frontier intelligence you can hand real work.</h1>
+<p class="rx-lede">Most AI answers questions about work. <b>Arche 1.0 does the work</b> — open Kimi K3 weights inside a harness built for privacy and safety, scoring with the closed frontier on the benches that measure real doing.</p>
+<div class="rx-tags">
+  <span class="rx-tag green">Live in production</span>
+  <span class="rx-tag blue">Kimi K3 open weights</span>
+  <span class="rx-tag">1M-token context</span>
+  <span class="rx-tag">Smart + Fast</span>
+</div>
+<nav class="rx-nav" aria-label="On this page">
+  <a href="#specs">Specs</a><a href="#architecture">Architecture</a><a href="#results">Results</a><a href="#take">Take</a>
+</nav>
 
-<div class="tag-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
-<span class="chip green">● Live in production</span><span class="chip">Kimi K3 open weights</span><span class="chip">1M-token context</span><span class="chip">Smart + Fast modes</span>
+<div class="tldr">
+  <h3>At a glance</h3>
+  <ul>
+    <li><b>Four first-place agentic scores</b> — BrowseComp, SWE-Marathon, ProgramBench, τ³-Banking — against GPT-5.6 Sol and the Claude 5 / 4.8 family.</li>
+    <li><b>1M-token context</b> so a codebase, inbox or dossier fits in one window.</li>
+    <li><b>The model never holds your keys.</b> The sealed vault masks secrets to <span class="mono">sec_••••</span>, even from the weights.</li>
+  </ul>
 </div>
 
-<h2 style="margin-top:44px">Why this is a big deal</h2>
-<div class="wow-grid">
-  <div class="wow-card"><span class="big">4 × #1</span><p><b>Best score on 4 agentic benchmarks</b> — BrowseComp, SWE-Marathon, ProgramBench and τ³-Banking — against GPT-5.6 Sol, Claude Opus 5, Claude Fable 5 and Claude Opus 4.8.</p></div>
-  <div class="wow-card"><span class="big">1M tokens</span><p><b>A full project in one context window.</b> Codebases, inboxes, research dossiers — Arche reads it all at once and acts on it, instead of forgetting page two.</p></div>
-  <div class="wow-card"><span class="big">Zero keys</span><p><b>The agent never holds your secrets.</b> The sealed vault masks everything to <span class="mono">sec_••••</span> — even from the model itself. Nothing sensitive acts without your yes.</p></div>
+<div class="rx-sec" id="specs">
+  <div class="rx-sec-head"><span class="rx-num">1</span><h2>Specs</h2></div>
+  <div class="rx-card">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span class="chip green">Model card</span><b style="font-size:18px">Arche 1.0</b><span class="mut" style="font-size:13px">powered by Kimi K3</span></div>
+    <dl class="spec">
+      <div><dt>Foundation</dt><dd>Kimi K3 (Moonshot AI), open weights</dd></div>
+      <div><dt>Architecture</dt><dd>2.8T-parameter mixture-of-experts, native vision</dd></div>
+      <div><dt>Context</dt><dd>1M tokens</dd></div>
+      <div><dt>Harness</dt><dd>Belna agentic — approvals, sealed vault, sandbox, visible trace</dd></div>
+      <div><dt>Smart mode</dt><dd>Deepest reasoning — research, builds, reviews</dd></div>
+      <div><dt>Fast mode</dt><dd>Snappy everyday answers at lower cost</dd></div>
+    </dl>
+  </div>
 </div>
 
-<h2 style="margin-top:44px">Benchmarks: Arche 1.0 vs the frontier</h2>
-<p>Published technical results — Arche 1.0 (Kimi K3 at max reasoning effort) against current frontier models. <b>Bold marks the best score per row.</b> Arche takes the top spot on BrowseComp, SWE-Marathon, ProgramBench and τ³-Banking, and sits within a point or two of the leader almost everywhere else.</p>
-
-<div class="panel" style="padding:0;overflow:hidden;margin-top:14px"><div class="btable-wrap" style="border:none;border-radius:0;margin-top:0"><table class="btable">
-<thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
-<tbody>
-<tr><td>GPQA Diamond</td><td class="star">93.5</td><td><b>94.1</b></td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
-<tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td><b>88.8</b></td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
-<tr><td>BrowseComp</td><td class="star"><b>91.2</b></td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
-<tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td><b>85.0</b></td><td>83.4</td></tr>
-<tr><td>SWE-Marathon</td><td class="star"><b>42.0</b></td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
-<tr><td>FrontierSWE</td><td class="star">81.2</td><td>71.3</td><td>82.4</td><td><b>86.6</b></td><td>66.7</td></tr>
-<tr><td>DeepSWE</td><td class="star">67.5</td><td><b>73.0</b></td><td>68.0</td><td>70.0</td><td>59.0</td></tr>
-<tr><td>ProgramBench</td><td class="star"><b>77.8</b></td><td>77.6</td><td>75.2</td><td>76.8</td><td>71.9</td></tr>
-<tr><td>MCP-Atlas</td><td class="star">84.2</td><td>83.6</td><td>84.0</td><td><b>84.7</b></td><td>83.6</td></tr>
-<tr><td>HLE (with tools)</td><td class="star">56.0</td><td>58.0</td><td>60.5</td><td><b>63.0</b></td><td>57.9</td></tr>
-<tr><td>τ³-Banking</td><td class="star"><b>33.4</b></td><td>33.0</td><td>30.2</td><td>26.8</td><td>27.6</td></tr>
-</tbody>
-</table></div></div>
-<p class="fineprint">Source: Moonshot AI Kimi K3 technical results; competitor scores as reported in the same release (each evaluated in its own vendor harness). Arche 1.0 serves these weights through the Belna privacy-first harness.</p>
-
-<h2 style="margin-top:44px">The harness: why Arche is more than its weights</h2>
-<p>A brilliant model with no hands is just a chatbot. The Belna agentic harness is what turns intelligence into finished work — safely:</p>
-<div class="harness-grid">
-  <div class="harness-box"><h4>✅ Approvals by default</h4><p>Sensitive actions — apps, browsing, external writes — pause for your explicit yes, or an always-allow rule you can revoke anytime under Vault → Approved.</p></div>
-  <div class="harness-box"><h4>🔒 Sealed vault</h4><p>Secrets are encrypted at rest and masked everywhere: chat, traces, model context. The agent only ever sees references like <span class="mono">sec_••••</span>. Reveal is for your eyes alone, on your device.</p></div>
-  <div class="harness-box"><h4>🧪 Sandboxed doing</h4><p>Code, browser and computer use run contained with an allowlisted network. External integrations are read-only via your own per-request token — never stored, never logged.</p></div>
-  <div class="harness-box"><h4>👁 Visible trace</h4><p>Every step lands in the Trace tab. Belna never pretends to browse, run code or read email unless the trace shows it. Check the work, don't just trust it.</p></div>
+<div class="rx-sec" id="architecture">
+  <div class="rx-sec-head"><span class="rx-num">2</span><h2>Architecture</h2></div>
+  <p>A brilliant model with no hands is a chatbot. The harness is what turns intelligence into finished work.</p>
+  <div class="diagram" aria-hidden="true">
+    <svg viewBox="0 0 840 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="20" y="70" width="150" height="80" rx="16" fill="#EDF3FE" stroke="#C6D8F5"/>
+      <text x="95" y="106" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#1D5BBF">Kimi K3</text>
+      <text x="95" y="126" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">open weights</text>
+      <path d="M170 110H214" stroke="#4A7FD4" stroke-width="2"/>
+      <polygon points="214,106 224,110 214,114" fill="#4A7FD4"/>
+      <rect x="224" y="36" width="400" height="148" rx="20" fill="#FBFBFC" stroke="#E7E7EA"/>
+      <text x="424" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" font-weight="800" letter-spacing="1.4" fill="#9A9CA3">BELNA HARNESS</text>
+      <rect x="244" y="74" width="86" height="86" rx="14" fill="#fff" stroke="#E7E7EA"/>
+      <text x="287" y="114" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Approve</text>
+      <text x="287" y="132" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" fill="#6E7076">by default</text>
+      <rect x="342" y="74" width="86" height="86" rx="14" fill="#fff" stroke="#E7E7EA"/>
+      <text x="385" y="114" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Vault</text>
+      <text x="385" y="132" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" fill="#6E7076">sec_••••</text>
+      <rect x="440" y="74" width="86" height="86" rx="14" fill="#fff" stroke="#E7E7EA"/>
+      <text x="483" y="114" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Sandbox</text>
+      <text x="483" y="132" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" fill="#6E7076">code / browser</text>
+      <rect x="538" y="74" width="68" height="86" rx="14" fill="#fff" stroke="#E7E7EA"/>
+      <text x="572" y="114" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Trace</text>
+      <text x="572" y="132" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" fill="#6E7076">visible</text>
+      <path d="M624 110H668" stroke="#4A7FD4" stroke-width="2"/>
+      <polygon points="668,106 678,110 668,114" fill="#4A7FD4"/>
+      <rect x="678" y="70" width="142" height="80" rx="16" fill="#E9F4EE" stroke="#BFE0CC"/>
+      <text x="749" y="106" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">Finished work</text>
+      <text x="749" y="126" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">not just an answer</text>
+    </svg>
+    <p class="diagram-cap">Weights think. The harness decides what may run, what stays sealed, and what you can audit.</p>
+  </div>
+  <div class="rx-grid" style="margin-top:16px">
+    <div class="rx-box"><h4>Approvals by default</h4><p>Apps, browsing and external writes pause for your yes — or an always-allow rule you can revoke under Vault → Approved.</p></div>
+    <div class="rx-box"><h4>Sealed vault</h4><p>Secrets stay encrypted and masked in chat, traces and model context. Reveal is on your device, for your eyes.</p></div>
+    <div class="rx-box"><h4>Sandboxed doing</h4><p>Code, browser and computer use run contained. Integrations are read-only via a per-request token — never stored.</p></div>
+    <div class="rx-box"><h4>Visible work</h4><p>Every step is logged. Belna never pretends to browse, run code or read email unless the trace shows it.</p></div>
+  </div>
 </div>
 
-<div class="panel" style="margin-top:20px">
-<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span class="chip green">Two speeds</span><b style="font-size:18px">One model, your choice</b></div>
-<dl class="spec">
-<div><dt>Smart mode</dt><dd>Deepest reasoning — research, builds, reviews</dd></div>
-<div><dt>Fast mode</dt><dd>Snappy everyday answers at lower cost</dd></div>
-</dl>
+<div class="rx-sec" id="results">
+  <div class="rx-sec-head"><span class="rx-num">3</span><h2>Results</h2></div>
+  <p>Published technical results — Arche 1.0 (Kimi K3, max reasoning) against current frontier models. Bold is best in row.</p>
+  <div class="stat-row">
+    <div class="stat-pill win"><span class="val">91.2</span><span class="lab">BrowseComp</span></div>
+    <div class="stat-pill win"><span class="val">42.0</span><span class="lab">SWE-Marathon</span></div>
+    <div class="stat-pill win"><span class="val">77.8</span><span class="lab">ProgramBench</span></div>
+    <div class="stat-pill win"><span class="val">33.4</span><span class="lab">τ³-Banking</span></div>
+  </div>
+  <div class="rx-card">
+    <h3>Where Arche takes first</h3>
+    <div class="bars">
+      <div class="bar-row on"><span class="bar-lab">Arche 1.0</span><div class="bar-track"><i style="--w:100%"></i></div><span class="bar-val">91.2</span></div>
+      <div class="bar-row"><span class="bar-lab">GPT-5.6 Sol</span><div class="bar-track"><i style="--w:99%"></i></div><span class="bar-val">90.4</span></div>
+      <div class="bar-row"><span class="bar-lab">Claude Opus 5</span><div class="bar-track"><i style="--w:98%"></i></div><span class="bar-val">89.1</span></div>
+      <div class="bar-row"><span class="bar-lab">Claude Fable 5</span><div class="bar-track"><i style="--w:96%"></i></div><span class="bar-val">88.0</span></div>
+    </div>
+    <p class="fineprint">BrowseComp. Same pattern on SWE-Marathon, ProgramBench and τ³-Banking.</p>
+  </div>
+  <div class="rx-card">
+    <div class="rx-scroll"><table class="rtable">
+      <thead><tr><th>Benchmark</th><th class="hl">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
+      <tbody>
+        <tr><td>GPQA Diamond</td><td class="hl">93.5</td><td class="win">94.1</td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
+        <tr><td>Terminal-Bench 2.1</td><td class="hl">88.3</td><td class="win">88.8</td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
+        <tr><td>BrowseComp</td><td class="hl win">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
+        <tr><td>OSWorld-Verified</td><td class="hl">84.8</td><td>83.0</td><td>84.2</td><td class="win">85.0</td><td>83.4</td></tr>
+        <tr><td>SWE-Marathon</td><td class="hl win">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
+        <tr><td>FrontierSWE</td><td class="hl">81.2</td><td>71.3</td><td>82.4</td><td class="win">86.6</td><td>66.7</td></tr>
+        <tr><td>DeepSWE</td><td class="hl">67.5</td><td class="win">73.0</td><td>68.0</td><td>70.0</td><td>59.0</td></tr>
+        <tr><td>ProgramBench</td><td class="hl win">77.8</td><td>77.6</td><td>75.2</td><td>76.8</td><td>71.9</td></tr>
+        <tr><td>MCP-Atlas</td><td class="hl">84.2</td><td>83.6</td><td>84.0</td><td class="win">84.7</td><td>83.6</td></tr>
+        <tr><td>HLE (with tools)</td><td class="hl">56.0</td><td>58.0</td><td>60.5</td><td class="win">63.0</td><td>57.9</td></tr>
+        <tr><td>τ³-Banking</td><td class="hl win">33.4</td><td>33.0</td><td>30.2</td><td>26.8</td><td>27.6</td></tr>
+      </tbody>
+    </table></div>
+    <p class="fineprint">Source: Moonshot AI Kimi K3 technical results; competitor scores as reported in the same release (each in its own vendor harness). Arche 1.0 serves these weights through the Belna privacy-first harness.</p>
+  </div>
 </div>
 
-<h2 style="margin-top:44px">Still open at the core</h2>
-<p>Arche 1.0 is built on <b>Kimi K3 by Moonshot AI — fully open-source, open weights</b>. Anyone can inspect the foundation we're standing on; there is no black-box base model. What Belna adds is everything around it: the agentic harness, the safety layer, the memory and vault, the Swedish-hosted product that keeps your data yours.</p>
-<p>Openness is the point. Frontier capability shouldn't require handing your life to a closed box — and now, on the benchmarks that matter for real work, it doesn't have to.</p>
-
+<div class="rx-sec" id="take">
+  <div class="rx-sec-head"><span class="rx-num">4</span><h2>Take</h2></div>
+  <div class="verdict">
+    <h3>Open at the core, sealed at the edges</h3>
+    <p>Arche 1.0 stands on <b>Kimi K3 by Moonshot AI — fully open weights</b>. Anyone can inspect the foundation. Belna adds the harness, the safety layer, memory, vault, and Swedish hosting that keeps your data yours.</p>
+    <ul>
+      <li><span class="mark yes">+</span><span><b>Frontier-class doing</b> without handing your life to a closed box.</span></li>
+      <li><span class="mark yes">+</span><span><b>Two speeds</b> — Smart for research and builds, Fast for everyday answers.</span></li>
+      <li><span class="mark yes">+</span><span><b>Zero keys in the model.</b> Nothing sensitive acts without your yes.</span></li>
+    </ul>
+  </div>
+</div>
 </main>
 
-<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/#safety">Safe Swedish AI</a><a href="/#agent">Personal Agent</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 </body>
 </html>

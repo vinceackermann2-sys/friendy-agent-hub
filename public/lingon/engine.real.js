@@ -3,7 +3,7 @@
    Gemini-backed harness: tools run server-side (allowlisted fetch, read-only
    GitHub with YOUR per-request PAT, sandboxed HTML artifacts), secrets never
    enter model context, sensitive tools pause for your approval, and every step
-   lands in the Trace tab. Nothing is mocked.
+    is logged. Nothing is mocked.
 */
 window.Engine = (() => {
   const api = (path, opts = {}) => window.LingonAuth.api(path, opts);
@@ -381,7 +381,7 @@ window.Engine = (() => {
       return;
     }
     if (/keep me safe|safe|security|secret/.test(p)) {
-      await rt.say(`Your data is account-scoped, secrets are encrypted, and sensitive actions require approval. External access is restricted, GitHub access is read-only, and activity is visible in the Trace tab.`);
+      await rt.say(`Your data is account-scoped, secrets are encrypted, and sensitive actions require approval. External access is restricted, GitHub access is read-only, and activity is logged.`);
       return;
     }
     if (/^run it/.test(p)) return research(rt, raw);

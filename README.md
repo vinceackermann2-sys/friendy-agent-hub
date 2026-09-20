@@ -53,9 +53,20 @@ work with no extra setup.
 
 ## Plans (real credits, no fake charges)
 
-- Free $0 → $10 API credit
-- Pro $30 (was $50) → $20 credit + $50 gift card (use or gift)
-- Max $50 (was $100) → $50 credit + $100 gift card (use or gift)
+For production billing performance, apply the tracked Supabase migrations with
+`npx supabase db push`, including
+`supabase/migrations/20260919120000_billing_totals.sql`. The billing API then
+reads one database summary per account instead of downloading every usage and
+credit row. Before the migration is applied, the API paginates ledger rows for
+correctness, but that path will get slower as history grows. Use the Supabase
+secret/service role key on the server and a durable database for multi-user
+traffic; the local JSON fallback is for development. Watch billing response
+latency and database load under concurrent signed-in users before increasing
+capacity.
+
+- Free $0 → 20 starter credits
+- Pro $50/mo → 60 credits monthly
+- Max $100/mo → 100 credits monthly
 Usage is metered from real Gemini token counts. Caps return 402 with upgrade
 prompt. Gift redeem adds real credit. Upgrades are recorded requests until
 payments connect — no charge is made. See Billing in the app.

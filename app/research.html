@@ -4,48 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Research — Belna Swedish Safe AI Agents</title>
-<meta name="description" content="Belna research: Arche 1.0 on open Kimi K3 weights, plus TAM v3 and Cortex-S hybrid architectures trained at 100M parameters and compared head-to-head with the Transformer. Full results and reproducible training code.">
-<meta name="keywords" content="Belna research, Arche 1.0, Kimi K3, TAM v3, Cortex-S, Transformer comparison, 100M parameters, AI research Sweden">
+<meta name="description" content="Belna research: Arche 1.0 on open Kimi K3 weights, plus TAM v3, Cortex-S, STLM and Mini-SLA. Model cards, results, and downloadable training code.">
+<meta name="keywords" content="Belna research, Arche 1.0, Kimi K3, TAM v3, Cortex-S, STLM, Mini-SLA, Transformer comparison, AI research Sweden">
 <link rel="canonical" href="https://belna.se/research.html">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Ccircle cx='60' cy='70' r='42' fill='%234A7FD4'/%3E%3Cpath d='M53 14q-16-9-27 1 11 11 27-1Z' fill='%235F9E63'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<style>
-/* research index: active work + article archive */
-.view-tabs{position:relative;display:grid;grid-template-columns:1fr 1fr;width:min(320px,100%);margin-top:28px;padding:4px;background:var(--line2);border:1px solid var(--line);border-radius:999px}
-.view-tab{position:relative;z-index:1;border:0;background:transparent;border-radius:999px;padding:10px 20px;font:inherit;font-size:14px;font-weight:800;color:var(--mut);cursor:pointer;transition:color .2s ease}
-.view-tab.on{color:var(--ink)}
-.view-slider{position:absolute;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:999px;background:#fff;box-shadow:0 1px 4px rgba(20,20,26,.12);transition:transform .22s ease}
-.view-tabs[data-active="research"] .view-slider{transform:translateX(100%)}
-.view-panel{display:none;margin-top:30px;animation:fadeUp .25s ease both}
-.view-panel.on{display:block}
-.bloglist{margin-top:0}
-.post{padding:44px 0;border-top:1px solid var(--line)}
-.post-title{font-size:clamp(26px,4vw,34px);font-weight:800;letter-spacing:-.02em;line-height:1.15}
-.post-title a{color:var(--ink);text-decoration:none}
-.post-title a:hover{text-decoration:underline;text-underline-offset:4px}
-.post-excerpt{color:var(--mut);font-size:16px;line-height:1.6;margin-top:12px;max-width:640px}
-.read-link{display:inline-flex;align-items:center;gap:8px;margin-top:18px;font-size:14px;font-weight:700;color:var(--ink);text-decoration:none}
-.read-link .arr{transition:transform .15s ease}
-.read-link:hover .arr{transform:translateX(4px)}
-.active-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-.active-heading h2{margin:0}
-.active-intro{font-size:16px;line-height:1.6;max-width:700px}
-.model-panel{margin-top:24px}
-.benchmark-copy{margin-top:38px}
-.benchmark-wrap{padding:0;overflow:hidden;margin-top:14px}
-.benchmark-scroll{overflow-x:auto}
-@media(max-width:600px){.post{padding:34px 0}.view-tabs{width:100%}}
-</style>
+<link rel="stylesheet" href="research.css">
 </head>
-<body>
-<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<body class="rx">
+<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
-<main class="legal" style="max-width:880px">
+<main class="legal rx-page">
 <h1>Research</h1>
-<p class="mut" style="font-size:16.5px;line-height:1.6">Results, models, and notes from the Belna team.</p>
+<p class="mut" style="font-size:16.5px;line-height:1.6">Model cards from the Belna team — production systems and lab results, same layout throughout.</p>
 
 <div class="view-tabs" data-active="active" role="tablist" aria-label="Research sections">
   <span class="view-slider" aria-hidden="true"></span>
@@ -54,99 +28,115 @@
 </div>
 
 <section class="view-panel on" id="active-panel" data-view-panel="active" role="tabpanel">
-  <div class="active-heading"><span class="chip green">Live in production</span><h2>Arche 1.0</h2></div>
-  <p class="mut active-intro">The personal agent that does the work. Arche 1.0 runs Kimi K3 open weights inside the Belna agentic harness, optimized for privacy and safety.</p>
-
-  <div class="panel model-panel">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span class="chip green">Model card</span><b style="font-size:18px">Arche 1.0</b><span class="mut" style="font-size:13px">powered by Kimi K3</span></div>
-    <dl class="spec">
-      <div><dt>Foundation</dt><dd>Kimi K3 (Moonshot AI), open weights</dd></div>
-      <div><dt>Architecture</dt><dd>2.8T-parameter mixture-of-experts, native vision</dd></div>
-      <div><dt>Context</dt><dd>1M tokens</dd></div>
-      <div><dt>Harness</dt><dd>Belna agentic — approvals, sealed vault, sandbox, visible trace</dd></div>
-      <div><dt>Smart mode</dt><dd>Deepest reasoning — research, builds, reviews</dd></div>
-      <div><dt>Fast mode</dt><dd>Snappy everyday answers at lower cost</dd></div>
-    </dl>
-    <p class="fineprint">Safety layer: allowlisted tools, approval gates, masked secrets (<span class="mono">sec_••••</span>), sandboxed browser/code/computer use. The agent never holds your keys.</p>
+  <div class="mc-list">
+    <a class="mc-tile" href="/research-arche-1-0">
+      <div class="mc-tile-top">
+        <span class="chip green">Live in production</span>
+        <span class="rx-tag">Model card</span>
+      </div>
+      <h2>Arche 1.0</h2>
+      <p class="ex">The personal agent that does the work. Open Kimi K3 weights inside the Belna harness — approvals, sealed vault, sandbox, visible trace.</p>
+      <div class="mc-metrics">
+        <div class="mc-metric"><b>2.8T</b><span>MoE · open weights</span></div>
+        <div class="mc-metric"><b>1M</b><span>Token context</span></div>
+        <div class="mc-metric"><b>4× #1</b><span>Agentic benches</span></div>
+      </div>
+      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+    </a>
   </div>
-
-  <h2 class="benchmark-copy">Benchmarks</h2>
-  <p>Published technical results, Arche 1.0 (Kimi K3, max reasoning effort) against current frontier models. Bold marks the best score per row.</p>
-  <div class="panel benchmark-wrap"><div class="benchmark-scroll"><table class="btable">
-    <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
-    <tbody>
-      <tr><td>GPQA Diamond</td><td class="star">93.5</td><td><b>94.1</b></td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
-      <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td><b>88.8</b></td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
-      <tr><td>BrowseComp</td><td class="star"><b>91.2</b></td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
-      <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td><b>85.0</b></td><td>83.4</td></tr>
-      <tr><td>SWE-Marathon</td><td class="star"><b>42.0</b></td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
-      <tr><td>FrontierSWE</td><td class="star">81.2</td><td>71.3</td><td>82.4</td><td><b>86.6</b></td><td>66.7</td></tr>
-      <tr><td>DeepSWE</td><td class="star">67.5</td><td><b>73.0</b></td><td>68.0</td><td>70.0</td><td>59.0</td></tr>
-      <tr><td>ProgramBench</td><td class="star"><b>77.8</b></td><td>77.6</td><td>75.2</td><td>76.8</td><td>71.9</td></tr>
-      <tr><td>MCP-Atlas</td><td class="star">84.2</td><td>83.6</td><td>84.0</td><td><b>84.7</b></td><td>83.6</td></tr>
-      <tr><td>HLE (with tools)</td><td class="star">56.0</td><td>58.0</td><td>60.5</td><td><b>63.0</b></td><td>57.9</td></tr>
-      <tr><td>τ³-Banking</td><td class="star"><b>33.4</b></td><td>33.0</td><td>30.2</td><td>26.8</td><td>27.6</td></tr>
-    </tbody>
-  </table></div></div>
-  <p class="fineprint">Source: Moonshot AI Kimi K3 technical results; competitor scores as reported in the same release (each evaluated in its own vendor harness). Arche 1.0 serves these weights through the Belna privacy-first harness.</p>
-  <p style="margin-top:20px"><a class="btn small" href="/research-arche-1-0">Read the Arche 1.0 story →</a></p>
 </section>
 
 <section class="view-panel" id="research-panel" data-view-panel="research" role="tabpanel" hidden>
-<div class="bloglist">
-  <article class="post">
-    <h2 class="post-title"><a href="/research-arche-1-0">Arche 1.0: frontier intelligence you can hand real work</a></h2>
-    <p class="post-excerpt">Our flagship agent pairs open Kimi K3 weights with a privacy-first harness — and holds its own against the biggest frontier models on agentic benchmarks. Here's what it can do, how it scores, and how the safety layer works.</p>
-    <a class="read-link" href="/research-arche-1-0">Read article <span class="arr">→</span></a>
-  </article>
+  <div class="mc-list">
+    <a class="mc-tile" href="/research-100m#tam-v3">
+      <div class="mc-tile-top">
+        <span class="chip">100M programme</span>
+        <span class="rx-tag">Model card</span>
+      </div>
+      <h2>TAM v3</h2>
+      <p class="ex">Temporal Associative Memory — reduced-width attention in parallel with a learned recurrent world-state. Beats a matched Transformer on loss at every scale we ran.</p>
+      <div class="mc-metrics">
+        <div class="mc-metric"><b>14.86</b><span>Perplexity</span></div>
+        <div class="mc-metric"><b>2.698</b><span>Pretrain NLL</span></div>
+        <div class="mc-metric"><b>3 / 3</b><span>Scales won</span></div>
+      </div>
+      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+    </a>
 
-  <article class="post">
-    <h2 class="post-title"><a href="/research-100m#tam-v3">TAM v3 at 100M parameters: a hybrid that beats the Transformer on loss</a></h2>
-    <p class="post-excerpt">Temporal Associative Memory adds a learned recurrent world-state alongside attention. Trained on 2B tokens against a matched Transformer, it wins on loss at every scale — with full training code so you can replicate it.</p>
-    <a class="read-link" href="/research-100m#tam-v3">Read article <span class="arr">→</span></a>
-  </article>
+    <a class="mc-tile" href="/research-100m#cortex-s">
+      <div class="mc-tile-top">
+        <span class="chip">100M programme</span>
+        <span class="rx-tag">Model card</span>
+      </div>
+      <h2>Cortex-S</h2>
+      <p class="ex">Sparse mixture-of-experts with persistent recurrent state and a deterministic safety bound. A second, independent design that also beats the Transformer on loss.</p>
+      <div class="mc-metrics">
+        <div class="mc-metric"><b>15.015</b><span>Perplexity</span></div>
+        <div class="mc-metric"><b>8 / 2</b><span>Experts · top-k</span></div>
+        <div class="mc-metric"><b>128</b><span>State / layer</span></div>
+      </div>
+      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+    </a>
 
-  <article class="post">
-    <h2 class="post-title"><a href="/research-stlm-sla#stlm">STLM: a 23M-parameter model where words have coordinates</a></h2>
-    <p class="post-excerpt">Pin every word to meaning axes like hot–cold and true–false, and a tiny model starts to reason: perplexity 80.89 vs 111.45 against its baseline, 35/35 on negation, embeddings where opposites are genuinely opposite.</p>
-    <a class="read-link" href="/research-stlm-sla#stlm">Read article <span class="arr">→</span></a>
-  </article>
+    <a class="mc-tile" href="/research-stlm-sla#stlm">
+      <div class="mc-tile-top">
+        <span class="chip">Small-scale</span>
+        <span class="rx-tag">Model card</span>
+      </div>
+      <h2>STLM</h2>
+      <p class="ex">A 23M-parameter model that pins every word to meaning axes like hot–cold and true–false. Embeddings where opposites are actually opposite.</p>
+      <div class="mc-metrics">
+        <div class="mc-metric"><b>80.89</b><span>Perplexity</span></div>
+        <div class="mc-metric"><b>0.957</b><span>Meaning corr.</span></div>
+        <div class="mc-metric"><b>35/35</b><span>Negation</span></div>
+      </div>
+      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+    </a>
 
-  <article class="post" style="border-bottom:1px solid var(--line)">
-    <h2 class="post-title"><a href="/research-100m#cortex-s">Cortex-S: a second hybrid confirms the signal</a></h2>
-    <p class="post-excerpt">Sparse mixture-of-experts meets persistent recurrent state. A completely independent design, the same 2B-token protocol — and the same result: lower loss than the Transformer. Safety bounds included, training code included.</p>
-    <a class="read-link" href="/research-100m#cortex-s">Read article <span class="arr">→</span></a>
-  </article>
-
-  <article class="post" style="border-bottom:1px solid var(--line)">
-    <h2 class="post-title"><a href="/research-stlm-sla#sla">Mini-SLA: one layer, an explicit memory, and negation solved</a></h2>
-    <p class="post-excerpt">A single Transformer layer looped four times around a memory database with a symbolic router. At 11.3M parameters it halves its baseline's perplexity (63.89 vs 111.45) — and cracks all 35 negation probes with zero help at inference.</p>
-    <a class="read-link" href="/research-stlm-sla#sla">Read article <span class="arr">→</span></a>
-  </article>
-</div>
+    <a class="mc-tile" href="/research-stlm-sla#sla">
+      <div class="mc-tile-top">
+        <span class="chip">Small-scale</span>
+        <span class="rx-tag">Model card</span>
+      </div>
+      <h2>Mini-SLA</h2>
+      <p class="ex">One Transformer layer, looped four times around an explicit memory with a symbolic negation router. Halves baseline perplexity and solves negation with no help at inference.</p>
+      <div class="mc-metrics">
+        <div class="mc-metric"><b>63.89</b><span>Perplexity</span></div>
+        <div class="mc-metric"><b>11.3M</b><span>Parameters</span></div>
+        <div class="mc-metric"><b>35/35</b><span>Negation, no help</span></div>
+      </div>
+      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+    </a>
+  </div>
 </section>
-
 </main>
 
-<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/#safety">Safe Swedish AI</a><a href="/#agent">Personal Agent</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span><span><a href="/">Home</a> · <a href="/research">Research</a> · <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 
 <script>
 (function(){
   var tablist = document.querySelector('.view-tabs');
   var tabs = document.querySelectorAll('[data-view-tab]');
   var panels = document.querySelectorAll('[data-view-panel]');
-  tabs.forEach(function(tab){
-    tab.addEventListener('click', function(){
-      tabs.forEach(function(t){ t.classList.remove('on'); t.setAttribute('aria-selected','false'); });
-      panels.forEach(function(p){ p.classList.remove('on'); p.hidden = true; });
-      tab.classList.add('on');
-      tab.setAttribute('aria-selected','true');
-      var view = tab.getAttribute('data-view-tab');
-      tablist.setAttribute('data-active', view);
-      var panel = document.querySelector('[data-view-panel="' + view + '"]');
-      if (panel) { panel.hidden = false; panel.classList.add('on'); }
+  function show(view){
+    tabs.forEach(function(t){
+      var on = t.getAttribute('data-view-tab') === view;
+      t.classList.toggle('on', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
     });
+    panels.forEach(function(p){
+      var on = p.getAttribute('data-view-panel') === view;
+      p.classList.toggle('on', on);
+      p.hidden = !on;
+    });
+    tablist.setAttribute('data-active', view);
+    if (history.replaceState) history.replaceState(null, '', view === 'research' ? '#research' : '#active');
+  }
+  tabs.forEach(function(tab){
+    tab.addEventListener('click', function(){ show(tab.getAttribute('data-view-tab')); });
   });
+  var hash = (location.hash || '').replace('#','');
+  if (hash === 'research') show('research');
 })();
 </script>
 </body>

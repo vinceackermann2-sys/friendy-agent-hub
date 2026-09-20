@@ -40,8 +40,7 @@ function currentTimeAnswer(task, now = new Date()) {
 
 async function ensureCredit(userId) {
   await store.ensureFreeGrant(userId);
-  const granted = await store.grantsTotal(userId);
-  const used = await store.creditsUsed(userId);
+  const { granted, used } = await store.billingTotals(userId);
   if (used >= granted - 1e-9) {
     const e = new Error(`You're out of credits (${used.toFixed(1)} of ${granted.toFixed(0)} used). Upgrade your plan or redeem a gift card under Billing.`);
     e.code = 'NO_CREDIT';
