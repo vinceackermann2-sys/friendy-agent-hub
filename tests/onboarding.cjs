@@ -83,15 +83,24 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       assert.match(await page.locator('#thread').innerText(), /own secure computer/);
       assert.equal(await page.locator('button.qopt').count(), 0, 'no expression/personality step');
       assert.equal((await readState(page)).onboarded, false);
-      assert.equal(runs.length, 0, 'request waits for the passport handoff');
+      assert.equal(runs.length, 0, 'request waits for the setup handoff');
       await page.reload();
       await page.click('[data-act="open-passport"]');
-      await page.waitForSelector('.passport-panel');
+      await page.waitForSelector('.canvas-seg [data-t="canvas"].on');
       const final = await readState(page);
       assert.equal(final.onboarded, true);
       assert.equal(final.agent.name, mode === 'oauth' ? 'Rosa' : 'Sora');
       assert.equal(final.agent.color, 'rose');
-      assert.equal(final.canvasTab, 'passport');
+      assert.equal(final.canvasTab, 'canvas');
+      assert.equal(await page.locator('.canvas-seg [data-t="passport"]').count(), 0);
+      assert.equal(await page.locator('.canvas-seg [data-t="library"]').count(), 0);
+      await page.waitForFunction(() => document.querySelector('.agent-hero-status')?.textContent.includes('Disconnected'));
+      if (!await page.locator('[data-act="nav"][data-view="settings"]').count()) await page.click('[data-act="usermenu"]');
+      await page.click('[data-act="nav"][data-view="settings"]');
+      await page.waitForSelector('[data-act="stab"][data-t="library"]');
+      assert.equal(await page.locator('[data-act="stab"][data-t="theme"]').count(), 0);
+      assert.match(await page.locator('.psec').allInnerTexts().then(items => items.join('\n')), /Theme[\s\S]*Accent color/);
+      await page.click('[data-act="nav"][data-view="chat"]');
       if (mode !== 'signin') {
         await page.waitForFunction(() => JSON.parse(localStorage.getItem('lingon.v1')).chats.some(c=>c.managedStatus === 'completed'));
         assert.equal(runs.length, 1);
@@ -109,7 +118,7 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       assert.equal(await page.locator('[data-onboarding-name]').count(), 0);
       assert.equal(runs.length, mode === 'signin' ? 0 : 1, 'refresh must not repeat the request');
       assert.deepEqual(errors, []);
-      console.log(`${mode}: onboarding, resume, passport and remount passed`);
+      console.log(`${mode}: onboarding, resume, canvas and remount passed`);
       await context.close();
     }
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

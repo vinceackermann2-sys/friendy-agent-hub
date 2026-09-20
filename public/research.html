@@ -19,7 +19,7 @@
 
 <main class="legal rx-page">
 <h1>Research</h1>
-<p class="mut" style="font-size:16.5px;line-height:1.6">Model cards from the Belna team — production systems and lab results, same layout throughout.</p>
+<p class="rx-sub">Notes from the lab — production systems and the experiments behind them.</p>
 
 <div class="view-tabs" data-active="active" role="tablist" aria-label="Research sections">
   <span class="view-slider" aria-hidden="true"></span>
@@ -28,84 +28,124 @@
 </div>
 
 <section class="view-panel on" id="active-panel" data-view-panel="active" role="tabpanel">
-  <div class="mc-list">
-    <a class="mc-tile" href="/research-arche-1-0">
-      <div class="mc-tile-top">
-        <span class="chip green">Live in production</span>
-        <span class="rx-tag">Model card</span>
-      </div>
+  <div class="rx-feed">
+    <a class="rx-post" href="/research-arche-1-0">
+      <span class="rx-viz" aria-hidden="true">
+        <svg viewBox="0 0 640 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="8" y="18" width="118" height="52" rx="12" fill="#ECECF0" stroke="#E7E7EA"/>
+          <text x="67" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Kimi K3</text>
+          <path d="M126 44H162" stroke="#17181A" stroke-width="2"/><polygon points="162,40 172,44 162,48" fill="#17181A"/>
+          <rect x="172" y="12" width="296" height="64" rx="14" fill="#fff" stroke="#E7E7EA"/>
+          <text x="320" y="36" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" font-weight="800" letter-spacing="1.2" fill="#17181A">BELNA HARNESS</text>
+          <text x="320" y="56" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="700" fill="#17181A">Approve · Vault · Sandbox · Trace</text>
+          <path d="M468 44H504" stroke="#17181A" stroke-width="2"/><polygon points="504,40 514,44 504,48" fill="#17181A"/>
+          <rect x="514" y="18" width="118" height="52" rx="12" fill="#E9F4EE" stroke="#BFE0CC"/>
+          <text x="573" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">Work</text>
+        </svg>
+      </span>
+      <time datetime="2026-09">Production</time>
       <h2>Arche 1.0</h2>
-      <p class="ex">The personal agent that does the work. Open Kimi K3 weights inside the Belna harness — approvals, sealed vault, sandbox, visible trace.</p>
-      <div class="mc-metrics">
-        <div class="mc-metric"><b>2.8T</b><span>MoE · open weights</span></div>
-        <div class="mc-metric"><b>1M</b><span>Token context</span></div>
-        <div class="mc-metric"><b>4× #1</b><span>Agentic benches</span></div>
-      </div>
-      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+      <p class="ex">Most people think AI is text in, text out. Arche doesn’t answer questions about work — it does the work: open Kimi K3 weights inside a harness that approves, seals, sandboxes, and shows the trace.</p>
+      <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
   </div>
 </section>
 
 <section class="view-panel" id="research-panel" data-view-panel="research" role="tabpanel" hidden>
-  <div class="mc-list">
-    <a class="mc-tile" href="/research-100m#tam-v3">
-      <div class="mc-tile-top">
-        <span class="chip">100M programme</span>
-        <span class="rx-tag">Model card</span>
-      </div>
+  <div class="rx-feed">
+    <a class="rx-post" href="/research-100m#tam-v3">
+      <span class="rx-viz" aria-hidden="true">
+        <svg viewBox="0 0 640 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="8" y="18" width="100" height="52" rx="12" fill="#fff" stroke="#E7E7EA"/>
+          <text x="58" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
+          <path d="M108 44H140" stroke="#17181A" stroke-width="2"/><polygon points="140,40 150,44 140,48" fill="#17181A"/>
+          <rect x="150" y="8" width="148" height="32" rx="10" fill="#ECECF0" stroke="#E7E7EA"/>
+          <text x="224" y="29" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Attention</text>
+          <rect x="150" y="48" width="148" height="32" rx="10" fill="#E9F4EE" stroke="#BFE0CC"/>
+          <text x="224" y="69" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#3E8E5A">World-state</text>
+          <rect x="318" y="18" width="92" height="52" rx="12" fill="#17181A"/>
+          <text x="364" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#fff">Gate</text>
+          <path d="M410 44H442" stroke="#17181A" stroke-width="2"/><polygon points="442,40 452,44 442,48" fill="#17181A"/>
+          <rect x="452" y="18" width="180" height="52" rx="12" fill="#fff" stroke="#E7E7EA"/>
+          <text x="542" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Block output</text>
+        </svg>
+      </span>
+      <span class="when">100M programme</span>
       <h2>TAM v3</h2>
-      <p class="ex">Temporal Associative Memory — reduced-width attention in parallel with a learned recurrent world-state. Beats a matched Transformer on loss at every scale we ran.</p>
-      <div class="mc-metrics">
-        <div class="mc-metric"><b>14.86</b><span>Perplexity</span></div>
-        <div class="mc-metric"><b>2.698</b><span>Pretrain NLL</span></div>
-        <div class="mc-metric"><b>3 / 3</b><span>Scales won</span></div>
-      </div>
-      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+      <p class="ex">Attention plus a learned recurrent world-state, running in parallel. Beats a matched Transformer on loss at every scale we ran — and still loses the wall-clock race.</p>
+      <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
 
-    <a class="mc-tile" href="/research-100m#cortex-s">
-      <div class="mc-tile-top">
-        <span class="chip">100M programme</span>
-        <span class="rx-tag">Model card</span>
-      </div>
+    <a class="rx-post" href="/research-100m#cortex-s">
+      <span class="rx-viz" aria-hidden="true">
+        <svg viewBox="0 0 640 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="8" y="18" width="100" height="52" rx="12" fill="#fff" stroke="#E7E7EA"/>
+          <text x="58" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
+          <path d="M108 44H136" stroke="#17181A" stroke-width="2"/><polygon points="136,40 146,44 136,48" fill="#17181A"/>
+          <rect x="146" y="12" width="112" height="64" rx="12" fill="#ECECF0" stroke="#E7E7EA"/>
+          <text x="202" y="40" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Layer 0</text>
+          <text x="202" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#17181A">Attention</text>
+          <rect x="270" y="12" width="112" height="64" rx="12" fill="#fff" stroke="#E7E7EA"/>
+          <text x="326" y="40" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">1–5</text>
+          <text x="326" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#3E8E5A">MoE + state</text>
+          <rect x="394" y="12" width="112" height="64" rx="12" fill="#ECECF0" stroke="#E7E7EA"/>
+          <text x="450" y="40" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Layer 6</text>
+          <text x="450" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#17181A">Attention</text>
+          <rect x="518" y="18" width="114" height="52" rx="12" fill="#17181A"/>
+          <text x="575" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#fff">Bounded</text>
+        </svg>
+      </span>
+      <span class="when">100M programme</span>
       <h2>Cortex-S</h2>
-      <p class="ex">Sparse mixture-of-experts with persistent recurrent state and a deterministic safety bound. A second, independent design that also beats the Transformer on loss.</p>
-      <div class="mc-metrics">
-        <div class="mc-metric"><b>15.015</b><span>Perplexity</span></div>
-        <div class="mc-metric"><b>8 / 2</b><span>Experts · top-k</span></div>
-        <div class="mc-metric"><b>128</b><span>State / layer</span></div>
-      </div>
-      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+      <p class="ex">A second, independent design on the same frozen corpus: sparse experts, persistent state, full attention only every sixth layer. If TAM was a fluke, this would miss. It doesn’t.</p>
+      <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
 
-    <a class="mc-tile" href="/research-stlm-sla#stlm">
-      <div class="mc-tile-top">
-        <span class="chip">Small-scale</span>
-        <span class="rx-tag">Model card</span>
-      </div>
+    <a class="rx-post" href="/research-stlm-sla#stlm">
+      <span class="rx-viz" aria-hidden="true">
+        <svg viewBox="0 0 640 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="8" y="18" width="92" height="52" rx="12" fill="#fff" stroke="#E7E7EA"/>
+          <text x="54" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Word</text>
+          <path d="M100 44H128" stroke="#17181A" stroke-width="2"/><polygon points="128,40 138,44 128,48" fill="#17181A"/>
+          <rect x="138" y="8" width="148" height="32" rx="10" fill="#ECECF0" stroke="#E7E7EA"/>
+          <text x="212" y="29" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Which axis?</text>
+          <rect x="138" y="48" width="148" height="32" rx="10" fill="#E9F4EE" stroke="#BFE0CC"/>
+          <text x="212" y="69" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#3E8E5A">Where on it?</text>
+          <rect x="306" y="18" width="160" height="52" rx="12" fill="#17181A"/>
+          <text x="386" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#fff">hot ←→ cold</text>
+          <path d="M466 44H496" stroke="#17181A" stroke-width="2"/><polygon points="496,40 506,44 496,48" fill="#17181A"/>
+          <rect x="506" y="18" width="126" height="52" rx="12" fill="#fff" stroke="#E7E7EA"/>
+          <text x="569" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">LM logits</text>
+        </svg>
+      </span>
+      <span class="when">Small-scale</span>
       <h2>STLM</h2>
       <p class="ex">A 23M-parameter model that pins every word to meaning axes like hot–cold and true–false. Embeddings where opposites are actually opposite.</p>
-      <div class="mc-metrics">
-        <div class="mc-metric"><b>80.89</b><span>Perplexity</span></div>
-        <div class="mc-metric"><b>0.957</b><span>Meaning corr.</span></div>
-        <div class="mc-metric"><b>35/35</b><span>Negation</span></div>
-      </div>
-      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+      <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
 
-    <a class="mc-tile" href="/research-stlm-sla#sla">
-      <div class="mc-tile-top">
-        <span class="chip">Small-scale</span>
-        <span class="rx-tag">Model card</span>
-      </div>
+    <a class="rx-post" href="/research-stlm-sla#sla">
+      <span class="rx-viz" aria-hidden="true">
+        <svg viewBox="0 0 640 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="8" y="18" width="100" height="52" rx="12" fill="#fff" stroke="#E7E7EA"/>
+          <text x="58" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
+          <path d="M108 44H136" stroke="#17181A" stroke-width="2"/><polygon points="136,40 146,44 136,48" fill="#17181A"/>
+          <rect x="146" y="12" width="120" height="64" rx="12" fill="#ECECF0" stroke="#E7E7EA"/>
+          <text x="206" y="40" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">1 layer</text>
+          <text x="206" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" fill="#17181A">× 4 loops</text>
+          <rect x="282" y="8" width="140" height="32" rx="10" fill="#fff" stroke="#E7E7EA"/>
+          <text x="352" y="29" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#17181A">Memory · 10</text>
+          <rect x="282" y="48" width="140" height="32" rx="10" fill="#17181A"/>
+          <text x="352" y="69" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="800" fill="#fff">NOT router</text>
+          <path d="M422 44H452" stroke="#17181A" stroke-width="2"/><polygon points="452,40 462,44 452,48" fill="#17181A"/>
+          <rect x="462" y="18" width="170" height="52" rx="12" fill="#E9F4EE" stroke="#BFE0CC"/>
+          <text x="547" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">35 / 35 negation</text>
+        </svg>
+      </span>
+      <span class="when">Small-scale</span>
       <h2>Mini-SLA</h2>
-      <p class="ex">One Transformer layer, looped four times around an explicit memory with a symbolic negation router. Halves baseline perplexity and solves negation with no help at inference.</p>
-      <div class="mc-metrics">
-        <div class="mc-metric"><b>63.89</b><span>Perplexity</span></div>
-        <div class="mc-metric"><b>11.3M</b><span>Parameters</span></div>
-        <div class="mc-metric"><b>35/35</b><span>Negation, no help</span></div>
-      </div>
-      <span class="mc-cta">Read modelcard <span class="arr">→</span></span>
+      <p class="ex">One Transformer layer, looped four times around an explicit memory. Negation is a switch, not a hint — 35/35 with no help at inference.</p>
+      <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
   </div>
 </section>
