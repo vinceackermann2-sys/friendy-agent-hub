@@ -1,85 +1,23 @@
-/* ChatGPT-style memory: automatic, not keyword-gated.
-   - RECALL: rankMemories() scores every stored memory against the current
-     prompt (word overlap + recency) and injects the top hits as model context.
-   - WRITE: maybeExtract() runs after an answer when the turn looks
-     fact-worthy (cue heuristic saves quota), asks Gemini for durable facts as
-     JSON, dedupes against existing memories, and persists new ones.
-   Guards: never persist secret-looking values, cap 200/user, max 3 facts/turn.
-*/
+/* OpenClaw-style layered, durable memory. The archive is unbounded; prompt
+   context contains only relevant active rows. Corrections preserve history. */
 import * as store from '../store.js';
 import { callGemini, MODEL_FALLBACK } from '../gemini.js';
 
-const MAX_MEMORIES = 200;
-const STOP = new Set(('the,a,an,and,or,but,for,with,from,that,this,these,those,you,your,they,them,their,there,here,what,when,where,which,who,how,why,not,are,was,were,have,has,can,will,just,like,know,think,please,thanks,thank,hello,hi,hey,okay'.split(',')));
-
-function words(s) {
-  return String(s || '').toLowerCase().replace(/[^a-zåäö0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
+const STOP=new Set('the,a,an,and,or,but,for,with,from,that,this,these,those,you,your,they,them,their,there,here,what,when,where,which,who,how,why,not,are,was,were,have,has,can,will,just,like,know,think,please,thanks,thank,hello,okay'.split(','));
+const words=s=>String(s || '').toLowerCase().replace(/[^a-zåäö0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>3&&!STOP.has(w));
+function rankMemories(all,prompt,limit=8){const pw=new Set(words(prompt)),normalized=String(prompt || '').toLowerCase(),now=Date.now();return (all || []).filter(m=>!m.status||m.status==='active').map(m=>{const mw=words(m.text),overlap=mw.filter(w=>pw.has(w)).length,age=Math.max(0,(now-(Number(m.at)||Date.parse(m.updatedAt||m.observedAt)||now))/864e5),phrase=normalized.includes(String(m.text || '').toLowerCase().slice(0,48))?12:0,stable=m.category==='user'?3:m.category==='long_term'?2:0;return {m,score:overlap*10+(mw.length?overlap/mw.length*4:0)+phrase+stable+(Number(m.importance)||0)*2-Math.min(age*.03,2)};}).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,limit).map(x=>x.m);}
+function looksFactWorthy(text){return /(i (am|like|love|hate|prefer|work|live|study|use|need|want|'m|have)|we (are|use|have|work|prefer|need|'re)|our |my |call me|remember|always|never|don't|birthday|family|project|company|team|deadline|allergic|vegetarian|vegan|language|swedish|english|actually|no longer|used to)/i.test(String(text || ''));}
+function looksSecret(text){return /(ghp_|github_pat_|sk-|bearer |password\s*[:=]|api[_-]?key\s*[:=][A-Za-z0-9_\-]{8,}|AQ\.[A-Za-z0-9_\-]+|sb_secret)/i.test(String(text || ''));}
+function sameFact(a,b){const wa=new Set(words(a)),wb=new Set(words(b));if(!wa.size||!wb.size)return false;const n=[...wa].filter(w=>wb.has(w)).length;return n/Math.max(wa.size,wb.size)>.6;}
+function categoryFor(text){return /^(user |i |my |call me)|prefer|allerg|language|timezone|live|work as/i.test(String(text || ''))?'user':'long_term';}
+async function maybeExtract({userId,prompt,answer,existing}){
+  if(/^\s*(?:please\s+)?(forget|delete|remove|stop remembering|don't remember|do not remember)\b/i.test(String(prompt || '')))return {saved:[],usage:null};
+  if(!looksFactWorthy(prompt))return {saved:[],usage:null};
+  const explicit=String(prompt || '').match(/(?:remember(?: that)?|keep in mind(?: that)?|my preference is)\s+(.{4,600})/i);
+  if(explicit&&!/(actually|no longer|instead|changed|correction|now (live|work|prefer|use|have))/i.test(String(prompt))){const text=explicit[1].replace(/[.?!]+$/,'').trim();if(text&&!looksSecret(text)&&!(existing||[]).some(m=>sameFact(m.text,text))){try{const m=await store.addMemory(userId,text,'explicit',{category:categoryFor(text),importance:2});return {saved:[m],usage:null,usedModel:null};}catch{}}return {saved:[],usage:null,usedModel:null};}
+  let facts=[],usage=null,usedModel=null;
+  try{const candidates=(existing||[]).slice(0,20).map(m=>({id:m.id,text:m.text,category:m.category||'long_term'}));const r=await callGemini({model:MODEL_FALLBACK,json:true,system:'Extract durable facts stated by the user. Return ONLY JSON {"facts":[{"text":"...","category":"user|long_term|daily","importance":0,"supersedesId":null}]}. Max 3. user = stable profile or preference; long_term = durable project/relationship/standing fact; daily = useful current-session context likely to expire. importance 0-3. When the user corrects a listed fact, set supersedesId to that exact id. Omit assistant claims, guesses, transient chatter, secrets, credentials and one-off questions.',prompt:`User: ${String(prompt).slice(0,1800)}\nAssistant response (context only; never extract it as user fact): ${String(answer||'').slice(0,600)}\nActive candidates: ${JSON.stringify(candidates).slice(0,2400)}`});usage=r.usage;usedModel=r.model||MODEL_FALLBACK;const parsed=JSON.parse(r.text.replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim());facts=(parsed.facts||[]).map(f=>typeof f==='string'?{text:f}:f).filter(f=>f&&typeof f.text==='string').slice(0,3);}catch{return {saved:[],usage,usedModel};}
+  const saved=[];for(const fact of facts){const text=fact.text.trim().slice(0,2000);if(!text||looksSecret(text))continue;const category=['user','long_term','daily'].includes(fact.category)?fact.category:categoryFor(text),importance=Number.isFinite(Number(fact.importance))?Math.min(3,Math.max(0,Math.round(Number(fact.importance)))):1,prior=(existing||[]).find(m=>m.id===fact.supersedesId);try{if(prior){saved.push(await store.updateMemory(userId,prior.id,{text,category,importance,src:'auto_correction'}));continue;}if((existing||[]).concat(saved).some(m=>sameFact(m.text,text)))continue;saved.push(await store.addMemory(userId,text,'auto',{category,importance}));}catch{}}
+  return {saved,usage,usedModel};
 }
-
-function rankMemories(all, prompt, limit = 8) {
-  const pw = new Set(words(prompt));
-  const now = Date.now();
-  return (all || [])
-    .map((m) => {
-      const mw = words(m.text);
-      const overlap = mw.filter((w) => pw.has(w)).length;
-      const ageDays = Math.max(0, (now - (m.at || now)) / 864e5);
-      const score = overlap * 10 - Math.min(ageDays * 0.1, 3) + Math.min(String(m.text).length / 200, 1);
-      return { m, score };
-    })
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((x) => x.m);
-}
-
-function looksFactWorthy(text) {
-  return /(i (am|like|love|hate|prefer|work|live|study)|my |call me|remember|always|never|don't|don't like|birthday|dog|cat|wife|husband|kid|son|daughter|project|company|team|deadline|allergic|vegetarian|vegan|language|swedish|english)/i.test(String(text || ''));
-}
-
-function looksSecret(text) {
-  return /(ghp_|github_pat_|sk-|bearer |password\s*[:=]|api[_-]?key\s*[:=][A-Za-z0-9_\-]{8,}|AQ\.[A-Za-z0-9_\-]+|sb_secret)/i.test(String(text || ''));
-}
-
-function sameFact(a, b) {
-  const wa = new Set(words(a));
-  const wb = new Set(words(b));
-  if (!wa.size || !wb.size) return false;
-  const inter = [...wa].filter((w) => wb.has(w)).length;
-  return inter / Math.max(wa.size, wb.size) > 0.6;
-}
-
-async function maybeExtract({ userId, prompt, answer, existing }) {
-  if (!looksFactWorthy(prompt) && !looksFactWorthy(answer)) return { saved: [], usage: null };
-  if ((existing || []).length >= MAX_MEMORIES) return { saved: [], usage: null };
-  let facts = [];
-  let usage = null;
-  let usedModel = null;
-  try {
-    const r = await callGemini({
-      model: MODEL_FALLBACK, // auxiliary call rides the cheap lane, no failover needed
-      system: 'Extract durable user facts (preferences, identity, projects, relationships, standing instructions). Reply ONLY as JSON: {"facts":["..."]}. Max 3, each under 140 chars, first-person-neutral ("User prefers concise answers"). Omit transient chit-chat, secrets, credentials, one-off questions. Empty list if nothing durable.',
-      prompt: `User: ${String(prompt).slice(0, 1500)}\nAssistant: ${String(answer).slice(0, 1500)}\n\nAlready known: ${(existing || []).slice(0, 20).map((m) => m.text).join(' | ').slice(0, 2000)}`,
-      json: true,
-    });
-    usage = r.usage;
-    usedModel = r.model || MODEL_FALLBACK;
-    const parsed = JSON.parse(r.text.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim());
-    facts = (parsed.facts || []).filter((f) => typeof f === 'string').slice(0, 3);
-  } catch {
-    return { saved: [], usage, usedModel };
-  }
-  const saved = [];
-  for (const f of facts) {
-    const t = f.trim().slice(0, 200);
-    if (!t || looksSecret(t)) continue;
-    if ((existing || []).concat(saved).some((m) => sameFact(typeof m === 'string' ? m : m.text, t))) continue;
-    try {
-      const m = await store.addMemory(userId, t, 'auto');
-      saved.push({ id: m.id, text: m.text });
-    } catch {}
-  }
-  return { saved, usage, usedModel };
-}
-
-export { rankMemories, maybeExtract, looksFactWorthy, MAX_MEMORIES };
+export {rankMemories,maybeExtract,looksFactWorthy};

@@ -66,12 +66,12 @@ syncAzureProvider();
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['task-store', 'task-runtime', 'conversation']) {
+for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);
   src = src.replace(/const (\w+) = require\('([^']+)'\);/g, (_, binding, spec) =>
-    spec === 'crypto' ? `import ${binding} from 'node:crypto';` : `import * as ${binding} from '${spec}.js';`);
+    spec === 'crypto' ? `import ${binding} from 'node:crypto';` : spec === 'path' ? `import path from 'node:path';` : `import * as ${binding} from '${spec}.js';`);
   src = src.replace('module.exports={createCoordinator,handle:coordinator.handle,tasks,startWorker};',
     'const handle=coordinator.handle;\nexport {createCoordinator,handle,tasks,startWorker};');
   src = src.replace(/module\.exports\s*=\s*\{/g, 'export {');

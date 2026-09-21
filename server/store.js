@@ -14,7 +14,7 @@ function loadLocal() {
   try {
     return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   } catch {
-    return { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [], connectorPermissions: [] };
+    return { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [], connectorPermissions: [], agentContexts: [], shopPayAccounts: [], shopPayOrders: [] };
   }
 }
 function saveLocal(d) {
@@ -89,47 +89,195 @@ async function ensureProfile(userId) {
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
-async function listMemories(userId) {
+const AGENT_DOC_KEYS = ['identity', 'soul', 'user', 'agents'];
+function cleanAgent(agent = {}) {
+  const style = ['Playful', 'Precise', 'Calm', 'Bold'].includes(agent.pers) ? agent.pers : 'Playful';
+  return {
+    name: String(agent.name || 'Lingon').trim().slice(0, 40) || 'Lingon',
+    color: String(agent.color || 'lingon').trim().slice(0, 30) || 'lingon',
+    pers: style,
+  };
+}
+function defaultAgentDocuments(agent = {}) {
+  const a = cleanAgent(agent);
+  return {
+    identity: `# Identity\n\nName: ${a.name}\nStyle: ${a.pers}`,
+    soul: '# Soul\n\nBe warm, candid, practical, and reliable. Adapt detail to the user and keep promises explicit.',
+    user: '# User\n\nAdd stable preferences, background, language, and timezone here.',
+    agents: '# Working agreement\n\nPlan substantial work, verify results with evidence, surface uncertainty, and ask before irreversible external actions.',
+  };
+}
+function cleanAgentDocuments(documents = {}, agent = {}) {
+  const defaults = defaultAgentDocuments(agent);
+  return Object.fromEntries(AGENT_DOC_KEYS.map((key) => [key,
+    String(documents?.[key] || defaults[key]).replace(/\u0000/g, '').slice(0, key === 'user' ? 4000 : 8000),
+  ]));
+}
+function contextView(row, hint = {}) {
+  const agent = cleanAgent({ ...(row?.agent || {}), ...(hint || {}) });
+  return { agent, documents: cleanAgentDocuments(row?.documents, agent), revision: Number(row?.revision || 0) };
+}
+async function getAgentContext(userId, hint = {}) {
   const s = supa();
   if (s) {
     try {
-      const { data, error } = await s.from('memories').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(100);
+      const { data, error } = await s.from('agent_contexts').select('agent,documents,revision,updated_at').eq('user_id', userId).maybeSingle();
       if (error) throw error;
-      return (data || []).map((r) => ({ id: r.id, text: r.text, src: r.src, at: new Date(r.created_at).getTime() }));
-    } catch (e) {
-      console.warn('[store] supabase memories fallback to local:', e.message);
-    }
+      return contextView(data, hint);
+    } catch (e) { console.warn('[store] agent context fallback:', e.message); }
   }
-  const d = loadLocal();
-  return d.memories.filter((m) => !userId || m.userId === userId).sort((a, b) => b.at - a.at);
+  const row = (loadLocal().agentContexts || []).find((item) => item.userId === userId);
+  return contextView(row, hint);
 }
-async function addMemory(userId, text, src) {
+async function saveAgentContext(userId, input = {}) {
+  const previous = await getAgentContext(userId);
+  const agent = cleanAgent({ ...previous.agent, ...(input.agent || {}) });
+  const documents = cleanAgentDocuments({ ...previous.documents, ...(input.documents || {}) }, agent);
+  const expected = input.revision == null ? null : Number(input.revision);
   const s = supa();
-  const row = { id: `mem_${uid()}`, user_id: userId, text: String(text).slice(0, 2000), src: src || 'chat' };
   if (s) {
     try {
       await ensureProfile(userId);
-      const { error } = await s.from('memories').insert(row);
+      const { data, error } = await s.rpc('write_agent_context', {
+        p_user_id:userId, p_agent:agent, p_documents:documents, p_revision:expected,
+      });
       if (error) throw error;
-      return { id: row.id, text: row.text, src: row.src, at: Date.now() };
+      return contextView(Array.isArray(data) ? data[0] : data);
     } catch (e) {
-      console.warn('[store] supabase insert memory fallback:', e.message);
+      if (String(e.code || '') === '40001' || /changed/i.test(e.message)) {
+        throw Object.assign(new Error('Agent settings changed on another device. Refresh and try again.'), { code:'CONFLICT' });
+      }
+      console.warn('[store] save agent context failed:', e.message);
+      throw Object.assign(new Error('Agent context could not be saved. Try again.'), { code:'PERSISTENCE' });
     }
   }
   const d = loadLocal();
-  const m = { id: row.id, userId, text: row.text, src: row.src, at: Date.now() };
+  d.agentContexts = d.agentContexts || [];
+  const row = d.agentContexts.find((item) => item.userId === userId);
+  if (row && expected != null && expected !== Number(row.revision || 0)) {
+    throw Object.assign(new Error('Agent settings changed on another device. Refresh and try again.'), { code:'CONFLICT' });
+  }
+  if (row) Object.assign(row, { agent, documents, revision:Number(row.revision || 0) + 1, updatedAt:Date.now() });
+  else d.agentContexts.push({ userId, agent, documents, revision:1, updatedAt:Date.now() });
+  saveLocal(d);
+  return contextView(row || d.agentContexts[d.agentContexts.length - 1]);
+}
+async function syncAgentContext(userId, hint = {}) {
+  const current = await getAgentContext(userId);
+  const next = cleanAgent({ ...current.agent, ...hint });
+  if (current.revision && JSON.stringify(next) === JSON.stringify(current.agent)) return current;
+  return saveAgentContext(userId, { agent:next, documents:current.documents, revision:current.revision });
+}
+
+function memoryCategory(value) {
+  return ['user','long_term','daily'].includes(value) ? value : 'long_term';
+}
+function memoryImportance(value,fallback=1){const n=Number(value);return Number.isFinite(n)?Math.min(Math.max(Math.round(n),0),3):fallback;}
+function memoryView(row) {
+  return {
+    id:row.id, text:row.text, src:row.src || 'chat', category:memoryCategory(row.category),
+    status:row.status || 'active', importance:Number(row.importance ?? 1),
+    at:new Date(row.updated_at || row.observed_at || row.created_at || row.at || Date.now()).getTime(),
+    observedAt:new Date(row.observed_at || row.created_at || row.at || Date.now()).getTime(),
+    supersededBy:row.superseded_by || null, sourceChatId:row.source_chat_id || null,
+    sourceMessageId:row.source_message_id || null, score:Number(row.score || 0),
+  };
+}
+function memoryWords(value) {
+  return String(value || '').toLowerCase().replace(/[^a-zåäö0-9\s]/g,' ').split(/\s+/).filter((word)=>word.length>2);
+}
+function rankStoredMemories(rows, query, limit=12) {
+  const wanted=new Set(memoryWords(query));
+  return rows.map((row)=>{const words=memoryWords(row.text),hits=words.filter(word=>wanted.has(word)).length,coverage=words.length?hits/words.length:0;
+    return {row,hits,score:hits*10+coverage*4+Number(row.importance ?? 1)*2+(row.category==='user'?2:row.category==='long_term'?1:0)};
+  }).filter(item=>!wanted.size || item.hits>0).sort((a,b)=>b.score-a.score || b.row.at-a.row.at).slice(0,limit).map(item=>({...item.row,score:item.score}));
+}
+async function listMemories(userId, options = {}) {
+  const status=options.status || 'active',limit=Math.min(Math.max(Number(options.limit) || 250,1),1000),offset=Math.max(Number(options.offset) || 0,0);
+  const s = supa();
+  if (s) {
+    try {
+      let query=s.from('memories').select('*').eq('user_id',userId).eq('status',status).order('updated_at',{ascending:false}).range(offset,offset+limit-1);
+      const { data, error } = await query;
+      if (error) throw error;
+      return (data || []).map(memoryView);
+    } catch (e) {
+      console.warn('[store] supabase memories read failed:', e.message);
+      throw Object.assign(new Error('Memory could not be loaded. Try again.'),{code:'PERSISTENCE'});
+    }
+  }
+  const d = loadLocal();
+  return d.memories.filter((m) => (!userId || m.userId === userId) && (m.status || 'active') === status).sort((a,b)=>b.at-a.at).slice(offset,offset+limit).map(memoryView);
+}
+async function memoryStats(userId) {
+  const s=supa();
+  if(s){try{const {count,error}=await s.from('memories').select('id',{count:'exact',head:true}).eq('user_id',userId).eq('status','active');if(error)throw error;return {active:Number(count || 0)};}catch(e){console.warn('[store] memory stats failed:',e.message);throw Object.assign(new Error('Memory count could not be loaded. Try again.'),{code:'PERSISTENCE'});}}
+  return {active:(loadLocal().memories || []).filter(m=>m.userId===userId&&(m.status || 'active')==='active').length};
+}
+async function searchMemories(userId, query, limit = 12, includeCore = false) {
+  const size=Math.min(Math.max(Number(limit) || 12,1),100),s=supa();
+  if(s){try{const {data,error}=await s.rpc('search_agent_memories',{p_user_id:userId,p_query:String(query || '').slice(0,300),p_limit:size,p_include_core:includeCore});if(error)throw error;return (data || []).map(memoryView);}catch(e){console.warn('[store] memory search failed:',e.message);throw Object.assign(new Error('Memory search could not complete. Try again.'),{code:'PERSISTENCE'});}}
+  const rows=(loadLocal().memories || []).filter(m=>m.userId===userId&&(m.status || 'active')==='active').map(memoryView);
+  const ranked=rankStoredMemories(rows,query,size);
+  if(!includeCore)return ranked;
+  const seen=new Set(ranked.map(m=>m.id));
+  return [...ranked,...rows.filter(m=>m.category==='user'&&m.importance>=2&&!seen.has(m.id)).sort((a,b)=>b.at-a.at)].slice(0,size);
+}
+async function getMemory(userId,id) {
+  const s=supa();
+  if(s){const {data,error}=await s.from('memories').select('*').eq('user_id',userId).eq('id',id).maybeSingle();if(error)throw error;return data?memoryView(data):null;}
+  const row=(loadLocal().memories || []).find(m=>m.userId===userId&&m.id===id);return row?memoryView(row):null;
+}
+async function addMemory(userId, text, src, meta = {}) {
+  const cleaned = String(text || '').replace(/\u0000/g, '').trim().slice(0, 2000);
+  if (!cleaned) throw Object.assign(new Error('Memory text required.'), { code:'BAD_INPUT' });
+  if (/(ghp_|github_pat_|sk-|bearer\s+|password\s*[:=]|api[_-]?key\s*[:=][A-Za-z0-9_-]{8,}|AQ\.[A-Za-z0-9_-]+|sb_secret)/i.test(cleaned)) {
+    throw Object.assign(new Error('Secrets cannot be saved to memory.'), { code:'BAD_INPUT' });
+  }
+  const s = supa();
+  const now=new Date().toISOString(),category=memoryCategory(meta.category);
+  const row = { id:`mem_${uid()}`,user_id:userId,text:cleaned,src:src || 'chat',category,status:'active',importance:memoryImportance(meta.importance ?? 1),observed_at:meta.observedAt || now,updated_at:now,source_chat_id:meta.chatId || null,source_message_id:meta.messageId || null };
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const {data:existing,error:findError}=await s.from('memories').select('*').eq('user_id',userId).eq('status','active').eq('text',cleaned).limit(1);if(findError)throw findError;
+      if(existing?.length)return memoryView(existing[0]);
+      const { error } = await s.from('memories').insert(row);
+      if (error) throw error;
+      return memoryView(row);
+    } catch (e) {
+      console.warn('[store] supabase insert memory failed:', e.message);
+      throw Object.assign(new Error('Memory could not be saved. Try again.'), { code:'PERSISTENCE' });
+    }
+  }
+  const d = loadLocal();
+  const existing=(d.memories || []).find(m=>m.userId===userId&&(m.status || 'active')==='active'&&String(m.text).toLowerCase()===cleaned.toLowerCase());if(existing)return memoryView(existing);
+  const m = { ...row,userId,at:Date.now(),observedAt:Date.parse(row.observed_at) };
   d.memories.unshift(m);
   saveLocal(d);
-  return m;
+  return memoryView(m);
+}
+async function updateMemory(userId,id,input={}) {
+  const prior=await getMemory(userId,id);if(!prior || prior.status!=='active')throw Object.assign(new Error('Active memory not found.'),{code:'NOT_FOUND'});
+  const cleaned=String(input.text || '').replace(/\u0000/g,'').trim().slice(0,2000);if(!cleaned)throw Object.assign(new Error('Memory text required.'),{code:'BAD_INPUT'});
+  if (/(ghp_|github_pat_|sk-|bearer\s+|password\s*[:=]|api[_-]?key\s*[:=][A-Za-z0-9_-]{8,}|AQ\.[A-Za-z0-9_-]+|sb_secret)/i.test(cleaned))throw Object.assign(new Error('Secrets cannot be saved to memory.'),{code:'BAD_INPUT'});
+  const newId=`mem_${uid()}`,category=memoryCategory(input.category || prior.category),importance=memoryImportance(input.importance ?? prior.importance),s=supa();
+  if(s){const {data,error}=await s.rpc('supersede_agent_memory',{p_user_id:userId,p_memory_id:id,p_new_id:newId,p_text:cleaned,p_category:category,p_src:input.src || 'user_edit',p_importance:importance});if(error)throw Object.assign(new Error(error.message),{code:error.code==='P0002'?'NOT_FOUND':'PERSISTENCE'});return memoryView(Array.isArray(data)?data[0]:data);}
+  const d=loadLocal(),row=d.memories.find(m=>m.userId===userId&&m.id===id&&(m.status || 'active')==='active');if(!row)throw Object.assign(new Error('Active memory not found.'),{code:'NOT_FOUND'});
+  row.status='superseded';row.superseded_by=newId;row.updated_at=new Date().toISOString();const next={id:newId,userId,text:cleaned,src:input.src || 'user_edit',category,status:'active',importance,observed_at:new Date().toISOString(),updated_at:new Date().toISOString(),at:Date.now()};d.memories.unshift(next);saveLocal(d);return memoryView(next);
 }
 async function delMemory(userId, id) {
   const s = supa();
   if (s) {
-    try { await s.from('memories').delete().eq('id', id).eq('user_id', userId); } catch {}
+    const {data,error}=await s.rpc('forget_agent_memory',{p_user_id:userId,p_memory_id:id});if(error)throw Object.assign(new Error('Memory could not be deleted. Try again.'),{code:'PERSISTENCE'});return Number(data || 0);
   }
   const d = loadLocal();
-  d.memories = d.memories.filter((m) => m.id !== id);
+  const family=new Set([id]);let changed=true;
+  while(changed){changed=false;for(const m of d.memories || []){if(m.userId!==userId)continue;if(family.has(m.id)||family.has(m.superseded_by)){if(!family.has(m.id)){family.add(m.id);changed=true;}if(m.superseded_by&&!family.has(m.superseded_by)){family.add(m.superseded_by);changed=true;}}}}
+  const before=d.memories.length;
+  d.memories = d.memories.filter((m) => !(m.userId===userId&&family.has(m.id)));
   saveLocal(d);
+  return before-d.memories.length;
 }
 
 async function listSecrets(userId) {
@@ -717,9 +865,9 @@ async function listChatMessages(userId, chatId, limit = 100) {
   const s = supa();
   if (s) {
     try {
-      const { data, error } = await s.from('messages').select('id,role,kind,text,metadata,created_at').eq('user_id', userId).eq('chat_id', chatId).order('created_at', { ascending: true }).limit(limit);
+      const { data, error } = await s.from('messages').select('id,role,kind,text,metadata,created_at').eq('user_id', userId).eq('chat_id', chatId).order('created_at', { ascending: false }).limit(limit);
       if (error) throw error;
-      return data || [];
+      return (data || []).reverse();
     } catch (e) { console.warn('[store] chat messages fallback:', e.message); }
   }
   return (loadLocal().turns || []).filter((row) => (row.user_id === userId || row.userId === userId) && row.chat_id === chatId).sort((a, b) => Number(a.at || 0) - Number(b.at || 0)).slice(-limit);
@@ -1454,8 +1602,257 @@ async function setConnectorPermissions(userId, toolkit, disabled) {
   return list;
 }
 
+function mapShopPayAccount(r, userId) {
+  return {
+    userId: r.user_id || r.userId || userId,
+    shopSubject: r.shop_subject || r.shopSubject || null,
+    email: r.email || null,
+    displayName: r.display_name || r.displayName || null,
+    scopes: r.scopes || '',
+    encryptedShopToken: r.encrypted_shop_token || r.encryptedShopToken || null,
+    encryptedRefreshToken: r.encrypted_refresh_token || r.encryptedRefreshToken || null,
+    shopTokenExpiresAt: r.shop_token_expires_at ? new Date(r.shop_token_expires_at).getTime() : (r.shopTokenExpiresAt || null),
+    dailyLimitUsd: r.daily_limit_usd != null ? Number(r.daily_limit_usd) : (r.dailyLimitUsd != null ? Number(r.dailyLimitUsd) : 200),
+    oauthState: r.oauth_state || r.oauthState || null,
+    oauthVerifier: r.oauth_verifier || r.oauthVerifier || null,
+    oauthRedirect: r.oauth_redirect || r.oauthRedirect || null,
+    oauthNonce: r.oauth_nonce || r.oauthNonce || null,
+    oauthExp: r.oauth_exp ? new Date(r.oauth_exp).getTime() : (r.oauthExp || null),
+    connectedAt: r.connected_at ? new Date(r.connected_at).getTime() : (r.connectedAt || null),
+    updatedAt: r.updated_at ? new Date(r.updated_at).getTime() : (r.updatedAt || Date.now()),
+  };
+}
+
+async function getShopPayAccount(userId) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('shop_pay_accounts').select('*').eq('user_id', userId).maybeSingle();
+      if (error) throw error;
+      if (data) return mapShopPayAccount(data, userId);
+    } catch (e) {
+      console.warn('[store] supabase shop pay fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.shopPayAccounts || []).find((a) => a.userId === userId) || null;
+}
+
+async function findShopPayByOAuthState(state) {
+  const st = String(state || '');
+  if (!st) return null;
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('shop_pay_accounts').select('*').eq('oauth_state', st).maybeSingle();
+      if (error) throw error;
+      if (data) return mapShopPayAccount(data, data.user_id);
+    } catch (e) {
+      console.warn('[store] supabase shop pay oauth fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.shopPayAccounts || []).find((a) => a.oauthState === st) || null;
+}
+
+async function upsertShopPayAccount(userId, patch) {
+  const prev = await getShopPayAccount(userId);
+  const next = Object.assign({
+    userId,
+    shopSubject: null,
+    email: null,
+    displayName: null,
+    scopes: '',
+    encryptedShopToken: null,
+    encryptedRefreshToken: null,
+    shopTokenExpiresAt: null,
+    dailyLimitUsd: 200,
+    oauthState: null,
+    oauthVerifier: null,
+    oauthRedirect: null,
+    oauthNonce: null,
+    oauthExp: null,
+    connectedAt: null,
+    updatedAt: Date.now(),
+  }, prev || {}, patch || {}, { userId, updatedAt: Date.now() });
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { error } = await s.from('shop_pay_accounts').upsert({
+        user_id: userId,
+        shop_subject: next.shopSubject,
+        email: next.email,
+        display_name: next.displayName,
+        scopes: next.scopes,
+        encrypted_shop_token: next.encryptedShopToken,
+        encrypted_refresh_token: next.encryptedRefreshToken,
+        shop_token_expires_at: next.shopTokenExpiresAt ? new Date(next.shopTokenExpiresAt).toISOString() : null,
+        daily_limit_usd: next.dailyLimitUsd,
+        oauth_state: next.oauthState,
+        oauth_verifier: next.oauthVerifier,
+        oauth_redirect: next.oauthRedirect,
+        oauth_nonce: next.oauthNonce,
+        oauth_exp: next.oauthExp ? new Date(next.oauthExp).toISOString() : null,
+        connected_at: next.connectedAt ? new Date(next.connectedAt).toISOString() : null,
+        updated_at: new Date(next.updatedAt).toISOString(),
+      }, { onConflict: 'user_id' });
+      if (error) throw error;
+      return next;
+    } catch (e) {
+      console.warn('[store] supabase upsert shop pay fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.shopPayAccounts = d.shopPayAccounts || [];
+  const i = d.shopPayAccounts.findIndex((a) => a.userId === userId);
+  if (i >= 0) d.shopPayAccounts[i] = next; else d.shopPayAccounts.unshift(next);
+  saveLocal(d);
+  return next;
+}
+
+async function deleteShopPayAccount(userId) {
+  const s = supa();
+  if (s) {
+    try { await s.from('shop_pay_accounts').delete().eq('user_id', userId); } catch {}
+  }
+  const d = loadLocal();
+  d.shopPayAccounts = (d.shopPayAccounts || []).filter((a) => a.userId !== userId);
+  saveLocal(d);
+}
+
+function mapShopPayOrder(r, userId) {
+  return {
+    id: r.id,
+    userId: r.user_id || r.userId || userId,
+    merchant: r.merchant_domain || r.merchant || null,
+    checkoutId: r.checkout_id || r.checkoutId || null,
+    cartId: r.cart_id || r.cartId || null,
+    orderId: r.order_id || r.orderId || null,
+    status: r.status,
+    amount: Number(r.amount || 0),
+    currency: r.currency || 'USD',
+    title: r.title || null,
+    continueUrl: r.continue_url || r.continueUrl || null,
+    error: r.error || null,
+    at: r.created_at ? new Date(r.created_at).getTime() : (r.at || Date.now()),
+  };
+}
+
+async function listShopPayOrders(userId, limit) {
+  const cap = Math.min(80, Number(limit) || 20);
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('shop_pay_orders').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(cap);
+      if (error) throw error;
+      return (data || []).map((r) => mapShopPayOrder(r, userId));
+    } catch (e) {
+      console.warn('[store] supabase shop pay orders fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.shopPayOrders || []).filter((t) => t.userId === userId).sort((a, b) => b.at - a.at).slice(0, cap);
+}
+
+async function getShopPayOrder(userId, id) {
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('shop_pay_orders').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
+      if (error) throw error;
+      if (data) return mapShopPayOrder(data, userId);
+    } catch (e) {
+      console.warn('[store] supabase shop pay order fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  return (d.shopPayOrders || []).find((t) => t.id === id && t.userId === userId) || null;
+}
+
+async function reserveShopPaySpend(userId, order, dailyLimitUsd) {
+  const id = order.id || ('spo_' + uid());
+  const s = supa();
+  if (s) {
+    await ensureProfile(userId);
+    const { data, error } = await s.rpc('reserve_shop_pay_spend', {
+      p_user_id: userId,
+      p_order_id: id,
+      p_merchant: order.merchant || '',
+      p_checkout_id: order.checkoutId || null,
+      p_cart_id: order.cartId || null,
+      p_amount: Number(order.amount || 0),
+      p_currency: order.currency || 'USD',
+      p_title: order.title || null,
+      p_daily_limit: Number(dailyLimitUsd || 0),
+      p_status: order.status || 'pending',
+    });
+    if (error) {
+      const e = new Error(String(error.message || '').includes('DAILY_LIMIT') ? 'Daily Shop Pay spend limit exceeded.' : 'Could not reserve Shop Pay spend.');
+      e.code = String(error.message || '').includes('DAILY_LIMIT') ? 'LIMIT' : 'SHOP_STORE';
+      throw e;
+    }
+    return mapShopPayOrder(data, userId);
+  }
+  if (supaConfigured()) throw Object.assign(new Error('Shop Pay database is unavailable.'), { code: 'SHOP_STORE' });
+  const start = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+  const spent = (loadLocal().shopPayOrders || [])
+    .filter((t) => t.userId === userId && t.at >= start && ['pending', 'authorized', 'escalated', 'completed'].includes(t.status))
+    .reduce((n, t) => n + Number(t.amount || 0), 0);
+  if (spent + Number(order.amount || 0) > Number(dailyLimitUsd || 0)) {
+    throw Object.assign(new Error('Daily Shop Pay spend limit exceeded.'), { code: 'LIMIT' });
+  }
+  const row = {
+    id, userId,
+    merchant: order.merchant || null,
+    checkoutId: order.checkoutId || null,
+    cartId: order.cartId || null,
+    orderId: null,
+    status: order.status || 'pending',
+    amount: Number(order.amount || 0),
+    currency: order.currency || 'USD',
+    title: order.title || null,
+    continueUrl: null,
+    error: null,
+    at: Date.now(),
+  };
+  const d = loadLocal();
+  d.shopPayOrders = d.shopPayOrders || [];
+  d.shopPayOrders.unshift(row);
+  saveLocal(d);
+  return row;
+}
+
+async function updateShopPayOrder(userId, id, patch) {
+  const s = supa();
+  if (s) {
+    try {
+      const upd = {};
+      if (patch.status) upd.status = patch.status;
+      if (patch.orderId !== undefined) upd.order_id = patch.orderId;
+      if (patch.checkoutId !== undefined) upd.checkout_id = patch.checkoutId;
+      if (patch.continueUrl !== undefined) upd.continue_url = patch.continueUrl;
+      if (patch.error !== undefined) upd.error = patch.error;
+      if (patch.title !== undefined) upd.title = patch.title;
+      if (patch.amount !== undefined) upd.amount = patch.amount;
+      const { error } = await s.from('shop_pay_orders').update(upd).eq('id', id).eq('user_id', userId);
+      if (error) throw error;
+    } catch (e) {
+      console.warn('[store] supabase update shop pay order fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.shopPayOrders = (d.shopPayOrders || []).map((t) => t.id === id && t.userId === userId ? Object.assign({}, t, patch) : t);
+  saveLocal(d);
+  return (d.shopPayOrders || []).find((t) => t.id === id) || { id, userId, ...patch };
+}
+
+function sealSecret(plain) { return encryptValue(plain); }
+function openSecret(obj) { return decryptValue(obj); }
+
 module.exports = {
-  listMemories, addMemory, delMemory,
+  getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
+  listMemories, memoryStats, searchMemories, getMemory, addMemory, updateMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret,
   supaConfigured,
   getSubscription, setSubscription, findUserByStripeCustomer,
@@ -1472,5 +1869,8 @@ module.exports = {
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
   countUnreadMail, countOutboundMailToday, listMailDrafts, upsertMailDraft, deleteMailDraft,
   getConnectorPermissions, setConnectorPermissions,
+  getShopPayAccount, findShopPayByOAuthState, upsertShopPayAccount, deleteShopPayAccount,
+  listShopPayOrders, getShopPayOrder, reserveShopPaySpend, updateShopPayOrder,
+  sealSecret, openSecret,
   CREDIT_GRANT_FREE,
 };

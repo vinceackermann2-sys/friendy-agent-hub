@@ -17,6 +17,15 @@ const fmtWhen = ts => {
   if (d < 86400e3) return Math.floor(d / 3600e3) + 'h';
   return new Date(ts).toLocaleDateString();
 };
+const fmtAgo = ts => {
+  if (!ts) return '';
+  const d = Date.now() - ts;
+  if (d < 60e3) return 'now';
+  if (d < 3600e3) return Math.floor(d / 60e3) + 'm ago';
+  if (d < 86400e3) return Math.floor(d / 3600e3) + 'h ago';
+  if (d < 7 * 86400e3) return Math.floor(d / 86400e3) + 'd ago';
+  return new Date(ts).toLocaleDateString(undefined, { day:'numeric', month:'short' });
+};
 const fmtNext = ts => {
   const d = Number(ts) - Date.now();
   if (d <= 60e3) return 'in under 1m';
@@ -40,6 +49,7 @@ const IC = {
   mic:'<path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/>',
   search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
   globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 5.6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.6-4-9s1.5-6.4 4-9Z"/>',
+  websearch:'<circle cx="10" cy="10" r="6.5"/><path d="M3.5 10h13M10 3.5c1.8 1.8 2.8 3.9 2.8 6.5s-1 4.7-2.8 6.5c-1.8-1.8-2.8-3.9-2.8-6.5s1-4.7 2.8-6.5Z"/><circle cx="17.2" cy="17.2" r="3.1"/><path d="M19.6 19.6 22 22"/>',
   term:'<path d="M4 17l6-5-6-5M12 19h8"/>',
   file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
   lock:'<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
@@ -85,6 +95,14 @@ const IC = {
   pencil:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   card:'<rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/>',
   gift:'<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"/>',
+  image:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-9 9"/>',
+  video:'<rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 10l6-3v10l-6-3"/>',
+  audio:'<path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
+  podcast:'<path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3M8 22h8"/>',
+  doc:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
+  web:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 5.6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.6-4-9s1.5-6.4 4-9Z"/>',
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  play:'<circle cx="12" cy="12" r="9"/><path d="M10 8.5l6 3.5-6 3.5Z" fill="currentColor" stroke="none"/>',
 };
 const icon = (n, s = 16) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[n] || ''}</svg>`;
 
@@ -145,6 +163,126 @@ function wirePromptBox(form, textarea, opts){
   });
 }
 
+const voiceIn = { rec:null, stream:null, chunks:[], on:false, busy:false, timer:null };
+function joinSpoken(base, spoken){
+  const a = String(base || '');
+  const b = String(spoken || '').replace(/\s+/g, ' ').trim();
+  if (!b) return a;
+  if (!a) return b;
+  return /[\s\n]$/.test(a) ? a + b : a + ' ' + b;
+}
+function applyPromptText(text){
+  const ta = $('#cprompt');
+  if (!ta) return;
+  ta.value = text;
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
+  ta.dispatchEvent(new Event('input', { bubbles:true }));
+}
+function syncVoiceButton(){
+  const btn = $('#cvoice');
+  if (!btn) return;
+  btn.classList.toggle('on', !!voiceIn.on);
+  btn.classList.toggle('busy', !!voiceIn.busy);
+  btn.disabled = !!voiceIn.busy;
+  const label = voiceIn.busy ? 'Transcribing…' : voiceIn.on ? 'Stop voice' : 'Speak prompt';
+  btn.title = label;
+  btn.setAttribute('aria-pressed', voiceIn.on ? 'true' : 'false');
+  btn.setAttribute('aria-busy', voiceIn.busy ? 'true' : 'false');
+  btn.setAttribute('aria-label', voiceIn.busy ? 'Transcribing speech' : voiceIn.on ? 'Stop voice input' : 'Speak your prompt');
+}
+function voiceMime(){
+  const types = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'];
+  for (const t of types){
+    try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; } catch {}
+  }
+  return '';
+}
+function stopVoiceTracks(){
+  (voiceIn.stream && voiceIn.stream.getTracks() || []).forEach(t => { try { t.stop(); } catch {} });
+  voiceIn.stream = null;
+}
+function stopVoice(){
+  voiceIn.on = false;
+  if (voiceIn.timer){ clearTimeout(voiceIn.timer); voiceIn.timer = null; }
+  const rec = voiceIn.rec;
+  voiceIn.rec = null;
+  voiceIn.chunks = [];
+  if (rec && rec.state !== 'inactive'){
+    rec.ondataavailable = null;
+    rec.onstop = null;
+    rec.onerror = null;
+    try { rec.stop(); } catch {}
+  }
+  stopVoiceTracks();
+  if (!voiceIn.busy) syncVoiceButton();
+}
+function blobToDataUrl(blob){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(new Error('Couldn’t read recording.'));
+    r.readAsDataURL(blob);
+  });
+}
+async function startVoice(){
+  if (voiceIn.busy || voiceIn.on) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
+    toast('Voice input isn’t available in this browser.'); return;
+  }
+  if (!window.isSecureContext){ toast('Voice input needs a secure connection.'); return; }
+  if (!signedIn()){ toast('Sign in to use voice input.'); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    const mime = voiceMime();
+    const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    voiceIn.chunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) voiceIn.chunks.push(e.data); };
+    rec.onerror = () => { toast('Microphone error.'); stopVoice(); };
+    voiceIn.rec = rec;
+    voiceIn.stream = stream;
+    voiceIn.on = true;
+    try { rec.start(250); } catch { rec.start(); }
+    voiceIn.timer = setTimeout(() => { if (voiceIn.on) finishVoice(); }, 60000);
+    syncVoiceButton();
+  } catch (e) {
+    stopVoice();
+    toast(e && e.name === 'NotAllowedError' ? 'Microphone permission denied.' : 'Couldn’t start the microphone.');
+  }
+}
+async function finishVoice(){
+  if (voiceIn.busy) return;
+  const rec = voiceIn.rec;
+  if (!rec){ stopVoice(); return; }
+  voiceIn.on = false;
+  if (voiceIn.timer){ clearTimeout(voiceIn.timer); voiceIn.timer = null; }
+  const mime = rec.mimeType || 'audio/webm';
+  const blob = await new Promise(resolve => {
+    rec.onstop = () => resolve(new Blob(voiceIn.chunks, { type: mime }));
+    try { if (rec.state !== 'inactive') rec.stop(); else resolve(new Blob(voiceIn.chunks, { type: mime })); }
+    catch { resolve(new Blob(voiceIn.chunks, { type: mime })); }
+  });
+  voiceIn.rec = null;
+  voiceIn.chunks = [];
+  stopVoiceTracks();
+  if (!blob.size){ syncVoiceButton(); toast('No speech captured.'); return; }
+  voiceIn.busy = true;
+  syncVoiceButton();
+  try {
+    const audio = await blobToDataUrl(blob);
+    const j = await window.LingonAuth.api('/api/voice/transcribe', { method:'POST', body: JSON.stringify({ audio, mime: blob.type || mime }) });
+    const spoken = String(j.text || '').trim();
+    if (!spoken) toast('Couldn’t hear that. Try again.');
+    else applyPromptText(joinSpoken((($('#cprompt') || {}).value || ''), spoken));
+  } catch (e) {
+    toast(e.message || 'Couldn’t transcribe that.');
+  } finally {
+    voiceIn.busy = false;
+    syncVoiceButton();
+  }
+}
+function toggleVoice(){ if (voiceIn.busy) return; if (voiceIn.on) finishVoice(); else startVoice(); }
+
 /* ---------------- markdown-lite ---------------- */
 function md(src){
   const s = esc(src)
@@ -166,15 +304,18 @@ const fresh = () => ({
   canvasOpen:false, canvasTab:'canvas', model:'Smart', theme:'grey',
   chats:[], pendingPrompt:null,
   vault:{ secrets:[], apps:[], approvals:[], mode:'default' },
-  memory:[],
+  memory:[], memoryTotal:0, memoryQuery:'',
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
   composioApps:[], composioLoading:false, appQuery:'', appFilter:'all', appOpen:null, appDetails:{},
+  shopPay:null, shopPayLoading:false, shopPayOrders:[],
   // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'approvals'
   agentEdit:false, mailTab:'inbox',
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
-  userProfile:null, browserProfile:{ profile:'Default', sandbox:true, allowlist:true },
+  userProfile:null, agentContext:null,
+  // library (Settings → Library) — image-like layout: sidebar filters + card grid
+  libraryCat:'all', librarySearch:'', librarySelect:false, librarySelected:[], libraryLayout:'grid',
 });
 let state;
 let mobileNavOpen = false;
@@ -193,7 +334,7 @@ delete state.walletTab;
 if (!state.mailTab) state.mailTab = 'inbox';
 if (!state.settingsTab) state.settingsTab = 'profiles';
 if (state.settingsTab === 'theme') state.settingsTab = 'profiles';
-if (!state.browserProfile) state.browserProfile = fresh().browserProfile;
+if (!state.agentContext || typeof state.agentContext !== 'object') state.agentContext = null;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
 if (!Array.isArray(state.composioApps)) state.composioApps = [];
@@ -202,9 +343,19 @@ state.composioLoading = false;
   if (!state.appFilter || state.appFilter === 'available') state.appFilter = 'all';
   if (typeof state.appOpen !== 'string') state.appOpen = null;
   if (!state.appDetails || typeof state.appDetails !== 'object') state.appDetails = {};
+  // Library defaults (Settings → Library gallery)
+  if (!state.libraryCat) state.libraryCat = 'all';
+  if (typeof state.librarySearch !== 'string') state.librarySearch = '';
+  if (typeof state.librarySelect !== 'boolean') state.librarySelect = false;
+  if (!Array.isArray(state.librarySelected)) state.librarySelected = [];
+  if (!['grid','list'].includes(state.libraryLayout)) state.libraryLayout = 'grid';
   // Honest apps: no fake OAuth connections exist — always empty.
   state.vault.apps = [];
-  const save = () => { localStorage.setItem(LS, JSON.stringify(state)); };
+  const save = () => {
+    const persisted=JSON.parse(JSON.stringify(state));
+    if(persisted.vault?.secrets)persisted.vault.secrets=persisted.vault.secrets.map((secret)=>secret.backend?{id:secret.id,ref:secret.ref,name:secret.name,at:secret.at,backend:true}:secret);
+    localStorage.setItem(LS,JSON.stringify(persisted));
+  };
 const taskRuns = new Map();
 
 // Remove implementation details left in conversations by older app versions.
@@ -280,26 +431,37 @@ async function syncFromBackend(force = false) {
   }
   if (!force && Date.now() - backendSyncedAt < BACKEND_SYNC_MS) return false;
   const request = (async () => {
-    const [memories, secrets, automationChats] = await Promise.allSettled([
-      window.LingonAuth.api('/api/memories'),
+    const [memories, secrets, automationChats, agentContext] = await Promise.allSettled([
+      window.LingonAuth.api('/api/memories'+(state.memoryQuery?'?q='+encodeURIComponent(state.memoryQuery):'?limit='+Math.min(Math.max(state.memory.length,250),1000))),
       window.LingonAuth.api('/api/secrets'),
       window.LingonAuth.api('/api/automation-chats'),
+      window.LingonAuth.api('/api/agent-context'),
     ]);
     if (owner !== billingIdentity()) return false;
     const value = (result) => result.status === 'fulfilled' ? result.value : null;
     const m = value(memories);
     if (m) {
-      const seen = new Set(state.memory.map((x) => x.text));
-      (m.memories || []).forEach((r) => {
-        if (!seen.has(r.text)) state.memory.unshift({ id: r.id, text: r.text, src: 'account', at: r.at });
-      });
+      state.memory=(m.memories || []).map(r=>({...r,at:r.at || Date.parse(r.updatedAt || r.observedAt) || Date.now()}));
+      state.memoryTotal=Number(m.total ?? state.memory.length);
+      state.memoryQuery=String(m.query || '');
     }
     const s = value(secrets);
     if (s) {
-      const have = new Set(state.vault.secrets.map((x) => x.id));
-      (s.secrets || []).forEach((r) => {
-        if (!have.has(r.id)) state.vault.secrets.unshift({ id: r.id, ref: r.ref, name: r.name, at: r.at, backend: true });
-      });
+      const remote=(s.secrets || []).map((r)=>({id:r.id,ref:r.ref,name:r.name,at:r.at,backend:true}));
+      const localOnly=state.vault.secrets.filter((item)=>!item.backend && item.value);
+      const keptLocal=[];
+      for(const item of localOnly){
+        try{
+          const added=await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name:item.name,value:item.value})});
+          if(added?.secret)remote.unshift({...added.secret,backend:true});
+        }catch{keptLocal.push(item);}
+      }
+      state.vault.secrets=[...remote,...keptLocal];
+    }
+    const ac = value(agentContext);
+    if (ac) {
+      state.agentContext = ac;
+      if (ac.revision > 0 && ac.agent) state.agent = { ...state.agent, ...ac.agent };
     }
     for (const remote of (value(automationChats)?.chats || [])) {
       const messages = (remote.messages || []).map((m) => ({
@@ -419,20 +581,100 @@ function refreshComposioApps(force = false) {
   return request;
 }
 
+let pendingConnect = null; // { toolkit, before: string[], startedAt }
+function accountLabel(acc){
+  if (!acc) return '';
+  if (acc.name && acc.email && acc.name !== acc.email) return `${acc.name} · ${acc.email}`;
+  return acc.email || acc.name || acc.alias || acc.wordId || 'Connected account';
+}
 async function connectComposioApp(toolkit, authConfigId) {
+  const tk = String(toolkit || '').toLowerCase();
+  if (!tk) return;
   try {
-    toast(`Opening ${toolkit} connection…`);
+    toast(`Opening ${tk} connection…`);
+    const before = ((composioAppByToolkit(tk) || {}).accounts || []).map((a) => a.id);
     const j = await window.LingonAuth.api('/api/composio/connect', {
       method: 'POST',
-      body: JSON.stringify({ toolkit, authConfigId }),
+      body: JSON.stringify({ toolkit: tk, authConfigId }),
     });
     if (j.redirectUrl) {
+      // Keep the connector open so the new account identity lands in view.
+      state.appOpen = tk;
+      save();
+      if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+      else openConnector(tk, true);
+      pendingConnect = { toolkit: tk, before, startedAt: Date.now() };
       window.open(j.redirectUrl, '_blank', 'noopener');
-      toast('Finish signing in, then press Refresh.');
+      toast('Finish signing in — your account will appear here automatically.');
+      pollPendingConnect();
     }
   } catch (e) {
     toast(e.message || 'Could not start connection.');
   }
+}
+async function pollPendingConnect(){
+  if (!pendingConnect) return;
+  const { toolkit, before, startedAt } = pendingConnect;
+  // Poll for up to ~2 minutes: Composio OAuth happens in another tab.
+  for (let i = 0; i < 30; i++) {
+    if (!pendingConnect || pendingConnect.toolkit !== toolkit) return;
+    if (Date.now() - startedAt > 120000) break;
+    await sleep(4000);
+    if (!pendingConnect || pendingConnect.toolkit !== toolkit) return;
+    if (!signedIn()) continue;
+    try {
+      await refreshComposioApps(true);
+      const app = composioAppByToolkit(toolkit);
+      const now = (app && app.accounts) || [];
+      const fresh = now.filter((a) => !before.includes(a.id));
+      if (fresh.length) {
+        pendingConnect = null;
+        state.appOpen = toolkit;
+        save();
+        await openConnector(toolkit, true);
+        const who = accountLabel(fresh[0]);
+        toast(`${who} connected. You can add another account anytime.`);
+        return;
+      }
+      // Also refresh the open detail so permissions/accounts stay current.
+      if (state.appOpen === toolkit && state.view === 'apps') await openConnector(toolkit, true);
+    } catch {}
+  }
+  pendingConnect = null;
+}
+// OAuth callback lands back on /?connected_app=<toolkit> (see /api/composio/connect).
+// Claim it: open Connectors on that app and surface the connected mail/name/profile.
+async function handleConnectedAppReturn(){
+  let tk = '';
+  try {
+    const q = new URLSearchParams(window.location.search);
+    tk = String(q.get('connected_app') || '').toLowerCase().trim();
+    if (tk && tk !== 'app') {
+      q.delete('connected_app');
+      const rest = q.toString();
+      window.history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : ''));
+    }
+  } catch {}
+  if (!tk || tk === 'app' || !signedIn()) return;
+  state.view = 'apps';
+  state.appOpen = tk;
+  save();
+  if ($('#app')) renderApp();
+  toast('Connection finished — loading your account…');
+  try {
+    await refreshComposioApps(true);
+    await openConnector(tk, true);
+    const app = composioAppByToolkit(tk);
+    if (app && app.accounts && app.accounts.length) {
+      const latest = app.accounts[app.accounts.length - 1];
+      toast(`${accountLabel(latest)} connected.`);
+    } else {
+      toast('Press Refresh if your account is not listed yet.');
+    }
+  } catch (e) {
+    toast(e.message || 'Press Refresh to see your account.');
+  }
+  pendingConnect = null;
 }
 
 function patchConnectorAccounts(toolkit, accounts) {
@@ -457,7 +699,7 @@ async function disconnectComposioApp(app, accountId) {
   const id = accountId || (app && app.connectedAccountId);
   if (!app || !id) return;
   const acc = ((app.accounts || []).find((a) => a.id === id)) || {};
-  const who = acc.email || acc.name || app.name || 'this account';
+  const who = accountLabel(acc) !== 'Connected account' ? accountLabel(acc) : (app.name || 'this account');
   if (!window.confirm(`Disconnect ${who}? Your agent will lose access until you reconnect.`)) return;
   try {
     await window.LingonAuth.api('/api/composio/disconnect', {
@@ -588,72 +830,77 @@ const currentUserId = () => {
   try { return (window.LingonAuth && window.LingonAuth.get() && window.LingonAuth.get().user && window.LingonAuth.get().user.id) || null; }
   catch { return null; }
 };
-let sandboxLeaseId = null;
-let sandboxLeaseTimer = null;
-let sandboxVmState = 'disconnected';
-function vmConnectionView(){
+let workspacePresenceTimer = null;
+let workspacePresenceState = 'offline';
+let workspacePresenceInfo = null;
+let workspacePresenceOwner = null;
+function workspaceConnectionView(){
   const work = statusFor(chat());
   if (work && work !== 'Available') return { label:work, tone:'busy' };
-  if (sandboxVmState === 'connected') return { label:'Connected', tone:'' };
-  if (sandboxVmState === 'connecting') return { label:'Connecting…', tone:'busy' };
-  return { label:'Disconnected', tone:'offline' };
+  if (workspacePresenceState === 'ready') return { label:'Agent ready', tone:'' };
+  if (workspacePresenceState === 'warming') return { label:'Warming workspace…', tone:'busy' };
+  return { label:'Offline', tone:'offline' };
 }
-function refreshVmConnectionView(){
+function refreshWorkspaceConnectionView(){
   const badge = document.querySelector('.agent-hero-status');
   if (!badge) return;
-  const view = vmConnectionView();
+  const view = workspaceConnectionView();
   badge.classList.toggle('busy', view.tone === 'busy');
   badge.classList.toggle('offline', view.tone === 'offline');
   const label = badge.querySelector('span');
   if (label) label.textContent = view.label;
 }
-function setSandboxVmState(next){
-  if (sandboxVmState === next) return;
-  sandboxVmState = next;
-  refreshVmConnectionView();
+function setWorkspacePresenceState(next){
+  if (workspacePresenceState === next) return;
+  workspacePresenceState = next;
+  refreshWorkspaceConnectionView();
 }
-async function sandboxLeaseRequest(action) {
-  if (!sandboxLeaseId || !window.LingonAuth || !window.LingonAuth.signedIn()) {
-    setSandboxVmState('disconnected');
+async function workspacePresenceRequest(action) {
+  if (!window.LingonAuth || !window.LingonAuth.signedIn()) {
+    setWorkspacePresenceState('offline');
     return null;
   }
-  if (action === 'acquire') setSandboxVmState('connecting');
+  const owner = currentUserId();
+  if (action === 'acquire') setWorkspacePresenceState('warming');
   try {
-    const result = await window.LingonAuth.api('/api/sandbox/lease', {
+    const result = await window.LingonAuth.api('/api/sandbox/presence', {
       method: 'POST',
-      body: JSON.stringify({ action, leaseId: sandboxLeaseId, kind: 'app' }),
+      body: JSON.stringify({ action }),
     });
-    if (action !== 'release') {
-      const trulyConnected = result?.power === 'running' && !!result?.vmName;
-      setSandboxVmState(trulyConnected ? 'connected' : 'disconnected');
+    if (action !== 'release' && owner === currentUserId()) {
+      workspacePresenceInfo = result || null;
+      setWorkspacePresenceState(result?.status === 'ready' ? 'ready' : 'offline');
+      if (state.view === 'settings' && state.settingsTab === 'browser' && $('#main')) paintSettings($('#main'));
     }
     return result;
   } catch {
-    setSandboxVmState('disconnected');
+    if (owner === currentUserId()) setWorkspacePresenceState('offline');
     return null;
   }
 }
-function startSandboxLease() {
-  if (!signedIn()) return;
-  if (!sandboxLeaseId) sandboxLeaseId = 'app_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36);
-  if (sandboxLeaseTimer) return;
-  sandboxLeaseRequest('acquire');
-  sandboxLeaseTimer = setInterval(() => {
-    if (signedIn()) sandboxLeaseRequest('renew');
-    else stopSandboxLease();
-  }, 25000);
+function startWorkspacePresence() {
+  if (!signedIn() || document.visibilityState === 'hidden') return;
+  const owner = currentUserId();
+  if (owner !== workspacePresenceOwner) {
+    workspacePresenceTimer = null;
+    workspacePresenceOwner = owner;
+    workspacePresenceInfo = null;
+    setWorkspacePresenceState('offline');
+  }
+  if (workspacePresenceTimer) return;
+  // Presence is a zero-compute account status check. Full-OS work acquires
+  // its own VM lease from the agent tool path; an open tab never warms it.
+  workspacePresenceRequest('status');
+  workspacePresenceTimer = true;
 }
-function stopSandboxLease() {
-  if (sandboxLeaseTimer) { clearInterval(sandboxLeaseTimer); sandboxLeaseTimer = null; }
-  const id = sandboxLeaseId;
-  sandboxLeaseId = null;
-  setSandboxVmState('disconnected');
-  if (!id) return;
-  try {
-    const sess = window.LingonAuth && window.LingonAuth.get && window.LingonAuth.get();
-    const token = sess && sess.access_token;
-    if (token) fetch('/api/sandbox/lease', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ action: 'release', leaseId: id, kind: 'app' }) }).catch(() => {});
-  } catch {}
+function stopWorkspacePresence() {
+  workspacePresenceTimer = null;
+  setWorkspacePresenceState('offline');
+  if (workspacePresenceInfo) {
+    workspacePresenceInfo = { ...workspacePresenceInfo, warmed:false, status:workspacePresenceInfo.container ? 'cooling' : workspacePresenceInfo.status };
+    if (state.view === 'settings' && state.settingsTab === 'browser' && $('#main')) paintSettings($('#main'));
+  }
+  if (!signedIn()) { workspacePresenceOwner = null; workspacePresenceInfo = null; return; }
 }
 function ensureOwnerScope(){
   const uid = currentUserId();
@@ -670,12 +917,12 @@ function ensureOwnerScope(){
 function render(){
   applyTheme();
   if (!signedIn()) {
-    stopSandboxLease();
+    stopWorkspacePresence();
     const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
     return state.pendingPrompt || appRoute ? renderAuth() : renderLanding();
   }
   ensureOwnerScope();
-  startSandboxLease();
+  startWorkspacePresence();
   if (needsOnboarding()) return startPendingPromptFlow();
   return renderApp();
 }
@@ -1559,6 +1806,29 @@ function renderLanding(){
 
     ${landingLifeBento()}
 
+    <section class="asection" id="safety" aria-label="Safe Swedish AI">
+      <div class="safety-layout">
+        <div class="safety-copy">
+          <h2>Safe Swedish AI</h2>
+          <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
+        </div>
+        <div class="panel model-card">
+          <div class="mc-title">Arche 1.0 vs frontier models</div>
+          <div class="mc-table"><table class="btable">
+            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th></tr></thead>
+            <tbody>
+              <tr><td>GPQA Diamond</td><td class="star">93.5</td><td>94.1</td><td>93.8</td><td>92.6</td></tr>
+              <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td>88.8</td><td>87.5</td><td>88.0</td></tr>
+              <tr><td>BrowseComp</td><td class="star">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td></tr>
+              <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td>85.0</td></tr>
+              <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td></tr>
+            </tbody>
+          </table></div>
+          <div class="fineprint mc-foot"><span>Full results and methodology in <a href="/research-arche-1-0">Research → Arche 1.0</a></span></div>
+        </div>
+      </div>
+    </section>
+
     <section class="cta2" id="cta" aria-label="Start">
       <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Start now</div>
       <h2>What do you want to do?</h2>
@@ -1573,42 +1843,6 @@ function renderLanding(){
             </span>
           </div>
         </form>
-      </div>
-    </section>
-
-    <section class="asection" id="safety" aria-label="Safe Swedish AI">
-      <div class="safety-layout">
-        <div class="safety-copy">
-          <h2>Safe Swedish AI</h2>
-          <p class="lede">Arche 1.0 is built on the open source Kimi K3 model, with an Agentic harness optimized for privacy and safety.</p>
-        </div>
-        <div class="panel model-card">
-          <div class="mc-viz" aria-hidden="true">
-            <svg viewBox="0 0 640 88" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect x="8" y="18" width="118" height="52" rx="12" fill="#ECECF0" stroke="#E7E7EA"/>
-              <text x="67" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Kimi K3</text>
-              <path d="M126 44H162" stroke="#17181A" stroke-width="2"/><polygon points="162,40 172,44 162,48" fill="#17181A"/>
-              <rect x="172" y="12" width="296" height="64" rx="14" fill="#fff" stroke="#E7E7EA"/>
-              <text x="320" y="36" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="10" font-weight="800" letter-spacing="1.2" fill="#17181A">BELNA HARNESS</text>
-              <text x="320" y="56" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="12" font-weight="700" fill="#17181A">Approve · Vault · Sandbox · Trace</text>
-              <path d="M468 44H504" stroke="#17181A" stroke-width="2"/><polygon points="504,40 514,44 504,48" fill="#17181A"/>
-              <rect x="514" y="18" width="118" height="52" rx="12" fill="#E9F4EE" stroke="#BFE0CC"/>
-              <text x="573" y="49" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">Work</text>
-            </svg>
-          </div>
-          <div class="mc-title">Arche 1.0 vs frontier models</div>
-          <div class="mc-table"><table class="btable">
-            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th></tr></thead>
-            <tbody>
-              <tr><td>GPQA Diamond</td><td class="star">93.5</td><td>94.1</td><td>93.8</td><td>92.6</td></tr>
-              <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td>88.8</td><td>87.5</td><td>88.0</td></tr>
-              <tr><td>BrowseComp</td><td class="star">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td></tr>
-              <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td>85.0</td></tr>
-              <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td></tr>
-            </tbody>
-          </table></div>
-          <div class="fineprint mc-foot"><span>Full results and methodology in <a href="/research-arche-1-0">Research → Arche 1.0</a></span></div>
-        </div>
       </div>
     </section>
 
@@ -1749,7 +1983,6 @@ async function openOnboardingPassport(c, m){
   const ownerId = currentUserId();
   state.agent = { name:answers.name, color:answers.color, pers:'Playful', ownerId, claimedAt:Date.now() };
   state.onboarded = true; c.onboarding = false; c.busy = false; m.card.status = 'done';
-  state.memory.unshift({ id:uid(), text:'Agent named “' + answers.name + '” — ' + Mascot.PALETTE[answers.color].name + '.', src:'onboarding', at:Date.now() });
   const pending = state.pendingPrompt;
   state.pendingPrompt = null;
   state.canvasOpen = true; state.canvasTab = 'canvas';
@@ -1877,8 +2110,82 @@ function applyTheme(){
 function openOnboarding(){ return startPendingPromptFlow(); }
 
 /* ================================================================
-   APP SHELL
+   APP SHELL — smooth drawers (no full re-render on toggle)
+   Left nav (mobile) slides via .mobile-nav-open; right canvas slides via
+   .nocanvas removal. Both keep their DOM mounted so CSS transitions run.
 ================================================================ */
+function canvasShouldShow(){
+  return !!(state.canvasOpen && state.view === 'chat');
+}
+function syncShellClasses(){
+  const app = $('#app');
+  if (!app) return;
+  app.classList.toggle('nocanvas', !canvasShouldShow());
+  app.classList.toggle('mobile-nav-open', !!mobileNavOpen);
+  const t = app.querySelector('.mobile-nav-toggle');
+  if (t){
+    t.setAttribute('aria-label', mobileNavOpen ? 'Close navigation' : 'Open navigation');
+    t.setAttribute('aria-expanded', mobileNavOpen ? 'true' : 'false');
+    t.innerHTML = icon(mobileNavOpen ? 'x' : 'menu', 20);
+  }
+  const side = app.querySelector('#side');
+  if (side) side.setAttribute('aria-hidden', mobileNavOpen || window.matchMedia('(min-width: 761px)').matches ? 'false' : 'true');
+  const cv = app.querySelector('#canvas');
+  if (cv) cv.setAttribute('aria-hidden', canvasShouldShow() ? 'false' : 'true');
+  try { document.body.classList.toggle('nav-lock', !!mobileNavOpen && window.matchMedia('(max-width: 760px)').matches); } catch {}
+}
+function setMobileNav(open, opts = {}){
+  mobileNavOpen = !!open;
+  const app = $('#app');
+  if (!app){ return; }
+  // In-place class toggle preserves the .side element so the slide animates.
+  syncShellClasses();
+  if (mobileNavOpen && opts.focus !== false){
+    const first = app.querySelector('#side .sitem, #side .btn, #side .sidebrand');
+    if (first && window.matchMedia('(max-width: 760px)').matches){ try { first.focus({ preventScroll:true }); } catch {} }
+  } else if (!mobileNavOpen && opts.refocus){
+    const t = app.querySelector('.mobile-nav-toggle');
+    if (t){ try { t.focus({ preventScroll:true }); } catch {} }
+  }
+}
+function setCanvasOpen(open, opts = {}){
+  state.canvasOpen = !!open;
+  save();
+  const app = $('#app');
+  if (!app){ return; }
+  if (state.canvasOpen){
+    // Mount content first, then reveal on next frame so the slide runs.
+    if (opts.tab) state.canvasTab = opts.tab;
+    paintCanvas();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      syncShellClasses();
+      if (opts.focus !== false){
+        const close = $('#canvas .canvas-close');
+        if (close && window.matchMedia('(max-width: 1100px)').matches){ try { close.focus({ preventScroll:true }); } catch {} }
+      }
+    }));
+  } else {
+    // Keep painted content during slide-out; hiding is pure CSS.
+    syncShellClasses();
+    try { liveClose(); } catch {}
+  }
+}
+let shellKeysWired = false;
+function wireShellKeys(){
+  if (shellKeysWired) return;
+  shellKeysWired = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (mobileNavOpen){ e.preventDefault(); setMobileNav(false, { refocus:true }); return; }
+    if (canvasShouldShow() && window.matchMedia('(max-width: 1100px)').matches){ e.preventDefault(); setCanvasOpen(false); }
+  });
+  try {
+    const mq = window.matchMedia('(min-width: 761px)');
+    const onChange = () => { if (mq.matches && mobileNavOpen) setMobileNav(false); };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  } catch {}
+}
 function renderApp(){
   if (!signedIn()){ renderAuth(); return; }
   ensureOwnerScope();
@@ -1890,14 +2197,17 @@ function renderApp(){
   applyTheme();
   belnaStopLandingFx();
   root.innerHTML = `
-  <div class="app ${state.canvasOpen && state.view === 'chat' ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''}" id="app">
+  <div class="app ${canvasShouldShow() ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''}" id="app">
     <button class="mobile-nav-toggle" data-act="togglemenu" aria-label="${mobileNavOpen ? 'Close navigation' : 'Open navigation'}" aria-expanded="${mobileNavOpen}">${icon(mobileNavOpen ? 'x' : 'menu',20)}</button>
-    <button class="side-scrim" data-act="togglemenu" aria-label="Close navigation"></button>
-    <aside class="side" id="side"></aside>
+    <button class="side-scrim" data-act="togglemenu" aria-label="Close navigation" tabindex="-1"></button>
+    <aside class="side" id="side" aria-hidden="${mobileNavOpen ? 'false' : 'true'}"></aside>
     <main class="main" id="main"></main>
-    <aside class="canvas" id="canvas"></aside>
+    <aside class="canvas" id="canvas" aria-hidden="${canvasShouldShow() ? 'false' : 'true'}"></aside>
+    <button class="canvas-scrim" data-act="closecanvas" aria-label="Close canvas" tabindex="-1"></button>
   </div>`;
+  wireShellKeys();
   paintSide(); paintMain(); paintCanvas();
+  syncShellClasses();
 }
 
 function currentUser(){
@@ -1911,21 +2221,277 @@ function currentUser(){
 function artifactRows(){
   const rows = [];
   state.chats.forEach(c => {
-    if (c.artifact) rows.push({ title: c.artifact.title, kind: c.artifact.kind, chat: c.title, chatId: c.id });
+    if (c.artifact) rows.push({ title: c.artifact.title, kind: c.artifact.kind, chat: c.title, chatId: c.id, at: c.updatedAt || c.createdAt || Date.now() });
     (c.messages || []).forEach(m => {
-      if (m.kind === 'card' && (m.card.type === 'file' || m.card.type === 'canvas')) rows.push({ title: m.card.name || m.card.title, kind: m.card.type, chat: c.title, chatId: c.id, messageId:m.id, card: m.card });
+      if (m.kind === 'card' && (m.card.type === 'file' || m.card.type === 'canvas' || m.card.type === 'artifact')) rows.push({ title: m.card.name || m.card.title, kind: m.card.type, chat: c.title, chatId: c.id, messageId:m.id, card: m.card, at: m.at || m.createdAt || c.updatedAt || c.createdAt || Date.now() });
+      // attached uploads (jpg / mp4 / mp3 / mov / png …) live on m.files
+      (m.files || []).forEach((f, fi) => {
+        if (!f || !f.name) return;
+        rows.push({ title: f.name, kind:'file', chat: c.title, chatId: c.id, messageId: m.id, fileIndex: fi, card: { type:'file', name: f.name, dataUrl: f.dataUrl, mime: f.type, size: f.size }, at: m.at || m.createdAt || c.updatedAt || c.createdAt || Date.now() });
+      });
     });
   });
+  rows.sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
   return rows;
+}
+/* ---------- Library: media vs artifacts split + branded previews ---------- */
+const LIB_IMAGE_EXT = ['jpg','jpeg','png','gif','webp','svg','bmp','ico','avif'];
+const LIB_VIDEO_EXT = ['mp4','mov','webm','mkv','avi','m4v'];
+const LIB_AUDIO_EXT = ['mp3','wav','ogg','m4a','flac','aac','opus'];
+const LIB_DOC_EXT = ['pdf','doc','docx','txt','md','csv','xls','xlsx','ppt','pptx','json','zip'];
+function libExt(name){
+  const s = String(name || '').split('?')[0].split('#')[0];
+  const m = s.match(/\.([a-z0-9]{2,5})$/i);
+  return m ? m[1].toLowerCase() : '';
+}
+function libMediaType(row){
+  const ext = libExt(row.title);
+  if (LIB_IMAGE_EXT.includes(ext)) return 'image';
+  if (LIB_VIDEO_EXT.includes(ext)) return 'video';
+  if (LIB_AUDIO_EXT.includes(ext)) return 'audio';
+  return '';
+}
+function libItemType(row){
+  const media = libMediaType(row);
+  if (media) return media;
+  const kind = String(row.kind || '').toLowerCase();
+  const title = String(row.title || '').toLowerCase();
+  if (kind === 'canvas' || row.card?.type === 'canvas') return 'web';
+  if (/\.html?$|\bweb\b|website|landing|canvas/.test(title + ' ' + kind)) return 'web';
+  const ext = libExt(row.title);
+  if (LIB_DOC_EXT.includes(ext) || kind === 'file') return 'document';
+  return 'artifact';
+}
+function libCatFor(item){
+  const t = item._type;
+  if (t === 'image') return 'images';
+  if (t === 'video') return 'videos';
+  if (t === 'audio') return 'podcasts';
+  if (t === 'document') return 'documents';
+  if (t === 'web') return 'web';
+  return 'artifact';
+}
+function libDemoItems(){
+  const now = Date.now();
+  const agent = (state.agent && state.agent.name) || 'Belna';
+  return [
+    { id:'demo-lead', title:'Belna Lead List', kind:'artifact', chat: agent + ' research', at: now - 18*3600e3, _demo:true, _type:'artifact', sub:'Prospect brief · 24 researched prospects' },
+    { id:'demo-readme', title:'README.md', kind:'file', chat:'Website Template Pack', at: now - 18*3600e3, _demo:true, _type:'document', sub:'Text · template docs' },
+    { id:'demo-tictac', title:'Tic Tac Toe', kind:'artifact', chat:'Canvas game', at: now - 5*86400e3, _demo:true, _type:'web', sub:'Playable web artifact' },
+    { id:'demo-hero', title:'launch-hero.jpg', kind:'file', chat:'Launch assets', at: now - 2*86400e3, _demo:true, _type:'image', sub:'Image · 1.2 MB' },
+    { id:'demo-demo', title:'product-demo.mp4', kind:'file', chat:'Launch assets', at: now - 26*3600e3, _demo:true, _type:'video', sub:'Video · 0:42' },
+    { id:'demo-voice', title:'founder-update.mp3', kind:'file', chat:'Voice notes', at: now - 3*86400e3, _demo:true, _type:'audio', sub:'Audio · 3:18' },
+  ];
+}
+function libraryItems(){
+  const real = artifactRows().map((r, i) => {
+    const type = libItemType(r);
+    const fid = r.fileIndex !== undefined ? ':f' + r.fileIndex : '';
+    return { id: (r.chatId || 'c') + ':' + (r.messageId || 'a') + ':' + i + fid, ...r, _type: type, _demo:false, sub: null };
+  });
+  if (real.length) return real;
+  return libDemoItems();
+}
+function libraryFiltered(){
+  const cat = state.libraryCat || 'all';
+  const q = String(state.librarySearch || '').toLowerCase().trim();
+  let items = libraryItems();
+  if (cat === 'images') items = items.filter(x => x._type === 'image');
+  else if (cat === 'videos') items = items.filter(x => x._type === 'video');
+  else if (cat === 'podcasts') items = items.filter(x => x._type === 'audio');
+  else if (cat === 'documents') items = items.filter(x => x._type === 'document');
+  else if (cat === 'web') items = items.filter(x => x._type === 'web');
+  else if (cat === 'artifacts') items = items.filter(x => !['image','video','audio'].includes(x._type));
+  else if (cat === 'system') items = [];
+  // 'all' shows everything (artifacts + media), like the reference
+  if (q) items = items.filter(x => String(x.title || '').toLowerCase().includes(q) || String(x.chat || '').toLowerCase().includes(q));
+  return items;
+}
+function libTypeLabel(t){
+  if (t === 'image') return 'Image';
+  if (t === 'video') return 'Video';
+  if (t === 'audio') return 'Audio';
+  if (t === 'document') return 'Text';
+  if (t === 'web') return 'Artifact';
+  return 'Artifact';
+}
+function libIconFor(t){
+  if (t === 'image') return 'image';
+  if (t === 'video') return 'video';
+  if (t === 'audio') return 'podcast';
+  if (t === 'document') return 'doc';
+  if (t === 'web') return 'easel';
+  return 'spark';
+}
+function libPreviewHtml(item){
+  const t = item._type;
+  const seed = String(item.title || 'B').split('').reduce((a, ch) => a + ch.charCodeAt(0), 0);
+  const dataUrl = item.card && item.card.dataUrl;
+  const isImgUrl = dataUrl && /^data:image\//.test(String(dataUrl));
+  const isVidUrl = dataUrl && /^data:video\//.test(String(dataUrl));
+  if (t === 'image'){
+    if (isImgUrl) return `<div class="lib-prev lib-prev-photo"><img src="${esc(dataUrl)}" alt="${esc(item.title)}" loading="lazy"><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
+    const hue = seed % 360;
+    return `<div class="lib-prev lib-prev-image" style="--ph:${hue}"><span class="lib-prev-mount">${icon('image',28)}</span><span class="lib-prev-fname">${esc(item.title)}</span><span class="lib-prev-tag">${esc(libExt(item.title).toUpperCase() || 'JPG')}</span></div>`;
+  }
+  if (t === 'video'){
+    if (isVidUrl) return `<div class="lib-prev lib-prev-photo"><video src="${esc(dataUrl)}" muted playsinline preload="metadata"></video><span class="lib-prev-play">${icon('play',26)}</span><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
+    return `<div class="lib-prev lib-prev-video"><span class="lib-prev-play">${icon('play',26)}</span><span class="lib-prev-dur">0:42</span><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
+  }
+  if (t === 'audio'){
+    const bars = Array.from({length: 28}, (_, i) => `<i style="height:${6 + ((seed * (i+3)) % 22)}px"></i>`).join('');
+    return `<div class="lib-prev lib-prev-audio"><span class="lib-prev-audio-ic">${icon('podcast',22)}</span><span class="lib-prev-wave">${bars}</span><span class="lib-prev-dur">3:18</span></div>`;
+  }
+  if (t === 'document'){
+    return `<div class="lib-prev lib-prev-doc"><div class="lib-doc-paper"><b>${esc(String(item.title || 'Untitled').slice(0, 28))}</b><span class="lib-doc-lines"><i style="width:92%"></i><i style="width:84%"></i><i style="width:88%"></i><i style="width:64%"></i><i style="width:76%"></i></span><span class="lib-doc-table"><i></i><i></i><i></i><i></i><i></i><i></i></span></div></div>`;
+  }
+  // web / artifact — branded mini dashboard preview like the reference
+  const dark = seed % 2 === 0;
+  return `<div class="lib-prev lib-prev-web${dark ? ' dark' : ''}"><div class="lib-web-bar"><i></i><i></i><i></i><span>${esc(String(item.title || 'Artifact').slice(0, 26))}</span></div><div class="lib-web-body"><div class="lib-web-hero"><b>${esc(String(item.sub || item.chat || 'Built with Belna').slice(0, 42))}</b><span class="lib-web-cta">Open</span></div><div class="lib-web-grid"><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>`;
+}
+function libCardHtml(item){
+  const sel = state.librarySelect && (state.librarySelected || []).includes(item.id);
+  const meta = item.sub || ((item.chat ? 'from ' + item.chat + ' · ' : '') + fmtAgo(item.at));
+  const sub = item._demo ? esc(item.sub || '') + ' · Sample' : esc(libTypeLabel(item._type)) + ' · ' + esc(fmtAgo(item.at));
+  return `<article class="lib-card${sel ? ' sel' : ''}" data-lib="${esc(item.id)}">
+    <button class="lib-card-main" data-act="${item._demo ? 'lib-demo' : 'library-open'}"${item._demo ? ` data-demo="${esc(item.id)}"` : ` data-chat="${esc(item.chatId || '')}"${item.messageId ? ` data-msg="${esc(item.messageId)}"` : ''}`}>
+      ${libPreviewHtml(item)}
+      <span class="lib-meta"><span class="lib-ico lib-ico-${item._type}">${icon(libIconFor(item._type), 16)}</span><span class="lib-copy"><b>${esc(item.title)}</b><span>${sub}</span></span></span>
+    </button>
+    ${state.librarySelect ? `<button class="lib-check${sel ? ' on' : ''}" data-act="lib-pick" data-id="${esc(item.id)}" aria-pressed="${sel ? 'true' : 'false'}">${icon('check',12)}</button>` : ''}
+  </article>`;
 }
 function approvalRows(){
   const rows = [];
+  const seen = new Set();
+  const alwaysFor = key => (state.vault.approvals || []).find(a => a.key && a.key === key);
   state.chats.forEach(c => (c.messages || []).forEach(m => {
-    if (m.kind === 'card' && m.card.type === 'approval')
-      rows.push({ title: m.card.title, status: m.card.status, chat: c.title });
+    if (!(m.kind === 'card' && m.card.type === 'approval')) return;
+    if (m.card.key) seen.add(m.card.key);
+    rows.push({
+      id: m.id,
+      title: m.card.title,
+      status: m.card.status,
+      chat: c.title,
+      chatId: c.id,
+      messageId: m.id,
+      detail: m.card.detail,
+      key: m.card.key,
+      at: m.at || m.createdAt || c.updatedAt || c.createdAt || Date.now(),
+      alwaysId: alwaysFor(m.card.key)?.id,
+    });
   }));
+  (state.vault.approvals || []).forEach(x => {
+    if (x.key && seen.has(x.key)) return;
+    rows.push({
+      id: x.id,
+      title: x.label,
+      status: 'always',
+      detail: '',
+      key: x.key,
+      at: x.at,
+      alwaysId: x.id,
+    });
+  });
+  rows.sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
   return rows;
 }
+function approvalArgs(detail){
+  if (!detail) return null;
+  if (typeof detail === 'object') return detail;
+  const s = String(detail).trim();
+  if (!(s.startsWith('{') || s.startsWith('['))) return null;
+  try { return JSON.parse(s); } catch { return null; }
+}
+function approvalHost(args){
+  const inner = args && (args.args || args);
+  const url = args && (args.url || args.uri || args.href || (inner && (inner.url || inner.uri || inner.href)));
+  if (!url) return '';
+  try { return new URL(url).hostname.replace(/^www\./, ''); }
+  catch {
+    const m = String(url).match(/https?:\/\/([^/\s]+)/i);
+    return m ? m[1].replace(/^www\./, '') : '';
+  }
+}
+function approvalSlug(row, args){
+  return String((args && (args.tool || args.name || args.action)) || row.title || row.key || '').toLowerCase();
+}
+function approvalKind(row){
+  const args = approvalArgs(row.detail);
+  const slug = approvalSlug(row, args);
+  const blob = [row.title, row.key, row.detail, slug].join(' ').toLowerCase();
+  if (/gmail|mail_send|mail_read|inbox|\bemail\b/.test(blob)) return 'gmail';
+  if (/shop_pay|shop_purchase|shop pay|shopify/.test(blob)) return 'wallet';
+  if (/github|gh_|git_/.test(blob)) return 'github';
+  if (approvalHost(args) || /web_fetch|browser|https?:\/\/|web access/.test(blob)) return 'web';
+  return 'action';
+}
+function humanizeSlug(s){
+  return String(s || '')
+    .replace(/^(gmail|github|google|slack|notion)_/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+function approvalHeadline(row){
+  const args = approvalArgs(row.detail);
+  const slug = approvalSlug(row, args);
+  const host = approvalHost(args);
+  if (/shop_purchase|shop pay|shopify/.test(slug + ' ' + String(row.title || '').toLowerCase())) return 'Complete this Shop Pay purchase';
+  if (/gmail/.test(slug) && /send/.test(slug)) return 'Send this email in Gmail';
+  if (/gmail/.test(slug) && /read|fetch|list|get/.test(slug)) return 'Read email in Gmail';
+  if (/mail_send|send.*email|email.*gmail/.test(slug + ' ' + String(row.title || '').toLowerCase())) return 'Send this email in Gmail';
+  if (/mail_read/.test(slug)) return 'Read email in Gmail';
+  if (host && !/web_fetch|browser/.test(slug)) return 'Share info with ' + host;
+  if (/web_fetch|browser|http/.test(slug) || host) return 'Web access for this task';
+  const raw = String(row.title || '').trim();
+  if (raw && !/^[a-z0-9_:-]+$/i.test(raw)) return raw;
+  if (args && args.tool) return humanizeSlug(args.tool);
+  return raw ? humanizeSlug(raw) : 'Action approval';
+}
+function approvalBlurb(row){
+  const prose = String(row.detail || '').trim();
+  if (prose && !(prose.startsWith('{') || prose.startsWith('['))) return prose;
+  const args = approvalArgs(row.detail);
+  const agent = (state.agent && state.agent.name) || 'Your agent';
+  const inner = args && (args.args || args);
+  const to = inner && (inner.recipient_email || inner.to || inner.recipient || inner.email);
+  const host = approvalHost(args);
+  const slug = approvalSlug(row, args);
+  if (to) return `${agent} wants to email ${Array.isArray(to) ? to.join(', ') : to}.`;
+  if (host) return `${agent} wants to look up the contents of ${host}.`;
+  if (/gmail/.test(slug)) return `${agent} wants to use Gmail.`;
+  if (row.title && !/^[a-z0-9_:-]+$/i.test(row.title)) {
+    const lead = row.title.charAt(0).toLowerCase() + row.title.slice(1);
+    return `${agent} wants to ${lead.replace(/\.$/, '')}.`;
+  }
+  const action = humanizeSlug(slug || 'take this action').toLowerCase() || 'take this action';
+  return `${agent} wants to ${action}.`;
+}
+function approvalStatusLine(row){
+  const when = fmtAgo(row.at);
+  const st = String(row.status || '').toLowerCase();
+  let label = 'Allowed';
+  if (st === 'pending') label = 'Needs approval';
+  else if (st === 'denied' || st === 'rejected') label = 'Denied';
+  else if (st === 'always') label = 'Always allowed';
+  else if (st === 'approved' || st === 'allowed' || st === 'ok') label = row.chatId ? 'Allowed for this task' : 'Allowed once';
+  else if (row.alwaysId && !st) label = 'Always allowed';
+  else if (st) label = st.replace(/_/g, ' ');
+  return when ? `${label} · ${when}` : label;
+}
+function approvalIconHtml(row){
+  const kind = approvalKind(row);
+  const toolkit = kind === 'gmail' ? 'gmail' : kind === 'github' ? 'github' : '';
+  const app = toolkit && (state.composioApps || []).find(a => a.toolkit === toolkit);
+  if (app && app.logo) return `<span class="appr-ico brand">${appLogoHtml(app)}</span>`;
+  if (kind === 'gmail') return `<span class="appr-ico brand">${GMAIL_MARK}</span>`;
+  if (kind === 'github') return `<span class="appr-ico">${icon('git',18)}</span>`;
+  if (kind === 'web') return `<span class="appr-ico">${icon('websearch',18)}</span>`;
+  return `<span class="appr-ico">${icon('shieldcheck',18)}</span>`;
+}
+const GMAIL_MARK = '<svg class="appr-brand" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M1.5 6.8v10.5c0 .9.7 1.7 1.7 1.7h2.2V10l6.6 4.8L18.6 10v9h2.2c.9 0 1.7-.8 1.7-1.7V6.8L12 14.2Z"/><path fill="#34A853" d="M20.8 4H18L12 8.3 6 4H3.2L12 10.4Z"/><path fill="#EA4335" d="M1.5 4.1C1.5 3.2 2.3 2.5 3.2 2.5H6v1.6L1.5 7.2Z"/><path fill="#FBBC04" d="M20.8 2.5h-2.8v1.6l4.5 3.1V4.1c0-.9-.8-1.6-1.7-1.6Z"/></svg>';
 
 function paintSide(){
   const a = state.agent;
@@ -1958,12 +2524,17 @@ function paintSide(){
         </button>
       </div>
     </div>`;
-  // usage card: credit usage meter (real billing when signed in)
+  // usage card: credit usage meter (real billing when signed in).
+  // Only touch the DOM when the resolved HTML actually changed (avoids
+  // layout thrash on every paintSide while a billing fetch is in flight).
   try {
+    const ownerAtPaint = billingIdentity();
     getBilling().then(b => {
+      if (billingIdentity() !== ownerAtPaint) return;
       const box = $('#usagecard');
       if (!box) return;
-      box.innerHTML = b ? usageCardHtml(b) : `<button class="usage-unavailable" data-act="nav" data-view="billing">View billing ${icon('aur',14)}</button>`;
+      const next = b ? usageCardHtml(b) : `<button class="usage-unavailable" data-act="nav" data-view="billing">View billing ${icon('aur',14)}</button>`;
+      if (box.dataset.billingHtml !== next){ box.dataset.billingHtml = next; box.innerHTML = next; }
     }).catch(() => {});
   } catch {}
 }
@@ -1983,6 +2554,7 @@ function usageCardHtml(b){
 
 function paintMain(){
   const M = $('#main');
+  if (state.view !== 'chat') stopVoice();
   if (state.view === 'chat') return paintChat(M);
   if (state.view === 'settings') return paintSettings(M);
   if (state.view === 'apps') return paintApps(M);
@@ -2035,6 +2607,7 @@ function syncComposerActions(c){
 function paintChat(M){
   const c = chat();
   if (!c){
+    stopVoice();
     M.innerHTML = `<div class="empty" style="margin:auto">${Mascot.svg(state.agent.color,'idle',90,'mascot-bob')}<div style="margin-top:14px;font-weight:700">No chat open</div><div class="t2">Start one and ${esc(state.agent.name)} is on it.</div><button class="btn" data-act="newchat">${icon('plus',15)} New chat</button></div>`;
     return;
   }
@@ -2065,6 +2638,7 @@ function paintChat(M){
         <div class="pb-row">
           <span class="iconbtn" data-act="attach" title="Attach files">${icon('plus',16)}</span>
           <span style="display:flex;gap:10px;align-items:center">
+            <button type="button" class="voicebtn" id="cvoice" data-act="voice" title="Speak prompt" aria-label="Speak your prompt" aria-pressed="false">${icon('mic',17)}</button>
             <button type="button" class="micbtn" id="cstop" data-act="managed-stop" title="Stop response" aria-label="Stop response">${icon('stop',17)}</button>
             <button type="submit" class="micbtn" id="csend" title="Send" aria-label="Send">${icon('up',17)}</button>
           </span>
@@ -2072,16 +2646,26 @@ function paintChat(M){
       </form>
     </div></div>`;
   M.dataset.chatId = c.id;
-  const th = $('#thread'); th.scrollTop = th.scrollHeight;
+  const th = $('#thread');
+  // Preserve scroll: only jump to bottom when the user was already near it.
+  const nearBottom = th ? (th.scrollHeight - th.scrollTop - th.clientHeight < 120) : true;
+  if (th && nearBottom) requestAnimationFrame(() => { th.scrollTop = th.scrollHeight; });
+  // Animate only the newest message — repainting all rows each time was jank.
+  try {
+    const rows = M.querySelectorAll('#tinner .msg');
+    const last = rows[rows.length - 1];
+    if (last) last.classList.add('msg-new');
+  } catch {}
   updateFloat();
   const prompt = $('#cprompt');
   prompt.value = draft;
   if (focused) { prompt.focus({ preventScroll:true }); prompt.setSelectionRange(selectionStart, selectionEnd); }
-  $('#cform').addEventListener('submit', e => { e.preventDefault(); const v = $('#cprompt').value.trim(); if (v || pendingFiles.length){ $('#cprompt').value = ''; sendPrompt(v, pendingFiles.slice()); clearFiles(); } });
+  $('#cform').addEventListener('submit', e => { e.preventDefault(); const v = $('#cprompt').value.trim(); if (v || pendingFiles.length){ stopVoice(); $('#cprompt').value = ''; sendPrompt(v, pendingFiles.slice()); clearFiles(); } });
   $('#cprompt').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#cform').requestSubmit(); } });
   prompt.addEventListener('input', () => syncComposerActions(c));
   wirePromptBox($('#cform'), $('#cprompt'));
   paintAttachPills();
+  syncVoiceButton();
   if (Engine.managed && signedIn() && !needsOnboarding()) void Engine.recoverTasks?.(makeRT(c));
 }
 
@@ -2144,6 +2728,102 @@ function msgNode(c, m){
   return el('<div></div>');
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
+
+/* Mobile only: hold-to-reveal for Reply / emoji / Copy in agent chat.
+   Desktop keeps hover (.msg:hover .message-actions in CSS). On mobile
+   (<=760px, same breakpoint as CSS) actions stay hidden until the user
+   long-presses a message bubble, then .show-actions reveals them. */
+(function wireMobileHoldActions(){
+  if (window.__lingonHoldWired) return;
+  window.__lingonHoldWired = true;
+  const HOLD_MS = 500;
+  const MOVE_TOL = 10;
+  const isMobileMode = () => {
+    try { return window.matchMedia('(max-width: 760px)').matches; } catch { return false; }
+  };
+  const closeAll = (except) => {
+    document.querySelectorAll('.msg.show-actions').forEach((n) => { if (n !== except) n.classList.remove('show-actions'); });
+  };
+  let timer = null;
+  let targetMsg = null;
+  let startX = 0, startY = 0;
+  let firedAt = 0;
+  const cancel = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (targetMsg) { targetMsg.classList.remove('pressing'); targetMsg = null; }
+  };
+  const fire = () => {
+    timer = null;
+    if (!targetMsg) return;
+    if (!isMobileMode()) { cancel(); return; }
+    // Only text messages render .message-actions (Reply/Copy/emoji).
+    if (!targetMsg.querySelector('.message-actions')) { cancel(); return; }
+    closeAll(targetMsg);
+    targetMsg.classList.remove('pressing');
+    targetMsg.classList.add('show-actions');
+    firedAt = Date.now();
+    try { if (navigator.vibrate) navigator.vibrate(10); } catch {}
+    try { const sel = window.getSelection(); if (sel && sel.rangeCount) sel.removeAllRanges(); } catch {}
+    targetMsg = null;
+  };
+  const begin = (msg, x, y) => {
+    if (!isMobileMode()) return;
+    cancel();
+    if (!msg.querySelector('.message-actions')) return;
+    targetMsg = msg;
+    startX = x; startY = y;
+    msg.classList.add('pressing');
+    timer = setTimeout(fire, HOLD_MS);
+  };
+  document.addEventListener('touchstart', (e) => {
+    if (!isMobileMode()) return;
+    const t = e.touches && e.touches[0];
+    // Tap outside an open message dismisses it (tap on actions/bubble keeps it).
+    if (!e.target.closest || !e.target.closest('.msg.show-actions')) {
+      // Defer so a new long-press starting on another bubble isn't closed instantly.
+      if (!e.target.closest || !e.target.closest('.msg .bub')) closeAll();
+    }
+    const bub = e.target.closest ? e.target.closest('.msg .bub') : null;
+    if (!bub || (e.target.closest && e.target.closest('.message-actions'))) { cancel(); return; }
+    const msg = bub.closest('.msg');
+    if (!msg || !t) return;
+    begin(msg, t.clientX, t.clientY);
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!timer || !targetMsg) return;
+    const t = e.touches && e.touches[0];
+    if (!t) return;
+    if (Math.abs(t.clientX - startX) > MOVE_TOL || Math.abs(t.clientY - startY) > MOVE_TOL) cancel();
+  }, { passive: true });
+  document.addEventListener('touchend', () => { cancel(); }, { passive: true });
+  document.addEventListener('touchcancel', () => { cancel(); }, { passive: true });
+  // Narrow-window desktop testing / stylus: same hold with mouse, mobile breakpoint only.
+  document.addEventListener('mousedown', (e) => {
+    if (!isMobileMode() || e.button !== 0) return;
+    if (e.target.closest && e.target.closest('.message-actions')) return;
+    const bub = e.target.closest ? e.target.closest('.msg .bub') : null;
+    if (!bub) return;
+    const msg = bub.closest('.msg');
+    if (msg) begin(msg, e.clientX, e.clientY);
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!timer || !targetMsg) return;
+    if (Math.abs(e.clientX - startX) > MOVE_TOL || Math.abs(e.clientY - startY) > MOVE_TOL) cancel();
+  });
+  document.addEventListener('mouseup', () => { cancel(); });
+  document.addEventListener('contextmenu', (e) => {
+    // Swallow the native callout when our hold just fired on a bubble.
+    if (Date.now() - firedAt < 800 && e.target.closest && e.target.closest('.msg .bub')) e.preventDefault();
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+  // Tapping far from any open message (e.g. thread padding, composer) closes it.
+  document.addEventListener('click', (e) => {
+    if (!isMobileMode()) return;
+    if (Date.now() - firedAt < 300) return;
+    if (e.target.closest && e.target.closest('.msg.show-actions')) return;
+    closeAll();
+  });
+})();
 
 /* ---------------- cards ---------------- */
 const STCHIP = {
@@ -2294,7 +2974,7 @@ function makeRT(c){
   const active = () => isActive(c);
   const threadInner = () => $('#tinner');
   const scroll = () => { const t = $('#thread'); if (t) t.scrollTop = t.scrollHeight; };
-  const append = n => { if (active() && threadInner()){ const t=$('#thread');const atBottom=!t || t.scrollHeight-t.scrollTop-t.clientHeight<100;threadInner().appendChild(n); if(atBottom)scroll(); updateFloat(); } };
+  const append = n => { if (active() && threadInner()){ const t=$('#thread');const atBottom=!t || t.scrollHeight-t.scrollTop-t.clientHeight<100;try { n.classList && n.classList.add('msg-new'); } catch {} threadInner().appendChild(n); if(atBottom)scroll(); updateFloat(); } };
   const runToken = uid();
   let answerReady = false;
   let currentProgress = null;
@@ -2367,6 +3047,13 @@ function makeRT(c){
         const m = c.messages.find(x => x.card?.managedCallId === event.callId && (!task || x.card.taskId===task.id));
         if (m) { m.card.status = event.status; m.card.choice = event.answer; if(event.ref)m.card.ref=event.ref; replaceNode(c,m); }
       }
+      if (event.type === 'message_retract') {
+        const i = c.messages.findIndex(x => x.managedId === event.id);
+        if (i >= 0) {
+          const gone = c.messages.splice(i, 1)[0];
+          if (active()) document.querySelector(`[data-mid="${gone.id}"]`)?.remove();
+        }
+      }
       if (event.type === 'message' || event.type === 'message_delta') {
         if (!task && event.phase === 'final_answer') {
           answerReady = true;
@@ -2375,20 +3062,28 @@ function makeRT(c){
           if (active()) { updateFloat(); syncComposerActions(c); }
         }
         let m = c.messages.find(x => x.managedId === event.id);
-        if (!m) { m = { id:uid(), managedId:event.id, role:'agent', kind:'text', text:'' }; c.messages.push(m); append(msgNode(c,m)); }
-        m.text = event.type === 'message_delta' ? m.text + event.delta : event.text;
-        replaceNode(c,m);
+        if (!m) { m = { id:uid(), managedId:event.id, role:'agent', kind:'text', text:'' }; c.messages.push(m); if (active()) append(msgNode(c,m)); }
+        if (event.type === 'message_delta') {
+          m.text += event.delta || '';
+          if (active()) streamPaint(c, m);
+        } else {
+          m.text = event.text;
+          replaceNode(c, m);
+        }
       }
       if (event.type === 'card') {
         let m = c.messages.find(x => x.managedId === event.id);
         const card = { ...event.card, managedCallId:event.callId, taskId:task?.id, taskVersion:task?.version };
         if (!m) { m = { id:uid(), managedId:event.id, kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
         else { m.card = card; replaceNode(c,m); }
-        if (card.type === 'memory' && !state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
+        if (card.type === 'memory') {
+          if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='settings'&&state.settingsTab==='memory'&&$('#main'))paintSettings($('#main'));}).catch(()=>{});
+          else if (!state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
+        }
         if (card.type === 'canvas' && active() && !task) {
           c.canvasSelectedMessageId = m.id;
           state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-          $('#app')?.classList.remove('nocanvas');
+          $('#app')?.classList.remove('nocanvas'); syncShellClasses();
           paintCanvas();
         }
         else if (active() && state.canvasOpen && c.canvasSelectedMessageId && ['browser','computer'].includes(card.type)) paintCanvas();
@@ -2399,7 +3094,7 @@ function makeRT(c){
         c.messages.push(m); append(msgNode(c,m));
         rt.trace('alert', event.error);
       }
-      save();
+      if (event.type !== 'message_delta') save();
       if (event.type === 'session' && active()) syncComposerActions(c);
       if (['done','paused','error','stopped'].includes(event.type) && active()) { invalidateBilling(); paintMain(); paintSide(); }
     },
@@ -2411,7 +3106,7 @@ function makeRT(c){
       state.subAgentDraft = String(prompt || '').slice(0, 4000);
       state.subAgentComposer = true;
       state.canvasTab = 'subagents'; state.canvasOpen = true;
-      const app = $('#app'); if (app) app.classList.remove('nocanvas');
+      const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
       save(); paintCanvas(); refreshSubAgents();
     },
     remember(text, src){ state.memory.unshift({ id: uid(), text, src: src || 'chat', at: Date.now() }); save(); },
@@ -2423,7 +3118,7 @@ function makeRT(c){
       c.artifact = a;
       if(!opts.background){c.canvasSelectedMessageId = null; delete c.canvasSelectedFileIndex;}
       if(active()) {
-        if(!opts.background){state.canvasOpen = true;state.canvasTab = 'canvas';const app = $('#app');if(app)app.classList.remove('nocanvas');}
+        if(!opts.background){state.canvasOpen = true;state.canvasTab = 'canvas';const app = $('#app');if(app)app.classList.remove('nocanvas'); syncShellClasses();}
         if(state.canvasOpen && state.canvasTab==='canvas')paintCanvas();
       }
       save();
@@ -2590,6 +3285,25 @@ function makeRT(c){
   return rt;
 }
 
+const streamPaintPending = new WeakMap();
+function streamPaint(c, m){
+  const old = document.querySelector(`[data-mid="${m.id}"]`);
+  if (!old) { replaceNode(c, m); return; }
+  if (streamPaintPending.get(m)) return;
+  const run = () => {
+    streamPaintPending.delete(m);
+    const node = document.querySelector(`[data-mid="${m.id}"]`);
+    const bodyEl = node?.querySelector('.md');
+    if (!bodyEl || !bodyEl.isConnected) { replaceNode(c, m); return; }
+    bodyEl.innerHTML = md(m.text);
+    const t = $('#thread');
+    if (t && t.scrollHeight - t.scrollTop - t.clientHeight < 100) t.scrollTop = t.scrollHeight;
+  };
+  streamPaintPending.set(m, true);
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else run();
+}
+
 function replaceNode(c, m){
   const old = document.querySelector(`[data-mid="${m.id}"]`);
   if (old) old.replaceWith(msgNode(c, m));
@@ -2723,7 +3437,7 @@ function canvasHeroHTML(){
   const a = state.agent;
   if (!a) return '';
   const editing = !!state.agentEdit;
-  const connection = vmConnectionView();
+  const connection = workspaceConnectionView();
   return `<div class="agent-hero">
     <div class="agent-hero-fig">
       ${Mascot.svg(a.color, editing ? 'happy' : 'idle', 84)}
@@ -2736,34 +3450,131 @@ function canvasHeroHTML(){
   </div>`;
 }
 function libraryTabContent(){
-  const arts = artifactRows();
-  return `<div class="aslider-sec"><label class="alabel">Artifacts &amp; files (${arts.length})</label>
-    <div class="kv">${arts.map(r => `<div class="row"><span style="color:var(--mut)">${icon(r.kind === 'file' ? 'file' : 'spark',15)}</span><div><b>${esc(r.title)}</b><div class="sub">${esc(r.kind)} · from “${esc(r.chat)}”</div></div><div class="rgt"><button class="btn ghost small" data-act="library-open" data-chat="${r.chatId}"${r.messageId ? ` data-msg="${r.messageId}"` : ''}>Open</button></div></div>`).join('') || '<div class="row mut">No artifacts or files yet.</div>'}</div>
-    </div>`;
+  const cat = state.libraryCat || 'all';
+  const items = libraryFiltered();
+  const all = libraryItems();
+  const count = (c) => c === 'all' ? all.length : c === 'images' ? all.filter(x => x._type === 'image').length : c === 'videos' ? all.filter(x => x._type === 'video').length : c === 'podcasts' ? all.filter(x => x._type === 'audio').length : c === 'documents' ? all.filter(x => x._type === 'document').length : c === 'web' ? all.filter(x => x._type === 'web').length : c === 'artifacts' ? all.filter(x => !['image','video','audio'].includes(x._type)).length : 0;
+  const titles = { all:'All artifacts', artifacts:'Artifacts', documents:'Documents', web:'Web artifacts', images:'Images', videos:'Videos', podcasts:'Podcasts', system:'System files' };
+  const recent = items.slice(0, 4);
+  const rest = items.slice(4);
+  const sideBtn = (id, ic, label) => `<button class="lib-nav${cat === id ? ' on' : ''}" data-act="libcat" data-cat="${id}">${icon(ic,15)}<span>${label}</span>${id === 'all' || id === 'system' ? '' : `<em>${count(id)}</em>`}</button>`;
+  const gridCls = state.libraryLayout === 'list' ? 'lib-grid list' : 'lib-grid';
+  return `<div class="lib-layout">
+    <aside class="lib-side">
+      <label class="lib-search">${icon('search',15)}<input id="libsearch" class="field lib-search-in" placeholder="Search" value="${esc(state.librarySearch || '')}"></label>
+      <div class="lib-group">Artifacts</div>
+      ${sideBtn('all','grid','All artifacts')}
+      ${sideBtn('documents','doc','Documents')}
+      ${sideBtn('web','web','Web artifacts')}
+      <div class="lib-group">Media</div>
+      ${sideBtn('images','image','Images')}
+      ${sideBtn('videos','video','Videos')}
+      ${sideBtn('podcasts','podcast','Podcasts')}
+      <div class="lib-side-foot">${sideBtn('system','folder','System files')}</div>
+    </aside>
+    <section class="lib-main">
+      <div class="lib-head"><h2>${esc(titles[cat] || 'All artifacts')}</h2>
+        <span class="lib-actions">
+          ${state.librarySelect ? `<button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete">${icon('trash',13)} Delete (${(state.librarySelected || []).length})</button>` : `<button class="btn ghost small" data-act="lib-select">Select</button>`}
+          <button class="iconbtn" data-act="lib-layout" title="Toggle grid / list">${icon('list',16)}</button>
+          <button class="btn lib-create small" data-act="lib-create">${icon('plus',14)} Create an artifact</button>
+        </span>
+      </div>
+      ${!items.length ? `<div class="lib-empty card">${icon('folder',22)}<b>No ${esc((titles[cat] || 'files').toLowerCase())} yet</b><span>Images, videos and audio land under Media (jpg, png, mp4, mov, mp3…). Everything else lives under Artifacts.</span><button class="btn small lib-create" data-act="lib-create">${icon('plus',14)} Create an artifact</button></div>` : `
+      <div class="lib-sec">Recent</div>
+      <div class="${gridCls}">${recent.map(libCardHtml).join('')}</div>
+      ${rest.length ? `<div class="lib-sec">${esc(titles[cat] || 'All artifacts')}</div><div class="${gridCls}">${rest.map(libCardHtml).join('')}</div>` : ''}`}
+    </section>
+  </div>`;
 }
 function approvalsTabContent(){
   const ap = approvalRows();
-  return `<div class="aslider-sec"><label class="alabel">Approval history (${ap.length + state.vault.approvals.length})</label>
-    <div class="kv">
-      ${state.vault.approvals.map(x => `<div class="row"><span style="color:var(--green)">${icon('check',15)}</span><div><b>${esc(x.label)}</b><div class="sub">always allowed · ${fmtWhen(x.at)}</div></div><div class="rgt"><button class="btn ghost small" data-act="revoke" data-id="${x.id}">Revoke</button></div></div>`).join('')}
-      ${ap.map(x => `<div class="row"><span style="color:var(--mut)">${icon('shieldcheck',15)}</span><div><b>${esc(x.title)}</b><div class="sub">${esc(x.status)} · “${esc(x.chat)}”</div></div></div>`).join('') || (state.vault.approvals.length ? '' : '<div class="row mut">No approvals yet — sensitive actions will pause for you here.</div>')}
-    </div></div>`;
+  const openId = state.approvalOpenId;
+  const items = ap.map(x => {
+    const open = openId && openId === x.id;
+    const more = [
+      x.chat ? `<div class="appr-more-line">From “${esc(x.chat)}”</div>` : '',
+      x.chatId ? `<button class="btn ghost small" data-act="openchat" data-id="${x.chatId}">Open chat</button>` : '',
+      x.alwaysId ? `<button class="btn ghost small" data-act="revoke" data-id="${x.alwaysId}">Revoke</button>` : '',
+    ].join('');
+    return `<article class="appr-item${open ? ' open' : ''}" data-id="${esc(x.id)}">
+      <button type="button" class="appr-row" data-act="appr-toggle" data-id="${esc(x.id)}" aria-expanded="${open ? 'true' : 'false'}">
+        ${approvalIconHtml(x)}
+        <span class="appr-copy">
+          <b>${esc(approvalHeadline(x))}</b>
+          <span class="appr-desc">${esc(approvalBlurb(x))}</span>
+          <span class="appr-meta">${esc(approvalStatusLine(x))}</span>
+        </span>
+        <span class="appr-chev">${icon('chev',16)}</span>
+      </button>
+      <div class="appr-more">${more}</div>
+    </article>`;
+  }).join('');
+  return `<div class="appr-panel">
+    <h3 class="appr-heading">Approvals history</h3>
+    ${items || '<div class="appr-empty">No approvals yet — sensitive actions will pause for you here.</div>'}
+  </div>`;
 }
 
+function shopPaySnapshot(){
+  return state.shopPay || { configured:false, connected:false, email:null, dailyLimitUsd:200, remainingUsd:null };
+}
+function refreshShopPay(force = false){
+  const owner = billingIdentity();
+  if (!owner) return Promise.resolve();
+  if (!force && state.shopPay && !state.shopPayLoading) return Promise.resolve();
+  state.shopPayLoading = true;
+  return window.LingonAuth.api('/api/shop-pay').then((j) => {
+    if (owner !== billingIdentity()) return;
+    state.shopPay = j.shopPay || null;
+    state.shopPayOrders = Array.isArray(j.orders) ? j.orders : [];
+  }).catch((e) => {
+    if (owner === billingIdentity()) toast(e.message || 'Could not load Shop Pay.');
+  }).finally(() => {
+    if (owner !== billingIdentity()) return;
+    state.shopPayLoading = false;
+    save();
+    if (state.canvasOpen && state.canvasTab === 'payments' && $('#cbody')) $('#cbody').innerHTML = paymentsTabContent();
+  });
+}
 function paymentsTabContent(){
   const stripe = composioAppByToolkit('stripe');
   const connected = !!stripe?.connected;
   const checking = state.composioLoading;
   const status = checking ? 'Checking…' : connected ? 'Connected' : stripe ? 'Ready to connect' : 'Unavailable';
+  const shop = shopPaySnapshot();
+  const shopStatus = state.shopPayLoading ? 'Checking…' : !shop.configured ? 'Unavailable' : shop.connected ? 'Connected' : 'Ready to connect';
+  const orders = (state.shopPayOrders || []).slice(0, 5).map((o) => `<li><b>${esc(o.title || o.merchant || 'Order')}</b><span>${esc(o.status)} · ${o.amount != null ? '$' + Number(o.amount).toFixed(2) : ''}</span>${o.continueUrl ? `<a href="${esc(o.continueUrl)}" target="_blank" rel="noopener">Finish in Shop Pay</a>` : ''}</li>`).join('');
   return `<div class="payments-panel">
     <div class="payments-intro">
       <span class="payments-intro-icon">${icon('wallet',24)}</span>
-      <h2>Let your agent earn for you</h2>
-      <p>Connect payment tools so your agent can help with the work that brings in revenue.</p>
+      <h2>Let your agent pay and earn for you</h2>
+      <p>Connect Shop Pay so the agent can check out on Shopify stores through UCP. Card numbers stay in Shop Pay. Every purchase still pauses for your approval.</p>
     </div>
     <article class="payments-option">
       <div class="payments-option-head">
-        <span class="payments-option-icon stripe-mark">${stripe ? appLogoHtml(stripe) : 'S'}</span>
+        <span class="payments-option-icon shop-pay-mark" title="Shop Pay" aria-label="Shop Pay">${shopPayBrandMark()}</span>
+        <div>
+          <h3>Shop Pay</h3>
+          <p>${shop.connected ? `Linked as ${esc(shop.email || 'your Shop account')}. Remaining today: $${Number(shop.remainingUsd != null ? shop.remainingUsd : shop.dailyLimitUsd).toFixed(2)}.` : 'Connect Shop so the agent can search Shopify catalogs and complete approved checkouts with Shop Pay.'}</p>
+        </div>
+        <span class="chip ${shop.connected ? 'green' : ''}">${shopStatus}</span>
+      </div>
+      <div class="payments-option-actions">
+        ${shop.connected
+          ? `<button class="btn ghost small" data-act="shop-pay-disconnect">Disconnect</button>
+             <label class="payments-limit">Daily limit <input class="field tiny" id="shoppaylimit" type="number" min="1" max="2000" step="1" value="${esc(shop.dailyLimitUsd || 200)}"></label>
+             <button class="btn ghost small" data-act="shop-pay-limit">Save limit</button>`
+          : shop.configured
+            ? `<button class="btn small" data-act="shop-pay-connect">Connect Shop Pay</button>`
+            : `<button class="btn small" disabled>Connect Shop Pay</button><span class="payments-note">${state.shopPayLoading ? 'Checking Shop Pay…' : 'Add SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET from the Shopify Dev Dashboard Catalogs key.'}</span>`}
+        <button class="btn ghost small" data-act="shop-pay-refresh" aria-label="Refresh Shop Pay">${icon('refresh',14)} Refresh</button>
+      </div>
+      ${orders ? `<ul class="payments-orders">${orders}</ul>` : ''}
+    </article>
+    <article class="payments-option">
+      <div class="payments-option-head">
+        <span class="payments-option-icon stripe-mark" title="Stripe" aria-label="Stripe">${stripeIconHtml(stripe)}</span>
         <div><h3>Stripe</h3><p>Connect Stripe for payment and revenue tasks.</p></div>
         <span class="chip ${connected ? 'green' : ''}">${status}</span>
       </div>
@@ -2774,13 +3585,6 @@ function paymentsTabContent(){
             ? `<button class="btn small" data-act="connect-app" data-toolkit="stripe" data-auth="${esc(stripe.authConfigId || '')}">Connect Stripe</button>`
             : `<button class="btn small" disabled>Connect Stripe</button><span class="payments-note">${checking ? 'Checking Stripe availability…' : 'Stripe connection is not available on this server yet.'}</span>`}
         <button class="btn ghost small" data-act="refresh-apps" aria-label="Refresh Stripe connection">${icon('refresh',14)} Refresh</button>
-      </div>
-    </article>
-    <article class="payments-option payments-option-soon">
-      <div class="payments-option-head">
-        <span class="payments-option-icon">${icon('card',20)}</span>
-        <div><h3>Card</h3><p>Let your agent spend for you.</p></div>
-        <span class="chip">Coming soon</span>
       </div>
     </article>
   </div>`;
@@ -2870,20 +3674,62 @@ function paintLive(body, c, selectedId){
     <button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>
     <div class="livewrap" id="livewrap">
       <div class="livebar"><span class="url" id="liveurl">connecting…</span><span class="chip purple" id="livestate">connecting</span></div>
-      <div class="liveview" id="liveview">
-        <img id="liveimg" alt="Live browser"${poster ? ` src="${poster}"` : ''}>
+      <div class="liveview" id="liveview" tabindex="0" aria-label="Live browser workspace">
+        <canvas id="livecanvas" width="1280" height="900" aria-label="Live browser stream"></canvas>
+        <img id="liveimg" alt="Browser preview" hidden${poster ? ` src="${poster}"` : ''}>
         <div class="bigcursor" id="bigcursor"></div>
       </div>
       <div class="pctitle">${icon('term',13)} Read-only tool output</div>
       <div class="term mini" id="pcout" style="margin-top:6px">${terms.length ? terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('') : '<div class="mut">No runs yet in this chat.</div>'}</div>
       <div class="controlbar">
         <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
-        <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">streaming the real page</div></div>
+        <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">live interactive stream — the agent is connected to the VM</div></div>
         <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
         <button class="btn ghost small" data-act="canvas-back">Back</button>
       </div>
     </div>`;
   liveConnect(id);
+  if (poster) drawLiveFrame(poster);
+}
+let liveFrameBusy = false, liveFramePending = null;
+function drawLiveFrame(data){
+  liveFramePending = data;
+  if (liveFrameBusy) return;
+  liveFrameBusy = true;
+  const consume = () => {
+    const frame = liveFramePending;
+    liveFramePending = null;
+    const canvas = $('#livecanvas'), img = $('#liveimg');
+    if (!canvas || frame == null) { liveFrameBusy = false; return; }
+    const finish = () => {
+      if (liveFramePending != null) consume();
+      else liveFrameBusy = false;
+    };
+    const draw = (source) => {
+      try {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+        if (source.close) source.close();
+        window.__liveFrames = (window.__liveFrames || 0) + 1;
+      } catch {}
+      finish();
+    };
+    if (typeof frame === 'string' && frame.startsWith('data:')) {
+      const image = new Image();
+      image.onload = () => draw(image);
+      image.onerror = finish;
+      image.src = frame;
+      if (img) img.src = frame;
+      return;
+    }
+    const blob = frame instanceof Blob ? frame : new Blob([frame], { type: 'image/jpeg' });
+    if (window.createImageBitmap) createImageBitmap(blob).then(draw).catch(finish);
+    else {
+      const image = new Image(); image.onload = () => draw(image); image.onerror = finish; image.src = URL.createObjectURL(blob);
+    }
+  };
+  consume();
 }
 function liveConnect(id){
   if (liveWS && liveIdShown === id){ bindLiveInput(liveWS); liveState(liveControl ? 'user' : 'idle'); pcConnect(); return; }
@@ -2893,10 +3739,14 @@ function liveConnect(id){
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(proto + '//' + location.host + '/ws/live/' + id + '?token=' + encodeURIComponent(sess.access_token));
   liveWS = ws; liveIdShown = id; liveControl = false;
-  const img = () => $('#liveimg'), wrap = () => $('#livewrap'), st = () => $('#livestate');
+  ws.binaryType = 'arraybuffer';
+  const wrap = () => $('#livewrap'), st = () => $('#livestate');
   ws.onmessage = (ev) => {
+    if (typeof ev.data !== 'string') { drawLiveFrame(ev.data); return; }
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.frame && img()){ img().src = 'data:image/jpeg;base64,' + m.frame; window.__liveFrames = (window.__liveFrames || 0) + 1; }
+    if (m.frame) {
+      try { const bytes = Uint8Array.from(atob(m.frame), (ch) => ch.charCodeAt(0)); drawLiveFrame(bytes); } catch {}
+    }
     if (m.hello && $('#liveurl')) $('#liveurl').textContent = m.url || m.hello;
     if (m.state) liveState(m.state, m);
   };
@@ -2956,6 +3806,7 @@ function liveState(s, m){
   const wrap = $('#livewrap'), st = $('#livestate'), sub = $('#livesub'), btn = $('#takebtn');
   if (m && m.url && $('#liveurl')) $('#liveurl').textContent = m.url;
   if (m && m.title && $('#livesub') && !liveControl) sub.textContent = m.title;
+  if (m && m.transport && sub && !liveControl) sub.textContent = m.transport === 'cdp-screencast' ? 'live interactive stream — the agent is connected to the VM' : 'compatibility preview — live relay is not connected';
   if (wrap) wrap.classList.toggle('working', s === 'working' && !liveControl);
   if (st) st.textContent = liveControl ? 'you drive' : s;
   if (btn) btn.textContent = liveControl ? 'Give back' : 'Take over';
@@ -2975,8 +3826,12 @@ async function liveTakeover(){
   } catch (e) { toast(e.message); }
 }
 async function liveSend(ev){
-  // Input goes over REST (auth-checked); frames come over WS.
+  // Input shares the authenticated live socket for low-latency pointer and
+  // keyboard control. REST remains a fallback for older sessions.
   const id = liveIdShown; if (!id) return;
+  if (liveWS && liveWS.readyState === 1){
+    try { liveWS.send(JSON.stringify({ type:'input', ev })); return; } catch {}
+  }
   try {
     const j = await window.LingonAuth.api('/api/live/input', { method: 'POST', body: JSON.stringify({ liveId: id, ev }) });
     if (j.url && $('#liveurl')) $('#liveurl').textContent = j.url;
@@ -3276,6 +4131,7 @@ function paintCanvas(){
   }
   if (top === 'payments'){
     body.innerHTML = paymentsTabContent();
+    if (signedIn()) refreshShopPay();
     if (!state.composioLoading && signedIn()) refreshComposioApps();
     return;
   }
@@ -3378,7 +4234,7 @@ function paintVault(M){
     body = `
     <div class="warnband">${icon('shieldcheck',18)}<div><b>Your secrets remain protected.</b>Values are masked in chat and activity history. Reveal below is for your eyes alone, on this device.</div></div>
     <div class="kv">
-      ${v.secrets.map(s => `<div class="row">
+      ${v.secrets.map(s => `<div class="row secret-row">
         <span style="color:var(--mut)">${icon('lock',16)}</span>
         <div><b class="mono">${esc(s.name)}</b><div class="sub">${esc(s.ref)} · added ${fmtWhen(s.at)}</div></div>
         <div class="rgt">
@@ -3434,14 +4290,13 @@ function paintVault(M){
 }
 
 
+function memoryFile(m){return m.category==='user'?'About you · USER.md':m.category==='daily'?`Daily note · ${new Date(m.observedAt || m.at || Date.now()).toISOString().slice(0,10)}`:'Long-term · MEMORY.md';}
+function memorySource(m){return ({explicit:'You asked to remember this',auto:'Saved automatically',auto_correction:'Updated automatically',agent:'Saved by your agent',agent_correction:'Corrected by your agent',user:'Added by you',user_edit:'Edited by you',onboarding:'Added during setup'})[m.src] || 'Account memory';}
 function paintMemory(M){
   M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Memory</h1><span class="chip">${icon('book',12)} ${state.memory.length} stored</span></div>
-    <p class="psub">What ${esc(state.agent.name)} remembers across chats. Delete anything, anytime.</p>
-    <div class="kv">${state.memory.map(m => `<div class="row">
-      <span style="color:var(--mut)">${icon('book',16)}</span>
-      <div><b style="font-weight:600">${esc(m.text)}</b><div class="sub">${esc(m.src)} · ${fmtWhen(m.at)}</div></div>
-      <div class="rgt"><button class="iconbtn" data-act="delmem" data-id="${m.id}">${icon('trash',14)}</button></div></div>`).join('') || '<div class="row mut">Nothing remembered yet.</div>'}</div>
+    <div class="phead"><h1>Memory</h1><span class="chip">${icon('book',12)} ${state.memoryTotal || state.memory.length} active</span></div>
+    <p class="psub">What ${esc(state.agent.name)} remembers across chats. Relevant entries are recalled automatically; you can add, correct, search, or forget entries here. Deleting a memory removes its earlier versions; past chat messages remain in chat history.</p>
+    ${settingsMemoryBody()}
   </div></div>`;
 }
 
@@ -3498,14 +4353,23 @@ function settingsMemoryBody(){
   return `<section class="memory-root">
       <div class="memory-root-main">
         <span class="memory-root-icon">${icon('folder',22)}</span>
-        <div><span class="memory-kicker">Root memory</span><b class="mono">/memory</b><p>Account-scoped notes your agent uses across your chats.</p></div>
-        <span class="chip green">${state.memory.length} remembered</span>
+        <div><span class="memory-kicker">Durable memory</span><b class="mono">/memory</b><p>Saved when you ask or when your agent identifies a useful durable fact. Only relevant entries are loaded into each chat.</p></div>
+        <span class="chip green">${state.memoryTotal || state.memory.length} active</span>
       </div>
+      <div class="row" style="background:var(--panel);gap:8px;flex-wrap:wrap">
+        <input class="field" id="memory-new" placeholder="Add something your agent should remember" maxlength="2000" style="flex:1;min-width:220px">
+        <select class="field" id="memory-category" style="max-width:150px"><option value="user">About me</option><option value="long_term">Long-term</option><option value="daily">Daily note</option></select>
+        <button class="btn small" data-act="addmem">${icon('plus',14)} Add</button>
+      </div>
+      <div class="row" style="background:var(--panel);gap:8px"><input class="field" id="memory-search" value="${esc(state.memoryQuery || '')}" placeholder="Search all memory" style="flex:1"><button class="btn soft small" data-act="searchmem">Search</button>${state.memoryQuery?'<button class="btn ghost small" data-act="clearmemsearch">Clear</button>':''}</div>
+      ${state.memoryQuery?`<p class="sub" style="margin:8px 0">Showing ${state.memory.length} closest matches from ${state.memoryTotal || 0} active memories. Refine the search to find more.</p>`:''}
       <div class="memory-items">${state.memory.map(m => `<div class="memory-entry">
         <span class="memory-file-icon">${icon('file',16)}</span>
-        <div class="memory-entry-copy"><b>${esc(m.text)}</b><div>${esc(m.src || 'account')} · ${fmtWhen(m.at)}</div></div>
+        <div class="memory-entry-copy"><b>${esc(m.text)}</b><div><span class="mono">${esc(memoryFile(m))}</span> · ${esc(memorySource(m))} · ${fmtWhen(m.updatedAt || m.at)}</div></div>
+        <button class="iconbtn" data-act="editmem" data-id="${m.id}" title="Correct memory">${icon('edit',14)}</button>
         <button class="iconbtn" data-act="delmem" data-id="${m.id}" title="Delete memory">${icon('trash',14)}</button>
-      </div>`).join('') || `<div class="memory-empty"><span class="memory-file-icon">${icon('book',16)}</span><div><b>Nothing remembered yet</b><p>Ask your agent to remember a preference or detail and it will appear here.</p></div></div>`}</div>
+      </div>`).join('') || `<div class="memory-empty"><span class="memory-file-icon">${icon('book',16)}</span><div><b>${state.memoryQuery?'No matching memories':'Nothing remembered yet'}</b><p>${state.memoryQuery?'Try another search.':'Tell your agent about yourself naturally, or add an entry above.'}</p></div></div>`}</div>
+      ${!state.memoryQuery && state.memory.length < state.memoryTotal?`<button class="btn soft small" data-act="moremem" style="margin:12px">Show more (${state.memory.length} of ${state.memoryTotal})</button>`:''}
     </section>`;
 }
 function centerActiveSeg(container){
@@ -3517,6 +4381,28 @@ function centerActiveSeg(container){
   });
 }
 function centerActiveSettingsTab(container){ centerActiveSeg(container); }
+function editableAgentDocuments(){
+  const a=state.agent || {name:'Lingon',pers:'Playful'};
+  return state.agentContext?.documents || {
+    identity:`# Identity\n\nName: ${a.name}\nStyle: ${a.pers}`,
+    soul:'# Soul\n\nBe warm, candid, practical, and reliable. Adapt detail to the user and keep promises explicit.',
+    user:'# User\n\nAdd stable preferences, background, language, and timezone here.',
+    agents:'# Working agreement\n\nPlan substantial work, verify results with evidence, surface uncertainty, and ask before irreversible external actions.',
+  };
+}
+let agentContextSavePending=null,agentContextSaveVersion=0,queuedAgentDocuments=null;
+async function persistAgentContext(documents){
+  if(!window.LingonAuth.signedIn())return;
+  agentContextSaveVersion++;if(documents)queuedAgentDocuments=documents;
+  if(agentContextSavePending)return agentContextSavePending;
+  agentContextSavePending=(async()=>{let completed=0;do{
+    const target=agentContextSaveVersion,current=state.agentContext || {revision:0,documents:editableAgentDocuments()};
+    const nextDocuments=queuedAgentDocuments || current.documents;queuedAgentDocuments=null;
+    const saved=await window.LingonAuth.api('/api/agent-context',{method:'PUT',body:JSON.stringify({agent:state.agent,documents:nextDocuments,revision:current.revision})});
+    state.agentContext=saved;if(saved.agent)state.agent={...state.agent,...saved.agent};save();completed=target;
+  }while(completed<agentContextSaveVersion);})();
+  try{return await agentContextSavePending;}finally{agentContextSavePending=null;}
+}
 function paintSettings(M){
   const a = state.agent;
   const u = currentUser();
@@ -3524,6 +4410,8 @@ function paintSettings(M){
   const curTheme = THEMES.find(t => t.id === (state.theme || 'grey')) || THEMES[0];
   let body = '';
   if (tab === 'profiles'){
+    const docs=editableAgentDocuments();
+    const memoryDoc=(`# Memory\n\n${(state.memory || []).filter(m=>!m.category || m.category==='long_term').map(m=>`- ${m.text} <!-- ${memorySource(m)} -->`).join('\n') || 'No long-term memories yet.'}`).slice(0,12000);
     body = `
     <div class="profiletop">
       <div><span class="uava big">${esc((u.name || 'U').slice(0, 1).toUpperCase())}</span></div>
@@ -3542,6 +4430,19 @@ function paintSettings(M){
           <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
         </div>
       </div>
+      <div class="kv" style="margin-top:12px">
+        <div class="row"><span style="color:var(--mut)">${icon('mail',16)}</span><div><b>Agent mail</b><div class="sub">${mailCache?.address ? esc(mailCache.address) : 'Open Mail to see the agent’s address'}</div></div></div>
+        <div class="row"><span style="color:var(--mut)">${icon('wallet',16)}</span><div><b>Shop Pay</b><div class="sub">${state.shopPay?.connected ? 'Connected for approved purchases' : state.shopPay?.configured ? 'Ready to connect in Payments' : 'Payment connection unavailable'}</div></div></div>
+      </div>
+    </div>
+    <div class="psec"><h3>${icon('book',15)} Agent context</h3>
+      <p class="sub" style="margin-bottom:12px">These documents follow your agent across devices. Your written USER.md and automatically saved facts both inform replies. Manage saved facts under Memory. Permissions remain enforced separately.</p>
+      ${[['identity','IDENTITY.md'],['soul','SOUL.md'],['user','USER.md'],['agents','AGENTS.md']].map(([key,label])=>`<details style="margin:8px 0"><summary style="cursor:pointer;font-weight:750">${label}</summary><textarea class="field agent-doc" data-doc="${key}" rows="6" maxlength="8000" style="width:100%;margin-top:8px;resize:vertical">${esc(docs[key] || '')}</textarea></details>`).join('')}
+      <details style="margin:8px 0"><summary style="cursor:pointer;font-weight:750">MEMORY.md preview</summary><textarea class="field" rows="7" readonly style="width:100%;margin-top:8px;resize:vertical">${esc(memoryDoc)}</textarea><button class="btn soft small" data-act="stab" data-t="memory" style="margin-top:8px">Manage memories</button></details>
+      <details style="margin:8px 0"><summary style="cursor:pointer;font-weight:750">How your agent uses context</summary>
+        <div class="sub" style="margin-top:10px;line-height:1.55"><b>Every reply:</b> agent name, style and color; own mail and Shop Pay capabilities; IDENTITY.md, SOUL.md, USER.md and AGENTS.md.<br><b>When relevant:</b> selected MEMORY.md facts, stable user facts and dated memory notes.<br><b>When needed:</b> small, structured tool definitions are loaded on demand. There is no editable TOOLS.md, so unused tools do not slow replies or consume prompt space.<br><b>Always separate:</b> permissions, owner approvals, secrets and the full-OS sandbox are enforced by the server.</div>
+      </details>
+      <button class="btn dark small" data-act="save-agent-docs">Save agent context</button>
     </div>
     <div class="psec"><h3>${icon('star',15)} Theme</h3>
       <div class="kv"><div class="row" style="align-items:flex-start"><span style="color:var(--mut)">${icon('star',16)}</span>
@@ -3560,17 +4461,23 @@ function paintSettings(M){
   } else if (tab === 'library'){
     body = libraryTabContent();
   } else if (tab === 'browser'){
-    const bp = state.browserProfile || { profile:'Default', sandbox:true, allowlist:true };
+    const saved = workspacePresenceInfo?.persistence?.browserProfile;
+    const browserStorage = saved === 'private-workspace-backup' ? 'Private account backup' : saved === 'vm-os-disk-only' ? 'On the dedicated VM only' : 'Available when the full-OS workspace is configured';
+    const worker = workspacePresenceInfo?.worker;
+    const presenceText = worker?.status === 'on-demand-with-vm'
+      ? 'Shell and code use a hardened worker container inside your dedicated VM. Both start only for an active compute task.'
+      : 'Agent chat is ready from account storage. Compute tools become available after the dedicated VM is configured.';
     body = `<div class="kv">
-      <div class="row"><span style="color:var(--mut)">${icon('globe',16)}</span><div><b>Profile</b><div class="sub">Sandboxed browser identity for this device</div></div>
-      <div class="rgt"><input class="field" id="bprof" value="${esc(bp.profile)}" style="max-width:180px"></div></div>
+      <div class="row"><span style="color:var(--mut)">${icon('globe',16)}</span><div><b>Agent browser</b><div class="sub">Isolated from your personal browser. The full OS starts only when browser or computer work needs it.</div></div></div>
+      <div class="row"><span style="color:var(--mut)">${icon('folder',16)}</span><div><b>Browser data</b><div class="sub">${browserStorage}.${saved === 'private-workspace-backup' ? ' The profile and workspace files are backed up after completed computer work and before shutdown.' : ''}</div></div></div>
+      <div class="row"><span style="color:var(--mut)">${icon('box',16)}</span><div><b>Workspace compute</b><div class="sub">${presenceText} The container shares the VM’s compute and does not create a second always-on container service.</div></div></div>
     </div>`;
   } else if (tab === 'billing'){
     body = billingBodyHtml();
   }
-  M.innerHTML = `<div class="page"><div class="pageinner">
+  M.innerHTML = `<div class="page${tab === 'library' ? ' lib-page' : ''}"><div class="pageinner${tab === 'library' ? ' lib-pageinner' : ''}">
     <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : 'Profiles, theme, secrets, memory, library, browser and billing — all scoped to your account, never shared.'}</p>
+    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : tab === 'library' ? 'Artifacts live here. Media is jpg, png, mp4, mov, mp3 and friends — everything else is an artifact.' : 'Profiles, theme, secrets, memory, library, browser and billing — all scoped to your account, never shared.'}</p>
     <div class="seg">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles">${icon('user',14)} Profiles</button>
       <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets">${icon('key',14)} Secrets</button>
@@ -3582,10 +4489,21 @@ function paintSettings(M){
     ${body}
   </div></div>`;
   centerActiveSettingsTab(M);
+  const libSearch = $('#libsearch');
+  if (libSearch){
+    libSearch.addEventListener('input', (e) => {
+      state.librarySearch = e.target.value; save();
+      const pos = e.target.selectionStart;
+      paintSettings($('#main'));
+      const again = $('#libsearch');
+      if (again){ again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
+    });
+  }
   const pn = $('#pname');
   if (pn) pn.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
     state.agent.name = v; save(); paintSide(); paintCanvas();
+    persistAgentContext().catch(e=>toast(e.message));
     ensureMailbox(v);
     toast('Renamed — they answer to ' + v + ' now.');
   });
@@ -3593,10 +4511,6 @@ function paintSettings(M){
   if (un) un.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
     state.userProfile = Object.assign({}, state.userProfile, { name: v }); save(); paintSide(); toast('Profile updated.');
-  });
-  const bp = $('#bprof');
-  if (bp) bp.addEventListener('change', e => {
-    state.browserProfile.profile = e.target.value.trim() || 'Default'; save(); toast('Browser profile saved.');
   });
   if (tab === 'billing'){
     loadBillingContent();
@@ -3609,6 +4523,19 @@ function appLogoHtml(a){
     ? `<img src="${esc(a.logo)}" alt="" loading="lazy" onerror="this.style.display='none'">`
     : `<span class="app-fallback">${esc(String((a && (a.name || a.toolkit)) || '?').slice(0, 1).toUpperCase())}</span>`;
 }
+/* Brand marks for Wallet (right-side menu → Wallet). Stripe and Shop Pay must
+   never share the same generic purple "S" — each uses its official white mark
+   on its official brand purple. */
+function stripeBrandMark(){
+  return `<svg class="brandmark" viewBox="54 36 360.02 149.84" width="34" height="15" fill="none" role="img" aria-label="Stripe"><g fill="#fff"><path fill-rule="evenodd" clip-rule="evenodd" d="M414 113.4c0-25.6-12.4-45.8-36.1-45.8-23.8 0-38.2 20.2-38.2 45.6 0 30.1 17 45.3 41.4 45.3 11.9 0 20.9-2.7 27.7-6.5v-20c-6.8 3.4-14.6 5.5-24.5 5.5-9.7 0-18.3-3.4-19.4-15.2h48.9c.2-1.1.2-6.3.2-8.9zm-49.4-9.5c0-11.3 6.9-16 13.2-16 6.1 0 12.6 4.7 12.6 16h-25.8z"/><path d="M301.1 67.6c-9.8 0-16.1 4.6-19.6 7.8l-1.3-6.2h-22v116.6l25-5.3.1-28.3c3.6 2.6 8.9 6.3 17.7 6.3 17.9 0 34.2-14.4 34.2-46.1 0-28.9-16.6-44.8-34.1-44.8zm-6 68.9c-5.9 0-9.4-2.1-11.8-4.7l-.1-37.1c2.6-2.9 6.2-4.9 11.9-4.9 9.1 0 15.4 10.2 15.4 23.3 0 13.9-6.2 23.4-15.4 23.4z"/><polygon points="223.8,61.7 248.9,56.3 248.9,36 223.8,41.3"/><rect x="223.8" y="69.3" width="25.1" height="87.5"/><path d="M196.9 76.7l-1.6-7.4h-21.6v87.5h25V97.5c5.9-7.7 15.9-6.3 19-5.2v-23c-2.6-1.2-14.3-3.4-20.8 7.4z"/><path d="M146.9 47.6l-24.4 5.2-.1 80.1c0 14.8 11.1 25.7 25.9 25.7 8.2 0 14.2-1.5 17.5-3.3V135c-3.2 1.3-19 5.9-19-8.9V90.6h19V69.3h-19l.1-21.7z"/><path d="M79.3 94.7c0-3.9 3.2-5.4 8.5-5.4 7.6 0 17.2 2.3 24.8 6.4V72.2c-8.3-3.3-16.5-4.6-24.8-4.6C67.5 67.6 54 78.2 54 95.9c0 27.6 38 23.2 38 35.1 0 4.6-4 6.1-9.6 6.1-8.3 0-18.9-3.4-27.3-8v23.8c9.3 4 18.7 5.7 27.3 5.7 20.8 0 35.1-10.3 35.1-28.2 0-29.8-38.1-24.5-38.2-35.7z"/></g></svg>`;
+}
+function shopPayBrandMark(){
+  return `<svg class="brandmark" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Shop Pay"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>`;
+}
+function stripeIconHtml(stripe){
+  if (stripe && stripe.logo) return appLogoHtml(stripe);
+  return stripeBrandMark();
+}
 function appsStackList(apps){
   const featured = ['gmail','googlecalendar','slack','github','notion','outlook','linear','googledrive','jira','hubspot'];
   const connected = apps.filter((a) => a.connected);
@@ -3620,6 +4547,23 @@ function accountFace(acc, app){
   if (acc && acc.picture) return `<img src="${esc(acc.picture)}" alt="" loading="lazy" onerror="this.style.display='none'">`;
   const letter = String((acc && (acc.name || acc.email)) || (app && (app.name || app.toolkit)) || '?').replace(/^[^A-Za-z0-9]+/, '').slice(0, 1).toUpperCase() || '?';
   return `<span>${esc(letter)}</span>`;
+}
+function accountPrimary(acc){
+  if (!acc) return 'Connected account';
+  return acc.name || acc.email || acc.alias || acc.wordId || 'Connected account';
+}
+function accountSecondary(acc){
+  if (!acc) return '';
+  // Show mail + name together whenever we have both so the user can tell
+  // exactly which account they connected.
+  if (acc.name && acc.email && acc.name !== acc.email) return acc.email;
+  if (!acc.name && acc.email && acc.alias && acc.alias !== acc.email) return acc.alias;
+  if (acc.name && !acc.email && acc.alias && acc.alias !== acc.name) return acc.alias;
+  return '';
+}
+function accountTitle(acc){
+  if (!acc) return '';
+  return [acc.name, acc.email, acc.alias].filter((v, i, arr) => v && arr.indexOf(v) === i).join(' · ');
 }
 function switchHtml(on, attrs){
   return `<button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on ? 'true' : 'false'}" ${attrs}><i></i></button>`;
@@ -3636,11 +4580,11 @@ function connectorBodyHtml(a){
   }
   const connectLabel = accounts.length ? 'Add account' : 'Connect';
   const accountRows = accounts.map((acc) => {
-    const mail = acc.email || acc.alias || acc.wordId || 'Connected account';
-    const nm = acc.name && acc.name !== acc.email ? acc.name : '';
-    return `<div class="conn-account">
+    const primary = accountPrimary(acc);
+    const secondary = accountSecondary(acc);
+    return `<div class="conn-account" title="${esc(accountTitle(acc))}">
       <span class="conn-ava">${accountFace(acc, a)}</span>
-      <div class="conn-who"><b>${esc(mail)}</b>${nm ? `<span>${esc(nm)}</span>` : ''}</div>
+      <div class="conn-who"><b>${esc(primary)}</b>${secondary ? `<span>${esc(secondary)}</span>` : ''}</div>
       <button class="btn ghost tiny" data-act="disconnect-app" data-toolkit="${esc(a.toolkit)}" data-account="${esc(acc.id)}">Disconnect</button>
     </div>`;
   }).join('') || `<div class="conn-empty">No accounts yet. Connect one to let your agent use ${esc(a.name || a.toolkit)}.</div>`;
@@ -3665,7 +4609,8 @@ function connectorBodyHtml(a){
       <button class="btn small" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}">${icon('plus',14)} ${connectLabel}</button>
       ${a.connected ? `<button class="btn ghost small" data-act="automate-app" data-toolkit="${esc(a.toolkit)}">Automate</button>` : ''}
     </div>
-    <div class="conn-sec"><h3>Accounts</h3>${accountRows}</div>
+    ${accounts.length ? `<p class="conn-hint">You can add more than one account — pick which one the agent should use when it acts.</p>` : ''}
+    <div class="conn-sec"><h3>Accounts${accounts.length > 1 ? ` (${accounts.length})` : ''}</h3>${accountRows}</div>
     <div class="conn-sec">
       <h3>Permissions</h3>
       <p class="conn-hint">Read and write access your agent may use. Turn any off to block it.</p>
@@ -3686,20 +4631,29 @@ function paintApps(M){
       String(a.name || '').toLowerCase().includes(q) ||
       String(a.toolkit || '').toLowerCase().includes(q) ||
       String(a.description || '').toLowerCase().includes(q) ||
-      (a.accounts || []).some((acc) => String(acc.email || acc.name || '').toLowerCase().includes(q))
+      (a.accounts || []).some((acc) => String(acc.email || acc.name || acc.alias || acc.wordId || '').toLowerCase().includes(q))
     );
   }
   list.sort((a, b) => (Number(b.connected) - Number(a.connected)) || String(a.name || a.toolkit).localeCompare(String(b.name || b.toolkit)));
 
   const rows = list.map((a) => {
     const open = state.appOpen === a.toolkit;
-    const n = Number(a.accountCount || (a.accounts && a.accounts.length) || (a.connected ? 1 : 0));
-    const sub = a.connected ? (n === 1 ? '1 account' : `${n} accounts`) : 'Not connected';
+    const accts = Array.isArray(a.accounts) ? a.accounts : [];
+    const n = Number(a.accountCount || accts.length || (a.connected ? 1 : 0));
+    const first = accts[0] || null;
+    const firstMail = first ? (first.email || '') : '';
+    const firstName = first ? (first.name && first.name !== first.email ? first.name : '') : '';
+    // Collapsed row always shows WHO is connected: mail + name + profile face,
+    // so the user knows which account they linked without expanding.
+    const sub = !a.connected ? 'Not connected'
+      : n <= 1 ? (firstMail || firstName || '1 account')
+      : `${firstMail || firstName || '1 account'} +${n - 1} more`;
+    const faces = accts.slice(0, 3).map((acc) => `<span class="conn-ava mini" title="${esc(accountTitle(acc))}">${accountFace(acc, a)}</span>`).join('');
     return `<article class="conn-row ${a.connected ? 'is-connected' : ''} ${open ? 'is-open' : ''}" data-toolkit="${esc(a.toolkit)}">
       <button type="button" class="conn-head" data-act="toggle-connector" data-toolkit="${esc(a.toolkit)}">
         <span class="app-logo">${appLogoHtml(a)}${a.connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
-        <span class="conn-meta"><b>${esc(a.name || a.toolkit)}</b><span>${esc(sub)}</span></span>
-        ${a.connected ? `<span class="chip green">Connected</span>` : ''}
+        <span class="conn-meta"><b>${esc(a.name || a.toolkit)}</b><span title="${esc(first ? (firstName && firstMail ? `${firstName} · ${firstMail}` : (firstMail || firstName || '')) : '')}">${esc(sub)}${firstName && firstMail ? ` · ${esc(firstName)}` : ''}</span></span>
+        ${a.connected ? `<span class="conn-faces">${faces}</span><span class="chip green">Connected</span>` : ''}
         <span class="conn-chev">${icon('chev',16)}</span>
       </button>
       ${open ? connectorBodyHtml(a) : ''}
@@ -3744,11 +4698,20 @@ window.addEventListener('resize', () => {
   if (state.view === 'settings' && $('#main')) centerActiveSettingsTab($('#main'));
 });
 window.addEventListener('focus', () => {
-  startSandboxLease();
+  startWorkspacePresence();
   if (signedIn() && state.onboarded) syncFromBackend().then((updated) => { if (updated && $('#side')) paintSide(); });
   if (signedIn() && state.canvasOpen && state.canvasTab === 'payments') refreshComposioApps(true);
+  // Returning from the OAuth tab: pull the fresh account list so the newly
+  // connected mail/name/profile appears without a manual Refresh.
+  if (signedIn() && (pendingConnect || (state.view === 'apps' && state.appOpen))) {
+    refreshComposioApps(true).then(() => { if (state.appOpen) openConnector(state.appOpen, true); });
+  }
 });
-window.addEventListener('pagehide', () => stopSandboxLease());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') stopWorkspacePresence();
+  else startWorkspacePresence();
+});
+window.addEventListener('pagehide', () => { stopVoice(); stopWorkspacePresence(); });
 document.addEventListener('submit', e => {
   const form = e.target.closest('[data-onboarding-name]');
   if (!form) return;
@@ -3783,7 +4746,7 @@ document.addEventListener('click', async e => {
   const c = state.chats.find(x => x.id === b.dataset.chat);
   const m = c && c.messages.find(x => x.id === b.dataset.msg);
 
-  if (signedIn() && needsOnboarding() && !['qopt','open-passport','togglemenu','usermenu','signout'].includes(act)) {
+  if (signedIn() && needsOnboarding() && !['qopt','open-passport','togglemenu','usermenu','signout','voice'].includes(act)) {
     e.preventDefault(); toast('Finish setting up your agent first.'); return;
   }
   if (act === 'qopt' && m?.card?.onboarding) { answerOnboarding(c, m, b.dataset.o); return; }
@@ -3855,8 +4818,9 @@ document.addEventListener('click', async e => {
     openOnboarding(); return;
   }
 
-  /* navigation */
-  if (act === 'togglemenu'){ mobileNavOpen = !mobileNavOpen; renderApp(); return; }
+  /* navigation — toggles animate in place, no full re-render */
+  if (act === 'togglemenu'){ setMobileNav(!mobileNavOpen); return; }
+  if (act === 'closecanvas'){ setCanvasOpen(false); return; }
   if (act === 'nav'){
     if (!signedIn()){ renderAuth(); return; }
     mobileNavOpen = false; state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp();
@@ -3871,6 +4835,35 @@ document.addEventListener('click', async e => {
     state.appQuery = 'stripe'; state.appFilter = 'all'; state.view = 'apps';
     save(); renderApp(); refreshComposioApps(true); return;
   }
+  if (act === 'shop-pay-connect'){
+    window.LingonAuth.api('/api/shop-pay/connect', { method:'POST', body:'{}' }).then((j) => {
+      if (j.url) { window.location.href = j.url; }
+      else toast('Could not start Shop Pay.');
+    }).catch((e) => toast(e.message || 'Could not start Shop Pay.'));
+    return;
+  }
+  if (act === 'shop-pay-disconnect'){
+    window.LingonAuth.api('/api/shop-pay/disconnect', { method:'POST', body:'{}' }).then((j) => {
+      state.shopPay = j.shopPay || { connected:false, configured:true };
+      state.shopPayOrders = j.orders || [];
+      save();
+      if ($('#cbody') && state.canvasTab === 'payments') $('#cbody').innerHTML = paymentsTabContent();
+      toast('Shop Pay disconnected.');
+    }).catch((e) => toast(e.message || 'Could not disconnect Shop Pay.'));
+    return;
+  }
+  if (act === 'shop-pay-limit'){
+    const n = Number(($('#shoppaylimit') || {}).value);
+    window.LingonAuth.api('/api/shop-pay/limit', { method:'POST', body: JSON.stringify({ dailyLimitUsd: n }) }).then((j) => {
+      state.shopPay = j.shopPay || state.shopPay;
+      state.shopPayOrders = j.orders || state.shopPayOrders;
+      save();
+      if ($('#cbody') && state.canvasTab === 'payments') $('#cbody').innerHTML = paymentsTabContent();
+      toast('Shop Pay daily limit saved.');
+    }).catch((e) => toast(e.message || 'Could not save limit.'));
+    return;
+  }
+  if (act === 'shop-pay-refresh'){ refreshShopPay(true); return; }
   if (act === 'app-filter'){ state.appFilter = b.dataset.f === 'connected' ? 'connected' : 'all'; save(); paintApps(document.getElementById('main')); return; }
   if (act === 'app-focus'){
     const tk = String(b.dataset.toolkit || '');
@@ -3899,19 +4892,22 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
-  if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
+  if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); if(state.settingsTab==='memory'&&window.LingonAuth.signedIn())await syncFromBackend(true).catch(e=>toast(e.message)); paintSettings($('#main')); return; }
   if (act === 'theme'){ state.theme = b.dataset.v || 'grey'; save(); applyTheme(); paintSide(); if ($('#canvas')) paintCanvas(); if (state.view === 'settings' && $('#main')) paintSettings($('#main')); toast('Accent: ' + ((THEMES.find(t => t.id === state.theme) || THEMES[0]).name)); return; }
   if (act === 'goto-secrets'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); renderApp(); return; }
-  if (act === 'btoggle'){ state.browserProfile[b.dataset.k] = !state.browserProfile[b.dataset.k]; save(); paintSettings($('#main')); return; }
+  if (act === 'save-agent-docs'){
+    const documents={};document.querySelectorAll('.agent-doc').forEach(el=>{documents[el.dataset.doc]=el.value;});
+    try{await persistAgentContext(documents);toast('Agent context saved across devices.');paintSettings($('#main'));}catch(e){toast(e.message);}return;
+  }
   if (act === 'agentpanel'){
     state.canvasTab = 'canvas';
-    state.canvasOpen = true; const app = $('#app'); if (app) app.classList.remove('nocanvas');
+    state.canvasOpen = true; const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
     save(); paintCanvas(); return;
   }
   if (act === 'agent-edit'){
     state.agentEdit = !state.agentEdit;
     state.canvasOpen = true;
-    const app = $('#app'); if (app) app.classList.remove('nocanvas');
+    const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
     save(); paintCanvas();
     return;
   }
@@ -3922,7 +4918,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'open-subagents'){
     state.canvasTab = 'subagents'; state.canvasOpen = true;
-    const app = $('#app'); if (app) app.classList.remove('nocanvas');
+    const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
     save(); paintCanvas(); refreshSubAgents(); return;
   }
   if (act === 'create-subagent'){
@@ -3993,14 +4989,29 @@ document.addEventListener('click', async e => {
     if (state.activeChat === b.dataset.id) state.activeChat = state.chats[0] ? state.chats[0].id : null;
     save(); renderApp(); return;
   }
-  if (act === 'togglecanvas'){ state.canvasOpen = !state.canvasOpen; save(); $('#app').classList.toggle('nocanvas', !state.canvasOpen); paintCanvas(); return; }
+  if (act === 'togglecanvas'){ setCanvasOpen(!canvasShouldShow()); return; }
   if (act === 'ctab'){
     const next = b.dataset.t === 'agent' || b.dataset.t === 'trace' || b.dataset.t === 'wallet' ? 'canvas' : b.dataset.t;
     state.canvasTab = ['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(next) ? next : 'canvas';
     if (next !== 'canvas') state._showLiveInCanvas = false;
     save(); paintCanvas();
     if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
-    if (next === 'payments') refreshComposioApps(true);
+    if (next === 'payments') { refreshComposioApps(true); refreshShopPay(true); }
+    return;
+  }
+  if (act === 'appr-toggle'){
+    const item = b.closest('.appr-item');
+    if (!item) return;
+    const willOpen = !item.classList.contains('open');
+    document.querySelectorAll('.appr-item.open').forEach(n => {
+      if (n === item) return;
+      n.classList.remove('open');
+      const t = n.querySelector('[data-act="appr-toggle"]');
+      if (t) t.setAttribute('aria-expanded', 'false');
+    });
+    item.classList.toggle('open', willOpen);
+    b.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    state.approvalOpenId = willOpen ? (b.dataset.id || item.dataset.id) : null;
     return;
   }
   if (act === 'mtab'){
@@ -4086,24 +5097,79 @@ document.addEventListener('click', async e => {
     c.canvasSelectedMessageId = m?.card ? m.id : null; delete c.canvasSelectedFileIndex;
     save(); renderApp(); return;
   }
+  if (act === 'libcat'){ state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
+  if (act === 'lib-select'){ state.librarySelect = true; state.librarySelected = []; save(); paintSettings($('#main')); return; }
+  if (act === 'lib-clear'){ state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
+  if (act === 'lib-layout'){ state.libraryLayout = state.libraryLayout === 'list' ? 'grid' : 'list'; save(); paintSettings($('#main')); return; }
+  if (act === 'lib-pick'){
+    const id = b.dataset.id;
+    const sel = new Set(state.librarySelected || []);
+    if (sel.has(id)) sel.delete(id); else sel.add(id);
+    state.librarySelected = [...sel]; save(); paintSettings($('#main')); return;
+  }
+  if (act === 'lib-demo'){ toast('Sample preview — create an artifact to add your own.'); return; }
+  if (act === 'lib-delete'){
+    const ids = new Set((state.librarySelected || []).filter(id => !String(id).startsWith('demo-')));
+    if (!ids.size){ toast(state.librarySelected && state.librarySelected.length ? 'Samples stay as examples.' : 'Select items first.'); state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
+    if (!window.confirm(`Delete ${ids.size} selected item${ids.size > 1 ? 's' : ''}?`)) return;
+    let removed = 0;
+    ids.forEach(id => {
+      const parts = String(id).split(':');
+      if (parts.length < 2) return;
+      const chatId = parts[0], msgId = parts[1];
+      const ch = state.chats.find(x => x.id === chatId);
+      if (!ch) return;
+      const fMatch = String(id).match(/:f(\d+)$/);
+      if (msgId === 'a'){
+        if (ch.artifact){ ch.artifact = null; removed++; }
+        return;
+      }
+      const mi = (ch.messages || []).findIndex(mm => mm.id === msgId);
+      if (mi < 0) return;
+      const target = ch.messages[mi];
+      if (fMatch && target.files && target.files[Number(fMatch[1])]){
+        target.files.splice(Number(fMatch[1]), 1);
+        if (!target.files.length && (!target.card || target.kind !== 'card')) ch.messages.splice(mi, 1);
+        else if (!target.files.length && target.kind !== 'card' && !target.text) ch.messages.splice(mi, 1);
+        removed++;
+      } else {
+        ch.messages.splice(mi, 1);
+        removed++;
+      }
+    });
+    state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); paintSide();
+    toast(removed ? `Deleted ${removed} item${removed > 1 ? 's' : ''}.` : 'Nothing to delete.');
+    return;
+  }
+  if (act === 'lib-create'){
+    const name = window.prompt('Name your artifact (e.g. Launch plan, Moodboard, Demo video):');
+    if (name === null) return;
+    const title = String(name || '').trim() || 'Untitled artifact';
+    const c2 = { id: uid(), title: title.length > 42 ? title.slice(0, 42) + '…' : title, messages:[{ id: uid(), role:'agent', kind:'card', card:{ type:'canvas', title, format:'document', content: `# ${title}\n\nCreated from Library. Ask your agent to fill this in.` }, at: Date.now() }], trace:[], artifact:{ title, kind:'canvas' }, createdAt:Date.now(), updatedAt:Date.now() };
+    state.chats.unshift(c2); state.activeChat = c2.id; state.view = 'chat'; state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
+    c2.canvasSelectedMessageId = c2.messages[0].id;
+    state.settingsTab = 'library'; save(); renderApp();
+    toast(`“${title}” created — find it under Library.`);
+    return;
+  }
   if (act === 'canvas-card' && c && m?.card){
     state.activeChat = c.id;
     c.canvasSelectedMessageId = m.card.type === 'artifact' && c.artifact?.title === m.card.title ? null : m.id;
     delete c.canvasSelectedFileIndex;
     state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-    $('#app')?.classList.remove('nocanvas'); save(); paintCanvas(); return;
+    $('#app')?.classList.remove('nocanvas'); syncShellClasses(); save(); paintCanvas(); return;
   }
   if (act === 'canvas-upload' && c && m?.files?.[Number(b.dataset.i)]){
     state.activeChat = c.id; c.canvasSelectedMessageId = m.id; c.canvasSelectedFileIndex = Number(b.dataset.i);
     state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-    $('#app')?.classList.remove('nocanvas'); save(); paintCanvas(); return;
+    $('#app')?.classList.remove('nocanvas'); syncShellClasses(); save(); paintCanvas(); return;
   }
   if (act === 'canvas-back'){
     const current = chat(); if (current) { current.canvasSelectedMessageId = null; delete current.canvasSelectedFileIndex; }
     state._showLiveInCanvas = false; liveClose(); save(); paintCanvas(); return;
   }
-  if (act === 'viewcanvas'){ const current = chat(); if (current) { current.canvasSelectedMessageId = null; delete current.canvasSelectedFileIndex; } state._showLiveInCanvas = false; state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); paintCanvas(); return; }
-  if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = true; $('#app') && $('#app').classList.remove('nocanvas'); save(); paintCanvas(); return; }
+  if (act === 'viewcanvas'){ const current = chat(); if (current) { current.canvasSelectedMessageId = null; delete current.canvasSelectedFileIndex; } state._showLiveInCanvas = false; state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); syncShellClasses(); paintCanvas(); return; }
+  if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = true; $('#app') && $('#app').classList.remove('nocanvas'); syncShellClasses(); save(); paintCanvas(); return; }
   if (act === 'takeover'){ liveTakeover(); return; }
   if (act === 'closestop-live'){
     const id = liveIdShown;
@@ -4146,6 +5212,7 @@ document.addEventListener('click', async e => {
     try {await Engine.controlTask(makeRT(c),m.card.taskId,act==='task-stop'?'cancel':'continue');}catch(error){toast(error.message);}
     finally{b.disabled=false;}return;
   }
+  if (act === 'voice') { toggleVoice(); return; }
   if (act === 'managed-stop') { await Engine.stop(makeRT(chat())); return; }
   if (act === 'managed-resume') { await Engine.resume(makeRT(chat())); return; }
   if (m?.card?.managedCallId && ['save-secret','skip-secret'].includes(act)) {
@@ -4193,10 +5260,19 @@ document.addEventListener('click', async e => {
     const name = (node.querySelector('[data-f="name"]').value || '').trim();
     const val = node.querySelector('[data-f="val"]').value;
     if (!name || !val){ toast('Give the secret a name and a value first.'); return; }
-    const ref = 'sec_' + uid().slice(0, 4);
-    state.vault.secrets.push({ id: ref, ref, name, value: val, at: Date.now() });
-    m.card.ref = ref; m.card.nameVal = name;
-    save(); resolveCard(c, m, { ok:true }, 'saved'); paintSide(); return;
+    try{
+      let secret;
+      if(signedIn()){
+        const added=await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name,value:val})});
+        secret={...added.secret,backend:true};
+      }else{
+        const ref='sec_'+uid().slice(0,4);
+        secret={id:ref,ref,name,value:val,at:Date.now()};
+      }
+      state.vault.secrets.push(secret);
+      m.card.ref=secret.ref;m.card.nameVal=name;
+      save();resolveCard(c,m,{ok:true},'saved');paintSide();return;
+    }catch(err){toast(err.message || 'Could not save that secret.');return;}
   }
   if (act === 'qopt' && m){ if (!signedIn()){ renderAuth(); return; } m.card.choice = b.dataset.o; resolveCard(c, m, { choice: b.dataset.o }, 'answered'); return; }
   if (act === 'download' && m){
@@ -4212,14 +5288,39 @@ document.addEventListener('click', async e => {
     else if ($('#main') && state.view === 'vault') paintVault($('#main'));
     if ($('#canvas')) paintCanvas();
   };
-  if (act === 'reveal'){ const s = state.vault.secrets.find(x => x.id === b.dataset.id); if (s) s.revealed = !s.revealed; repaintSettings(); return; }
-  if (act === 'delsecret'){ state.vault.secrets = state.vault.secrets.filter(x => x.id !== b.dataset.id); save(); repaintSettings(); paintSide(); toast('Secret deleted'); return; }
+  if (act === 'reveal'){
+    const s=state.vault.secrets.find(x=>x.id===b.dataset.id);if(!s)return;
+    try{
+      if(s.backend && signedIn()){
+        if(s.revealed){s.revealed=false;delete s.value;}
+        else{const revealed=await window.LingonAuth.api('/api/secrets/'+encodeURIComponent(s.id)+'/reveal',{method:'POST'});s.value=revealed.value;s.revealed=true;}
+      }else s.revealed=!s.revealed;
+      repaintSettings();
+    }catch(err){toast(err.message || 'Could not reveal that secret.');}
+    return;
+  }
+  if (act === 'delsecret'){
+    const secret=state.vault.secrets.find(x=>x.id===b.dataset.id);if(!secret)return;
+    try{
+      if(secret.backend && signedIn())await window.LingonAuth.api('/api/secrets/'+encodeURIComponent(secret.id),{method:'DELETE'});
+      state.vault.secrets=state.vault.secrets.filter(x=>x.id!==secret.id);save();repaintSettings();paintSide();toast('Secret deleted');
+    }catch(err){toast(err.message || 'Could not delete that secret.');}
+    return;
+  }
   if (act === 'addsecret'){
     const n = $('#vname').value.trim(), v = $('#vval').value;
     if (!n || !v){ toast('Name and value required.'); return; }
-    const ref = 'sec_' + uid().slice(0, 4);
-    state.vault.secrets.push({ id: ref, ref, name: n, value: v, at: Date.now() });
-    save(); repaintSettings(); paintSide(); toast('Sealed in vault — agent gets ' + ref + ' only'); return;
+    try{
+      let secret;
+      if(signedIn()){
+        const added=await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name:n,value:v})});
+        secret={...added.secret,backend:true};
+      }else{
+        const ref='sec_'+uid().slice(0,4);secret={id:ref,ref,name:n,value:v,at:Date.now()};
+      }
+      state.vault.secrets.push(secret);save();repaintSettings();paintSide();toast('Sealed in vault — agent gets '+secret.ref+' only');
+    }catch(err){toast(err.message || 'Could not save that secret.');}
+    return;
   }
   if (act === 'toggleapp'){
     state.view = 'apps'; save(); renderApp(); refreshComposioApps();
@@ -4235,7 +5336,7 @@ document.addEventListener('click', async e => {
   if (act === 'otp-send'){ authOtpSend(); return; }
   if (act === 'otp-verify'){ authOtpVerify(); return; }
   if (act === 'signout'){
-    stopSandboxLease();
+    stopWorkspacePresence();
     window.LingonAuth.set(null);
     state.view = 'chat';
     render();
@@ -4312,12 +5413,36 @@ document.addEventListener('click', async e => {
   }
   if (act === 'revoke'){ state.vault.approvals = state.vault.approvals.filter(x => x.id !== b.dataset.id); save(); repaintSettings(); toast('Revoked — it will ask again'); return; }
   if (act === 'pmode'){ state.vault.mode = b.dataset.m; save(); repaintSettings(); return; }
-  if (act === 'delmem'){ state.memory = state.memory.filter(x => x.id !== b.dataset.id); save(); repaintSettings(); paintSide(); return; }
+  if (act === 'addmem'){
+    const text=String(($('#memory-new') || {}).value || '').trim(),category=String(($('#memory-category') || {}).value || 'user');
+    if(!text){toast('Write something to remember.');return;}
+    try{
+      if(window.LingonAuth.signedIn()){await window.LingonAuth.api('/api/memories',{method:'POST',body:JSON.stringify({text,category,importance:2,src:'user'})});const out=await window.LingonAuth.api('/api/memories');state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}
+      else{state.memory.unshift({id:uid('mem'),text,category,importance:2,src:'user',at:Date.now()});state.memoryTotal=state.memory.length;}
+      state.memoryQuery='';save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));paintSide();toast('Memory saved.');
+    }catch(e){toast(e.message);}return;
+  }
+  if(act==='searchmem' || act==='clearmemsearch'){
+    const query=act==='clearmemsearch'?'':String(($('#memory-search') || {}).value || '').trim();
+    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories'+(query?'?q='+encodeURIComponent(query):''));state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}state.memoryQuery=query;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}catch(e){toast(e.message);}return;
+  }
+  if(act==='moremem'){
+    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories?offset='+state.memory.length);const seen=new Set(state.memory.map(x=>x.id));state.memory.push(...(out.memories || []).filter(x=>!seen.has(x.id)));state.memoryTotal=Number(out.total ?? state.memory.length);save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}}catch(e){toast(e.message);}return;
+  }
+  if(act==='editmem'){
+    const current=state.memory.find(x=>x.id===b.dataset.id);if(!current)return;
+    const text=window.prompt('Correct this memory',current.text);if(text===null)return;const cleaned=text.trim();if(!cleaned){toast('Memory cannot be empty.');return;}
+    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories/'+encodeURIComponent(current.id),{method:'PATCH',body:JSON.stringify({text:cleaned,category:current.category,importance:current.importance})});state.memory=state.memory.map(x=>x.id===current.id?out.memory:x);}else Object.assign(current,{text:cleaned,src:'user_edit',at:Date.now()});save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));toast('Memory corrected.');}catch(e){toast(e.message);}return;
+  }
+  if (act === 'delmem'){
+    const id=b.dataset.id;
+    try{if(window.LingonAuth.signedIn())await window.LingonAuth.api('/api/memories/'+encodeURIComponent(id),{method:'DELETE'});state.memory=state.memory.filter(x=>x.id!==id);state.memoryTotal=Math.max(0,(state.memoryTotal || 1)-1);save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));paintSide();toast('Memory forgotten.');}catch(e){toast(e.message);}return;
+  }
   if (act === 'dlfile'){ const f = window.__fileRows && window.__fileRows[+b.dataset.i]; if (f) dl(f.name, f.content); return; }
 
   /* profile / appearance (shared by Settings + right slider) */
-  if (act === 'p-color'){ state.agent.color = b.dataset.c; save(); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
-  if (act === 'p-pers'){ state.agent.pers = b.dataset.p; save(); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
+  if (act === 'p-color'){ state.agent.color = b.dataset.c; save();persistAgentContext().catch(()=>{}); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
+  if (act === 'p-pers'){ state.agent.pers = b.dataset.p; save();persistAgentContext().catch(()=>{}); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
   if (act === 'reset'){
     if (confirm('Release this agent? This deletes the claim, chats, vault and memory on this device.')){
       localStorage.removeItem(LS); location.reload();
@@ -4406,10 +5531,22 @@ const bootReady = bootHash().then((st) => {
   render();
   try {
     const q = new URLSearchParams(window.location.search);
+    if (q.get('connected_app')) { handleConnectedAppReturn(); return; }
     const f = q.get('billing');
-    if (f) {
+    const shop = q.get('shop_pay');
+    if (f || shop) {
+      const msg = q.get('shop_pay_msg');
       window.history.replaceState(null, '', window.location.pathname);
-      handleBillingReturn(f, q);
+      if (f) handleBillingReturn(f, q);
+      if (shop) {
+        state.canvasOpen = true;
+        state.canvasTab = 'payments';
+        save();
+        if ($('#app')) { const app = $('#app'); app.classList.remove('nocanvas'); syncShellClasses(); }
+        paintCanvas();
+        refreshShopPay(true);
+        setTimeout(() => toast(shop === 'connected' ? 'Shop Pay connected. Purchases still need your approval.' : ('Shop Pay: ' + (msg || 'could not connect.'))), 400);
+      }
     }
   } catch {}
 });

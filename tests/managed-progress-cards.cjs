@@ -42,4 +42,12 @@ first.managedTask({...task,status:'completed',revision:10,sequence:6,events:[
   {id:'computer-call',seq:6,type:'card',card:{type:'computer',status:'done',lines:[{t:'ready'}]}},
 ]});
 assert.equal(chat.messages.filter(m=>m.managedId==='computer-call').length,1,'computer progress updates the existing card');
+third.managedEvent({type:'message_delta',id:'live-answer',delta:'Hel'});
+third.managedEvent({type:'message_delta',id:'live-answer',delta:'lo'});
+assert.equal(chat.messages.find(m=>m.managedId==='live-answer').text,'Hello');
+third.managedEvent({type:'message',id:'live-answer',phase:'final_answer',text:'Hello'});
+assert.equal(chat.messages.find(m=>m.managedId==='live-answer').text,'Hello');
+third.managedEvent({type:'message_delta',id:'draft-answer',delta:'Nope'});
+third.managedEvent({type:'message_retract',id:'draft-answer'});
+assert.equal(chat.messages.some(m=>m.managedId==='draft-answer'),false,'tool-bound drafts are retracted');
 console.log('managed cards: milestone-only updates, persistent history, replay dedupe, independent task/main status: ok');

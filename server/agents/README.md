@@ -4,8 +4,9 @@ Model: Gemini 3.5 (`GEMINI_API_KEY`). Sandbox: one Azure VM per user.
 See [AZURE.md](AZURE.md).
 
 The model decides tools via function calling in `vm-harness.js`. Untrusted
-code runs only through Azure Run Command. Until `AZURE_*` is set, the harness
-uses an isolated per-user workspace and `code_run` stays disabled.
+shell and code runs through Azure Run Command into a hardened worker container
+inside that user's VM. Until `AZURE_*` is set, the harness uses an isolated
+per-user workspace and compute tools stay disabled.
 
 Preserved on the Lingon side: auth, credits, memory, vault refs, approvals,
 Composio apps, automations, traces.
@@ -25,12 +26,12 @@ and logs the storage error, so it cannot claim background work was started.
 `task-runtime.js` advances each saved task by one model or tool step. The main
 reply has a separate request and cancellation scope, so asking a question does
 not cancel or replay task work. Workers use the existing tools, memory ranking,
-credit checks, response guards, approvals and per-user Azure VM. App-entry VM
-warming remains in place. Task code gets a separate working directory and each
+credit checks, response guards, approvals and per-user Azure VM. Opening the app
+does not warm compute. Task code gets a separate working directory and each
 task has a separate browser session on that VM.
 
 The database allows two worker steps per owner at once. It serializes task VM
-commands because Azure Action Run Command permits only one active script per
+commands because the Azure management transport permits only one active script per
 VM. Foreground replies are outside this worker limit. Existing interactive VM
 operations and automation runs still share Azure's command capacity; a failed
 or uncertain task action is never automatically replayed.

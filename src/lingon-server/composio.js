@@ -216,22 +216,48 @@ function walkIdentity(obj, pred, depth = 0) {
   }
   return '';
 }
-function accountIdentity(it) {
-  const bags = [it && it.data, it && it.params, it && it.state && it.state.val, it].filter(Boolean);
-  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const emailKey = /^(email|email_address|emailaddress|user_email|useremail|mail|login)$/i;
-  const nameKey = /^(name|display_name|displayname|full_name|fullname|username|user_name|login)$/i;
-  const picKey = /^(picture|avatar|avatar_url|photo|photo_url|image|image_url|profile_picture|profilepicture|picture_url)$/i;
-  let email = '', name = '', picture = '';
-  for (const bag of bags) {
-    if (!email) email = walkIdentity(bag, (k, v) => emailKey.test(k) && emailRe.test(v));
-    if (!email) email = walkIdentity(bag, (_k, v) => emailRe.test(v) && v.length < 120);
-    if (!name) name = walkIdentity(bag, (k, v) => nameKey.test(k) && v.length < 80 && !emailRe.test(v));
-    if (!picture) picture = walkIdentity(bag, (k, v) => picKey.test(k) && /^https?:\/\//i.test(v));
+function normalizeBag(bag) {
+  // Composio sometimes nests identity as JSON strings (state.val) — parse them.
+  if (typeof bag === 'string') {
+    const t = bag.trim();
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try { return JSON.parse(t); } catch { return bag; }
+    }
+    return bag;
   }
+  return bag;
+}
+function accountIdentity(it) {
+  const rawBags = [
+    it && it.data,
+    it && it.params,
+    it && it.connection_params,
+    it && it.connectionParams,
+    it && it.state && it.state.val,
+    it && it.state,
+    it,
+  ].filter(Boolean).map(normalizeBag);
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const norm = (k) => String(k || '').toLowerCase().replace(/[_\s-]/g, '');
+  const emailKey = /^(email|emailaddress|useremail|primaryemail|mail|loginemail|accountemail)$/;
+  const nameKey = /^(name|displayname|fullname|firstname|lastname|username|screenname|nickname|nick|handle|login|loginname|accountname|ownername)$/;
+  const picKey = /^(picture|avatar|avatarurl|photo|photourl|image|imageurl|profilepicture|profilepictureurl|profileimage|profileimageurl|pictureurl|profilepic|userpicture)$/;
+  let email = '', name = '', picture = '';
+  let firstName = '', lastName = '';
+  for (const bag of rawBags) {
+    if (!email) email = walkIdentity(bag, (k, v) => emailKey.test(norm(k)) && emailRe.test(v));
+    if (!email) email = walkIdentity(bag, (_k, v) => emailRe.test(v) && v.length < 120);
+    if (!name) name = walkIdentity(bag, (k, v) => nameKey.test(norm(k)) && v.length >= 2 && v.length < 80 && !emailRe.test(v) && !/^https?:\/\//i.test(v));
+    if (!picture) picture = walkIdentity(bag, (k, v) => picKey.test(norm(k)) && /^https?:\/\//i.test(v));
+    if (!firstName) firstName = walkIdentity(bag, (k, v) => /^(firstname|givenname)$/.test(norm(k)) && v.length < 60);
+    if (!lastName) lastName = walkIdentity(bag, (k, v) => /^(lastname|familyname|surname)$/.test(norm(k)) && v.length < 60);
+  }
+  if (!name && (firstName || lastName)) name = `${firstName} ${lastName}`.trim();
+  // Never return an empty name — fall back to alias so the UI can always
+  // show *something* identifying for this connected account.
   return {
     email: email || '',
-    name: name || String((it && it.alias) || ''),
+    name: name || String((it && it.alias) || (it && (it.word_id || it.wordId)) || ''),
     picture: picture || '',
     alias: (it && it.alias) || '',
     wordId: (it && (it.word_id || it.wordId)) || '',
@@ -545,7 +571,9 @@ async function toolkitForUser(belnaUserId, toolkit) {
   const accounts = [];
   for (const acc of app.accounts || []) {
     let next = acc;
-    if (!acc.email || !acc.picture) {
+    // Re-fetch the full connected account when identity is incomplete so the
+    // UI can always show mail + name + profile picture for every account.
+    if (!acc.email || !acc.name || !acc.picture) {
       try {
         const raw = await getConnectedAccount(acc.id);
         if (raw && String(raw.user_id || '') === composioUserId(belnaUserId)) next = { ...acc, ...mapConnected(raw), toolkit: slug };

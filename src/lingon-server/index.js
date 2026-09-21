@@ -8,7 +8,7 @@
    Harness: Gemini 3.5 + per-user Azure VM (see agents/azure-vm.js).
 */
 import { createApp } from './express-shim.js';
-import { callGemini, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK } from './gemini.js';
+import { callGemini, transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK } from './gemini.js';
 import { PLANS, costOf, creditsForGiftUsd } from './plans.js';
 import * as store from './store.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
@@ -24,8 +24,8 @@ import { fetchAllowlisted } from './agents/sandbox.js';
 import { normalizeSubAgent, nextRunAt } from './agents/triggers.js';
 import * as Automations from './agents/automations.js';
 import * as composio from './composio.js';
-import * as privy from './privy.js';
 import * as mail from './mail.js';
+import * as shoppay from './shoppay.js';
 import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases } from './agents/azure-vm.js';
 import { handle as vmHarnessHandle } from './agents/vm-harness.js';
 import { handle as conversationHandle, tasks as chatTasks } from './agents/conversation.js';
@@ -85,6 +85,15 @@ app.use('/api/agent', rateLimit(120, 60000), requireAuth(vmHarnessHandle));
 app.use('/api/sandbox', rateLimit(30, 60000), requireAuth(vmHarnessHandle));
 app.post('/api/chat', rateLimit(60, 60000), requireAuth(vmHarnessHandle));
 app.post('/api/chat/stream', rateLimit(60, 60000), requireAuth(vmHarnessHandle));
+app.post('/api/voice/transcribe', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  try {
+    const out = await transcribeAudio({ audio: req.body?.audio, mime: req.body?.mime, signal: requestSignal(req) });
+    res.json({ text: out.text || '' });
+  } catch (e) {
+    const status = e.code === 'BAD_INPUT' ? 400 : e.code === 'NO_KEY' ? 503 : 502;
+    res.status(status).json({ error: e.code === 'BAD_INPUT' ? e.message : 'Couldn’t transcribe that.' });
+  }
+}));
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -98,6 +107,7 @@ app.get('/api/health', (req, res) => {
     google: googleConfigured(),
     composio: composio.configured(),
     privy: privy.configured(),
+    shopPay: shoppay.configured(),
     resend: mail.configured(),
     mailDomain: mail.mailDomain(),
     harness: 'gemini-azure-vm-harness',
@@ -631,7 +641,7 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
   const push = (e) => trace.push(e);
   const signal = requestSignal(req);
   try {
-    const { prompt, history, replyTo, agent, memories, sessionId, activeTask, delegated } = req.body || {};
+    const { prompt, history, replyTo, agent, sessionId, activeTask, delegated } = req.body || {};
     checkPrompt(prompt);
     if (asksAboutInternalDetails(prompt)) {
       return res.json({ text: INTERNAL_DETAILS_REPLY, trace: [], savedMems: [] });
@@ -640,16 +650,13 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(async (req, res) => {
     push(entry('box', `${delegated ? 'subagent worker' : 'main agent'} · session ${sessionId ? String(sessionId).slice(0, 8) : 'new'} accepted`));
     const tools = pickTools(prompt + ' ' + (agent?.name || ''));
     push(entry('search', `available tools: ${tools.map((t) => t.name).join(', ')}`));
-    // Server-side per-user memory read (authoritative): stored memories are
-    // relevance-ranked against the prompt (ChatGPT-style), frontend-supplied
-    // ones merged in — the agent reads what it wrote, no "remember" needed.
+    // Only active server-owned memory enters model context. The client cannot
+    // reintroduce a fact after the user has corrected or deleted it.
     let serverMems = [];
     try {
-      serverMems = await store.listMemories(req.user.id);
+      serverMems = await store.searchMemories(req.user.id,String(prompt),12,true);
     } catch {}
-    const seen = new Set();
-    const all = [...(Array.isArray(memories) ? memories : []), ...serverMems]
-      .filter((m) => m && m.text && !seen.has(m.text) && seen.add(m.text));
+    const all = serverMems;
     const ranked = rankMemories(all, String(prompt));
     push(entry('book', `memory_read: ${ranked.length} relevant of ${all.length} account memories`));
     // Past-conversation lookup (Strawberry-style transcripts): when the user
@@ -728,7 +735,7 @@ app.post('/api/chat/stream', rateLimit(60, 60000), requireAuth(async (req, res) 
     try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
   };
   try {
-    const { prompt, history, replyTo, agent, memories, sessionId, activeTask, delegated } = req.body || {};
+    const { prompt, history, replyTo, agent, sessionId, activeTask, delegated } = req.body || {};
     checkPrompt(prompt);
     if (asksAboutInternalDetails(prompt)) {
       send({ delta: INTERNAL_DETAILS_REPLY });
@@ -739,11 +746,9 @@ app.post('/api/chat/stream', rateLimit(60, 60000), requireAuth(async (req, res) 
     const tools = pickTools(prompt + ' ' + (agent?.name || ''));
     let serverMems = [];
     try {
-      serverMems = await store.listMemories(req.user.id);
+      serverMems = await store.searchMemories(req.user.id,String(prompt),12,true);
     } catch {}
-    const seen = new Set();
-    const all = [...(Array.isArray(memories) ? memories : []), ...serverMems]
-      .filter((m) => m && m.text && !seen.has(m.text) && seen.add(m.text));
+    const all = serverMems;
     const ranked = rankMemories(all, String(prompt));
     let pastTxt = '';
     if (/(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous|remember when)/i.test(String(prompt))) {
@@ -902,6 +907,7 @@ app.get('/api/github/diff', rateLimit(30, 60000), requireAuth(async (req, res) =
   }
 }));
 
+// ---------- agent wallet + attached card (Privy; keys stay in TEEs) ----------
 app.get('/api/wallet', requireAuth(async (req, res) => {
   try {
     res.json(await privy.snapshot(req.user.id, { ensure: privy.configured() }));
@@ -945,6 +951,40 @@ app.post('/api/wallet/limit', rateLimit(20, 60000), requireAuth(async (req, res)
     const code = e.code === 'BAD_INPUT' || e.code === 'NO_WALLET' ? 400 : 502;
     res.status(code).json({ error: e.message });
   }
+}));
+
+function shopPayErr(e) {
+  return e.code === 'BAD_INPUT' || e.code === 'NEED_CONFIRM' || e.code === 'LIMIT' || e.code === 'NO_SHOP_LINK' ? 400
+    : e.code === 'NO_SHOP' ? 503
+    : 502;
+}
+app.get('/api/ucp-profile', (req, res) => {
+  res.json(shoppay.platformProfile(siteOrigin(req)));
+});
+app.get('/api/shop-pay', requireAuth(async (req, res) => {
+  try { res.json(await shoppay.snapshot(req.user.id)); }
+  catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
+}));
+app.post('/api/shop-pay/connect', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  try { res.json(await shoppay.startConnect(req.user.id, { origin: siteOrigin(req) })); }
+  catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
+}));
+app.get('/api/shop-pay/callback', rateLimit(20, 60000), async (req, res) => {
+  const back = (ok, msg) => res.redirect('/?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
+  try {
+    await shoppay.finishConnect(req.query || {});
+    back(true);
+  } catch (e) {
+    back(false, e.message || 'Shop Pay connect failed.');
+  }
+});
+app.post('/api/shop-pay/disconnect', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  try { res.json(await shoppay.disconnect(req.user.id)); }
+  catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
+}));
+app.post('/api/shop-pay/limit', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  try { res.json(await shoppay.setDailyLimit(req.user.id, (req.body || {}).dailyLimitUsd)); }
+  catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
 }));
 
 function mailErr(e) {
@@ -1007,18 +1047,36 @@ app.get('/api/history/search', requireAuth(async (req, res) => {
   res.json({ turns: await store.searchTurns(req.user.id, q) });
 }));
 
+// ---------- durable personal-agent identity and editable context ----------
+app.get('/api/agent-context', requireAuth(async (req, res) => {
+  res.json(await store.getAgentContext(req.user.id));
+}));
+app.put('/api/agent-context', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  try {
+    const body=req.body || {};
+    res.json(await store.saveAgentContext(req.user.id,{agent:body.agent,documents:body.documents,revision:body.revision}));
+  } catch(e) { res.status(e.code==='CONFLICT'?409:e.code==='PERSISTENCE'?503:400).json({error:e.message}); }
+}));
+
 // ---------- memories (auth-derived user) ----------
 app.get('/api/memories', requireAuth(async (req, res) => {
-  res.json({ memories: await store.listMemories(req.user.id) });
+  const query=String(req.query.q || '').slice(0,300),limit=Math.min(Math.max(Number(req.query.limit) || 250,1),1000),offset=Math.max(Number(req.query.offset) || 0,0);
+  const [memories,stats]=await Promise.all([query?store.searchMemories(req.user.id,query,limit):store.listMemories(req.user.id,{limit,offset}),store.memoryStats(req.user.id)]);
+  res.json({memories,total:stats.active,query,offset});
 }));
-app.post('/api/memories', requireAuth(async (req, res) => {
-  const { text, src } = req.body || {};
+app.post('/api/memories', rateLimit(30,60000), requireAuth(async (req, res) => {
+  const {text,category,importance}=req.body || {};
   if (!text) return res.status(400).json({ error: 'text required' });
-  res.json({ memory: await store.addMemory(req.user.id, String(text), String(src || 'chat')) });
+  try {res.json({memory:await store.addMemory(req.user.id,String(text),'user',{category,importance})});}
+  catch(e) { res.status(e.code==='PERSISTENCE'?503:400).json({error:e.message}); }
+}));
+app.patch('/api/memories/:id',rateLimit(30,60000),requireAuth(async(req,res)=>{
+  try{res.json({memory:await store.updateMemory(req.user.id,req.params.id,{text:req.body?.text,category:req.body?.category,importance:req.body?.importance,src:'user_edit'})});}
+  catch(e){res.status(e.code==='NOT_FOUND'?404:e.code==='PERSISTENCE'?503:400).json({error:e.message});}
 }));
 app.delete('/api/memories/:id', requireAuth(async (req, res) => {
-  await store.delMemory(req.user.id, req.params.id);
-  res.json({ ok: true });
+  try{const count=await store.delMemory(req.user.id,req.params.id);if(!count)return res.status(404).json({error:'Memory not found.'});res.json({ok:true,deleted:count});}
+  catch(e){res.status(e.code==='PERSISTENCE'?503:400).json({error:e.message});}
 }));
 
 // ---------- vault secrets ----------

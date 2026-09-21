@@ -34,6 +34,7 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
         if (endpoint === '/api/auth/me') body = {user:session.user};
         if (endpoint === '/api/auth/google/enabled') body = {enabled:true};
         if (endpoint === '/api/agent/tasks') body = {tasks:[]};
+        if (endpoint === '/api/sandbox/presence') body = {status:'ready', mode:'account-only', warmed:false, container:false};
         if (endpoint === '/api/agent/conversation') {
           runs.push(route.request().postDataJSON());
           return route.fulfill({ contentType:'text/event-stream', body:'data: {"type":"done","status":"completed"}\n\n' });
@@ -80,6 +81,7 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       await page.waitForSelector('[data-o="Rosehip"]');
       await page.click('[data-o="Rosehip"]');
       await page.waitForSelector('[data-act="open-passport"]');
+      await page.waitForFunction(() => /own secure computer/.test(document.querySelector('#thread')?.innerText || ''));
       assert.match(await page.locator('#thread').innerText(), /own secure computer/);
       assert.equal(await page.locator('button.qopt').count(), 0, 'no expression/personality step');
       assert.equal((await readState(page)).onboarded, false);
@@ -94,7 +96,10 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       assert.equal(final.canvasTab, 'canvas');
       assert.equal(await page.locator('.canvas-seg [data-t="passport"]').count(), 0);
       assert.equal(await page.locator('.canvas-seg [data-t="library"]').count(), 0);
-      await page.waitForFunction(() => document.querySelector('.agent-hero-status')?.textContent.includes('Disconnected'));
+      await page.waitForFunction(() => {
+        const text = document.querySelector('.agent-hero-status')?.textContent || '';
+        return /Available|Agent ready/.test(text) && !/Disconnected/.test(text);
+      });
       if (!await page.locator('[data-act="nav"][data-view="settings"]').count()) await page.click('[data-act="usermenu"]');
       await page.click('[data-act="nav"][data-view="settings"]');
       await page.waitForSelector('[data-act="stab"][data-t="library"]');

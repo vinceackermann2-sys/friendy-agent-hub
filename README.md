@@ -11,6 +11,12 @@ simulated.** AI answers come from Gemini server-side, research does live web
 fetches with citations, GitHub reviews hit the real api.github.com with your
 own token, pages are Gemini-generated.
 
+Browser/computer work appears in Canvas through a persistent Chromium CDP
+screencast relay. It is a continuous interactive stream over an authenticated
+outbound WebSocket from the private VM; it does not expose VNC/RDP and does not
+wait for a new screenshot after every action. Set `LINGON_PUBLIC_ORIGIN` (or
+`SITE_URL`) to the public HTTPS app origin so VMs can connect back to the relay.
+
 ## Quick start (Windows)
 
 ```powershell

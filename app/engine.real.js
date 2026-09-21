@@ -60,6 +60,7 @@ window.Engine = (() => {
     const payload = {
       prompt, history, replyTo: current?.replyTo,
       agent: { name: rt.agent.name, pers: rt.agent.pers }, memories,
+      attachments: (current?.files || []).map(f => ({ name: f.name, type: f.type, size: f.size, dataUrl: f.dataUrl })),
       sessionId: rt.chat.id, activeTask: options.activeTask || undefined,
       delegated: !!options.delegated,
     };
