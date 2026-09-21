@@ -16,11 +16,11 @@ let modelCall = async () => modelReplies.shift();
 const fakeGemini = { MODEL_DEFAULT: 'test-model', MODEL_FALLBACK: 'test-model',
   callGeminiWithTools: (options) => modelCall(options) };
 const fakeRunner = { ensureCredit: async () => {}, logModelUsage: async () => {} };
-const fakeTools = { TOOLS: { shell: { approval: false, run: async (_, ctx) => {
+const fakeTools = { TOOLS: { shell: { name: 'shell', approval: false, run: async (_, ctx) => {
   assert.equal(ctx.vmReady, true, 'VM tools should reuse the confirmed agent lease');
   calls.push('tool');
   return { stdout: 'ok' };
-} } } };
+} } }, pickTools: (prompt) => /command/i.test(prompt) ? [{ name:'shell' }] : [] };
 const fakeGuardrails = { checkPrompt: () => {}, protectAgentResponse: (_, text) => text };
 const fakeMemory = { rankMemories: () => [], maybeExtract: async () => {
   calls.push('memory-start');
@@ -28,7 +28,7 @@ const fakeMemory = { rankMemories: () => [], maybeExtract: async () => {
   calls.push('memory-end');
   return { saved: [] };
 } };
-const fakeStore = { listMemories: async () => [], saveTurn: async () => {}, logToolRun: async () => {} };
+const fakeStore = { listMemories: async () => [], syncAgentContext: async (_, agent) => ({ agent, documents:{} }), saveTurn: async () => {}, logToolRun: async () => {} };
 const fakeAzure = { isAzureConfigured: () => true,
   getSandbox: async () => ({ mode: 'azure', vmName: 'test-vm' }),
   acquireLease: async (_, { leaseId }) => { vmCalls.push(['acquire', leaseId]); },
@@ -60,6 +60,13 @@ function response() {
 }
 
 (async () => {
+  modelCall = async (options) => {
+    const reply = modelReplies.shift();
+    if (options.onDelta && reply?.text && !(reply.functionCalls || []).length) {
+      for (const part of String(reply.text).match(/(\s+|[^\s]+)/g) || [reply.text]) options.onDelta(part);
+    }
+    return reply;
+  };
   modelReplies = [{ text: 'Fast answer', functionCalls: [], usage: null }];
   const answerReady = defer();
   const events = [];
@@ -70,6 +77,9 @@ function response() {
   await answerReady.promise;
   assert.equal(vmCalls.length, 0, 'plain chat must not start the VM');
   assert.equal(events.find((event) => event.type === 'message').text, 'Fast answer');
+  const deltas = events.filter((event) => event.type === 'message_delta').map((event) => event.delta).join('');
+  assert.equal(deltas, 'Fast answer');
+  assert.ok(events.findIndex((event) => event.type === 'message_delta') < events.findIndex((event) => event.type === 'message'), 'tokens arrive before the final card');
   assert.ok(events.some((event) => event.type === 'progress' && event.stage === 'model'));
   assert.ok(calls.includes('memory-start'));
   assert.ok(!calls.includes('memory-end'), 'answer must arrive before memory extraction finishes');

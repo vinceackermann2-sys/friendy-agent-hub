@@ -49,7 +49,7 @@ async function ensureCredit(userId) {
   }
 }
 
-async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, signal, onDelta }) {
+async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, signal, onDelta, attachments }) {
   const direct = currentTimeAnswer(task);
   if (direct) {
     // Keep streaming UX consistent even for instant clock answers:
@@ -69,7 +69,7 @@ async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, 
   const replyContext = replyTo && replyTo.text
     ? `[The user is replying to this ${replyTo.role === 'user' ? 'user' : 'assistant'} message: ${String(replyTo.text).slice(0, 500)}]\n\n`
     : '';
-  const r = await callGemini({ prompt: replyContext + task, system, history: h2, model, signal, onDelta });
+  const r = await callGemini({ prompt: replyContext + task, system, history: h2, model, signal, onDelta, attachments });
   return { text: r.text, usage: r.usage, model: r.model || model, compacted, compactUsage: costUsage || null };
 }
 

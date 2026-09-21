@@ -40,25 +40,23 @@
   <p>Temporal Associative Memory: reduced-width causal attention and a diagonal affine scan run in parallel. A learned gate mixes them. About 55% of the signal goes through state.</p>
 
   <figure class="diagram" aria-hidden="true">
-    <svg viewBox="0 0 840 230" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="24" y="86" width="120" height="58" rx="14" fill="#FFFFFF" stroke="#E7E7EA"/>
-      <text x="84" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
-      <path d="M144 115H188" stroke="#17181A" stroke-width="2"/>
-      <polygon points="188,111 198,115 188,119" fill="#17181A"/>
-      <rect x="198" y="28" width="200" height="70" rx="14" fill="#ECECF0" stroke="#E7E7EA"/>
-      <text x="298" y="58" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Causal attention</text>
-      <text x="298" y="78" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">reduced width</text>
-      <rect x="198" y="132" width="200" height="70" rx="14" fill="#E9F4EE" stroke="#BFE0CC"/>
-      <text x="298" y="162" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">World-state scan</text>
-      <text x="298" y="182" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="11" fill="#6E7076">s = αs + u</text>
-      <path d="M398 63H470" stroke="#17181A" stroke-width="2"/>
-      <path d="M398 167H470" stroke="#3E8E5A" stroke-width="2"/>
-      <rect x="470" y="86" width="130" height="58" rx="14" fill="#17181A"/>
-      <text x="535" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#fff">Gate g</text>
-      <path d="M600 115H648" stroke="#17181A" stroke-width="2"/>
-      <polygon points="648,111 658,115 648,119" fill="#17181A"/>
-      <rect x="658" y="86" width="158" height="58" rx="14" fill="#fff" stroke="#E7E7EA"/>
-      <text x="737" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Block output</text>
+    <svg viewBox="0 0 840 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="24" y="61" width="120" height="58" rx="14" fill="#FFFFFF" stroke="#E7E7EA"/>
+      <text x="84" y="95" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Tokens</text>
+      <path d="M144 90H188" stroke="#17181A" stroke-width="2"/>
+      <polygon points="188,86 198,90 188,94" fill="#17181A"/>
+      <rect x="198" y="28" width="200" height="48" rx="14" fill="#ECECF0" stroke="#E7E7EA"/>
+      <text x="298" y="57" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Attention</text>
+      <rect x="198" y="104" width="200" height="48" rx="14" fill="#E9F4EE" stroke="#BFE0CC"/>
+      <text x="298" y="133" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">World-state</text>
+      <path d="M398 52H470" stroke="#17181A" stroke-width="2"/>
+      <path d="M398 128H470" stroke="#3E8E5A" stroke-width="2"/>
+      <rect x="470" y="61" width="130" height="58" rx="14" fill="#17181A"/>
+      <text x="535" y="95" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#fff">Gate</text>
+      <path d="M600 90H648" stroke="#17181A" stroke-width="2"/>
+      <polygon points="648,86 658,90 648,94" fill="#17181A"/>
+      <rect x="658" y="61" width="158" height="58" rx="14" fill="#fff" stroke="#E7E7EA"/>
+      <text x="737" y="95" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">Block output</text>
     </svg>
     <figcaption class="diagram-cap">Attention and the recurrent notebook update together. The gate learns to send about 55% of the signal through state.</figcaption>
   </figure>

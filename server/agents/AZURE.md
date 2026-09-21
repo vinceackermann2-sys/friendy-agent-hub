@@ -8,19 +8,24 @@ Gemini 3.5 stays on the Lingon server (API key never copied to the VM). Memory a
 - Name: `lingon-sb-<sha256(userId)[0:24]>`
 - Size: `Standard_B2als_v2` (2 vCPU, 4 GB) · Ubuntu 22.04 · Sweden Central
 - No public IP / SSH. Workspace: `/home/lingon/workspace` on the OS disk
-- First boot installs Node 22 + Chromium via cloud-init
-- Browser frames are uploaded to a private Blob container with a blob-specific, five-minute SAS, fetched by Lingon, and deleted immediately. The VM still has no inbound ports.
+- First boot installs Node 22 + Chromium plus Podman and the configured worker image via cloud-init
+- The live browser uses a persistent Chromium CDP screencast relay. The VM makes one outbound, session-scoped `wss://` connection to Lingon; Canvas receives binary live frames and sends authenticated mouse/keyboard events back. The VM still has no inbound ports and no VNC/RDP/noVNC service.
+- A private Blob screenshot is retained only as a compatibility fallback for deployments without `LINGON_PUBLIC_ORIGIN` (or `SITE_URL`).
 
 ## Lifecycle
 
-- **Start** automatically when the Belna app opens, an agent turn runs, or a browser session starts.
-- The app sends a short-lived per-user lease heartbeat while it is open; agent and browser leases are renewed while active.
-- **Deallocate** as soon as the last lease is released or expires (with the idle sweep as a recovery backstop).
-- Deallocate keeps the disk. Next start restores files. Memory/secrets are not on the disk.
+- **Start** only when an agent actually needs shell, code, browser, or computer work. Opening the app and ordinary chat make a zero-compute status request.
+- Shell and code run in a short-lived hardened Podman container inside the VM. The container has no network, no capabilities, a read-only root, resource limits, and only the task workspace mounted.
+- Agent, background-task, and browser leases are renewed while active. After the last lease, the VM stays warm for `AZURE_VM_IDLE_MINUTES` (5 by default), then the sweeper snapshots state and deallocates it.
+- Deallocation keeps the OS disk. The workspace and browser profile are also copied to private Blob storage and restored after VM replacement. Memory, secrets, chats, and documents remain in account storage.
 
 ## Cost (pay-as-you-go, Sweden Central, Linux B2als v2)
 
-Retail meter (Oct 2025): **$0.0432 / hour** while running.
+Illustrative Linux B2als v2 meter from an older estimate: **$0.0432 / hour** while running; verify the current Sweden Central Azure Retail Price before using it for billing.
+
+The worker container runs inside that VM and does not create a second Container
+Apps compute meter. Stopped VMs can still incur managed-disk, Blob, image, and
+network charges. Verify current regional pricing before publishing a price.
 
 | Usage | Approx. compute | Plus disk when stopped |
 |---|---|---|
@@ -40,7 +45,7 @@ AZURE_SUBSCRIPTION_ID=
 AZURE_RESOURCE_GROUP=
 AZURE_LOCATION=swedencentral
 AZURE_VM_SIZE=Standard_B2als_v2
-AZURE_VM_IDLE_MINUTES=30
+AZURE_VM_IDLE_MINUTES=5
 AZURE_AUTO_PROVISION=true
 # Optional; otherwise a deterministic Belna-only name is generated.
 AZURE_STORAGE_ACCOUNT=

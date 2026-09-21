@@ -26,7 +26,7 @@ async function main() {
   assert.equal(eventMatches({ type: "app", app: "github", event: "pull_request.changed" }, { type: "app", app: "github", event: "pull_request.changed" }), true);
   assert.equal(eventMatches({ type: "subagent", sourceAgentId: "a" }, { type: "subagent", sourceAgentId: "b", event: "completed" }), false);
   assert.throws(() => normalizeSubAgent({ name: "Too fast", prompt: "Check", trigger: { type: "schedule", intervalMinutes: 1 } }), /between 5/);
-  assert.deepEqual(pickTools("schedule a sub agent automation").map((tool) => tool.name).sort(), ["memory_write", "trigger_create", "trigger_list"]);
+  assert.deepEqual(pickTools("schedule a sub agent automation").map((tool) => tool.name).sort(), ["capability_search", "memory_write", "trigger_create", "trigger_list"]);
 
   const active = { status: "running", kind: "research" };
   assert.equal(routeMessage(active, "What sources are you checking?"), "respond");

@@ -31,8 +31,9 @@
           const out=await api('/api/agent/tasks/advance',{chatId:rt.chat.id,taskId,after:task.sequence});
           if(owner()!==userId) break;
           rt.managedTask(out.task);failures=0;
-          // Transport contention backoff only; never creates a progress card.
-          if(out.task.revision<=task.revision+1) await sleep(3000);
+          // The server claim protects every step, so continue as soon as the
+          // previous step is durably stored instead of adding a fixed pause.
+          await Promise.resolve();
         } catch(error) {
           if(owner()!==userId || error.code===401) break;
           if(++failures===3) rt.taskConnection?.(taskId,false);
@@ -98,6 +99,11 @@
         if (!data) return;
         const event = JSON.parse(data);
         if (controller.signal.aborted || owner()!==runOwner) return;
+        if (event.type === 'message_retract') {
+          rt.managedEvent(event);
+          if (!indicator) indicator = rt.typing({mood:'think'});
+          return;
+        }
         if (['message','message_delta','done','paused','error'].includes(event.type)) clearIndicator();
         if (event.type === 'message' && event.phase === 'final_answer') runState.answerReady = true;
         if(event.type==='task') {acceptTask(rt,event.task);void recoverTasks(rt);}
@@ -144,7 +150,7 @@
     }));
     return stream(rt, '/api/agent/conversation', { prompt, requestId: crypto.randomUUID(), history,
       context: { agent: { name: rt.agent.name, pers: rt.agent.pers }, replyTo: last?.replyTo,
-        artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, dataUrl:f.dataUrl })) } });
+        artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, type:f.type, size:f.size, dataUrl:f.dataUrl })) } });
   }
   async function cancelCurrent(rt, replacing = false) {
     const current = active.get(rt.chat.id);

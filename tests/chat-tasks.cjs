@@ -67,6 +67,30 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   });
   await degraded.run({userId:'a',chatId:'chat',requestId:'degraded',prompt:'Hello',onEvent:e=>degradedEvents.push(e)});
   assert.equal(degradedEvents.find(e=>e.type==='message').text,'Direct answer while tasks recover.');
+
+  const streamedEvents=[];
+  const streamed=createCoordinator({
+    tasks:{summaries:async()=>[]},
+    model:async opts=>{
+      opts.onDelta('Par');opts.onDelta('is.');
+      return {text:'Paris.'};
+    },
+    schemas:[],tools:{},azure:{getSandbox:async()=>({mode:'azure'})},
+    store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:h.d.checkPrompt,
+    protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],
+  });
+  await streamed.run({userId:'a',chatId:'chat',requestId:'stream',prompt:'Capital?',onEvent:e=>streamedEvents.push(e)});
+  assert.deepEqual(streamedEvents.filter(e=>e.type==='message_delta').map(e=>e.delta),['Par','is.']);
+  assert.equal(streamedEvents.find(e=>e.type==='message').text,'Paris.');
+  const retracted=[];
+  const toolThen=createCoordinator({
+    tasks:h.runtime,model:async opts=>{opts.onDelta('I will ');opts.onDelta('search.');return {functionCalls:[{name:'delegate_task',args:{title:'Research',instructions:'Research'}}]};},
+    schemas:[],tools:{},azure:h.d.azure,store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',
+    ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:h.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],
+  });
+  await toolThen.run({userId:'a',chatId:'chat',requestId:'retract',prompt:'Research',onEvent:e=>retracted.push(e)});
+  assert.ok(retracted.some(e=>e.type==='message_retract'));
+  assert.ok(retracted.some(e=>e.type==='task'));
   assert.deepEqual(degradedModels[0].tools.map(t=>t.name),['history_search']);
   assert.match(degradedModels[0].system,/Task storage is temporarily unavailable/);
   assert.equal(degradedReports[0].event,'task_storage_unavailable');

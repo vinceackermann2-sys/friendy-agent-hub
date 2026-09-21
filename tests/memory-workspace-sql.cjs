@@ -1,0 +1,32 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const { PGlite } = require('@electric-sql/pglite');
+
+(async () => {
+  const db = new PGlite();
+  await db.exec("create role anon; create role authenticated; create role service_role; create table public.profiles(id text primary key); insert into public.profiles values('user-a'),('user-b'); create table public.memories(id text primary key,user_id text not null references public.profiles(id),text text not null,src text default 'chat',created_at timestamptz default now());");
+  await db.exec(fs.readFileSync(require.resolve('../supabase/migrations/20260921143000_memory_workspace.sql'), 'utf8'));
+  const q = async (sql, args=[]) => (await db.query(sql,args)).rows;
+  for(let i=0;i<205;i++) await q('insert into public.memories(id,user_id,text) values($1,$2,$3)', [`m${i}`,'user-a',i===0?'Project lingon has a secret codename nebula':'Routine unrelated note '+i]);
+  await q("insert into public.memories(id,user_id,text) values('other','user-b','Project nebula is different')");
+  assert.equal((await q("select count(*)::integer n from public.memories where user_id='user-a'"))[0].n,205);
+  const found=await q("select * from public.search_agent_memories('user-a','nebula project',12)");
+  assert.deepEqual(found.map(row=>row.id),['m0']);
+  await q("insert into public.memories(id,user_id,text,category,importance) values('profile','user-a','User prefers concise replies','user',2)");
+  assert.deepEqual((await q("select id from public.search_agent_memories('user-a','mystical avocado',12)")).map(row=>row.id),[]);
+  assert.deepEqual((await q("select id from public.search_agent_memories('user-a','mystical avocado',12,true)")).map(row=>row.id),['profile']);
+  const next=await q("select * from public.supersede_agent_memory('user-a','m0','m-new','Project lingon codename is aurora','long_term','user_edit',2::smallint)");
+  assert.equal(next[0].text,'Project lingon codename is aurora');
+  assert.equal((await q("select status from public.memories where id='m0'"))[0].status,'superseded');
+  assert.equal((await q("select count(*)::integer n from public.search_agent_memories('user-a','nebula',12)"))[0].n,0);
+  assert.deepEqual((await q("select id from public.search_agent_memories('user-a','aurora',12)")).map(row=>row.id),['m-new']);
+  assert.equal((await q("select public.forget_agent_memory('user-a','m-new') n"))[0].n,2);
+  assert.equal((await q("select count(*)::integer n from public.memories where id in ('m0','m-new')"))[0].n,0);
+  assert.equal((await q("select count(*)::integer n from public.memories where id='other'"))[0].n,1);
+  await db.exec('set role authenticated');
+  await assert.rejects(q('select * from public.memories'),/permission denied/);
+  await assert.rejects(q("select * from public.search_agent_memories('user-a','aurora',12)"),/permission denied/);
+  await assert.rejects(q("select public.forget_agent_memory('user-a','m-new')"),/permission denied/);
+  await db.close();
+  console.log('memory workspace SQL: unbounded rows, scoped search, supersession, full forgetting, service-only access: ok');
+})().catch(error=>{console.error(error);process.exitCode=1;});
