@@ -1,5 +1,5 @@
 /* Lingon REAL smoke — auth + billing + no fakes.
-   Requires: npm start on http://127.0.0.1:8000, GEMINI_API_KEY + Supabase set.
+   Requires: npm start on http://127.0.0.1:8000, Foundry config + Supabase set.
    Flow: health → signup test user → auth gate → onboarding → real chat →
    research (live, no fake stats) → vault masked → Apps empty → billing Free 20 credits.
 */
@@ -14,7 +14,7 @@ import { chromium } from 'playwright';
     const r = await fetch(base + '/api/health');
     const j = await r.json();
     console.log('HEALTH:', JSON.stringify(j));
-    if (!j.gemini) throw new Error('gemini:false — set GEMINI_API_KEY');
+    if (!j.foundry) throw new Error('foundry:false — set AZURE_FOUNDRY_PROJECT_ENDPOINT and AZURE_FOUNDRY_API_KEY');
     if (!j.supabase) throw new Error('supabase:false — set SUPABASE keys');
   } catch (e) {
     console.error('SMOKE FAIL — backend: ' + e.message);

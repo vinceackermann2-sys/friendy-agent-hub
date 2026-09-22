@@ -1,6 +1,6 @@
 /* Agent harness — the real (non-Codex) tool boundary.
    NOTE (honest): this is NOT the OpenAI Codex Agents API. It is our own
-   Gemini-backed harness with the same safety shape: tools run server-side,
+   Foundry-backed harness with the same safety shape: tools run server-side,
    secrets never enter model context, sensitive tools need explicit approval,
    every run is traceable. Frontend Trace tab renders these entries.
 
@@ -32,7 +32,7 @@ const TOOL_POLICY = {
   web_fetch: { approval: false, desc: 'Live HTTP fetch (allowlisted hosts only)' },
   github_prs: { approval: true, desc: 'Read-only GitHub PR list with user PAT' },
   github_diff: { approval: true, desc: 'Read-only GitHub diff with user PAT' },
-  build_page: { approval: false, desc: 'Gemini-generated sandboxed HTML' },
+  build_page: { approval: false, desc: 'Model-generated sandboxed HTML' },
   memory_write: { approval: false, desc: 'User-scoped memory write' },
   trigger_create: { approval: true, desc: 'Create a user-scoped schedule, app, or sub-agent trigger' },
   trigger_list: { approval: false, desc: 'List the user’s own trigger watchers' },

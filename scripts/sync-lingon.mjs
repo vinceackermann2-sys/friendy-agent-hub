@@ -64,9 +64,31 @@ function syncAzureProvider() {
 
 syncAzureProvider();
 
+function syncFoundryProvider() {
+  const srcFile = 'server/foundry.js';
+  const edgeFile = 'src/lingon-server/foundry.js';
+  const exportsMarker = '\nmodule.exports = {';
+  const src = readFileSync(join(root, srcFile), 'utf8');
+  const exportsAt = src.lastIndexOf(exportsMarker);
+  if (exportsAt < 0 || /\brequire\s*\(/.test(src.slice(0, exportsAt))) {
+    console.error(`sync-lingon: could not convert ${srcFile} to ESM`);
+    failures++;
+    return;
+  }
+  const esm = src.slice(0, exportsAt)
+    + '\nexport {'
+    + src.slice(exportsAt + exportsMarker.length);
+  const to = join(root, edgeFile);
+  mkdirSync(dirname(to), { recursive: true });
+  writeFileSync(to, esm, 'utf8');
+  console.log(`sync-lingon: ${srcFile} -> ${edgeFile} (ESM)`);
+}
+
+syncFoundryProvider();
+
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments']) {
+for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);

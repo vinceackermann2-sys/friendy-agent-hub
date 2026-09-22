@@ -1,7 +1,7 @@
 # Belna/Lingon Azure VM sandbox
 
 Each user gets **one dedicated Azure VM** for the agent’s computer: terminal, browser, code, files.
-Gemini 3.5 stays on the Lingon server (API key never copied to the VM). Memory and vault stay in Lingon/Supabase.
+Microsoft Foundry calls stay on the Lingon server (the API key is never copied to the VM). Memory and vault stay in Lingon/Supabase.
 
 ## VM
 

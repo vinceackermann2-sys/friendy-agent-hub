@@ -13,8 +13,8 @@ let vmCalls = [];
 let releaseMemory = defer();
 let modelReplies = [];
 let modelCall = async () => modelReplies.shift();
-const fakeGemini = { MODEL_DEFAULT: 'test-model', MODEL_FALLBACK: 'test-model',
-  callGeminiWithTools: (options) => modelCall(options) };
+const fakeFoundry = { MODEL_DEFAULT: 'test-model', MODEL_FALLBACK: 'test-model',
+  callFoundryWithTools: (options) => modelCall(options) };
 const fakeRunner = { ensureCredit: async () => {}, logModelUsage: async () => {} };
 const fakeTools = { TOOLS: { shell: { name: 'shell', approval: false, run: async (_, ctx) => {
   assert.equal(ctx.vmReady, true, 'VM tools should reuse the confirmed agent lease');
@@ -35,7 +35,7 @@ const fakeAzure = { isAzureConfigured: () => true,
   renewLease: async () => {},
   releaseLease: async (_, { leaseId }) => { vmCalls.push(['release', leaseId]); },
 };
-const mocks = { '../gemini': fakeGemini, './runner': fakeRunner, './tools': fakeTools,
+const mocks = { '../foundry': fakeFoundry, './runner': fakeRunner, './tools': fakeTools,
   './tracing': { entry: (_, text) => ({ t: text }) }, './guardrails': fakeGuardrails,
   './memory': fakeMemory, '../store': fakeStore, './azure-vm': fakeAzure };
 const originalLoad = Module._load;

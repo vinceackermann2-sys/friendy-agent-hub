@@ -1,8 +1,8 @@
 const assert=require('node:assert/strict');
-const geminiPath=require.resolve('../server/gemini');
+const foundryPath=require.resolve('../server/foundry');
 const storePath=require.resolve('../server/store');
 let answer={facts:[]},writes=[],updates=[];
-require.cache[geminiPath]={id:geminiPath,filename:geminiPath,loaded:true,exports:{MODEL_FALLBACK:'cheap',callGemini:async()=>({text:JSON.stringify(answer),usage:null,model:'cheap'})}};
+require.cache[foundryPath]={id:foundryPath,filename:foundryPath,loaded:true,exports:{MODEL_FALLBACK:'cheap',callFoundry:async()=>({text:JSON.stringify(answer),usage:null,model:'cheap'})}};
 require.cache[storePath]={id:storePath,filename:storePath,loaded:true,exports:{
   addMemory:async(userId,text,src,meta)=>{writes.push({userId,text,src,meta});return {id:'new-'+writes.length,text,src,category:meta.category};},
   updateMemory:async(userId,id,input)=>{updates.push({userId,id,input});return {id:'corrected',text:input.text,category:input.category};},

@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const store = require('./store');
 
 const UCP_VERSION = '2026-08-25';
-const SHOP_SCOPES = 'openid email dev.ucp.shopping.catalog.search:read dev.ucp.shopping.checkout:manage';
+const SHOP_SCOPES = 'openid dev.ucp.shopping.catalog.search:read dev.ucp.shopping.checkout:manage';
 const CATALOG_HOST = 'catalog.shopify.com';
 const DEFAULT_DAILY = 200;
 const MAX_USD = 2000;
@@ -16,9 +16,35 @@ const discoveryCache = new Map();
 function env(name) {
   return String(process.env[name] || process.env['LINGON_' + name] || '').trim();
 }
-function clientId() { return env('SHOPIFY_CLIENT_ID') || env('SHOP_PAY_CLIENT_ID'); }
-function clientSecret() { return env('SHOPIFY_CLIENT_SECRET') || env('SHOP_PAY_CLIENT_SECRET'); }
+let credentialCache = { clientId: '', clientSecret: '', expiresAt: 0 };
+function clientId() { return env('SHOPIFY_CLIENT_ID') || env('SHOP_PAY_CLIENT_ID') || credentialCache.clientId; }
+function clientSecret() { return env('SHOPIFY_CLIENT_SECRET') || env('SHOP_PAY_CLIENT_SECRET') || credentialCache.clientSecret; }
 function configured() { return clientId().length > 8 && clientSecret().length > 8; }
+async function loadCredentials() {
+  if (env('SHOPIFY_CLIENT_ID') && env('SHOPIFY_CLIENT_SECRET')) return;
+  if (credentialCache.expiresAt > Date.now()) return;
+  const url = env('SUPABASE_URL').replace(/\/$/, '');
+  const key = env('SUPABASE_SERVICE_ROLE_KEY') || env('SUPABASE_SECRET_KEY');
+  if (!url || !key) { credentialCache.expiresAt = Date.now() + 30e3; return; }
+  const readSecret = async (name) => {
+    const response = await fetch(`${url}/rest/v1/rpc/get_server_secret`, {
+      method: 'POST',
+      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_name: name }),
+    });
+    if (!response.ok) return '';
+    return String(await response.json().catch(() => '') || '').trim();
+  };
+  try {
+    const [id, secret] = await Promise.all([
+      readSecret('shopify_client_id'),
+      readSecret('shopify_client_secret'),
+    ]);
+    credentialCache = { clientId: id, clientSecret: secret, expiresAt: Date.now() + (id && secret ? 5 : 0.5) * 60e3 };
+  } catch {
+    credentialCache.expiresAt = Date.now() + 30e3;
+  }
+}
 function siteUrl() { return env('SITE_URL').replace(/\/$/, ''); }
 function profileUrl(origin) {
   const base = String(origin || siteUrl() || '').replace(/\/$/, '');
@@ -169,6 +195,7 @@ async function formPost(url, fields, extraHeaders) {
 
 let appTokenCache = { token: '', exp: 0 };
 async function appAccessToken() {
+  await loadCredentials();
   if (!configured()) fail('NO_SHOP', 'Shop Pay is not configured (SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET).');
   if (appTokenCache.token && appTokenCache.exp > Date.now() + 30e3) return appTokenCache.token;
   const r = await fetch('https://api.shopify.com/auth/access_token', {
@@ -188,6 +215,7 @@ function shopTokenFromRow(row) {
 }
 
 async function buyerLinkedToken(userId, { resourceHost, scope } = {}) {
+  await loadCredentials();
   const row = await store.getShopPayAccount(userId);
   const shopToken = shopTokenFromRow(row);
   if (!shopToken) fail('NO_SHOP_LINK', 'Connect Shop Pay in Payments first.');
@@ -337,6 +365,7 @@ async function remainingUsd(userId, limit) {
 }
 
 async function snapshot(userId) {
+  await loadCredentials();
   const row = userId ? await store.getShopPayAccount(userId) : null;
   const orders = userId ? await store.listShopPayOrders(userId, 12) : [];
   const remaining = userId ? await remainingUsd(userId, row && row.dailyLimitUsd) : null;
@@ -363,6 +392,7 @@ async function agentStatus(userId) {
 
 async function startConnect(userId, { origin } = {}) {
   requireUser(userId);
+  await loadCredentials();
   if (!configured()) fail('NO_SHOP', 'Shop Pay is not configured on this server yet.');
   const shop = await shopAuthServer();
   const state = crypto.randomBytes(24).toString('hex');
@@ -391,6 +421,7 @@ async function startConnect(userId, { origin } = {}) {
 }
 
 async function finishConnect({ code, state, error, error_description }) {
+  await loadCredentials();
   if (error) fail('BAD_INPUT', String(error_description || error || 'Shop Pay connect cancelled.').slice(0, 200));
   const row = await store.findShopPayByOAuthState(state);
   if (!row || !row.oauthExp || row.oauthExp < Date.now()) fail('BAD_INPUT', 'Shop Pay connect expired — try again.');
@@ -427,6 +458,7 @@ async function finishConnect({ code, state, error, error_description }) {
 
 async function disconnect(userId) {
   requireUser(userId);
+  await loadCredentials();
   const row = await store.getShopPayAccount(userId);
   const token = shopTokenFromRow(row);
   if (token) {

@@ -1,9 +1,10 @@
 const crypto = require('crypto');
 const store = require('../store');
 const Runner = require('./runner');
-const { MODEL_DEFAULT } = require('../gemini');
+const { MODEL_DEFAULT } = require('../foundry');
 const { checkPrompt, protectAgentResponse } = require('./guardrails');
 const { eventMatches, MAX_CHAIN_DEPTH, nextRunAt } = require('./triggers');
+const { definitionFor, prepareUpkeepSignal, nextUpkeepRun } = require('./upkeep');
 
 const MAX_AUTOMATION_STEPS = 48;
 
@@ -11,7 +12,7 @@ const AUTOMATION_SYSTEM = `You are an isolated Lingon sub-agent running an autom
 
 function eventText(event) {
   const safe = JSON.stringify(event?.payload || {}).slice(0, 4000);
-  if (event?.type === 'schedule') return `Scheduled check-in at ${event.firedAt || new Date().toISOString()}.`;
+  if (event?.type === 'schedule') return `Scheduled check-in at ${event.firedAt || new Date().toISOString()}.${safe && safe !== '{}' ? ` New signal: ${safe}` : ''}`;
   if (event?.type === 'app') return `Connected app event: ${event.app}:${event.event}. Payload: ${safe}`;
   if (event?.type === 'subagent') return `Sub-agent ${event.sourceAgentName || event.sourceAgentId} completed. Result: ${String(event.output || '').slice(0, 4000)}`;
   return 'Manual run requested by the owner.';
@@ -19,6 +20,24 @@ function eventText(event) {
 
 async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, depth = 0 }) {
   if (!subAgent || !subAgent.enabled) return { skipped: true };
+  let upkeepSignal=null;
+  if(subAgent.systemKind){
+    const manual=event.type==='manual';
+    if(subAgent.systemKind==='quiet'&&!manual){
+      const today=new Date();today.setUTCHours(0,0,0,0);
+      const runs=await store.listAutomationRuns(userId,100);
+      const todayCount=runs.filter(row=>(row.sub_agent_id||row.subAgentId)===subAgent.id&&Date.parse(row.started_at||row.startedAt||0)>=today.getTime()).length;
+      if(todayCount>=3){const next=nextUpkeepRun(subAgent);await store.markSubAgentRun(userId,subAgent.id,'idle',null,next,{result:'Daily quiet-moment limit reached'});return {skipped:true,status:'idle',reason:'Daily quiet-moment limit reached',nextRunAt:next};}
+    }
+    const signals=await store.listUpkeepSignals(userId,manual?null:subAgent.lastSignalAt,24);
+    upkeepSignal=prepareUpkeepSignal(subAgent,signals,{manual});
+    if(!upkeepSignal.eligible){
+      const next=nextUpkeepRun(subAgent);
+      await store.markSubAgentRun(userId,subAgent.id,'idle',null,next,{result:upkeepSignal.reason,signalAt:upkeepSignal.latestAt});
+      return {skipped:true,status:'idle',reason:upkeepSignal.reason,nextRunAt:next};
+    }
+    event={...event,payload:{...(event.payload || {}),recentUserMessages:upkeepSignal.messages}};
+  }
   const dedupeKey = event.dedupeKey || `${subAgent.id}:${event.type}:${crypto.randomUUID()}`;
   const run = await store.beginAutomationRun(userId, subAgent.id, subAgent.chatId, dedupeKey, event);
   if (!run) return { duplicate: true };
@@ -26,13 +45,11 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
   try {
     checkPrompt(subAgent.prompt);
     await Runner.ensureCredit(userId);
-    const previous = await store.listChatMessages(userId, subAgent.chatId, 24);
+    const previous = subAgent.systemKind ? [] : await store.listChatMessages(userId, subAgent.chatId, 24);
     const triggerContext = eventText(event);
     const userTurn = `[${triggerContext}]\n\nAutomation task: ${subAgent.prompt}`;
-    await store.saveTurn(userId, subAgent.chatId, 'user', userTurn, {
-      title: subAgent.name,
-      source: 'automation',
-      subAgentId: subAgent.id,
+    if(!subAgent.systemKind)await store.saveTurn(userId, subAgent.chatId, 'user', userTurn, {
+      title: subAgent.name, source: 'automation', subAgentId: subAgent.id,
       metadata: { automationRunId: run.id, triggerType: event.type },
     });
     // Scheduled and event-driven work uses the same durable task state machine
@@ -43,7 +60,7 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
       userId, chatId:subAgent.chatId, requestKey:`automation:${run.id}`, title:subAgent.name,
       instructions:`${AUTOMATION_SYSTEM}\n\n${userTurn}`,
       history:previous.map((m)=>({role:m.role,text:m.text})).slice(-12),
-      context:{automation:true,agent:agentContext,originalPrompt:subAgent.prompt},
+      context:{automation:true,upkeep:subAgent.systemKind || null,allowedTools:definitionFor(subAgent.systemKind)?.allowedTools,maxRounds:subAgent.systemKind?3:8,agent:agentContext,originalPrompt:subAgent.prompt},
     });
     // One planning round can enqueue three tools, so twelve advances can stop
     // halfway through an otherwise healthy eight-round task. Drain the entire
@@ -56,9 +73,9 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
     const response = { status:task.state.status, text:task.state.result || task.state.summary || '' };
     if (response.status === 'waiting_approval') {
       const output = 'This automation is waiting for your approval. Open its chat and reconnect to review the pending action.';
-      await store.saveTurn(userId, subAgent.chatId, 'agent', output, { title:subAgent.name, source:'automation', subAgentId:subAgent.id });
+      if(!subAgent.systemKind)await store.saveTurn(userId, subAgent.chatId, 'agent', output, { title:subAgent.name, source:'automation', subAgentId:subAgent.id });
       await store.finishAutomationRun(userId, run.id, 'waiting_approval', { output }, null);
-      await store.markSubAgentRun(userId, subAgent.id, 'waiting_approval', null, nextRunAt(subAgent.trigger));
+      await store.markSubAgentRun(userId, subAgent.id, 'waiting_approval', null, subAgent.systemKind?nextUpkeepRun(subAgent):nextRunAt(subAgent.trigger),{result:output,signalAt:upkeepSignal?.latestAt});
       return { runId:run.id, chatId:subAgent.chatId, output, status:'waiting_approval' };
     }
     if (['failed','needs_review','stopped'].includes(response.status)) {
@@ -66,9 +83,9 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
     }
     if (response.status === 'partial') {
       const output = protectAgentResponse(subAgent.prompt, response.text || 'The automation reached its work limit before it could finish.');
-      await store.saveTurn(userId, subAgent.chatId, 'agent', output, { title:subAgent.name, source:'automation', subAgentId:subAgent.id });
+      if(!subAgent.systemKind)await store.saveTurn(userId, subAgent.chatId, 'agent', output, { title:subAgent.name, source:'automation', subAgentId:subAgent.id });
       await store.finishAutomationRun(userId, run.id, 'partial', { output, taskId:task.id }, null);
-      await store.markSubAgentRun(userId, subAgent.id, 'partial', null, nextRunAt(subAgent.trigger));
+      await store.markSubAgentRun(userId, subAgent.id, 'partial', null, subAgent.systemKind?nextUpkeepRun(subAgent):nextRunAt(subAgent.trigger),{result:output,signalAt:upkeepSignal?.latestAt});
       return { runId:run.id, chatId:subAgent.chatId, output, status:'partial', taskId:task.id };
     }
     if (response.status !== 'completed') {
@@ -76,10 +93,10 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
     }
     const output = protectAgentResponse(subAgent.prompt, response.text || 'The automation finished without a reportable result.');
     await store.finishAutomationRun(userId, run.id, 'done', { output }, null);
-    await store.markSubAgentRun(userId, subAgent.id, 'done', null, nextRunAt(subAgent.trigger));
+    await store.markSubAgentRun(userId, subAgent.id, 'done', null, subAgent.systemKind?nextUpkeepRun(subAgent):nextRunAt(subAgent.trigger),{result:output,signalAt:upkeepSignal?.latestAt});
     await store.logToolRun({ userId, sessionId: subAgent.chatId, kind: 'trigger', name: subAgent.name, status: 'done', detail: triggerContext, ms: Date.now() - started });
 
-    if (depth < MAX_CHAIN_DEPTH) {
+    if (!subAgent.systemKind && depth < MAX_CHAIN_DEPTH) {
       const agents = await store.listSubAgents(userId);
       const chainedEvent = { type: 'subagent', event: 'completed', sourceAgentId: subAgent.id, sourceAgentName: subAgent.name, output, chainDepth: depth + 1 };
       for (const dependent of agents.filter((candidate) => candidate.enabled && eventMatches(candidate.trigger, chainedEvent))) {
@@ -89,7 +106,7 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
     return { runId: run.id, chatId: subAgent.chatId, output };
   } catch (error) {
     await store.finishAutomationRun(userId, run.id, 'error', null, error.message);
-    await store.markSubAgentRun(userId, subAgent.id, 'error', error.message, nextRunAt(subAgent.trigger));
+    await store.markSubAgentRun(userId, subAgent.id, 'error', error.message, subAgent.systemKind?nextUpkeepRun(subAgent):nextRunAt(subAgent.trigger));
     await store.logToolRun({ userId, sessionId: subAgent.chatId, kind: 'trigger', name: subAgent.name, status: 'error', detail: error.message, ms: Date.now() - started });
     throw error;
   }

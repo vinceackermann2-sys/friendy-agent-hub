@@ -12,6 +12,7 @@ const store = require('../store');
 const azure = require('./azure-vm');
 const live = require('./live');
 const pc = require('./pc');
+const { generateImage } = require('../foundry');
 const browserResult = (s) => ({ url:s.url, title:s.title, text:s.text, links:s.links, screenshot:s.screenshot, liveId:s.id, transport:s.relay ? 'cdp-screencast' : 'compatibility' });
 const computerResult = (out, ctx) => {
   const session = pc.getOrCreate(ctx.userId, ctx.sessionId);
@@ -240,6 +241,15 @@ const TOOLS = {
       return agents.map(({ id, name, enabled, trigger, lastStatus, nextRunAt }) => ({ id, name, enabled, trigger, lastStatus, nextRunAt }));
     },
   },
+  image_generate: {
+    name: 'image_generate', type: 'image', approval: false,
+    description: 'Create a new image with GPT Image 2 and return it as a PNG file in Canvas.',
+    run: async ({ prompt, size, quality, background }, ctx) => {
+      const out = await generateImage({ prompt, size, quality, background, signal: ctx.signal });
+      ctx.trace(entry('image', `image_generate: ${out.name}`));
+      return out;
+    },
+  },
   wallet_status: {
     name: 'wallet_status', type: 'function', approval: false,
     description: 'Read this account’s agent wallet address, balances, attached card status (last4 only), and remaining daily spend. Never invent numbers.',
@@ -412,6 +422,7 @@ function pickTools(task) {
   if (/(gmail|slack|calendar|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|calendar|task|issue|ticket)/.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); }
   if (/(email|e-mail|inbox|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl)/.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
   if (/(build|landing|page|site|website|dashboard)/.test(t)) names.add('build_page');
+  if (/(generate|create|make|draw|design).{0,30}(image|picture|photo|illustration|artwork|logo)|\b(image|picture|photo|illustration)\s+(?:of|for)\b/.test(t)) names.add('image_generate');
   if (/(browse|browser|website|web page|fill|form|book|reservation|sign in|log in)/.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('computer_screenshot'); }
   if (/(code|script|terminal|shell|file|workspace|python|javascript|debug|compile|install)/.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
   if (/(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous)/.test(t)) names.add('history_search');

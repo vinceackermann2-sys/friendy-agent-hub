@@ -45,7 +45,7 @@ async function newChat(page) {
 async function main() {
   const health = await (await fetch(base + '/api/health')).json();
   assert.equal(health.ok, true);
-  assert.equal(health.gemini, true);
+  assert.equal(health.foundry, true);
   assert.equal(health.supabase, true);
 
   const session = await signup('agentchat');

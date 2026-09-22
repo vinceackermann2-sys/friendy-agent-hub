@@ -2,7 +2,7 @@
    Durable rows are unbounded; only relevant active entries enter a prompt.
    USER.md holds stable user facts, MEMORY.md curated long-term facts, and
    memory/YYYY-MM-DD.md daily context. Corrections supersede prior rows. */
-const { callGemini } = require('../gemini');
+const { callFoundry } = require('../foundry');
 
 const STOP = new Set('the,a,an,and,or,but,for,with,from,that,this,these,those,you,your,they,them,their,there,here,what,when,where,which,who,how,why,not,are,was,were,have,has,can,will,just,like,know,think,please,thanks,thank,hello,okay'.split(','));
 const words=s=>String(s || '').toLowerCase().replace(/[^a-zåäö0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>3&&!STOP.has(w));
@@ -36,9 +36,9 @@ async function maybeExtract({userId,prompt,answer,existing}){
   }
   let facts=[],usage=null,usedModel=null;
   try{
-    const {MODEL_FALLBACK}=require('../gemini');
+    const {MODEL_FALLBACK}=require('../foundry');
     const candidates=(existing || []).slice(0,20).map(m=>({id:m.id,text:m.text,category:m.category || 'long_term'}));
-    const r=await callGemini({model:MODEL_FALLBACK,json:true,
+    const r=await callFoundry({model:MODEL_FALLBACK,json:true,
       system:'Extract durable facts stated by the user. Return ONLY JSON {"facts":[{"text":"...","category":"user|long_term|daily","importance":0,"supersedesId":null}]}. Max 3. user = stable profile or preference; long_term = durable project/relationship/standing fact; daily = useful current-session context likely to expire. importance 0-3. When the user corrects a listed fact, set supersedesId to that exact id. Omit assistant claims, guesses, transient chatter, secrets, credentials and one-off questions.',
       prompt:`User: ${String(prompt).slice(0,1800)}\nAssistant response (context only; never extract it as user fact): ${String(answer || '').slice(0,600)}\nActive candidates: ${JSON.stringify(candidates).slice(0,2400)}`});
     usage=r.usage;usedModel=r.model || MODEL_FALLBACK;

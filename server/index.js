@@ -5,22 +5,22 @@
    raw API costs). Free: 20 starter credits. Pro $50/mo → 60 credits/mo.
    Max $100/mo → 100 credits/mo. Real Stripe subscriptions + webhooks;
    gift redeem adds credits.
-   Harness: NOT Codex API — our own Gemini tool boundary (see harness.js).
+   Harness: Microsoft Foundry Responses API + our own tool boundary.
 */
 require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { callGemini, transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK } = require('./gemini');
-const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd } = require('./plans');
+const { transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT, TRANSCRIPTION_MODEL, IMAGE_MODEL } = require('./foundry');
+const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd, REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH, REFERRAL_CREDITS_EACH } = require('./plans');
 const store = require('./store');
 const stripeMod = require('./stripe');
 const { pubClient, adminClient, requireAuth } = require('./auth');
-// Agents-API-shaped harness (Codex pattern, Gemini-backed) + extras
+// Agents-API-shaped harness backed by Microsoft Foundry + extras
 const Runner = require('./agents/runner');
 const { checkPrompt, asksAboutInternalDetails, protectAgentResponse, INTERNAL_DETAILS_REPLY } = require('./agents/guardrails');
 const { entry } = require('./agents/tracing');
-const { pickTools } = require('./agents/tools');
+const { TOOLS, pickTools } = require('./agents/tools');
 const { fetchAllowlisted } = require('./agents/sandbox');
 const { prepareAttachments } = require('./agents/attachments');
 const { normalizeSubAgent, nextRunAt } = require('./agents/triggers');
@@ -137,6 +137,10 @@ app.post('/api/internal/tasks-tick', rateLimit(120, 60000), async (req, res) => 
   if (!(await azure.verifySweepToken(req.headers.authorization))) return res.status(401).json({ error:'Unauthorized.' });
   try { res.json(await conversation.tasks.tick({drain:true})); } catch { res.status(503).json({ error:'Task worker unavailable.' }); }
 });
+app.post('/api/internal/automations-tick', rateLimit(120, 60000), async (req,res)=>{
+  if (!(await azure.verifySweepToken(req.headers.authorization))) return res.status(401).json({ error:'Unauthorized.' });
+  try { await Automations.tick(); res.json({ok:true}); } catch { res.status(503).json({ error:'Automation worker unavailable.' }); }
+});
 app.use('/api/agent/conversation', rateLimit(120, 60000), requireAuth(conversation.handle));
 app.use('/api/agent/tasks', rateLimit(240, 60000), requireAuth(conversation.handle));
 app.post('/api/internal/vm-sweep', rateLimit(10, 60000), async (req, res) => {
@@ -161,9 +165,11 @@ app.post('/api/voice/transcribe', rateLimit(20, 60000), requireAuth(async (req, 
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    gemini: isConfigured(),
+    foundry: isConfigured(),
     model: MODEL_DEFAULT,
-    openai: false,
+    reasoningEffort: REASONING_EFFORT,
+    transcriptionModel: TRANSCRIPTION_MODEL,
+    imageModel: IMAGE_MODEL,
     azure: azure.isAzureConfigured(),
     durableVmLeases: azure.isLeaseStoreConfigured(),
     supabase: store.supaConfigured(),
@@ -174,7 +180,7 @@ app.get('/api/health', (req, res) => {
     shopPay: shoppay.configured(),
     resend: mail.configured(),
     mailDomain: mail.mailDomain(),
-    harness: 'gemini-azure-vm-harness',
+    harness: 'foundry-azure-vm-harness',
     sandbox: azure.isAzureConfigured() ? 'azure-vm-per-user' : 'local-per-user-fallback',
     plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval })),
     prelander: PRELANDER_OFFERS,
@@ -190,7 +196,7 @@ app.get('/api/auth/status', (req, res) => {
 });
 
 app.get('/api/plans', (req, res) => {
-  res.json({ plans: Object.values(PLANS), prelander: PRELANDER_OFFERS, creditPacks: CREDIT_PACKS, giftAmounts: GIFT_AMOUNTS });
+  res.json({ plans: Object.values(PLANS), prelander: PRELANDER_OFFERS, creditPacks: CREDIT_PACKS, giftAmounts: GIFT_AMOUNTS, referral: { totalUsd: REFERRAL_TOTAL_USD, eachUsd: REFERRAL_GIFT_USD_EACH, eachCredits: REFERRAL_CREDITS_EACH } });
 });
 
 // ---------- auth (proxy so keys stay server-side) ----------
@@ -421,6 +427,25 @@ app.post('/api/billing/redeem', requireAuth(async (req, res) => {
   if (!r.ok) return res.status(400).json({ error: r.error });
   res.json({ ok: true, amount: r.amount, credits: r.credits, billing: await billingFor(req.user.id) });
 }));
+// ---------- referrals: FREE $50 gift card ($25 you + $25 friend, as credits) ----------
+// Same $50 face value as the Stripe $50 gift card. The inviter is credited
+// ONLY after the friend redeems (one reward per unique friend).
+function referralLink(req, code) {
+  const origin = (process.env.SITE_URL || '').replace(/\/$/, '')
+    || (req.headers.origin || '').replace(/\/$/, '')
+    || ((req.protocol + '://' + req.get('host')).replace(/\/$/, ''));
+  return origin + '/app?ref=' + encodeURIComponent(code);
+}
+app.get('/api/referrals/mine', requireAuth(async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  const stats = await store.referralStats(req.user.id);
+  res.json({ ok: true, code: stats.code, link: referralLink(req, stats.code), invited: stats.invited, earnedCredits: stats.earnedCredits, rewardEach: stats.rewardEach, totalUsd: REFERRAL_TOTAL_USD, eachUsd: REFERRAL_GIFT_USD_EACH });
+}));
+app.post('/api/referrals/redeem', requireAuth(async (req, res) => {
+  const r = await store.redeemReferral(req.user.id, (req.body || {}).code);
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  res.json({ ok: true, code: r.code, credits: r.credits, inviterCredits: r.inviterCredits, billing: await billingFor(req.user.id) });
+}));
 // Real Stripe Checkout: returns a hosted payment URL for a monthly subscription.
 app.post('/api/billing/checkout', requireAuth(async (req, res) => {
   try {
@@ -609,6 +634,7 @@ app.get('/api/trigger-options', requireAuth(async (req, res) => {
 }));
 
 app.get('/api/sub-agents', requireAuth(async (req, res) => {
+  await store.ensureSystemSubAgents(req.user.id);
   res.json({ subAgents: await store.listSubAgents(req.user.id) });
 }));
 
@@ -616,7 +642,7 @@ app.post('/api/sub-agents', rateLimit(30, 60000), requireAuth(async (req, res) =
   try {
     const input = normalizeSubAgent(req.body || {});
     const current = await store.listSubAgents(req.user.id);
-    if (current.length >= 25) return res.status(400).json({ error: 'A maximum of 25 sub-agents is allowed per account.' });
+    if (current.filter(agent=>!agent.systemKind).length >= 25) return res.status(400).json({ error: 'A maximum of 25 sub-agents is allowed per account.' });
     if (input.trigger.type === 'app') {
       const ok = await composio.isToolkitConnected(req.user.id, input.trigger.app);
       if (!ok) return res.status(409).json({ error: 'Choose an app that is connected under Apps.' });
@@ -631,6 +657,11 @@ app.patch('/api/sub-agents/:id', rateLimit(60, 60000), requireAuth(async (req, r
   try {
     const current = await store.getSubAgent(req.user.id, req.params.id);
     if (!current) return res.status(404).json({ error: 'Sub-agent not found.' });
+    if(current.systemKind){
+      const enabled=req.body?.enabled!==false;
+      const subAgent=await store.updateSubAgent(req.user.id,current.id,{name:current.name,prompt:current.prompt,enabled,trigger:current.trigger},enabled?nextRunAt(current.trigger):null);
+      return res.json({subAgent});
+    }
     const input = normalizeSubAgent({ ...current, ...req.body, trigger: req.body?.trigger || current.trigger }, current.id);
     const all = await store.listSubAgents(req.user.id);
     if (input.trigger.type === 'app') {
@@ -646,6 +677,7 @@ app.patch('/api/sub-agents/:id', rateLimit(60, 60000), requireAuth(async (req, r
 app.delete('/api/sub-agents/:id', requireAuth(async (req, res) => {
   const current = await store.getSubAgent(req.user.id, req.params.id);
   if (!current) return res.status(404).json({ error: 'Sub-agent not found.' });
+  if (current.systemKind) return res.status(403).json({ error: 'Built-in agent upkeep cannot be deleted. Pause it instead.' });
   await store.deleteSubAgent(req.user.id, current.id);
   res.json({ ok: true });
 }));
@@ -1322,6 +1354,33 @@ app.put('/api/agent-context', rateLimit(20, 60000), requireAuth(async (req, res)
   }
 }));
 
+// ---------- safe system-file manifest for Settings → Library ----------
+// The editable context comes from the same account-scoped store as chat. The
+// tool file is derived from the live registry, but exposes only public names,
+// types, descriptions and approval requirements — never function bodies,
+// credentials, prompts or host paths.
+function systemToolsMarkdown(){
+  const rows = Object.values(TOOLS).filter((tool) => tool && tool.name).map((tool) => {
+    const approval = tool.approval ? ' · owner approval required' : '';
+    return `- **${String(tool.name)}** · ${String(tool.type || 'function')}${approval} — ${String(tool.description || '').replace(/\s+/g, ' ').trim().slice(0, 320)}`;
+  });
+  return '# TOOLS.md\n\nThis file is generated from the live Lingon capability registry. It is read-only here: changing this description cannot grant permissions or bypass approvals.\n\n' + rows.join('\n');
+}
+app.get('/api/system-files', requireAuth(async (req, res) => {
+  const context = await store.getAgentContext(req.user.id);
+  res.json({
+    revision: context.revision,
+    documents: { ...context.documents, tools: systemToolsMarkdown() },
+    folders: [
+      { id:'agent', path:'/agent', editable:true, files:['IDENTITY.md','SOUL.md','AGENTS.md','TOOLS.md'] },
+      { id:'user', path:'/user', editable:true, files:['USER.md'] },
+      { id:'memory', path:'/memory', editable:false, files:['MEMORY.md'] },
+      { id:'workspace', path:'/workspace', editable:true, files:[] },
+      { id:'uploads', path:'/workspace/uploads', editable:true, files:[] },
+    ],
+  });
+}));
+
 // ---------- memories (auth-derived user) ----------
 app.get('/api/memories', requireAuth(async (req, res) => {
   const query=String(req.query.q || '').slice(0,300),limit=Math.min(Math.max(Number(req.query.limit) || 250,1),1000),offset=Math.max(Number(req.query.offset) || 0,0);
@@ -1489,7 +1548,7 @@ server.on('upgrade', async (req, socket, head) => {
 });
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Lingon real backend on http://localhost:${PORT}`);
-  console.log(`- Gemini: ${isConfigured() ? 'configured (' + MODEL_DEFAULT + ')' : 'MISSING — set GEMINI_API_KEY in .env'}`);
+  console.log(`- Foundry: ${isConfigured() ? 'configured (' + MODEL_DEFAULT + ', reasoning ' + REASONING_EFFORT + ')' : 'MISSING — set AZURE_FOUNDRY_PROJECT_ENDPOINT and AZURE_FOUNDRY_API_KEY in .env'}`);
   console.log(`- Supabase: ${store.supaConfigured() ? 'configured' : 'local JSON fallback (server/data.json)'}`);
   Automations.startAutomationWorker();
   conversation.startWorker();

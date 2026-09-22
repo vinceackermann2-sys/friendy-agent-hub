@@ -1,6 +1,6 @@
 # Agent runtime
 
-Model: Gemini 3.5 (`GEMINI_API_KEY`). Sandbox: one Azure VM per user.
+Model: Microsoft Foundry `gpt-6-luna` at `xhigh` reasoning (`AZURE_FOUNDRY_API_KEY`). Sandbox: one Azure VM per user.
 See [AZURE.md](AZURE.md).
 
 The model decides tools via function calling in `vm-harness.js`. Untrusted
@@ -98,7 +98,7 @@ The controlled concurrency test establishes that a question does not wait for
 the worker and uses one foreground model call; it is not a live latency or
 model-quality benchmark. Avoided router/narrator calls and replayed work reduce
 overhead. A delegated task adds coordination/storage work, so total savings
-depend on the workload. Live Gemini/Azure p50/p95 latency, token spending and
+depend on the workload. Live Foundry/Azure p50/p95 latency, token spending and
 answer quality still need measurement before publishing a speed or cost claim.
 
 ## Shared objectives and worker communication
