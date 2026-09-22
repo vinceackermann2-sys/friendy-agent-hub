@@ -24,6 +24,7 @@ import { fetchAllowlisted } from './agents/sandbox.js';
 import { normalizeSubAgent, nextRunAt } from './agents/triggers.js';
 import * as Automations from './agents/automations.js';
 import * as composio from './composio.js';
+import * as privy from './privy.js';
 import * as mail from './mail.js';
 import * as shoppay from './shoppay.js';
 import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases } from './agents/azure-vm.js';
