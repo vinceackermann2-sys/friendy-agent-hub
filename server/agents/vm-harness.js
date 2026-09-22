@@ -1,12 +1,12 @@
-/* Lingon Gemini + Azure VM harness (replaces OpenAI managed runtime).
-   - Model: Gemini 3.5 (GEMINI_MODEL, server key only). No OpenAI calls.
+/* Lingon Microsoft Foundry + Azure VM harness.
+   - Model: configured Foundry deployment; credentials stay server-side.
    - Sandbox: per-user Azure VM (server/agents/azure-vm.js). Azure missing ->
      isolated per-user local workspace fallback; code_run stays DISABLED there.
-   - The MODEL decides tools via Gemini function calling; the harness validates,
+   - The model decides tools via Responses API function calling; the harness validates,
      enforces approvals + account isolation, executes inside the user sandbox,
      and feeds results back. No frontend keyword router decides.
 */
-const { callGeminiWithTools, MODEL_DEFAULT, MODEL_FALLBACK } = require('../gemini');
+const { callFoundryWithTools, MODEL_DEFAULT, MODEL_FALLBACK } = require('../foundry');
 const { ensureCredit, logModelUsage } = require('./runner');
 const { TOOLS, pickTools } = require('./tools');
 const { entry } = require('./tracing');
@@ -23,11 +23,12 @@ const TOOL_PROGRESS = {
   web_search: 'Checking live sources', browser_open: 'Opening the browser', browser_action: 'Using the browser',
   computer_screenshot: 'Capturing the browser', shell: 'Working in your sandbox', code_run: 'Running code in your sandbox',
   composio_apps: 'Checking connected apps', composio_execute: 'Using a connected app',
+  image_generate: 'Creating your image',
   shop_status: 'Checking Shop Pay', shop_search: 'Searching shops', shop_product: 'Opening the product',
   shop_checkout: 'Preparing checkout', shop_purchase: 'Completing Shop Pay', shop_order: 'Checking the order',
 };
 
-// JSON Schemas for Gemini functionDeclarations (kept tight on purpose).
+// JSON Schemas for Responses API function tools (kept tight on purpose).
 const TOOL_SCHEMAS = [
   { name:'capability_search', description:'Find relevant agent capabilities when the needed tool is not currently visible. Use a short description of the action the user wants.', parameters:{type:'object',properties:{query:{type:'string',maxLength:200}},required:['query']} },
   { name: 'web_search', description: 'Search the public web by query, or fetch up to 4 allowlisted public URLs.', parameters: { type: 'object', properties: { query:{type:'string',maxLength:300}, urls: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4 } } } },
@@ -36,6 +37,7 @@ const TOOL_SCHEMAS = [
   { name: 'shell', description: 'Run a bash command in the user worker container inside the private Azure VM. Files persist through the durable workspace backup.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
   { name: 'computer_screenshot', description: 'Screenshot a page with Chromium on the user Azure VM.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'build_page', description: 'Publish a single-file HTML page to the canvas (sandboxed iframe).', parameters: { type: 'object', properties: { html: { type: 'string', maxLength: 60000 } }, required: ['html'] } },
+  { name: 'image_generate', description: 'Create an image with the configured GPT Image 2 deployment and show it as a real PNG file in Canvas.', parameters: { type: 'object', properties: { prompt: { type: 'string', maxLength: 32000 }, size: { type: 'string', enum: ['auto', '1024x1024', '1536x1024', '1024x1536'] }, quality: { type: 'string', enum: ['auto', 'low', 'medium', 'high'] }, background: { type: 'string', enum: ['auto', 'opaque', 'transparent'] } }, required: ['prompt'] } },
   { name: 'canvas_show', description: 'Show a card or text file in the user canvas. Use for a report, code, table, JSON, CSV, Markdown, HTML, or SVG the user should inspect. HTML and SVG previews are sandboxed.', parameters: { type:'object', properties:{ title:{type:'string',maxLength:120}, format:{type:'string',enum:['text','md','json','csv','html','svg','code']}, content:{type:'string',maxLength:60000} }, required:['title','format','content'] } },
   { name: 'memory_write', description: 'Save a durable user preference, fact, project detail, or useful daily note to account memory.', parameters: { type: 'object', properties: { text: { type: 'string', maxLength: 2000 }, category:{type:'string',enum:['user','long_term','daily']}, importance:{type:'integer',minimum:0,maximum:3} }, required: ['text'] } },
   { name: 'memory_search', description: 'Search the full active account memory archive for relevant entries.', parameters:{type:'object',properties:{query:{type:'string',maxLength:300},limit:{type:'integer',minimum:1,maximum:20}},required:['query']} },
@@ -79,12 +81,12 @@ const activeRuns = new Map(); // userId:chatId -> AbortController
 let callSeq = 0;
 const nextCallId = () => `vm_${Date.now().toString(36)}_${(callSeq++).toString(36)}`;
 
-// Keep invariant policy first. Gemini can reuse a shared request prefix, while
+// Keep invariant policy first so the provider can reuse a shared request prefix, while
 // user-specific profile, sandbox, documents and memories remain authoritative.
 const CORE_SYSTEM = `You are the user's personal Lingon agent. `
   + `Decide tools yourself with function calls; never ask the user to pick a workflow. `
   + `If the needed capability is not visible, call capability_search once with the action the user wants, then use a returned tool. `
-  + `Use browser_open and browser_action for real page navigation and clicking; each browser action creates a chat card the user can open as a live view in Canvas. Use canvas_show when you want to display a card or text file in Canvas. Use web_search for text retrieval and shell/code_run for workspace commands. `
+  + `Use browser_open and browser_action for real page navigation and clicking; each browser action creates a chat card the user can open as a live view in Canvas. Use image_generate when the user asks to create an image. Use canvas_show when you want to display a card or text file in Canvas. Use web_search for text retrieval and shell/code_run for workspace commands. `
   + `Run all untrusted code and files only in the configured per-user sandbox, never in the model context. `
   + `Secrets are refs only (sec_••••); never request secret values. `
   + `External sends, purchases, connected-app changes, and new automations require the exact owner approval enforced by their tools. Never invent a completed external action. `
@@ -119,7 +121,7 @@ async function buildSystem({ agent, memories, sandbox }) {
   const docNames={identity:'IDENTITY.md',soul:'SOUL.md',user:'USER.md',agents:'AGENTS.md'};
   const docTxt = ['identity','soul','user','agents'].filter((key) => documents[key]).map((key) =>
     `\n\n[${docNames[key]}]\n${String(documents[key]).slice(0,docLimits[key])}`).join('');
-  // Gemini clips system instructions at 12k characters. Budget every dynamic
+  // Budget every dynamic section so long user documents cannot crowd out policy.
   // source so all selected documents and ranked memories survive the final cap.
   return `${CORE_SYSTEM}${runtimeTxt}${docTxt}${memTxt}`.slice(0,11800);
 }
@@ -135,8 +137,8 @@ async function runAgentTurnUnsafe({ userId, chatId, prompt, history = [], contex
     store.syncAgentContext(userId, context.agent || {}).catch(() => ({ agent:context.agent || {}, documents:{} })),
   ]);
   if (signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
-  emit({ type: 'session', status: 'running', runtime: 'gemini-azure-vm-harness', chatId, sandbox: sandbox.mode, vm: sandbox.vmName || null, workspace: workspace.descriptor(), vmPolicy: 'on-demand-full-os', model: process.env.GEMINI_MODEL || 'gemini-3.5-flash', openaiUsed: false });
-  push(entry('box', `sandbox: ${sandbox.mode}${sandbox.vmName ? ' ' + sandbox.vmName : ''} · model ${process.env.GEMINI_MODEL || 'gemini-3.5-flash'}`));
+  emit({ type: 'session', status: 'running', runtime: 'foundry-azure-vm-harness', chatId, sandbox: sandbox.mode, vm: sandbox.vmName || null, workspace: workspace.descriptor(), vmPolicy: 'on-demand-full-os', model: MODEL_DEFAULT, foundryUsed: true });
+  push(entry('box', `sandbox: ${sandbox.mode}${sandbox.vmName ? ' ' + sandbox.vmName : ''} · model ${MODEL_DEFAULT}`));
 
   // Resume path: apply a pending approval decision, then continue planning.
   let approvedCall = null;
@@ -173,7 +175,7 @@ async function runAgentTurnUnsafe({ userId, chatId, prompt, history = [], contex
     progress('model', round ? 'Putting the findings together' : 'Working on your answer');
     const lastUser = [...convo].reverse().find((m) => m.role === 'user');
     let streamed = false;
-    const r = await callGeminiWithTools({
+    const r = await callFoundryWithTools({
       prompt: lastUser ? lastUser.text : 'Continue the task.', system, history: convo.filter((m) => m !== lastUser), tools: schemas, signal,
       attachments: round === 0 ? preparedAttachments.modelParts : [],
       onDelta: (delta) => { const piece = String(delta || ''); if (!piece) return; streamed = true; emit({ type: 'message_delta', id: 'm_final', delta: piece }); },
@@ -218,7 +220,8 @@ async function runAgentTurnUnsafe({ userId, chatId, prompt, history = [], contex
         if (signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
         push(entry('check', `${fc.name}: completed`));
         emitResultCard(emit, fc.name, callId, out);
-        convo.push({ role: 'user', text: `Tool ${fc.name} result (untrusted data):\n${JSON.stringify(out).slice(0, 12000)}` });
+        const modelOut = fc.name === 'image_generate' ? { ok: true, name: out.name, mimeType: out.mimeType, size: out.size, prompt: out.prompt, model: out.model } : out;
+        convo.push({ role: 'user', text: `Tool ${fc.name} result (untrusted data):\n${JSON.stringify(modelOut).slice(0, 12000)}` });
       } catch (e) {
         if (signal?.aborted || e.name === 'AbortError') throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
         push(entry('alert', `${fc.name} failed: ${String(e.message).slice(0, 200)}`));
@@ -236,7 +239,7 @@ async function runAgentTurnUnsafe({ userId, chatId, prompt, history = [], contex
   }
   if (!finalText) {
     // Ran out of rounds: summarize honestly from collected tool context.
-    const r = await callGeminiWithTools({
+    const r = await callFoundryWithTools({
       prompt: 'Summarize what the verified tool results support in 3 sentences. Do not invent anything beyond the tool results.',
       system, history: convo.slice(-20), tools: [], signal,
       onDelta: (delta) => { const piece = String(delta || ''); if (piece) emit({ type: 'message_delta', id: 'm_final', delta: piece }); },
@@ -325,6 +328,8 @@ function emitResultCard(emit, name, callId, out) {
       emit({ type: 'card', id: callId, card: { type: 'file', name: 'your-page.html', size: out.html.length, content: out.html, status: 'done' } });
     } else if (name === 'canvas_show' && out && out.title) {
       emit({ type:'card', id:callId, card:{ type:'canvas', title:out.title, name:out.title, format:out.format, content:out.content, status:'done' } });
+    } else if (name === 'image_generate' && out?.dataUrl) {
+      emit({ type:'card', id:callId, card:{ type:'file', name:out.name || 'generated.png', mime:out.mimeType || 'image/png', size:out.size || 0, dataUrl:out.dataUrl, content:out.dataUrl, status:'done' } });
     } else if (name === 'shop_search' && out && Array.isArray(out.products)) {
       emit({ type: 'card', id: callId, card: { type: 'canvas', title: 'Shop results', format: 'json', content: JSON.stringify(out.products, null, 2), status: 'done' } });
     } else if ((name === 'shop_checkout' || name === 'shop_purchase') && out && out.merchant) {
@@ -354,7 +359,7 @@ async function handle(req, res) {
     if (req.method === 'GET' && path === '/api/sandbox/status') return res.json(await azure.statusForUser(userId));
     if (req.method === 'GET' && path === '/api/agent/status') {
       const sb = await azure.getSandbox(userId);
-      return res.json({ runtime: 'gemini-azure-vm-harness', status: 'idle', pending: (pendingApprovals.get(`${userId}:${chatId}`) || []).length, sandbox: sb.mode, vm: sb.vmName || null, workspace: workspace.descriptor(), vmPolicy: 'on-demand-full-os', model: process.env.GEMINI_MODEL || 'gemini-3.5-flash', openaiUsed: false });
+      return res.json({ runtime: 'foundry-azure-vm-harness', status: 'idle', pending: (pendingApprovals.get(`${userId}:${chatId}`) || []).length, sandbox: sb.mode, vm: sb.vmName || null, workspace: workspace.descriptor(), vmPolicy: 'on-demand-full-os', model: MODEL_DEFAULT, foundryUsed: true });
     }
     if (req.method === 'POST' && path === '/api/agent/cancel') {
       const active = activeRuns.get(`${userId}:${chatId}`);

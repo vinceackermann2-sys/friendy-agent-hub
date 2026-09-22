@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { prepareAudio } = require('../server/gemini');
+const { prepareAudio } = require('../server/foundry');
 
 function fail(fn, code) {
   try { fn(); throw new Error('expected throw'); }
@@ -27,7 +27,9 @@ assert.doesNotMatch(app, /webkitSpeechRecognition/);
 
 const server = fs.readFileSync(path.join(__dirname, '../server/index.js'), 'utf8');
 assert.match(server, /app\.post\('\/api\/voice\/transcribe'/);
+assert.doesNotMatch(server, /app\.post\('\/api\/voice\/speech'/);
 const edge = fs.readFileSync(path.join(__dirname, '../src/lingon-server/index.js'), 'utf8');
 assert.match(edge, /app\.post\('\/api\/voice\/transcribe'/);
+assert.doesNotMatch(edge, /app\.post\('\/api\/voice\/speech'/);
 
 console.log('voice transcribe: ok');

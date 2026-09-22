@@ -5,17 +5,17 @@
    Billing: credits (1 credit = $0.50 face, margin built in). Free: 20 starter
    credits. Pro $50/mo → 60 credits/mo. Max $100/mo → 100 credits/mo.
    Gift redeem adds credits.
-   Harness: Gemini 3.5 + per-user Azure VM (see agents/azure-vm.js).
+   Harness: Microsoft Foundry Responses API + per-user Azure VM.
 */
 import { createApp } from './express-shim.js';
-import { callGemini, transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK } from './gemini.js';
+import { transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT, TRANSCRIPTION_MODEL, IMAGE_MODEL } from './foundry.js';
 import { PLANS, costOf, creditsForGiftUsd } from './plans.js';
 import * as store from './store.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
 import { rankMemories, maybeExtract } from './agents/memory.js';
 import { TOOLS } from './agents/tools.js';
 import crypto from 'node:crypto';
-// Gemini tool harness + Azure VM sandbox + extras
+// Microsoft Foundry tool harness + Azure VM sandbox + extras
 import * as Runner from './agents/runner.js';
 import { checkPrompt, asksAboutInternalDetails, protectAgentResponse, INTERNAL_DETAILS_REPLY } from './agents/guardrails.js';
 import { entry } from './agents/tracing.js';
@@ -79,6 +79,10 @@ app.post('/api/internal/tasks-tick', rateLimit(120, 60000), async (req, res) => 
   if (!(await verifySweepToken(req.headers.authorization))) return res.status(401).json({ error:'Unauthorized.' });
   try { res.json(await chatTasks.tick({drain:true})); } catch { res.status(503).json({ error:'Task worker unavailable.' }); }
 });
+app.post('/api/internal/automations-tick', rateLimit(120, 60000), async (req,res)=>{
+  if (!(await verifySweepToken(req.headers.authorization))) return res.status(401).json({ error:'Unauthorized.' });
+  try { res.json(await Automations.tick()); } catch { res.status(503).json({ error:'Automation worker unavailable.' }); }
+});
 app.use('/api/agent/conversation', rateLimit(120, 60000), requireAuth(conversationHandle));
 app.use('/api/agent/tasks', rateLimit(240, 60000), requireAuth(conversationHandle));
 app.use('/api/agent', rateLimit(120, 60000), requireAuth(vmHarnessHandle));
@@ -98,9 +102,11 @@ app.post('/api/voice/transcribe', rateLimit(20, 60000), requireAuth(async (req, 
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    gemini: isConfigured(),
+    foundry: isConfigured(),
     model: MODEL_DEFAULT,
-    openai: false,
+    reasoningEffort: REASONING_EFFORT,
+    transcriptionModel: TRANSCRIPTION_MODEL,
+    imageModel: IMAGE_MODEL,
     azure: isAzureConfigured(),
     durableVmLeases: isLeaseStoreConfigured(),
     supabase: store.supaConfigured(),
@@ -110,7 +116,7 @@ app.get('/api/health', (req, res) => {
     shopPay: shoppay.configured(),
     resend: mail.configured(),
     mailDomain: mail.mailDomain(),
-    harness: 'gemini-azure-vm-harness',
+    harness: 'foundry-azure-vm-harness',
     sandbox: isAzureConfigured() ? 'azure-vm-per-user' : 'local-per-user-fallback',
     plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval })),
     time: new Date().toISOString(),
@@ -403,6 +409,7 @@ app.get('/api/trigger-options', requireAuth(async (req, res) => {
 }));
 
 app.get('/api/sub-agents', requireAuth(async (req, res) => {
+  await store.ensureSystemSubAgents(req.user.id);
   res.json({ subAgents: await store.listSubAgents(req.user.id) });
 }));
 
@@ -410,7 +417,7 @@ app.post('/api/sub-agents', rateLimit(30, 60000), requireAuth(async (req, res) =
   try {
     const input = normalizeSubAgent(req.body || {});
     const current = await store.listSubAgents(req.user.id);
-    if (current.length >= 25) return res.status(400).json({ error: 'A maximum of 25 sub-agents is allowed per account.' });
+    if (current.filter(agent=>!agent.systemKind).length >= 25) return res.status(400).json({ error: 'A maximum of 25 sub-agents is allowed per account.' });
     if (input.trigger.type === 'app') {
       const ok = await composio.isToolkitConnected(req.user.id, input.trigger.app);
       if (!ok) return res.status(409).json({ error: 'Choose an app that is connected under Apps.' });
@@ -425,6 +432,11 @@ app.patch('/api/sub-agents/:id', rateLimit(60, 60000), requireAuth(async (req, r
   try {
     const current = await store.getSubAgent(req.user.id, req.params.id);
     if (!current) return res.status(404).json({ error: 'Sub-agent not found.' });
+    if(current.systemKind){
+      const enabled=req.body?.enabled!==false;
+      const subAgent=await store.updateSubAgent(req.user.id,current.id,{name:current.name,prompt:current.prompt,enabled,trigger:current.trigger},enabled?nextRunAt(current.trigger):null);
+      return res.json({subAgent});
+    }
     const input = normalizeSubAgent({ ...current, ...req.body, trigger: req.body?.trigger || current.trigger }, current.id);
     const all = await store.listSubAgents(req.user.id);
     if (input.trigger.type === 'app') {
@@ -440,6 +452,7 @@ app.patch('/api/sub-agents/:id', rateLimit(60, 60000), requireAuth(async (req, r
 app.delete('/api/sub-agents/:id', requireAuth(async (req, res) => {
   const current = await store.getSubAgent(req.user.id, req.params.id);
   if (!current) return res.status(404).json({ error: 'Sub-agent not found.' });
+  if (current.systemKind) return res.status(403).json({ error: 'Built-in agent upkeep cannot be deleted. Pause it instead.' });
   await store.deleteSubAgent(req.user.id, current.id);
   res.json({ ok: true });
 }));
@@ -1056,6 +1069,29 @@ app.put('/api/agent-context', rateLimit(20, 60000), requireAuth(async (req, res)
     const body=req.body || {};
     res.json(await store.saveAgentContext(req.user.id,{agent:body.agent,documents:body.documents,revision:body.revision}));
   } catch(e) { res.status(e.code==='CONFLICT'?409:e.code==='PERSISTENCE'?503:400).json({error:e.message}); }
+}));
+
+// ---------- safe system-file manifest for Settings → Library ----------
+function systemToolsMarkdown(){
+  const rows = Object.values(TOOLS).filter((tool) => tool && tool.name).map((tool) => {
+    const approval = tool.approval ? ' · owner approval required' : '';
+    return `- **${String(tool.name)}** · ${String(tool.type || 'function')}${approval} — ${String(tool.description || '').replace(/\s+/g, ' ').trim().slice(0, 320)}`;
+  });
+  return '# TOOLS.md\n\nThis file is generated from the live Lingon capability registry. It is read-only here: changing this description cannot grant permissions or bypass approvals.\n\n' + rows.join('\n');
+}
+app.get('/api/system-files', requireAuth(async (req, res) => {
+  const context = await store.getAgentContext(req.user.id);
+  res.json({
+    revision: context.revision,
+    documents: { ...context.documents, tools: systemToolsMarkdown() },
+    folders: [
+      { id:'agent', path:'/agent', editable:true, files:['IDENTITY.md','SOUL.md','AGENTS.md','TOOLS.md'] },
+      { id:'user', path:'/user', editable:true, files:['USER.md'] },
+      { id:'memory', path:'/memory', editable:false, files:['MEMORY.md'] },
+      { id:'workspace', path:'/workspace', editable:true, files:[] },
+      { id:'uploads', path:'/workspace/uploads', editable:true, files:[] },
+    ],
+  });
 }));
 
 // ---------- memories (auth-derived user) ----------

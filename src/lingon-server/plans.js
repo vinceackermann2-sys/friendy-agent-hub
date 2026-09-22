@@ -36,13 +36,19 @@ function creditPackFor(credits) {
   return CREDIT_PACKS.find((p) => p.credits === n) || null;
 }
 
-const RATE_IN = 0.30 / 1e6;
-const RATE_OUT = 2.50 / 1e6;
+const RATE_IN = (Number(process.env.MODEL_RATE_IN_USD_PER_MILLION) || 0.10) / 1e6;
+const RATE_CACHED_IN = (Number(process.env.MODEL_RATE_CACHED_IN_USD_PER_MILLION) || 0.01) / 1e6;
+const RATE_CACHE_WRITE = (Number(process.env.MODEL_RATE_CACHE_WRITE_USD_PER_MILLION) || 0.125) / 1e6;
+const RATE_OUT = (Number(process.env.MODEL_RATE_OUT_USD_PER_MILLION) || 0.50) / 1e6;
 function costOf(usage) {
   if (!usage) return 0;
-  const pin = usage.promptTokenCount || usage.promptTokens || 0;
-  const pout = usage.candidatesTokenCount || usage.candidatesTokens || 0;
-  return pin * RATE_IN + pout * RATE_OUT;
+  const pin = Number(usage.promptTokenCount ?? usage.promptTokens ?? usage.input_tokens ?? 0) || 0;
+  const pout = Number(usage.candidatesTokenCount ?? usage.candidatesTokens ?? usage.output_tokens ?? 0) || 0;
+  const details = usage.input_tokens_details || {};
+  const cached = Math.max(0, Math.min(pin, Number(details.cached_tokens ?? usage.cachedInputTokens ?? 0) || 0));
+  const cacheWrite = Math.max(0, Math.min(pin - cached, Number(details.cache_write_tokens ?? usage.cacheWriteTokens ?? 0) || 0));
+  const regular = Math.max(0, pin - cached - cacheWrite);
+  return regular * RATE_IN + cached * RATE_CACHED_IN + cacheWrite * RATE_CACHE_WRITE + pout * RATE_OUT;
 }
 function creditsForCost(costUsd) {
   return Number(costUsd || 0) * BILLING_MARKUP * CREDITS_PER_USD;

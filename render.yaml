@@ -14,9 +14,25 @@ services:
         value: https://belna.se
       - key: BEHIND_PROXY
         value: 1
-      - key: GEMINI_MODEL
-        value: gemini-2.5-flash
-      - key: GEMINI_API_KEY
+      - key: AZURE_FOUNDRY_PROJECT_ENDPOINT
+        value: https://vinceackermann11-4594-resource.services.ai.azure.com/api/projects/vinceackermann11-4594
+      - key: AZURE_FOUNDRY_MODEL
+        value: gpt-6-luna
+      - key: AZURE_FOUNDRY_REASONING_EFFORT
+        value: xhigh
+      - key: MODEL_RATE_IN_USD_PER_MILLION
+        value: "0.10"
+      - key: MODEL_RATE_CACHED_IN_USD_PER_MILLION
+        value: "0.01"
+      - key: MODEL_RATE_CACHE_WRITE_USD_PER_MILLION
+        value: "0.125"
+      - key: MODEL_RATE_OUT_USD_PER_MILLION
+        value: "0.50"
+      - key: AZURE_FOUNDRY_TRANSCRIPTION_MODEL
+        value: gpt-4o-transcribe
+      - key: AZURE_FOUNDRY_IMAGE_MODEL
+        value: gpt-image-2
+      - key: AZURE_FOUNDRY_API_KEY
         sync: false
       - key: SUPABASE_URL
         sync: false

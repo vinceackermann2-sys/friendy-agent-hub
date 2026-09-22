@@ -103,6 +103,10 @@ const IC = {
   web:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 5.6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.6-4-9s1.5-6.4 4-9Z"/>',
   grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   play:'<circle cx="12" cy="12" r="9"/><path d="M10 8.5l6 3.5-6 3.5Z" fill="currentColor" stroke="none"/>',
+  library:'<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h7M9 11h5"/>',
+  target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
+  heart:'<path d="M19 14c1.5-1.5 3-3.2 3-5.5A4.5 4.5 0 0 0 17.5 4c-1.8 0-3 .5-4 2-.5 1-1 1.5-1.5 2-.5-.5-1-1-1.5-2-1-1.5-2.2-2-4-2A4.5 4.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7Z"/>',
+  trophy:'<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4a1 1 0 0 0-1 1c0 2.5 2 4 4 4M17 6h3a1 1 0 0 1 1 1c0 2.5-2 4-4 4"/>',
 };
 const icon = (n, s = 16) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[n] || ''}</svg>`;
 
@@ -304,7 +308,7 @@ const fresh = () => ({
   canvasOpen:false, canvasTab:'canvas', model:'Smart', theme:'grey',
   chats:[], pendingPrompt:null,
   vault:{ secrets:[], apps:[], approvals:[], mode:'default' },
-  memory:[], memoryTotal:0, memoryQuery:'',
+  memory:[], memoryTotal:0, memoryQuery:'', memoryEditing:null,
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
   composioApps:[], composioLoading:false, appQuery:'', appFilter:'all', appOpen:null, appDetails:{},
@@ -314,8 +318,11 @@ const fresh = () => ({
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
   userProfile:null, agentContext:null,
-  // library (Settings → Library) — image-like layout: sidebar filters + card grid
+  // library (Settings → Library) — only real agent artifacts and user uploads.
   libraryCat:'all', librarySearch:'', librarySelect:false, librarySelected:[], libraryLayout:'grid',
+  libraryUploads:[], systemPath:'root', systemFile:null, systemManifest:null,
+  // goals — user-created life goals with sub-goals, tracked per account.
+  goals:[], goalFilter:'all',
 });
 let state;
 let mobileNavOpen = false;
@@ -339,6 +346,7 @@ if (!Array.isArray(state.subAgents)) state.subAgents = [];
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
 if (!Array.isArray(state.composioApps)) state.composioApps = [];
 state.composioLoading = false;
+if (state.memoryEditing !== null && typeof state.memoryEditing !== 'string') state.memoryEditing = null;
   if (typeof state.appQuery !== 'string') state.appQuery = '';
   if (!state.appFilter || state.appFilter === 'available') state.appFilter = 'all';
   if (typeof state.appOpen !== 'string') state.appOpen = null;
@@ -349,6 +357,20 @@ state.composioLoading = false;
   if (typeof state.librarySelect !== 'boolean') state.librarySelect = false;
   if (!Array.isArray(state.librarySelected)) state.librarySelected = [];
   if (!['grid','list'].includes(state.libraryLayout)) state.libraryLayout = 'grid';
+  if (!Array.isArray(state.libraryUploads)) state.libraryUploads = [];
+  if (!Array.isArray(state.goals)) state.goals = [];
+  if (!state.goalFilter) state.goalFilter = 'all';
+  // migrate legacy goals shape
+  state.goals.forEach(g => {
+    if (!Array.isArray(g.subgoals)) g.subgoals = [];
+    if (typeof g.active !== 'boolean') g.active = true;
+    if (typeof g.done !== 'boolean') g.done = false;
+    if (!g.category) g.category = 'other';
+    if (!g.createdAt) g.createdAt = Date.now();
+    g.subgoals.forEach(s => { if (typeof s.done !== 'boolean') s.done = false; });
+  });
+  if (!['root','agent','user','memory','workspace','uploads'].includes(state.systemPath)) state.systemPath = 'root';
+  if (state.systemFile !== null && typeof state.systemFile !== 'string') state.systemFile = null;
   // Honest apps: no fake OAuth connections exist — always empty.
   state.vault.apps = [];
   const save = () => {
@@ -914,8 +936,26 @@ function ensureOwnerScope(){
   }
 }
 
+/* ---------------- promo (hidden /promo landing) ----------------
+   Hidden Swedish landing page. Only reachable via the exact /promo URL:
+   no links from the main site, noindex meta, not in sitemap.xml.
+   window.__promoLeft tracks in-page funnel exits (auth/app) so post-auth
+   render() calls don't bounce back to the promo copy. */
+function isPromoRoute(){
+  try { return String(window.location.pathname || '').replace(/\/+$/, '') === '/promo'; }
+  catch { return false; }
+}
+function leavePromo(){
+  try { window.__promoLeft = true; } catch {}
+  belnaStopLandingFx();
+}
+
 function render(){
   applyTheme();
+  if (isPromoRoute() && !window.__promoLeft) {
+    stopWorkspacePresence();
+    return renderPromo();
+  }
   if (!signedIn()) {
     stopWorkspacePresence();
     const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
@@ -1211,10 +1251,6 @@ function billingShopHtml(){
       <span class="billing-extra-icon" aria-hidden="true">${icon('gift',20)}</span>
       <h3 id="gift-title">Good ideas are better shared</h3>
       <p>Give someone a little help with their next big idea.</p>
-      <div class="billing-gift-buttons">
-        <button class="btn ghost" data-act="buygift" data-amt="50">Gift $50 ${icon('aur',14)}</button>
-        <button class="btn ghost" data-act="buygift" data-amt="100">Gift $100 ${icon('aur',14)}</button>
-      </div>
       <div class="billing-redeem">
         <label class="billing-label" for="giftcode">Have a gift code? This one's for you.</label>
         <div class="billing-redeem-form"><input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
@@ -1323,7 +1359,7 @@ function planCards(b){
   const pPro = byId.pro || { id: 'pro', name: 'Pro', price: 50, was: null, credits: 60, giftUsd: 0, interval: 'month' };
   const pMax = byId.max || { id: 'max', name: 'Max', price: 100, was: null, credits: 100, giftUsd: 0, interval: 'month' };
   const descriptions = { free:'A little space to get acquainted.', pro:'For your everyday ideas and ambitions.', max:'For the bigger things you have in mind.' };
-  const features = { free:['Your own personal agent', 'Make yourself at home'], pro:['Everything in Free', 'Priority capacity for your agent'], max:['Everything in Pro', 'Our highest agent capacity'] };
+  const features = { free:['Your own personal agent', 'Make yourself at home'], pro:['Everything in Free'], max:['Everything in Pro'] };
   return `<div class="pcards">${[pFree,pPro,pMax].map((p, i) => {
     const id = ids[i], current = b && b.plan === id;
     const action = current ? `<span class="plan-state">${icon('check',14)} Your current plan</span>`
@@ -1389,6 +1425,154 @@ function loadBillingContent(){
 function paintBilling(M){
   M.innerHTML = `<div class="page"><div class="pageinner">${billingBodyHtml()}</div></div>`;
   loadBillingContent();
+}
+
+/* ================================================================
+   REFERRAL GIFT — "Free $50 gift card" (Stripe $50 face value, split)
+   $25 you + $25 friend as credits. You are credited ONLY after your
+   friend redeems (one reward per unique friend). Scratch to reveal,
+   then copy code / share link. Friend redeems in this same popup.
+   ================================================================ */
+let giftCache = null; // {code, link, invited, earnedCredits, rewardEach, ...}
+let giftRevealed = false;
+async function getGift(prefillCode){
+  if (giftCache && giftCache.code && !prefillCode) return giftCache;
+  const j = await window.LingonAuth.api('/api/referrals/mine');
+  giftCache = j || null;
+  if (prefillCode && giftCache) giftCache.prefill = prefillCode;
+  return giftCache;
+}
+function closeGift(){
+  const m = $('#giftmodal');
+  if (m) m.remove();
+}
+function openGift(prefillCode){
+  if (!signedIn()){ renderAuth(); toast('Sign in to claim your gift card.'); return; }
+  closeGift();
+  giftRevealed = false;
+  const overlay = el(`<div id="giftmodal" role="dialog" aria-modal="true" aria-labelledby="giftmodal-title">
+    <div class="giftmodal-card">
+      <button class="iconbtn giftmodal-x" data-act="closegift" aria-label="Close gift">${icon('x',16)}</button>
+      <div class="giftmodal-head"><span class="giftmodal-ico">${icon('gift',22)}</span>
+        <div><h2 id="giftmodal-title">Free $50 gift card</h2>
+        <p class="msub">$25 for you + $25 for each friend — as credits in the app. You get yours the moment your friend redeems. One reward per friend.</p></div>
+      </div>
+      <div class="giftmodal-body"><p class="mut" style="text-align:center">Scratch off your code…</p></div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeGift(); });
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape'){ e.stopPropagation(); closeGift(); } });
+  setTimeout(() => { const x = overlay.querySelector('.giftmodal-x'); if (x) x.focus({ preventScroll: true }); }, 50);
+  getGift(prefillCode).then((g) => {
+    const body = overlay.querySelector('.giftmodal-body');
+    if (!body || !body.isConnected) return;
+    if (!g || !g.code){ body.innerHTML = `<p class="mut">Couldn’t load your gift right now.</p><button class="btn" data-act="opengift">Try again</button>`; return; }
+    const friendCode = String(g.prefill || '').toUpperCase();
+    const showFriendBox = !!friendCode && friendCode !== String(g.code).toUpperCase();
+    body.innerHTML = `
+      <div class="scratch" id="scratch">
+        <div class="scratch-code"><span class="scratch-label">Your gift code</span><b id="giftcode-text">${esc(g.code)}</b>
+          <span class="scratch-state" id="scratch-state">Scratch to reveal, then copy & share</span></div>
+        <canvas id="scratch-canvas" aria-label="Scratch off to reveal your gift code"></canvas>
+      </div>
+      <div class="giftmodal-row">
+        <button class="btn" data-act="gift-copy-code">${icon('copy',14)} Copy code</button>
+        <button class="btn ghost" data-act="gift-copy-link">${icon('copy',14)} Copy invite link</button>
+        <button class="btn ghost" data-act="gift-share">${icon('chatb',14)} Share</button>
+      </div>
+      <div class="giftmodal-link"><span id="giftlink-text">${esc(g.link || '')}</span></div>
+      <div class="giftmodal-stats"><span>${icon('spark',13)} <b>${fmtC(g.rewardEach || 50)}</b> credits each ($${esc(String((g.eachUsd != null ? g.eachUsd : 25)))})</span><span>·</span><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span>·</span><span><b>${fmtC(g.earnedCredits || 0)}</b> credits earned</span></div>
+      <div class="giftmodal-redeem">
+        <label class="billing-label" for="giftfriendcode">Have a friend’s code? Redeem it here — you both get credits.</label>
+        <div class="billing-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
+        <button class="btn ghost small" data-act="gift-redeem">Redeem</button></div>
+        <span class="billing-fine">Same $50 Stripe gift card value. Credits land instantly and show in Billing + your credit meter.</span>
+      </div>
+      <button class="btn ghost small" data-act="gift-reveal" id="gift-reveal-btn">Can’t scratch? Tap to reveal</button>`;
+    wireScratch();
+  }).catch(() => {
+    const body = overlay.querySelector('.giftmodal-body');
+    if (body) body.innerHTML = `<p class="mut">Couldn’t load your gift right now.</p><button class="btn" data-act="opengift">Try again</button>`;
+  });
+}
+function giftRevealDone(){
+  if (giftRevealed) return;
+  giftRevealed = true;
+  const cv = $('#scratch-canvas'), st = $('#scratch-state'), box = $('#scratch');
+  if (cv) { cv.style.transition = 'opacity .35s'; cv.style.opacity = '0'; setTimeout(() => cv.remove(), 380); }
+  if (st) st.textContent = 'Revealed — copy your code & share the link';
+  if (box) box.classList.add('revealed');
+}
+function wireScratch(){
+  const cv = $('#scratch-canvas'), box = $('#scratch');
+  if (!cv || !box) return;
+  const fit = () => {
+    const r = box.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.max(1, Math.round(r.width * dpr));
+    cv.height = Math.max(1, Math.round(r.height * dpr));
+    const ctx = cv.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, cv.width, cv.height);
+    grad.addColorStop(0, '#c7ccd6'); grad.addColorStop(0.5, '#aeb5c2'); grad.addColorStop(1, '#d4d9e2');
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.font = `${Math.round(cv.height * 0.22)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('SCRATCH', cv.width / 2, cv.height / 2);
+    // faint coins for texture
+    ctx.fillStyle = 'rgba(255,255,255,.35)';
+    for (let i = 0; i < 40; i++) ctx.fillRect(Math.random() * cv.width, Math.random() * cv.height, 3 * dpr, 3 * dpr);
+  };
+  fit();
+  let drawing = false, moves = 0;
+  const pos = (e) => {
+    const r = cv.getBoundingClientRect();
+    const p = (e.touches && e.touches[0]) || e;
+    return { x: (p.clientX - r.left) / r.width * cv.width, y: (p.clientY - r.top) / r.height * cv.height };
+  };
+  const erase = (e) => {
+    if (!drawing) return;
+    if (e.cancelable) e.preventDefault();
+    const ctx = cv.getContext('2d');
+    const { x, y } = pos(e);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(cv.width, cv.height) * 0.045, 0, Math.PI * 2);
+    ctx.fill();
+    if (++moves % 12 === 0) checkCleared();
+  };
+  const checkCleared = () => {
+    try {
+      const ctx = cv.getContext('2d');
+      const w = 24, h = Math.max(1, Math.round(cv.height / cv.width * 24));
+      const d = ctx.getImageData(0, 0, cv.width, cv.height);
+      let clear = 0, total = 0;
+      const step = 37; // sample every Nth alpha byte (cheap)
+      for (let i = 3; i < d.data.length; i += 4 * step){ total++; if (d.data[i] < 40) clear++; }
+      void w; void h;
+      if (total && clear / total > 0.45) giftRevealDone();
+    } catch {}
+  };
+  cv.addEventListener('pointerdown', (e) => { drawing = true; cv.setPointerCapture && cv.setPointerCapture(e.pointerId); erase(e); });
+  cv.addEventListener('pointermove', erase);
+  window.addEventListener('pointerup', () => { drawing = false; }, { once: false });
+  cv.addEventListener('touchstart', (e) => { drawing = true; erase(e); }, { passive: false });
+  cv.addEventListener('touchmove', erase, { passive: false });
+  cv.addEventListener('touchend', () => { drawing = false; checkCleared(); });
+  window.addEventListener('resize', fit);
+}
+function giftAutoOpenFromUrl(){
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const ref = (q.get('ref') || q.get('gift') || '').trim();
+    if (!ref) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    if (!signedIn()){ try { sessionStorage.setItem('belna.pendingGift', ref); } catch {} renderAuth(); setTimeout(() => toast('Sign in — your friend’s gift code is waiting.'), 400); return; }
+    setTimeout(() => openGift(ref), 600);
+  } catch {}
 }
 
 /* ================================================================
@@ -1670,6 +1854,172 @@ function landingAgentPassport(){
       <span class="landing-phone-home" aria-hidden="true"></span>
     </div>
   </div>`;
+}
+
+/* ---------------- PROMO (hidden Swedish /promo landing) ----------------
+   Hidden landing page: exact /promo URL only, never linked from main site.
+   Copy (Swedish):
+   - H1 starts with "Så här får du veckan att gå runt utan att barnen får det sämre."
+   - Sub: "Städa, hämta, lämna, handla, tar det någonsin slut?"
+   - Next: "Man skulle kunna tro att dagen tog slut vid 4, men händer det någonsin?"
+   - Overflow visual: handla mat / städa / skola / sport
+   - "Blir det någonsin en lugn stund? Hemma, jobbet? Var gick 8 timmars arbetsdagen 😂"
+   - Vi-mot-dom: ChatGPT icon left, Belna mascot right, check/cross rows
+     (our side only checkmarks: säker, färre trådar, agent, svensk)
+   - "Belna är den första agenten som kan sköta handlingen, fakturorna och
+      barnens schema – din egen mini-superman 🦸"
+   - Phone graphic: Belna agent chat, user shops on ICA, approval card with
+     ICA icon + shopping list
+   - "Du äger din AI-agent. Varje agent har sin egna säkra dator, och ser aldrig
+      dina uppgifter utan de blir krypterade. Och du bestämmer själv vad du vill godkänna."
+   - Reused secure-agent phone graphic, then prompt box with
+     "Börja gratis idag! Gillar du inte så tar vi bort ditt konto."
+   - Top right: Get started etc. */
+function renderPromo(){
+  const chatgptFav = 'https://www.google.com/s2/favicons?sz=128&domain=chatgpt.com';
+  const icaFav = 'https://www.google.com/s2/favicons?sz=128&domain=ica.se';
+  root.innerHTML = `
+  <div class="fadeup promo-page">
+    <div class="anav"><nav class="nav">
+      <a class="abrand" href="/promo" data-act="top">${Mascot.logo(28)}belna</a>
+      <div class="navlinks"><a href="/" data-act="back-home">Hem</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
+      <div class="anav-cta">
+        <a class="btn ghost small" href="/promo" data-act="signin-nav">Sign in</a>
+        <a class="btn small" href="#promo-cta" data-act="promo-cta">Get started</a>
+      </div>
+    </nav></div>
+
+    <div class="hero-wrap">
+    <div class="belna-stars" aria-hidden="true">${STAR_SKY_SVG}</div>
+    <header class="hero ahero promo-hero">
+      <h1>Så här får du veckan att gå runt utan att barnen får det sämre.</h1>
+      <p class="tagline"><strong>Städa, hämta, lämna, handla, tar det någonsin slut?</strong></p>
+      <p class="tagline">Man skulle kunna tro att dagen tog slut vid 4, men händer det någonsin?</p>
+      <div class="promo-overflow" aria-label="Vardagens överflöde: handla mat, städa, skola, sport">
+        <div class="promo-overflow-card po-1"><span class="po-emoji">🛒</span><div><b>Handla mat</b><small>ICA · 17:30 · mjölk, ägg, pasta…</small></div></div>
+        <div class="promo-overflow-card po-2"><span class="po-emoji">🧹</span><div><b>Städa</b><small>Tvättstugan · dammsuga · diska</small></div></div>
+        <div class="promo-overflow-card po-3"><span class="po-emoji">🎒</span><div><b>Skola</b><small>Hämta 15:00 · lämna 08:00 · läxor</small></div></div>
+        <div class="promo-overflow-card po-4"><span class="po-emoji">⚽</span><div><b>Sport</b><small>Träning 18:00 · match lördag · gympapåse</small></div></div>
+        <div class="promo-overflow-card po-5"><span class="po-emoji">🧾</span><div><b>Fakturor</b><small>El · förskola · försäkring</small></div></div>
+      </div>
+      <div class="promo-calm"><span>Blir det någonsin en lugn stund?</span><span>Hemma, jobbet?</span><span>Var gick 8 timmars arbetsdagen? 😂</span></div>
+      <p class="tagline promo-why">Det var därför vi skapade Belna, din egen AI-agent som kan sköta dagssysslorna.</p>
+    </header>
+    </div>
+
+    <section class="asection promo-vs" aria-label="Vi mot dom">
+      <div class="promo-section-head">
+        <h2>Vanlig AI-chatt eller egen agent?</h2>
+      </div>
+      <div class="promo-vs-grid">
+        <article class="promo-vs-card promo-vs-old">
+          <div class="promo-vs-head"><img src="${chatgptFav}" alt="ChatGPT" width="28" height="28"><div><b>Vanliga AI-chattar</b><small>Svarar — men gör det inte åt dig</small></div></div>
+          <ul>
+            <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Säker</b><small>Dina uppgifter tränar andras modeller</small></span></li>
+            <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Mer huvudvärk</b><small>Fler trådar – mer att hålla koll på</small></span></li>
+            <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Ingen agent</b><small>Kan inte handla, betala eller boka</small></span></li>
+            <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Inte svensk</b><small>Data utomlands, support på engelska</small></span></li>
+          </ul>
+        </article>
+        <article class="promo-vs-card promo-vs-belna">
+          <div class="promo-vs-head"><span class="promo-vs-mascot">${Mascot.svg('lingon','happy',40)}</span><div><b>Belna</b><small>Din egen agent som gör jobbet</small></div><span class="chip green">vår sida ✓</span></div>
+          <ul>
+            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Säker</b><small>Krypterat, isolerat, ditt</small></span></li>
+            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Färre trådar</b><small>En agent håller ihop hela veckan</small></span></li>
+            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Egen agent</b><small>Handlar, betalar och bokar åt dig</small></span></li>
+            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Svensk</b><small>Byggd i Sverige, på svenska</small></span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="asection promo-agent" aria-label="Din egen mini-superman">
+      <div class="promo-section-head">
+        <p class="promo-superman"><strong>Belna</strong> är den första agenten som kan sköta handlingen, fakturorna och barnens schema — din egen minisuperman 🦸</p>
+      </div>
+      <div class="promo-phone-row">
+        <div class="landing-phone-shell promo-chat-phone">
+          <span class="landing-phone-island" aria-hidden="true"></span>
+          <div class="landing-phone-screen">
+            <div class="promo-chat-head"><span class="promo-chat-mascot">${Mascot.svg('lingon','idle',34)}</span><div><b>Alva</b><small>din agent · online</small></div></div>
+            <div class="promo-chat-body">
+              <div class="promo-bubble user">Kan du handla veckohandlingen på ICA? 🛒</div>
+              <div class="promo-bubble agent">Fixat! Jag har plockat ihop listan — godkänn så betalar jag. 👇</div>
+              <div class="promo-ica-card">
+                <div class="promo-ica-head"><img src="${icaFav}" alt="ICA" width="22" height="22"><div><b>ICA — godkänn köp</b><small>Veckohandling · ICA Nära · 342 kr</small></div><span class="chip">väntar på dig</span></div>
+                <div class="promo-ica-list">
+                  <div><span>🥛</span>Mjölk 1 L</div>
+                  <div><span>🥚</span>Ägg 12-pack</div>
+                  <div><span>🍝</span>Pasta + krossade tomater</div>
+                  <div><span>🍌</span>Bananer</div>
+                  <div><span>☕</span>Kaffe</div>
+                </div>
+                <div class="promo-ica-actions"><span class="btn small">${icon('check',14)} Godkänn</span><span class="btn ghost small">Neka</span></div>
+                <small class="promo-ica-note">Kort att godkänna köp — inget dras utan ditt ja.</small>
+              </div>
+            </div>
+          </div>
+          <div class="landing-phone-composer" aria-hidden="true">
+            <span class="landing-phone-plus">+</span>
+            <span class="landing-phone-message">Message Alva</span>
+            <span class="landing-phone-mic">${icon('mic',16)}</span>
+            <span class="landing-phone-bars"><i></i><i></i><i></i><i></i></span>
+          </div>
+          <span class="landing-phone-home" aria-hidden="true"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="asection promo-own" aria-label="Du äger din AI-agent">
+      <div class="secure-agent-layout">
+        <div class="secure-agent-copy">
+          <h2>Du äger din AI-agent</h2>
+          <p>Varje agent har sin egna säkra dator, och ser aldrig dina uppgifter utan de blir krypterade. Och du bestämmer själv vad du vill godkänna.</p>
+        </div>
+        ${landingAgentPassport()}
+      </div>
+    </section>
+
+    <section class="cta2 promo-cta" id="promo-cta" aria-label="Börja gratis">
+      <div class="kicker" style="font-size:12.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)">Börja gratis idag!</div>
+      <h2>Vad vill du få gjort?</h2>
+      <p class="mut" style="margin-top:8px">Gillar du inte så tar vi bort ditt konto.</p>
+      <div class="promptwrap">
+        <form class="promptbox" id="pform">
+          <textarea id="pprompt" rows="2" placeholder="Be Alva handla på ICA, betala fakturorna, planera barnens schema…"></textarea>
+          <div class="attach-pills"></div>
+          <div class="pb-row">
+            <span class="iconbtn" data-act="attach" title="Attach files">${icon('plus',17)}</span>
+            <span style="display:flex;gap:10px;align-items:center">
+              <button type="submit" class="micbtn" title="Send">${icon('up',17)}</button>
+            </span>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <footer class="afooter"><div class="fin">
+      <div><div class="abrand">${Mascot.logo(28)}belna</div></div>
+      <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
+      <div><h4>Company</h4><a href="#promo-cta" data-act="promo-cta">Get started</a><a href="/promo" data-act="signin-nav">Sign in</a></div>
+      <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div>
+    </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+  </div>`;
+  const f = document.getElementById('pform');
+  const p = document.getElementById('pprompt');
+  if (f && p){
+    f.addEventListener('submit', e => {
+      e.preventDefault();
+      const v = p.value.trim();
+      if (!v && !pendingFiles.length) return;
+      p.value = '';
+      clearFiles();
+      landingRun(v);
+    });
+    p.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); f.requestSubmit(); } });
+  }
+  wirePromptBox(document.getElementById('pform'), document.getElementById('pprompt'));
+  try { window.scrollTo({ top:0 }); } catch {}
 }
 
 function renderLanding(){
@@ -2221,14 +2571,57 @@ function currentUser(){
 function artifactRows(){
   const rows = [];
   state.chats.forEach(c => {
-    if (c.artifact) rows.push({ title: c.artifact.title, kind: c.artifact.kind, chat: c.title, chatId: c.id, at: c.updatedAt || c.createdAt || Date.now() });
+    if (c.artifact) rows.push({
+      title: c.artifact.title,
+      kind: c.artifact.kind,
+      chat: c.title,
+      chatId: c.id,
+      card: { ...c.artifact, type:'artifact', title:c.artifact.title, name:c.artifact.title },
+      source:'agent',
+      at: c.updatedAt || c.createdAt || Date.now(),
+    });
     (c.messages || []).forEach(m => {
-      if (m.kind === 'card' && (m.card.type === 'file' || m.card.type === 'canvas' || m.card.type === 'artifact')) rows.push({ title: m.card.name || m.card.title, kind: m.card.type, chat: c.title, chatId: c.id, messageId:m.id, card: m.card, at: m.at || m.createdAt || c.updatedAt || c.createdAt || Date.now() });
+      if (m.kind === 'card' && (m.card.type === 'file' || m.card.type === 'canvas' || m.card.type === 'artifact')) rows.push({
+        title: m.card.name || m.card.title,
+        kind: m.card.type,
+        chat: c.title,
+        chatId: c.id,
+        messageId:m.id,
+        card: m.card,
+        source:'agent',
+        at: m.at || m.createdAt || c.updatedAt || c.createdAt || Date.now(),
+      });
       // attached uploads (jpg / mp4 / mp3 / mov / png …) live on m.files
       (m.files || []).forEach((f, fi) => {
         if (!f || !f.name) return;
-        rows.push({ title: f.name, kind:'file', chat: c.title, chatId: c.id, messageId: m.id, fileIndex: fi, card: { type:'file', name: f.name, dataUrl: f.dataUrl, mime: f.type, size: f.size }, at: m.at || m.createdAt || c.updatedAt || c.createdAt || Date.now() });
+        rows.push({
+          title: f.name,
+          kind:'file',
+          chat: c.title,
+          chatId: c.id,
+          messageId: m.id,
+          fileIndex: fi,
+          card: { type:'file', name: f.name, dataUrl: f.dataUrl, mime: f.type, size: f.size },
+          source:'upload',
+          at: m.at || m.createdAt || c.updatedAt || c.createdAt || Date.now(),
+        });
       });
+    });
+  });
+  // Library uploads are kept separate from chat history so uploading a file
+  // here never creates a pretend chat message. The file itself remains real.
+  (state.libraryUploads || []).forEach((f) => {
+    if (!f || !f.name) return;
+    rows.push({
+      id:'upload:' + f.id,
+      title:f.name,
+      kind:'file',
+      chat:'Library upload',
+      source:'upload',
+      libraryUpload:true,
+      uploadId:f.id,
+      card:{ type:'file', name:f.name, dataUrl:f.dataUrl, mime:f.type, size:f.size },
+      at:Number(f.at || Date.now()),
     });
   });
   rows.sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
@@ -2271,30 +2664,19 @@ function libCatFor(item){
   if (t === 'web') return 'web';
   return 'artifact';
 }
-function libDemoItems(){
-  const now = Date.now();
-  const agent = (state.agent && state.agent.name) || 'Belna';
-  return [
-    { id:'demo-lead', title:'Belna Lead List', kind:'artifact', chat: agent + ' research', at: now - 18*3600e3, _demo:true, _type:'artifact', sub:'Prospect brief · 24 researched prospects' },
-    { id:'demo-readme', title:'README.md', kind:'file', chat:'Website Template Pack', at: now - 18*3600e3, _demo:true, _type:'document', sub:'Text · template docs' },
-    { id:'demo-tictac', title:'Tic Tac Toe', kind:'artifact', chat:'Canvas game', at: now - 5*86400e3, _demo:true, _type:'web', sub:'Playable web artifact' },
-    { id:'demo-hero', title:'launch-hero.jpg', kind:'file', chat:'Launch assets', at: now - 2*86400e3, _demo:true, _type:'image', sub:'Image · 1.2 MB' },
-    { id:'demo-demo', title:'product-demo.mp4', kind:'file', chat:'Launch assets', at: now - 26*3600e3, _demo:true, _type:'video', sub:'Video · 0:42' },
-    { id:'demo-voice', title:'founder-update.mp3', kind:'file', chat:'Voice notes', at: now - 3*86400e3, _demo:true, _type:'audio', sub:'Audio · 3:18' },
-  ];
-}
 function libraryItems(){
   const real = artifactRows().map((r, i) => {
     const type = libItemType(r);
     const fid = r.fileIndex !== undefined ? ':f' + r.fileIndex : '';
-    return { id: (r.chatId || 'c') + ':' + (r.messageId || 'a') + ':' + i + fid, ...r, _type: type, _demo:false, sub: null };
+    const id = r.libraryUpload ? 'upload:' + r.uploadId : (r.chatId || 'c') + ':' + (r.messageId || 'a') + ':' + i + fid;
+    return { id, ...r, _type: type, _source: r.source === 'upload' ? 'upload' : 'agent', sub: null };
   });
-  if (real.length) return real;
-  return libDemoItems();
+  return real;
 }
 function libraryFiltered(){
   const cat = state.libraryCat || 'all';
   const q = String(state.librarySearch || '').toLowerCase().trim();
+  if (cat === 'system') return [];
   let items = libraryItems();
   if (cat === 'images') items = items.filter(x => x._type === 'image');
   else if (cat === 'videos') items = items.filter(x => x._type === 'video');
@@ -2308,6 +2690,8 @@ function libraryFiltered(){
   return items;
 }
 function libTypeLabel(t){
+  if (t === 'folder') return 'Folder';
+  if (t === 'system') return 'System file';
   if (t === 'image') return 'Image';
   if (t === 'video') return 'Video';
   if (t === 'audio') return 'Audio';
@@ -2316,6 +2700,8 @@ function libTypeLabel(t){
   return 'Artifact';
 }
 function libIconFor(t){
+  if (t === 'folder') return 'folder';
+  if (t === 'system') return 'file';
   if (t === 'image') return 'image';
   if (t === 'video') return 'video';
   if (t === 'audio') return 'podcast';
@@ -2323,43 +2709,254 @@ function libIconFor(t){
   if (t === 'web') return 'easel';
   return 'spark';
 }
+function libraryTextContent(item){
+  const card = item.card || {};
+  if (typeof card.content === 'string') return card.content;
+  if (typeof card.text === 'string') return card.text;
+  if (typeof card.code === 'string') return card.code;
+  if (Array.isArray(card.items)) return card.items.join('\n');
+  return '';
+}
+function libUnavailablePreview(item, label){
+  const managed = item.card?.managedArtifactId && item.chatId
+    ? ` data-lib-managed="${esc(item.card.managedArtifactId)}" data-lib-chat="${esc(item.chatId)}"`
+    : '';
+  return `<div class="lib-prev lib-prev-unavailable"${managed}><span class="lib-prev-unavailable-icon">${icon(libIconFor(item._type), 26)}</span><b>${esc(label)}</b><span>Open the real file to preview it.</span></div>`;
+}
 function libPreviewHtml(item){
   const t = item._type;
-  const seed = String(item.title || 'B').split('').reduce((a, ch) => a + ch.charCodeAt(0), 0);
   const dataUrl = item.card && item.card.dataUrl;
   const isImgUrl = dataUrl && /^data:image\//.test(String(dataUrl));
   const isVidUrl = dataUrl && /^data:video\//.test(String(dataUrl));
+  const isAudioUrl = dataUrl && /^data:audio\//.test(String(dataUrl));
   if (t === 'image'){
     if (isImgUrl) return `<div class="lib-prev lib-prev-photo"><img src="${esc(dataUrl)}" alt="${esc(item.title)}" loading="lazy"><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
-    const hue = seed % 360;
-    return `<div class="lib-prev lib-prev-image" style="--ph:${hue}"><span class="lib-prev-mount">${icon('image',28)}</span><span class="lib-prev-fname">${esc(item.title)}</span><span class="lib-prev-tag">${esc(libExt(item.title).toUpperCase() || 'JPG')}</span></div>`;
+    return libUnavailablePreview(item, 'Image file');
   }
   if (t === 'video'){
     if (isVidUrl) return `<div class="lib-prev lib-prev-photo"><video src="${esc(dataUrl)}" muted playsinline preload="metadata"></video><span class="lib-prev-play">${icon('play',26)}</span><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
-    return `<div class="lib-prev lib-prev-video"><span class="lib-prev-play">${icon('play',26)}</span><span class="lib-prev-dur">0:42</span><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
+    return libUnavailablePreview(item, 'Video file');
   }
   if (t === 'audio'){
-    const bars = Array.from({length: 28}, (_, i) => `<i style="height:${6 + ((seed * (i+3)) % 22)}px"></i>`).join('');
-    return `<div class="lib-prev lib-prev-audio"><span class="lib-prev-audio-ic">${icon('podcast',22)}</span><span class="lib-prev-wave">${bars}</span><span class="lib-prev-dur">3:18</span></div>`;
+    if (isAudioUrl) return `<div class="lib-prev lib-prev-audio-real"><audio src="${esc(dataUrl)}" controls preload="metadata"></audio><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
+    return libUnavailablePreview(item, 'Audio file');
   }
   if (t === 'document'){
-    return `<div class="lib-prev lib-prev-doc"><div class="lib-doc-paper"><b>${esc(String(item.title || 'Untitled').slice(0, 28))}</b><span class="lib-doc-lines"><i style="width:92%"></i><i style="width:84%"></i><i style="width:88%"></i><i style="width:64%"></i><i style="width:76%"></i></span><span class="lib-doc-table"><i></i><i></i><i></i><i></i><i></i><i></i></span></div></div>`;
+    const content = libraryTextContent(item).trim();
+    if (content) return `<div class="lib-prev lib-prev-doc"><pre>${esc(content.slice(0, 560))}</pre><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
+    return libUnavailablePreview(item, 'Document');
   }
-  // web / artifact — branded mini dashboard preview like the reference
-  const dark = seed % 2 === 0;
-  return `<div class="lib-prev lib-prev-web${dark ? ' dark' : ''}"><div class="lib-web-bar"><i></i><i></i><i></i><span>${esc(String(item.title || 'Artifact').slice(0, 26))}</span></div><div class="lib-web-body"><div class="lib-web-hero"><b>${esc(String(item.sub || item.chat || 'Built with Belna').slice(0, 42))}</b><span class="lib-web-cta">Open</span></div><div class="lib-web-grid"><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>`;
+  // Web/artifact previews are the actual HTML or text emitted by the agent.
+  const html = item.card?.html || (item.card?.kind === 'html' ? item.card?.content : '');
+  if (html) return `<div class="lib-prev lib-prev-web-real"><iframe sandbox="allow-scripts" title="${esc(item.title || 'Artifact')}" srcdoc="${esc(html)}"></iframe></div>`;
+  const content = libraryTextContent(item).trim();
+  if (content) return `<div class="lib-prev lib-prev-code"><pre>${esc(content.slice(0, 560))}</pre></div>`;
+  return libUnavailablePreview(item, 'Agent artifact');
 }
 function libCardHtml(item){
   const sel = state.librarySelect && (state.librarySelected || []).includes(item.id);
-  const meta = item.sub || ((item.chat ? 'from ' + item.chat + ' · ' : '') + fmtAgo(item.at));
-  const sub = item._demo ? esc(item.sub || '') + ' · Sample' : esc(libTypeLabel(item._type)) + ' · ' + esc(fmtAgo(item.at));
+  const source = item._source === 'upload' ? 'Your upload' : 'Made by agent';
+  const sub = esc(libTypeLabel(item._type)) + ' · ' + source + ' · ' + esc(fmtAgo(item.at));
+  const action = item.libraryUpload ? 'library-upload-open' : 'library-open';
+  const attrs = item.libraryUpload
+    ? ` data-upload="${esc(item.uploadId || '')}"`
+    : ` data-chat="${esc(item.chatId || '')}"${item.messageId ? ` data-msg="${esc(item.messageId)}"` : ''}${item.fileIndex !== undefined ? ` data-file="${item.fileIndex}"` : ''}`;
   return `<article class="lib-card${sel ? ' sel' : ''}" data-lib="${esc(item.id)}">
-    <button class="lib-card-main" data-act="${item._demo ? 'lib-demo' : 'library-open'}"${item._demo ? ` data-demo="${esc(item.id)}"` : ` data-chat="${esc(item.chatId || '')}"${item.messageId ? ` data-msg="${esc(item.messageId)}"` : ''}`}>
+    <button class="lib-card-main" data-act="${action}"${attrs}>
       ${libPreviewHtml(item)}
       <span class="lib-meta"><span class="lib-ico lib-ico-${item._type}">${icon(libIconFor(item._type), 16)}</span><span class="lib-copy"><b>${esc(item.title)}</b><span>${sub}</span></span></span>
     </button>
+    <button class="lib-card-download" data-act="lib-download" data-id="${esc(item.id)}" title="Download ${esc(item.title)}" aria-label="Download ${esc(item.title)}">${icon('down',14)}</button>
     ${state.librarySelect ? `<button class="lib-check${sel ? ' on' : ''}" data-act="lib-pick" data-id="${esc(item.id)}" aria-pressed="${sel ? 'true' : 'false'}">${icon('check',12)}</button>` : ''}
   </article>`;
+}
+const FALLBACK_SYSTEM_TOOLS = [
+  ['capability_search','function','Find the live agent capability that matches a request.'],
+  ['web_search','web','Search public sources and fetch allowlisted pages.'],
+  ['composio_apps','function','List the apps connected to this account.'],
+  ['composio_tools','function','Discover enabled tools for one connected app.'],
+  ['composio_execute','function','Run an enabled connected-app action after approval when required.'],
+  ['shell','code','Run commands in the private workspace worker.'],
+  ['code_run','code','Run JavaScript, Python, or Bash in the hardened workspace worker.'],
+  ['browser_open','browser','Open an allowlisted page in the isolated agent browser.'],
+  ['browser_action','browser','Interact with the current isolated browser page.'],
+  ['computer_screenshot','browser','Display the current isolated browser page.'],
+  ['build_page','code','Create a single-file HTML artifact from a brief.'],
+  ['canvas_show','function','Show a real result or file in Canvas.'],
+  ['memory_search','memory','Search account memory.'],
+  ['memory_get','memory','Read selected account memories.'],
+  ['memory_write','memory','Save a durable memory when appropriate.'],
+  ['memory_update','memory','Correct a durable memory.'],
+  ['memory_delete','memory','Forget a durable memory.'],
+  ['history_search','memory','Search the user’s earlier chats.'],
+  ['mail_status','mail','Check the agent mailbox.'],
+  ['mail_list','mail','List mailbox messages.'],
+  ['mail_read','mail','Read one mailbox message.'],
+  ['mail_draft','mail','Save an email draft without sending it.'],
+  ['mail_send','mail','Send mail from the agent mailbox with owner approval.'],
+  ['trigger_list','automation','List isolated automations.'],
+  ['trigger_create','automation','Create an isolated automation with a trigger.'],
+  ['wallet_status','payments','Read the agent wallet status.'],
+  ['wallet_transfer','payments','Transfer funds with owner approval.'],
+  ['wallet_purchase','payments','Make a wallet purchase with owner approval.'],
+  ['shop_status','payments','Check Shop Pay connection and limits.'],
+  ['shop_search','payments','Search the connected Shop Pay catalog.'],
+  ['shop_product','payments','Read one Shop Pay product.'],
+  ['shop_checkout','payments','Prepare a Shop Pay checkout.'],
+  ['shop_purchase','payments','Complete a Shop Pay purchase with owner approval.'],
+  ['shop_order','payments','Read a Shop Pay order.'],
+];
+function fallbackToolsDocument(){
+  return '# TOOLS.md\n\nLive capabilities are supplied by the Lingon runtime. Tool availability and approvals are enforced separately from editable agent context.\n\n' + FALLBACK_SYSTEM_TOOLS.map(([name, type, description]) => `- **${name}** · ${type} — ${description}`).join('\n');
+}
+function systemToolsDocument(){
+  return String(state.systemManifest?.documents?.tools || fallbackToolsDocument());
+}
+function memoryDocumentContent(){
+  const rows = (state.memory || []).filter(m => !m.category || m.category === 'long_term');
+  return `# MEMORY.md\n\n${rows.map(m => `- ${m.text} <!-- ${memorySource(m)} -->`).join('\n') || 'No long-term memories yet.'}`;
+}
+function systemDocumentItems(){
+  const docs = editableAgentDocuments();
+  return [
+    { id:'system:identity', key:'identity', title:'IDENTITY.md', folder:'agent', path:'/agent/IDENTITY.md', content:docs.identity, editable:true, description:'The agent name, style, and identity you chose.', at:state.agentContext?.updatedAt || Date.now() },
+    { id:'system:soul', key:'soul', title:'SOUL.md', folder:'agent', path:'/agent/SOUL.md', content:docs.soul, editable:true, description:'The tone and values that guide the agent’s replies.', at:state.agentContext?.updatedAt || Date.now() },
+    { id:'system:agents', key:'agents', title:'AGENTS.md', folder:'agent', path:'/agent/AGENTS.md', content:docs.agents, editable:true, description:'Your working agreement for planning, verification, and approvals.', at:state.agentContext?.updatedAt || Date.now() },
+    { id:'system:tools', key:'tools', title:'TOOLS.md', folder:'agent', path:'/agent/TOOLS.md', content:systemToolsDocument(), editable:false, description:'The live runtime capability manifest. Read-only; permissions stay enforced by Lingon.', at:Date.now() },
+    { id:'system:user', key:'user', title:'USER.md', folder:'user', path:'/user/USER.md', content:docs.user, editable:true, description:'Stable preferences and background that you want the agent to remember.', at:state.agentContext?.updatedAt || Date.now() },
+    { id:'system:memory', key:'memory', title:'MEMORY.md', folder:'memory', path:'/memory/MEMORY.md', content:memoryDocumentContent(), editable:false, description:'A generated view of durable memory. Edit entries in Settings → Memory.', at:Date.now() },
+  ];
+}
+function systemFolderItems(){
+  const all = libraryItems();
+  const uploads = all.filter(item => item._source === 'upload');
+  return [
+    { id:'agent', title:'agent', path:'/agent', icon:'spark', description:'Editable agent context and the live runtime manifest.', count:systemDocumentItems().filter(item => item.folder === 'agent').length },
+    { id:'user', title:'user', path:'/user', icon:'user', description:'Your editable USER.md context.', count:1 },
+    { id:'memory', title:'memory', path:'/memory', icon:'book', description:'Durable memory and dated notes.', count:1 + (state.memory || []).filter(m => m.category === 'daily').length },
+    { id:'workspace', title:'workspace', path:'/workspace', icon:'folder', description:'Real artifacts created by the agent and files you uploaded.', count:all.length },
+    { id:'uploads', title:'uploads', path:'/workspace/uploads', icon:'attach', description:'Files uploaded by you, kept separate from agent output.', count:uploads.length },
+  ];
+}
+function systemPathLabel(path){
+  const item = systemFolderItems().find(folder => folder.id === path);
+  return item ? item.title : 'System files';
+}
+function systemFileRowHtml(item){
+  const stateLabel = item.editable ? 'Editable' : 'Read-only';
+  return `<article class="system-file-row">
+    <button class="system-file-main" data-act="system-open" data-system-id="${esc(item.id)}">
+      <span class="system-file-icon ${item.editable ? 'editable' : 'readonly'}">${icon(item.editable ? 'pencil' : 'lock',16)}</span>
+      <span class="system-file-copy"><b>${esc(item.title)}</b><span>${esc(item.path)} · ${esc(item.description)}</span></span>
+      <span class="chip ${item.editable ? 'acc' : ''}">${stateLabel}</span>
+      <span class="system-file-chev">${icon('chev',15)}</span>
+    </button>
+  </article>`;
+}
+function systemEditorHtml(item){
+  const readOnly = !item.editable;
+  return `<div class="system-editor">
+    <button class="system-back" data-act="system-back">${icon('left',14)} System files</button>
+    <div class="system-editor-head">
+      <span class="system-file-icon ${readOnly ? 'readonly' : 'editable'}">${icon(readOnly ? 'lock' : 'pencil',18)}</span>
+      <div><span class="system-eyebrow">${esc(item.path)}</span><h3>${esc(item.title)}</h3><p>${esc(item.description)}</p></div>
+      <span class="chip ${readOnly ? '' : 'acc'}">${readOnly ? 'Read-only' : 'Editable'}</span>
+    </div>
+    ${readOnly
+      ? `<pre class="system-editor-code">${esc(item.content)}</pre>${item.key === 'memory' ? `<button class="btn soft small" data-act="system-memory">${icon('book',14)} Manage memory</button>` : `<p class="system-editor-note">This file is generated from the live runtime. It describes capabilities; it cannot grant permissions or change safety boundaries.</p>`}`
+      : `<textarea class="field system-editor-text" id="system-editor-text" data-system-key="${esc(item.key)}" maxlength="${item.key === 'user' ? '4000' : '8000'}">${esc(item.content)}</textarea><div class="system-editor-actions"><button class="btn dark small" data-act="system-save">Save changes</button><button class="btn ghost small" data-act="system-back">Cancel</button></div>`}
+  </div>`;
+}
+function systemWorkspaceItems(path){
+  const items = libraryItems();
+  return path === 'uploads' ? items.filter(item => item._source === 'upload') : items;
+}
+function systemLibraryBody(){
+  const path = state.systemPath || 'root';
+  const selected = state.systemFile ? systemDocumentItems().find(item => item.id === state.systemFile) : null;
+  if (selected) return systemEditorHtml(selected);
+  if (path === 'workspace' || path === 'uploads') {
+    const items = systemWorkspaceItems(path);
+    return `<div class="system-browser"><button class="system-back" data-act="system-back">${icon('left',14)} System files</button><div class="lib-head"><div><span class="lib-eyebrow">/${path === 'uploads' ? 'workspace/uploads' : 'workspace'}</span><h2>${path === 'uploads' ? 'Uploads' : 'Workspace'}</h2></div><span class="chip">${items.length} real ${items.length === 1 ? 'file' : 'files'}</span></div>${items.length ? `<div class="lib-sec">${path === 'uploads' ? 'Your uploads' : 'Agent output and uploads'}</div><div class="lib-grid">${items.map(libCardHtml).join('')}</div>` : `<div class="lib-empty card">${icon(path === 'uploads' ? 'attach' : 'folder',22)}<b>No real files yet</b><span>${path === 'uploads' ? 'Upload a file from Library to put it here.' : 'Ask your agent to create an artifact or upload a file.'}</span></div>`}</div>`;
+  }
+  const docs = systemDocumentItems().filter(item => item.folder === path || path === 'root');
+  const folders = path === 'root' ? systemFolderItems() : [];
+  const pathTitle = path === 'root' ? 'System files' : systemPathLabel(path);
+  return `<div class="system-browser">
+    ${path === 'root' ? '' : `<button class="system-back" data-act="system-back">${icon('left',14)} System files</button>`}
+    <div class="system-intro"><span class="lib-brand-mark">${Mascot.logo(28)}</span><div><span class="lib-eyebrow">Lingon runtime</span><h2>${esc(pathTitle)}</h2><p>These are the safe files and folders that shape your agent. Editable context is saved to your account.</p></div><span class="chip green">live</span></div>
+    ${folders.length ? `<div class="system-folder-grid">${folders.map(folder => `<button class="system-folder" data-act="system-folder" data-path="${esc(folder.id)}"><span class="system-folder-icon">${icon(folder.icon,20)}</span><span><b>${esc(folder.title)}/</b><small>${esc(folder.description)}</small></span><em>${folder.count}</em></button>`).join('')}</div>` : ''}
+    <div class="lib-sec">${path === 'root' ? 'Safe system files' : esc(pathTitle)}</div>
+    <div class="system-file-list">${docs.map(systemFileRowHtml).join('')}</div>
+    ${path === 'memory' ? `<button class="btn soft small" data-act="system-memory" style="margin-top:12px">${icon('book',14)} Manage memories</button>` : ''}
+  </div>`;
+}
+let systemFilesPending = null, systemFilesOwner = null, systemFilesCheckedAt = 0;
+function refreshSystemFiles(force = false){
+  if (!signedIn() || !window.LingonAuth?.api) return Promise.resolve();
+  const owner = currentUserId();
+  if (owner !== systemFilesOwner){ systemFilesOwner = owner; systemFilesCheckedAt = 0; systemFilesPending = null; }
+  if (systemFilesPending) return systemFilesPending;
+  if (!force && Date.now() - systemFilesCheckedAt < 30000) return Promise.resolve();
+  const request = window.LingonAuth.api('/api/system-files').then((out) => {
+    if (owner !== currentUserId()) return;
+    state.systemManifest = out || null;
+    if (out?.documents) {
+      state.agentContext = { ...(state.agentContext || {}), revision:Number(out.revision || state.agentContext?.revision || 0), documents:{ ...((state.agentContext || {}).documents || {}), ...out.documents } };
+    }
+    save();
+    if (state.view === 'settings' && state.settingsTab === 'library' && $('#main')) paintSettings($('#main'));
+  }).catch(() => {}).finally(() => { systemFilesCheckedAt = Date.now(); systemFilesPending = null; });
+  systemFilesPending = request;
+  return request;
+}
+const MAX_LIBRARY_UPLOAD_MB = 8;
+function addLibraryUploads(fileList){
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  let added = 0;
+  files.forEach((file) => {
+    if (!file || file.size > MAX_LIBRARY_UPLOAD_MB * 1024 * 1024){
+      toast(`${file?.name || 'That file'} exceeds ${MAX_LIBRARY_UPLOAD_MB} MB.`);
+      return;
+    }
+    if ((state.libraryUploads || []).some(item => item.name === file.name && item.size === file.size)) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.libraryUploads.unshift({ id:uid(), name:file.name, size:file.size, type:file.type, dataUrl:String(reader.result || ''), at:Date.now() });
+      added++;
+      try { save(); } catch {
+        state.libraryUploads.shift();
+        toast('That file could not be kept in this browser. Try a smaller file.');
+        return;
+      }
+      if (state.view === 'settings' && state.settingsTab === 'library' && $('#main')) paintSettings($('#main'));
+      if (added === files.length) toast(`${added} file${added === 1 ? '' : 's'} uploaded to Library.`);
+    };
+    reader.onerror = () => toast(`Could not read ${file.name}.`);
+    reader.readAsDataURL(file);
+  });
+}
+function libraryItemById(id){ return libraryItems().find(item => item.id === id) || null; }
+function downloadDataUrl(name, dataUrl){
+  const link = document.createElement('a');
+  link.href = String(dataUrl || '');
+  link.download = name || 'download';
+  link.click();
+  toast('Downloading ' + (name || 'file'));
+}
+async function downloadLibraryItem(item){
+  if (!item) return;
+  const card = item.card || {};
+  if (card.managedArtifactId && item.chatId && window.Engine?.download){
+    try { await window.Engine.download(item.chatId, card); toast('Downloading ' + item.title); }
+    catch (error) { toast(error.message || 'Could not download that artifact.'); }
+    return;
+  }
+  if (card.dataUrl){ downloadDataUrl(item.title, card.dataUrl); return; }
+  const content = card.html || libraryTextContent(item);
+  if (content){ dl(item.title, content); return; }
+  toast('This file has no downloadable content in the current view.');
 }
 function approvalRows(){
   const rows = [];
@@ -2493,22 +3090,58 @@ function approvalIconHtml(row){
 }
 const GMAIL_MARK = '<svg class="appr-brand" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M1.5 6.8v10.5c0 .9.7 1.7 1.7 1.7h2.2V10l6.6 4.8L18.6 10v9h2.2c.9 0 1.7-.8 1.7-1.7V6.8L12 14.2Z"/><path fill="#34A853" d="M20.8 4H18L12 8.3 6 4H3.2L12 10.4Z"/><path fill="#EA4335" d="M1.5 4.1C1.5 3.2 2.3 2.5 3.2 2.5H6v1.6L1.5 7.2Z"/><path fill="#FBBC04" d="M20.8 2.5h-2.8v1.6l4.5 3.1V4.1c0-.9-.8-1.6-1.7-1.6Z"/></svg>';
 
+/* ---------------- Goals: categories + helpers ---------------- */
+const GOAL_CATS = [
+  { id:'health', label:'Health', ic:'heart' },
+  { id:'family', label:'Family', ic:'user' },
+  { id:'finance', label:'Finance', ic:'wallet' },
+  { id:'career', label:'Career', ic:'brief' },
+  { id:'interests', label:'Interests', ic:'star' },
+  { id:'other', label:'Something else', ic:'grid' },
+];
+function goalCat(id){ return GOAL_CATS.find(c => c.id === id) || GOAL_CATS[5]; }
+function goalProgress(g){
+  const subs = Array.isArray(g.subgoals) ? g.subgoals : [];
+  if (!subs.length) return g.done ? 100 : 0;
+  return Math.round(subs.filter(s => s.done).length / subs.length * 100);
+}
+function goalCounts(){
+  const goals = Array.isArray(state.goals) ? state.goals : [];
+  return { total: goals.length, active: goals.filter(g => g.active && !g.done).length, done: goals.filter(g => g.done).length };
+}
+
 function paintSide(){
   const a = state.agent;
   if (!a) return;
   const u = currentUser();
   const initials = esc((u.name || 'U').slice(0, 1).toUpperCase());
+  let libCount = 0;
+  try { libCount = artifactRows().length; } catch { libCount = 0; }
+  const gc = goalCounts();
+  const libOn = state.view === 'settings' && state.settingsTab === 'library';
+  const goalsOn = state.view === 'goals';
   $('#side').innerHTML = `
     <button class="sidebrand" data-act="nav" data-view="chat" title="Belna — back to chat">${Mascot.logo(28)}<span>belna</span></button>
     <button class="btn" style="margin:8px 4px 4px" data-act="newchat">${icon('plus',15)} New chat</button>
-    <div class="slabel">Chats</div>
-    <div style="overflow-y:auto;flex:1">
-      ${state.chats.slice(0, 12).map(c => `
-        <button class="sitem chatitem ${c.id === state.activeChat && state.view === 'chat' ? 'on' : ''}" data-act="openchat" data-id="${c.id}">
-          ${icon(c.source === 'automation' ? 'clock' : 'chatb',14)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span>
-          <span class="when">${fmtWhen(c.createdAt)}</span>
-          <span class="del" data-act="delchat" data-id="${c.id}" title="Delete chat">${icon('trash',13)}</span>
-        </button>`).join('') || '<div class="empty" style="padding:20px">No chats yet</div>'}
+    <div class="side-scroll">
+      <div class="slabel">Workspace</div>
+      <button class="sitem navitem${libOn ? ' on' : ''}" data-act="open-library" title="Open your file library">
+        <span class="sicon sicon-lib">${icon('library',15)}</span><span>Library</span>
+        ${libCount ? `<span class="cnt">${libCount}</span>` : ''}
+      </button>
+      <button class="sitem navitem${goalsOn ? ' on' : ''}" data-act="open-goals" title="Track health, family, finance, career and interests">
+        <span class="sicon sicon-goal">${icon('target',15)}</span><span>Goals</span>
+        ${gc.total ? `<span class="cnt">${gc.active}/${gc.total}</span>` : ''}
+      </button>
+      <div class="slabel">Chats</div>
+      <div class="chatlist">
+        ${state.chats.map(c => `
+          <button class="sitem chatitem ${c.id === state.activeChat && state.view === 'chat' ? 'on' : ''}" data-act="openchat" data-id="${c.id}">
+            ${icon(c.source === 'automation' ? 'clock' : 'chatb',14)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span>
+            <span class="when">${fmtWhen(c.createdAt)}</span>
+            <span class="del" data-act="delchat" data-id="${c.id}" title="Delete chat">${icon('trash',13)}</span>
+          </button>`).join('') || '<div class="empty" style="padding:20px">No chats yet</div>'}
+      </div>
     </div>
     <div class="sidebottom">
       <div class="usagecard" id="usagecard">${billingOwner === billingIdentity() && billingCache ? usageCardHtml(billingCache) : '<span class="usage-loading" role="status">Getting your credits ready…</span>'}</div>
@@ -2552,12 +3185,101 @@ function usageCardHtml(b){
   </div>`;
 }
 
+/* ---------------- Goals page ---------------- */
+function paintGoals(M){
+  const goals = Array.isArray(state.goals) ? state.goals : [];
+  const filter = state.goalFilter || 'all';
+  const catFilter = state.goalCat || 'all';
+  const gc = goalCounts();
+  const subDone = goals.reduce((n, g) => n + (g.subgoals || []).filter(s => s.done).length, 0);
+  const subTotal = goals.reduce((n, g) => n + (g.subgoals || []).length, 0);
+  let list = goals.slice().sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  if (filter === 'active') list = list.filter(g => g.active && !g.done);
+  if (filter === 'done') list = list.filter(g => g.done);
+  if (catFilter !== 'all') list = list.filter(g => (g.category || 'other') === catFilter);
+  M.innerHTML = `<div class="page"><div class="pageinner goals-page">
+    <div class="phead"><h1>Goals</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip acc">${icon('target',12)} ${gc.active} active</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
+    <p class="psub">Track health, family, finance, career, interests and anything else. Mark goals active, break them into sub-goals, and check them off when done.</p>
+    <div class="goal-stats">
+      <div class="goal-stat"><b>${gc.total}</b><small>Total goals</small></div>
+      <div class="goal-stat"><b>${gc.active}</b><small>Active</small></div>
+      <div class="goal-stat"><b>${gc.done}</b><small>Completed</small></div>
+      <div class="goal-stat"><b>${subDone}/${subTotal}</b><small>Sub-goals done</small></div>
+    </div>
+    <div class="goal-composer card">
+      <div class="goal-composer-row">
+        <input class="field" id="goal-title" placeholder="New goal — e.g. Run 5 km three times a week" maxlength="120">
+        <select class="field" id="goal-cat" aria-label="Goal category" style="max-width:170px">
+          ${GOAL_CATS.map(c => `<option value="${c.id}">${c.label}</option>`).join('')}
+        </select>
+        <button class="btn small" data-act="goal-add">${icon('plus',14)} Add goal</button>
+      </div>
+      <div class="goal-hint mut">Pick a category, add it, then break it into sub-goals below.</div>
+    </div>
+    <div class="seg goals-filter">
+      <button class="${filter === 'all' ? 'on' : ''}" data-act="goal-filter" data-f="all">All</button>
+      <button class="${filter === 'active' ? 'on' : ''}" data-act="goal-filter" data-f="active">Active</button>
+      <button class="${filter === 'done' ? 'on' : ''}" data-act="goal-filter" data-f="done">Done</button>
+    </div>
+    <div class="goal-cats">
+      <button class="chip${catFilter === 'all' ? ' acc' : ''}" data-act="goal-cat" data-c="all">All areas</button>
+      ${GOAL_CATS.map(c => `<button class="chip${catFilter === c.id ? ' acc' : ''}" data-act="goal-cat" data-c="${c.id}">${icon(c.ic,12)} ${c.label}</button>`).join('')}
+    </div>
+    <div class="goal-list">
+      ${list.map(g => {
+        const c = goalCat(g.category);
+        const pct = goalProgress(g);
+        const subs = Array.isArray(g.subgoals) ? g.subgoals : [];
+        return `<article class="goal-card card${g.done ? ' is-done' : ''}${g.active && !g.done ? ' is-active' : ''}">
+          <div class="goal-head">
+            <button class="goal-check${g.done ? ' on' : ''}" data-act="goal-done" data-id="${g.id}" title="${g.done ? 'Mark as not done' : 'Mark as done'}" aria-pressed="${g.done ? 'true' : 'false'}">${icon('check',14)}</button>
+            <div class="goal-title-wrap">
+              <b class="goal-title">${esc(g.title)}</b>
+              <div class="goal-meta"><span class="chip">${icon(c.ic,11)} ${c.label}</span>
+                ${g.active && !g.done ? '<span class="chip green">Active</span>' : ''}
+                ${g.done ? '<span class="chip green">Done</span>' : ''}
+                <span class="mut" style="font-size:11.5px">${subs.filter(s => s.done).length}/${subs.length} sub-goals · ${pct}%</span>
+              </div>
+            </div>
+            <div class="goal-actions">
+              ${g.done ? '' : `<button class="btn ${g.active ? 'ghost' : 'soft'} tiny" data-act="goal-active" data-id="${g.id}">${g.active ? 'Pause' : 'Set active'}</button>`}
+              <button class="iconbtn" data-act="goal-del" data-id="${g.id}" title="Delete goal">${icon('trash',14)}</button>
+            </div>
+          </div>
+          <div class="goal-bar"><i style="width:${pct}%"></i></div>
+          <div class="sub-list">
+            ${subs.map(s => `<div class="sub-row${s.done ? ' is-done' : ''}">
+              <button class="goal-check small${s.done ? ' on' : ''}" data-act="sub-done" data-id="${g.id}" data-sub="${s.id}" title="Check off sub-goal">${icon('check',12)}</button>
+              <span class="sub-title">${esc(s.title)}</span>
+              <button class="ap-x" data-act="sub-del" data-id="${g.id}" data-sub="${s.id}" title="Remove sub-goal">${icon('x',11)}</button>
+            </div>`).join('')}
+          </div>
+          ${g.done ? '' : `<div class="sub-add">
+            <input class="field" id="sub-${g.id}" placeholder="Add a sub-goal…" maxlength="120">
+            <button class="btn ghost small" data-act="sub-add" data-id="${g.id}">${icon('plus',13)} Add</button>
+          </div>`}
+        </article>`;
+      }).join('') || `<div class="goal-empty card"><span class="goal-empty-mark">${icon('target',22)}</span><div><b>No goals here yet</b><p class="mut">Create your first goal above — e.g. health, finance or career — then add sub-goals to track progress.</p></div></div>`}
+    </div>
+  </div></div>`;
+  const title = $('#goal-title');
+  if (title) title.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="goal-add"]')?.click(); }
+  });
+  M.querySelectorAll('.sub-add input').forEach(inp => {
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter'){ e.preventDefault(); inp.parentElement?.querySelector('[data-act="sub-add"]')?.click(); }
+    });
+  });
+}
+
 function paintMain(){
   const M = $('#main');
   if (state.view !== 'chat') stopVoice();
   if (state.view === 'chat') return paintChat(M);
   if (state.view === 'settings') return paintSettings(M);
   if (state.view === 'apps') return paintApps(M);
+  if (state.view === 'goals') return paintGoals(M);
   // legacy views now live inside Settings tabs
   if (state.view === 'vault'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); return paintSettings(M); }
   if (state.view === 'memory'){ state.view = 'settings'; state.settingsTab = 'memory'; save(); return paintSettings(M); }
@@ -2624,6 +3346,7 @@ function paintChat(M){
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
       ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
+      <button class="giftbtn" data-act="opengift" title="Free $50 gift card — scratch, copy & share">${icon('gift',16)}<span>Free $50 gift card</span></button>
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('easel',16)}</button>
     </div>
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
@@ -2815,7 +3538,14 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
     // Swallow the native callout when our hold just fired on a bubble.
     if (Date.now() - firedAt < 800 && e.target.closest && e.target.closest('.msg .bub')) e.preventDefault();
   });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAll();
+    // Keyboard toggle for connector cards (outer div acts as button).
+    if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.classList && e.target.classList.contains('conn-head')) {
+      e.preventDefault();
+      openConnector(e.target.dataset.toolkit);
+    }
+  });
   // Tapping far from any open message (e.g. thread padding, composer) closes it.
   document.addEventListener('click', (e) => {
     if (!isMobileMode()) return;
@@ -3453,7 +4183,7 @@ function libraryTabContent(){
   const cat = state.libraryCat || 'all';
   const items = libraryFiltered();
   const all = libraryItems();
-  const count = (c) => c === 'all' ? all.length : c === 'images' ? all.filter(x => x._type === 'image').length : c === 'videos' ? all.filter(x => x._type === 'video').length : c === 'podcasts' ? all.filter(x => x._type === 'audio').length : c === 'documents' ? all.filter(x => x._type === 'document').length : c === 'web' ? all.filter(x => x._type === 'web').length : c === 'artifacts' ? all.filter(x => !['image','video','audio'].includes(x._type)).length : 0;
+  const count = (c) => c === 'all' ? all.length : c === 'images' ? all.filter(x => x._type === 'image').length : c === 'videos' ? all.filter(x => x._type === 'video').length : c === 'podcasts' ? all.filter(x => x._type === 'audio').length : c === 'documents' ? all.filter(x => x._type === 'document').length : c === 'web' ? all.filter(x => x._type === 'web').length : c === 'artifacts' ? all.filter(x => !['image','video','audio'].includes(x._type)).length : c === 'system' ? systemDocumentItems().length + systemFolderItems().length : 0;
   const titles = { all:'All artifacts', artifacts:'Artifacts', documents:'Documents', web:'Web artifacts', images:'Images', videos:'Videos', podcasts:'Podcasts', system:'System files' };
   const recent = items.slice(0, 4);
   const rest = items.slice(4);
@@ -3469,23 +4199,25 @@ function libraryTabContent(){
       <div class="lib-group">Media</div>
       ${sideBtn('images','image','Images')}
       ${sideBtn('videos','video','Videos')}
-      ${sideBtn('podcasts','podcast','Podcasts')}
-      <div class="lib-side-foot">${sideBtn('system','folder','System files')}</div>
-    </aside>
-    <section class="lib-main">
-      <div class="lib-head"><h2>${esc(titles[cat] || 'All artifacts')}</h2>
-        <span class="lib-actions">
-          ${state.librarySelect ? `<button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete">${icon('trash',13)} Delete (${(state.librarySelected || []).length})</button>` : `<button class="btn ghost small" data-act="lib-select">Select</button>`}
-          <button class="iconbtn" data-act="lib-layout" title="Toggle grid / list">${icon('list',16)}</button>
-          <button class="btn lib-create small" data-act="lib-create">${icon('plus',14)} Create an artifact</button>
-        </span>
-      </div>
-      ${!items.length ? `<div class="lib-empty card">${icon('folder',22)}<b>No ${esc((titles[cat] || 'files').toLowerCase())} yet</b><span>Images, videos and audio land under Media (jpg, png, mp4, mov, mp3…). Everything else lives under Artifacts.</span><button class="btn small lib-create" data-act="lib-create">${icon('plus',14)} Create an artifact</button></div>` : `
-      <div class="lib-sec">Recent</div>
-      <div class="${gridCls}">${recent.map(libCardHtml).join('')}</div>
-      ${rest.length ? `<div class="lib-sec">${esc(titles[cat] || 'All artifacts')}</div><div class="${gridCls}">${rest.map(libCardHtml).join('')}</div>` : ''}`}
-    </section>
-  </div>`;
+       ${sideBtn('podcasts','podcast','Podcasts')}
+       <div class="lib-side-foot">${sideBtn('system','folder','System files')}<span class="lib-side-note">Live context, runtime files, and safe folders</span></div>
+     </aside>
+     <section class="lib-main">
+       ${cat === 'system' ? systemLibraryBody() : `<div class="lib-head"><div class="lib-title-lockup"><span class="lib-brand-mark">${Mascot.logo(28)}</span><div><span class="lib-eyebrow">Belna Library</span><h2>${esc(titles[cat] || 'All artifacts')}</h2></div></div>
+         <span class="lib-actions">
+           ${state.librarySelect ? `<button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete">${icon('trash',13)} Delete (${(state.librarySelected || []).length})</button>` : `<button class="btn ghost small" data-act="lib-select">Select</button>`}
+           <button class="iconbtn" data-act="lib-layout" title="Toggle grid / list">${icon('list',16)}</button>
+           <button class="btn ghost small" data-act="lib-upload">${icon('attach',14)} Upload files</button><input id="libupload" type="file" multiple hidden>
+           <button class="btn lib-create small" data-act="lib-create">${icon('spark',14)} Ask agent to create</button>
+         </span>
+       </div>
+       ${!items.length ? `<div class="lib-empty card">${icon('folder',22)}<b>No real files yet</b><span>This Library only shows artifacts produced by your agent and files you upload. There are no samples or placeholders.</span><span class="lib-empty-actions"><button class="btn ghost small" data-act="lib-upload">${icon('attach',14)} Upload files</button><button class="btn small lib-create" data-act="lib-create">${icon('spark',14)} Ask agent to create</button></span></div>` : `
+       <div class="lib-sec">Recent</div>
+       <div class="${gridCls}">${recent.map(libCardHtml).join('')}</div>
+       ${rest.length ? `<div class="lib-sec">${esc(titles[cat] || 'All artifacts')}</div><div class="${gridCls}">${rest.map(libCardHtml).join('')}</div>` : ''}`}
+       `}
+     </section>
+   </div>`;
 }
 function approvalsTabContent(){
   const ap = approvalRows();
@@ -3593,6 +4325,9 @@ function paymentsTabContent(){
 /* Sub Agents / Automations panel. */
 function subAgentsTabContent(){
   const agents = state.subAgents || [];
+  const upkeepOrder = ['memory','relationships','ideas','study','reflection','skills','quiet'];
+  const upkeep = agents.filter(agent => agent.systemKind).sort((a,b) => upkeepOrder.indexOf(a.systemKind)-upkeepOrder.indexOf(b.systemKind));
+  const customAgents = agents.filter(agent => !agent.systemKind);
   const kind = state.subAgentTriggerType || 'schedule';
   const apps = state.triggerOptions?.apps || [];
   const scheduleOptions = state.triggerOptions?.schedules || [15,60,360,1440];
@@ -3600,9 +4335,19 @@ function subAgentsTabContent(){
     ? `<label class="alabel">Run every</label><select class="field" id="subinterval">${scheduleOptions.map((minutes) => `<option value="${minutes}" ${Number(state.subAgentDraftInterval || 60) === Number(minutes) ? 'selected' : ''}>${minutes === 1440 ? 'Day' : minutes === 10080 ? 'Week' : minutes === 60 ? '1 hour' : minutes >= 60 ? (minutes / 60) + ' hours' : minutes + ' minutes'}</option>`).join('')}</select>`
     : kind === 'app'
       ? (apps.length ? `<label class="alabel">Connected app event (via Composio)</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} No connected apps yet. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
-      : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${agents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
+      : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${customAgents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
   return `<div class="aslider-sec subagents-panel">
-    <div class="subagent-intro"><span class="trigger-mark">${icon('clock',18)}</span><div><b>Automated chats</b><p>Each sub-agent has its own chat and runs on a schedule, a connected-app event, or after another sub-agent. App events fire via Composio webhooks.</p></div></div>
+    <div class="subagent-intro"><span class="trigger-mark">${icon('spark',18)}</span><div><b>Agent upkeep</b><p>Built-in routines maintain context and improve future work. They check for new signal first, so an idle check uses no model call.</p></div></div>
+    <div class="upkeep-list">${upkeep.map((agent) => `<article class="upkeep-card ${agent.enabled ? '' : 'paused'}">
+      <div class="upkeep-head"><span class="upkeep-mark">${icon(agent.systemKind === 'memory' ? 'book' : agent.systemKind === 'study' ? 'globe' : agent.systemKind === 'ideas' ? 'spark' : agent.systemKind === 'relationships' ? 'user' : agent.systemKind === 'skills' ? 'code' : 'clock',16)}</span><div><b>${esc(agent.name)}</b><small>${esc(agent.trigger?.label || subAgentTriggerLabel(agent))}</small></div><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus === 'idle' ? 'checked' : agent.lastStatus || 'ready') : 'paused'}</span></div>
+      <p>${esc(agent.description || '')}</p>
+      ${agent.lastResult ? `<div class="upkeep-result"><b>Latest</b><span>${esc(agent.lastResult)}</span></div>` : ''}
+      ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
+      <div class="subagent-meta">${agent.lastRunAt ? `<span>checked ${fmtAgo(new Date(agent.lastRunAt).getTime())}</span>` : '<span>Not checked yet</span>'}${agent.nextRunAt && agent.enabled ? `<span>next ${fmtNext(new Date(agent.nextRunAt).getTime())}</span>` : ''}</div>
+      <div class="subagent-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Check now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button></div>
+    </article>`).join('') || '<div class="trigger-empty">Agent upkeep is being prepared for this account…</div>'}</div>
+    <div class="automation-divider"><span>User automations</span></div>
+    <div class="subagent-intro"><span class="trigger-mark">${icon('clock',18)}</span><div><b>Automated chats</b><p>Create your own scheduled, connected-app, or chained automation. Each one keeps a separate chat history.</p></div></div>
     <button class="btn small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close setup' : 'New sub-agent'}</button>
     ${state.subAgentComposer ? `<div class="trigger-form">
       <label class="alabel">Name</label><input class="field" id="subname" maxlength="60" placeholder="Daily brief" value="${esc(state.subAgentDraftName || '')}">
@@ -3610,14 +4355,14 @@ function subAgentsTabContent(){
       <label class="alabel">Trigger</label><select class="field" id="subtrigger"><option value="schedule" ${kind === 'schedule' ? 'selected' : ''}>Schedule</option><option value="app" ${kind === 'app' ? 'selected' : ''}>Connected app</option><option value="subagent" ${kind === 'subagent' ? 'selected' : ''}>Another sub-agent</option></select>
       <div id="triggerfields">${triggerFields}</div>
       <div class="trigger-safety">${icon('shieldcheck',14)} Runs in an isolated, account-scoped sandbox. Chains stop after four handoffs.</div>
-      <button class="btn small" data-act="create-subagent" ${kind === 'app' && !apps.length || kind === 'subagent' && !agents.length ? 'disabled' : ''}>Create automation</button>
+      <button class="btn small" data-act="create-subagent" ${kind === 'app' && !apps.length || kind === 'subagent' && !customAgents.length ? 'disabled' : ''}>Create automation</button>
     </div>` : ''}
-    <div class="subagent-list">${agents.map((agent) => `<article class="subagent-card ${agent.enabled ? '' : 'paused'}">
+    <div class="subagent-list">${customAgents.map((agent) => `<article class="subagent-card ${agent.enabled ? '' : 'paused'}">
       <button class="subagent-main" data-act="open-subagent" data-id="${agent.id}"><span class="subagent-orb">${Mascot.svg(state.agent.color,'idle',30)}</span><span><b>${esc(agent.name)}</b><small>${esc(subAgentTriggerLabel(agent))}</small></span></button>
       <div class="subagent-meta"><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus || 'ready') : 'paused'}</span>${agent.nextRunAt ? `<span>next ${fmtNext(new Date(agent.nextRunAt).getTime())}</span>` : ''}</div>
       ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
       <div class="subagent-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button><button class="iconbtn" data-act="delete-subagent" data-id="${agent.id}" title="Delete">${icon('trash',13)}</button></div>
-    </article>`).join('') || '<div class="trigger-empty">No sub-agents yet. Create one to watch a schedule, app event, or another automation.</div>'}</div>
+    </article>`).join('') || '<div class="trigger-empty">No user automations yet. Create one to watch a schedule, app event, or another automation.</div>'}</div>
   </div>`;
 }
 
@@ -4292,6 +5037,22 @@ function paintVault(M){
 
 function memoryFile(m){return m.category==='user'?'About you · USER.md':m.category==='daily'?`Daily note · ${new Date(m.observedAt || m.at || Date.now()).toISOString().slice(0,10)}`:'Long-term · MEMORY.md';}
 function memorySource(m){return ({explicit:'You asked to remember this',auto:'Saved automatically',auto_correction:'Updated automatically',agent:'Saved by your agent',agent_correction:'Corrected by your agent',user:'Added by you',user_edit:'Edited by you',onboarding:'Added during setup'})[m.src] || 'Account memory';}
+function memoryCategoryLabel(category){return ({user:'About you',long_term:'Long-term',daily:'Daily note'})[category] || 'Long-term';}
+function memoryCategoryIcon(category){return category === 'user' ? 'user' : category === 'daily' ? 'clock' : 'book';}
+function memoryEntryHtml(m){
+  const category = ['user','long_term','daily'].includes(m.category) ? m.category : 'long_term';
+  const editing = String(state.memoryEditing || '') === String(m.id);
+  return `<article class="memory-entry${editing ? ' is-editing' : ''}">
+    <span class="memory-file-icon memory-file-${category}">${icon(memoryCategoryIcon(category),16)}</span>
+    <div class="memory-entry-copy">
+      <div class="memory-entry-meta"><span class="memory-tag memory-tag-${category}">${memoryCategoryLabel(category)}</span><span>${esc(memorySource(m))}</span><span>· ${esc(memoryFile(m))}</span></div>
+      ${editing
+        ? `<textarea class="field memory-entry-edit" id="memory-edit" maxlength="2000">${esc(m.text)}</textarea><div class="memory-entry-edit-actions"><button class="btn dark small" data-act="save-editmem" data-id="${esc(m.id)}">Save</button><button class="btn ghost small" data-act="cancel-editmem">Cancel</button></div>`
+        : `<b>${esc(m.text)}</b><div class="memory-entry-time">${fmtWhen(m.updatedAt || m.at)}</div>`}
+    </div>
+    ${editing ? '' : `<div class="memory-entry-actions"><button class="iconbtn" data-act="editmem" data-id="${esc(m.id)}" title="Correct memory" aria-label="Correct memory">${icon('edit',14)}</button><button class="iconbtn" data-act="delmem" data-id="${esc(m.id)}" title="Forget memory" aria-label="Forget memory">${icon('trash',14)}</button></div>`}
+  </article>`;
+}
 function paintMemory(M){
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Memory</h1><span class="chip">${icon('book',12)} ${state.memoryTotal || state.memory.length} active</span></div>
@@ -4350,27 +5111,35 @@ function settingsSecretsBody(v){
     </div>`;
 }
 function settingsMemoryBody(){
+  const memories = state.memory || [];
+  const total = Number(state.memoryTotal || memories.length);
+  const aboutCount = memories.filter(m => m.category === 'user').length;
+  const longTermCount = memories.filter(m => !m.category || m.category === 'long_term').length;
+  const dailyCount = memories.filter(m => m.category === 'daily').length;
+  const query = String(state.memoryQuery || '');
+  const resultLabel = query ? `${memories.length} result${memories.length === 1 ? '' : 's'} · ${total} active total` : `${memories.length} loaded · ${total} active total`;
   return `<section class="memory-root">
-      <div class="memory-root-main">
-        <span class="memory-root-icon">${icon('folder',22)}</span>
-        <div><span class="memory-kicker">Durable memory</span><b class="mono">/memory</b><p>Saved when you ask or when your agent identifies a useful durable fact. Only relevant entries are loaded into each chat.</p></div>
-        <span class="chip green">${state.memoryTotal || state.memory.length} active</span>
-      </div>
-      <div class="row" style="background:var(--panel);gap:8px;flex-wrap:wrap">
-        <input class="field" id="memory-new" placeholder="Add something your agent should remember" maxlength="2000" style="flex:1;min-width:220px">
-        <select class="field" id="memory-category" style="max-width:150px"><option value="user">About me</option><option value="long_term">Long-term</option><option value="daily">Daily note</option></select>
-        <button class="btn small" data-act="addmem">${icon('plus',14)} Add</button>
-      </div>
-      <div class="row" style="background:var(--panel);gap:8px"><input class="field" id="memory-search" value="${esc(state.memoryQuery || '')}" placeholder="Search all memory" style="flex:1"><button class="btn soft small" data-act="searchmem">Search</button>${state.memoryQuery?'<button class="btn ghost small" data-act="clearmemsearch">Clear</button>':''}</div>
-      ${state.memoryQuery?`<p class="sub" style="margin:8px 0">Showing ${state.memory.length} closest matches from ${state.memoryTotal || 0} active memories. Refine the search to find more.</p>`:''}
-      <div class="memory-items">${state.memory.map(m => `<div class="memory-entry">
-        <span class="memory-file-icon">${icon('file',16)}</span>
-        <div class="memory-entry-copy"><b>${esc(m.text)}</b><div><span class="mono">${esc(memoryFile(m))}</span> · ${esc(memorySource(m))} · ${fmtWhen(m.updatedAt || m.at)}</div></div>
-        <button class="iconbtn" data-act="editmem" data-id="${m.id}" title="Correct memory">${icon('edit',14)}</button>
-        <button class="iconbtn" data-act="delmem" data-id="${m.id}" title="Delete memory">${icon('trash',14)}</button>
-      </div>`).join('') || `<div class="memory-empty"><span class="memory-file-icon">${icon('book',16)}</span><div><b>${state.memoryQuery?'No matching memories':'Nothing remembered yet'}</b><p>${state.memoryQuery?'Try another search.':'Tell your agent about yourself naturally, or add an entry above.'}</p></div></div>`}</div>
-      ${!state.memoryQuery && state.memory.length < state.memoryTotal?`<button class="btn soft small" data-act="moremem" style="margin:12px">Show more (${state.memory.length} of ${state.memoryTotal})</button>`:''}
-    </section>`;
+    <div class="memory-hero">
+      <span class="memory-hero-mark">${Mascot.logo(34)}</span>
+      <div class="memory-hero-copy"><span class="memory-kicker">Private account memory</span><h2>What your agent remembers</h2><p>Keep durable facts accurate across chats. You can add memories directly or correct anything your agent saved.</p><div class="memory-hero-actions"><span class="chip green">${total} active</span><button class="btn ghost small" data-act="open-system-memory">${icon('file',14)} View MEMORY.md</button></div></div>
+    </div>
+    <div class="memory-stats">
+      <div class="memory-stat"><span class="memory-stat-icon">${icon('book',15)}</span><div><b>${total}</b><small>Active memories</small></div></div>
+      <div class="memory-stat"><span class="memory-stat-icon">${icon('user',15)}</span><div><b>${aboutCount}</b><small>About you</small></div></div>
+      <div class="memory-stat"><span class="memory-stat-icon">${icon('clock',15)}</span><div><b>${dailyCount}</b><small>Daily notes</small></div></div>
+      <div class="memory-stat"><span class="memory-stat-icon">${icon('spark',15)}</span><div><b>${longTermCount}</b><small>Long-term</small></div></div>
+    </div>
+    <div class="memory-compose">
+      <div class="memory-section-head"><div><span class="memory-kicker">New entry</span><h3>Remember something useful</h3><p>Write a clear fact, preference, or piece of context you want across chats.</p></div><span class="memory-compose-hint">Saved to your account</span></div>
+      <textarea class="field memory-new" id="memory-new" placeholder="For example: I prefer concise answers with practical next steps." maxlength="2000"></textarea>
+      <div class="memory-compose-foot"><select class="field" id="memory-category" aria-label="Memory type"><option value="user">About me</option><option value="long_term">Long-term</option><option value="daily">Daily note</option></select><span class="memory-compose-spacer"></span><button class="btn dark small" data-act="addmem">${icon('plus',14)} Save memory</button></div>
+    </div>
+    <div class="memory-toolbar"><label class="memory-search-box">${icon('search',16)}<input id="memory-search" value="${esc(query)}" placeholder="Search memories" aria-label="Search memories"></label><button class="btn soft small" data-act="searchmem">Search</button>${query ? '<button class="btn ghost small" data-act="clearmemsearch">Clear</button>' : ''}</div>
+    ${query ? `<div class="memory-search-note">${icon('search',14)} Showing ${esc(resultLabel)}. Search results are ranked by relevance.</div>` : ''}
+    <div class="memory-list-head"><div><span class="memory-kicker">Your memory</span><h3>${query ? 'Search results' : 'Recent entries'}</h3></div><span class="memory-list-count">${esc(resultLabel)}</span></div>
+    <div class="memory-items">${memories.map(memoryEntryHtml).join('') || `<div class="memory-empty"><span class="memory-empty-mark">${icon(query ? 'search' : 'book',20)}</span><div><b>${query ? 'No matching memories' : 'Nothing remembered yet'}</b><p>${query ? 'Try another phrase or clear the search.' : 'Tell your agent naturally, or save your first memory above.'}</p></div></div>`}</div>
+    ${!query && memories.length < total ? `<div class="memory-load-more"><button class="btn soft small" data-act="moremem">Show more (${memories.length} of ${total})</button></div>` : ''}
+  </section>`;
 }
 function centerActiveSeg(container){
   const tabs = container && container.querySelector('.seg');
@@ -4383,12 +5152,13 @@ function centerActiveSeg(container){
 function centerActiveSettingsTab(container){ centerActiveSeg(container); }
 function editableAgentDocuments(){
   const a=state.agent || {name:'Lingon',pers:'Playful'};
-  return state.agentContext?.documents || {
+  const fallback = {
     identity:`# Identity\n\nName: ${a.name}\nStyle: ${a.pers}`,
     soul:'# Soul\n\nBe warm, candid, practical, and reliable. Adapt detail to the user and keep promises explicit.',
     user:'# User\n\nAdd stable preferences, background, language, and timezone here.',
     agents:'# Working agreement\n\nPlan substantial work, verify results with evidence, surface uncertainty, and ask before irreversible external actions.',
   };
+  return { ...fallback, ...(state.systemManifest?.documents || {}), ...(state.agentContext?.documents || {}) };
 }
 let agentContextSavePending=null,agentContextSaveVersion=0,queuedAgentDocuments=null;
 async function persistAgentContext(documents){
@@ -4399,7 +5169,9 @@ async function persistAgentContext(documents){
     const target=agentContextSaveVersion,current=state.agentContext || {revision:0,documents:editableAgentDocuments()};
     const nextDocuments=queuedAgentDocuments || current.documents;queuedAgentDocuments=null;
     const saved=await window.LingonAuth.api('/api/agent-context',{method:'PUT',body:JSON.stringify({agent:state.agent,documents:nextDocuments,revision:current.revision})});
-    state.agentContext=saved;if(saved.agent)state.agent={...state.agent,...saved.agent};save();completed=target;
+    state.agentContext=saved;if(saved.agent)state.agent={...state.agent,...saved.agent};
+    state.systemManifest={...(state.systemManifest || {}),revision:saved.revision,documents:{...((state.systemManifest || {}).documents || {}),...(saved.documents || {}),tools:systemToolsDocument()}};
+    save();completed=target;
   }while(completed<agentContextSaveVersion);})();
   try{return await agentContextSavePending;}finally{agentContextSavePending=null;}
 }
@@ -4410,8 +5182,6 @@ function paintSettings(M){
   const curTheme = THEMES.find(t => t.id === (state.theme || 'grey')) || THEMES[0];
   let body = '';
   if (tab === 'profiles'){
-    const docs=editableAgentDocuments();
-    const memoryDoc=(`# Memory\n\n${(state.memory || []).filter(m=>!m.category || m.category==='long_term').map(m=>`- ${m.text} <!-- ${memorySource(m)} -->`).join('\n') || 'No long-term memories yet.'}`).slice(0,12000);
     body = `
     <div class="profiletop">
       <div><span class="uava big">${esc((u.name || 'U').slice(0, 1).toUpperCase())}</span></div>
@@ -4435,14 +5205,14 @@ function paintSettings(M){
         <div class="row"><span style="color:var(--mut)">${icon('wallet',16)}</span><div><b>Shop Pay</b><div class="sub">${state.shopPay?.connected ? 'Connected for approved purchases' : state.shopPay?.configured ? 'Ready to connect in Payments' : 'Payment connection unavailable'}</div></div></div>
       </div>
     </div>
-    <div class="psec"><h3>${icon('book',15)} Agent context</h3>
-      <p class="sub" style="margin-bottom:12px">These documents follow your agent across devices. Your written USER.md and automatically saved facts both inform replies. Manage saved facts under Memory. Permissions remain enforced separately.</p>
-      ${[['identity','IDENTITY.md'],['soul','SOUL.md'],['user','USER.md'],['agents','AGENTS.md']].map(([key,label])=>`<details style="margin:8px 0"><summary style="cursor:pointer;font-weight:750">${label}</summary><textarea class="field agent-doc" data-doc="${key}" rows="6" maxlength="8000" style="width:100%;margin-top:8px;resize:vertical">${esc(docs[key] || '')}</textarea></details>`).join('')}
-      <details style="margin:8px 0"><summary style="cursor:pointer;font-weight:750">MEMORY.md preview</summary><textarea class="field" rows="7" readonly style="width:100%;margin-top:8px;resize:vertical">${esc(memoryDoc)}</textarea><button class="btn soft small" data-act="stab" data-t="memory" style="margin-top:8px">Manage memories</button></details>
-      <details style="margin:8px 0"><summary style="cursor:pointer;font-weight:750">How your agent uses context</summary>
-        <div class="sub" style="margin-top:10px;line-height:1.55"><b>Every reply:</b> agent name, style and color; own mail and Shop Pay capabilities; IDENTITY.md, SOUL.md, USER.md and AGENTS.md.<br><b>When relevant:</b> selected MEMORY.md facts, stable user facts and dated memory notes.<br><b>When needed:</b> small, structured tool definitions are loaded on demand. There is no editable TOOLS.md, so unused tools do not slow replies or consume prompt space.<br><b>Always separate:</b> permissions, owner approvals, secrets and the full-OS sandbox are enforced by the server.</div>
-      </details>
-      <button class="btn dark small" data-act="save-agent-docs">Save agent context</button>
+    <div class="psec"><h3>${icon('file',15)} System files</h3>
+      <div class="kv">
+        <div class="row" style="align-items:flex-start">
+          <span style="color:var(--mut)">${icon('folder',16)}</span>
+          <div style="flex:1"><b>Agent context lives in Library</b><div class="sub">Edit IDENTITY.md, SOUL.md, USER.md and AGENTS.md in one place. Runtime TOOLS.md stays visible but read-only.</div></div>
+          <button class="btn soft small" data-act="open-system-files">${icon('file',14)} Open System files</button>
+        </div>
+      </div>
     </div>
     <div class="psec"><h3>${icon('star',15)} Theme</h3>
       <div class="kv"><div class="row" style="align-items:flex-start"><span style="color:var(--mut)">${icon('star',16)}</span>
@@ -4477,7 +5247,7 @@ function paintSettings(M){
   }
   M.innerHTML = `<div class="page${tab === 'library' ? ' lib-page' : ''}"><div class="pageinner${tab === 'library' ? ' lib-pageinner' : ''}">
     <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : tab === 'library' ? 'Artifacts live here. Media is jpg, png, mp4, mov, mp3 and friends — everything else is an artifact.' : 'Profiles, theme, secrets, memory, library, browser and billing — all scoped to your account, never shared.'}</p>
+    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : tab === 'memory' ? 'Review, correct, and shape the private memory your agent carries across chats.' : tab === 'library' ? 'Artifacts live here. Media is jpg, png, mp4, mov, mp3 and friends — everything else is an artifact.' : tab === 'profiles' ? 'Your account, agent appearance, system files, and private settings — all scoped to you.' : 'Profiles, theme, secrets, memory, library, browser and billing — all scoped to your account, never shared.'}</p>
     <div class="seg">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles">${icon('user',14)} Profiles</button>
       <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets">${icon('key',14)} Secrets</button>
@@ -4499,6 +5269,12 @@ function paintSettings(M){
       if (again){ again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
     });
   }
+  const libUpload = $('#libupload');
+  if (libUpload) libUpload.addEventListener('change', (e) => {
+    addLibraryUploads(e.target.files);
+    e.target.value = '';
+  });
+  if (tab === 'library' && signedIn()) refreshSystemFiles();
   const pn = $('#pname');
   if (pn) pn.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
@@ -4511,6 +5287,14 @@ function paintSettings(M){
   if (un) un.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
     state.userProfile = Object.assign({}, state.userProfile, { name: v }); save(); paintSide(); toast('Profile updated.');
+  });
+  const memorySearch = $('#memory-search');
+  if (memorySearch) memorySearch.addEventListener('keydown', e => {
+    if (e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="searchmem"]')?.click(); }
+  });
+  const memoryNew = $('#memory-new');
+  if (memoryNew) memoryNew.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="addmem"]')?.click(); }
   });
   if (tab === 'billing'){
     loadBillingContent();
@@ -4607,7 +5391,6 @@ function connectorBodyHtml(a){
   return `<div class="conn-body">
     <div class="conn-actions">
       <button class="btn small" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}">${icon('plus',14)} ${connectLabel}</button>
-      ${a.connected ? `<button class="btn ghost small" data-act="automate-app" data-toolkit="${esc(a.toolkit)}">Automate</button>` : ''}
     </div>
     ${accounts.length ? `<p class="conn-hint">You can add more than one account — pick which one the agent should use when it acts.</p>` : ''}
     <div class="conn-sec"><h3>Accounts${accounts.length > 1 ? ` (${accounts.length})` : ''}</h3>${accountRows}</div>
@@ -4643,19 +5426,26 @@ function paintApps(M){
     const first = accts[0] || null;
     const firstMail = first ? (first.email || '') : '';
     const firstName = first ? (first.name && first.name !== first.email ? first.name : '') : '';
-    // Collapsed row always shows WHO is connected: mail + name + profile face,
-    // so the user knows which account they linked without expanding.
+    // Collapsed row shows WHO is connected: profile picture + name first
+    // (mail only as secondary), so the user recognises the account
+    // without expanding. Quick Connect/Add sits next to the arrow.
+    const primary = firstName || firstMail || (a.connected ? '1 account' : '');
     const sub = !a.connected ? 'Not connected'
-      : n <= 1 ? (firstMail || firstName || '1 account')
-      : `${firstMail || firstName || '1 account'} +${n - 1} more`;
+      : n <= 1 ? primary
+      : `${primary} +${n - 1} more`;
+    const subTitle = first
+      ? (firstName && firstMail ? `${firstName} · ${firstMail}` : (firstName || firstMail || ''))
+      : '';
     const faces = accts.slice(0, 3).map((acc) => `<span class="conn-ava mini" title="${esc(accountTitle(acc))}">${accountFace(acc, a)}</span>`).join('');
+    const quickLabel = a.connected ? 'Add account' : 'Connect';
     return `<article class="conn-row ${a.connected ? 'is-connected' : ''} ${open ? 'is-open' : ''}" data-toolkit="${esc(a.toolkit)}">
-      <button type="button" class="conn-head" data-act="toggle-connector" data-toolkit="${esc(a.toolkit)}">
+      <div class="conn-head" data-act="toggle-connector" data-toolkit="${esc(a.toolkit)}" role="button" tabindex="0" title="${esc(subTitle)}">
         <span class="app-logo">${appLogoHtml(a)}${a.connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
-        <span class="conn-meta"><b>${esc(a.name || a.toolkit)}</b><span title="${esc(first ? (firstName && firstMail ? `${firstName} · ${firstMail}` : (firstMail || firstName || '')) : '')}">${esc(sub)}${firstName && firstMail ? ` · ${esc(firstName)}` : ''}</span></span>
+        <span class="conn-meta"><b>${esc(a.name || a.toolkit)}</b><span title="${esc(subTitle)}">${esc(sub)}${firstName && firstMail ? ` · ${esc(firstMail)}` : ''}</span></span>
         ${a.connected ? `<span class="conn-faces">${faces}</span><span class="chip green">Connected</span>` : ''}
+        <button type="button" class="btn ghost small conn-quick" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}" title="${esc(quickLabel + ' ' + (a.name || a.toolkit))}">${icon('plus',13)} ${quickLabel}</button>
         <span class="conn-chev">${icon('chev',16)}</span>
-      </button>
+      </div>
       ${open ? connectorBodyHtml(a) : ''}
     </article>`;
   }).join('');
@@ -4781,7 +5571,7 @@ document.addEventListener('click', async e => {
   if (act === 'rmfile'){ removeFile(+b.dataset.idx); return; }
   if (act === 'scroll'){ e.preventDefault(); const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
   if (act === 'open-app'){
-    belnaStopLandingFx();
+    leavePromo();
     if (!signedIn()){ renderAuth(); toast('Sign up or log in to meet your agent.'); return; }
     ensureOwnerScope();
     if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); }
@@ -4790,9 +5580,17 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
-  if (act === 'back-home'){ belnaStopLandingFx(); renderLanding(); return; }
+  if (act === 'back-home'){
+    if (isPromoRoute() || window.__promoLeft){
+      try { window.__promoLeft = false; } catch {}
+      belnaStopLandingFx();
+      if (isPromoRoute()){ renderPromo(); return; }
+    }
+    belnaStopLandingFx(); renderLanding(); return;
+  }
+  if (act === 'promo-cta'){ e.preventDefault(); const t = $('#promo-cta'); if (t) t.scrollIntoView({ behavior:'smooth', block:'start' }); return; }
   if (act === 'signin-nav'){
-    e.preventDefault(); belnaStopLandingFx();
+    e.preventDefault(); leavePromo();
     if (signedIn()){
       ensureOwnerScope();
       if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); }
@@ -4892,13 +5690,85 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
+  if (act === 'open-system-files'){
+    state.settingsTab = 'library'; state.libraryCat = 'system'; state.systemPath = 'root'; state.systemFile = null; state.librarySelect = false; save();
+    paintSettings($('#main')); refreshSystemFiles(true); return;
+  }
+  if (act === 'open-system-memory'){
+    state.settingsTab = 'library'; state.libraryCat = 'system'; state.systemPath = 'memory'; state.systemFile = 'system:memory'; state.librarySelect = false; save();
+    paintSettings($('#main')); refreshSystemFiles(true); return;
+  }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); if(state.settingsTab==='memory'&&window.LingonAuth.signedIn())await syncFromBackend(true).catch(e=>toast(e.message)); paintSettings($('#main')); return; }
+  if (act === 'open-library'){ mobileNavOpen = false; state.view = 'settings'; state.settingsTab = 'library'; state.userMenuOpen = false; save(); renderApp(); return; }
+  if (act === 'open-goals'){ mobileNavOpen = false; state.view = 'goals'; state.userMenuOpen = false; save(); renderApp(); return; }
+  /* goals */
+  const repaintGoals = () => {
+    if (state.view === 'goals' && $('#main')) paintGoals($('#main'));
+    if ($('#side')) paintSide();
+  };
+  if (act === 'goal-add'){
+    const input = $('#goal-title');
+    const title = String((input && input.value) || '').trim();
+    const cat = String(($('#goal-cat') && $('#goal-cat').value) || 'other');
+    if (!title){ toast('Give your goal a title first.'); return; }
+    if (!Array.isArray(state.goals)) state.goals = [];
+    state.goals.unshift({ id: uid(), title: title.slice(0, 120), category: GOAL_CATS.some(c => c.id === cat) ? cat : 'other', active: true, done: false, createdAt: Date.now(), subgoals: [] });
+    save(); repaintGoals(); toast('Goal added — break it into sub-goals below.');
+    return;
+  }
+  if (act === 'goal-del'){
+    const id = b.dataset.id;
+    state.goals = (state.goals || []).filter(g => g.id !== id);
+    save(); repaintGoals(); toast('Goal deleted.');
+    return;
+  }
+  if (act === 'goal-done'){
+    const g = (state.goals || []).find(x => x.id === b.dataset.id);
+    if (!g) return;
+    g.done = !g.done;
+    if (g.done){ g.active = false; (g.subgoals || []).forEach(s => { s.done = true; }); }
+    save(); repaintGoals();
+    return;
+  }
+  if (act === 'goal-active'){
+    const g = (state.goals || []).find(x => x.id === b.dataset.id);
+    if (!g || g.done) return;
+    g.active = !g.active;
+    save(); repaintGoals();
+    return;
+  }
+  if (act === 'goal-filter'){ state.goalFilter = b.dataset.f || 'all'; save(); repaintGoals(); return; }
+  if (act === 'goal-cat'){ state.goalCat = b.dataset.c || 'all'; save(); repaintGoals(); return; }
+  if (act === 'sub-add'){
+    const g = (state.goals || []).find(x => x.id === b.dataset.id);
+    if (!g || g.done) return;
+    const inp = document.getElementById('sub-' + g.id);
+    const title = String((inp && inp.value) || '').trim();
+    if (!title){ toast('Write the sub-goal first.'); return; }
+    if (!Array.isArray(g.subgoals)) g.subgoals = [];
+    g.subgoals.push({ id: uid(), title: title.slice(0, 120), done: false, at: Date.now() });
+    save(); repaintGoals();
+    return;
+  }
+  if (act === 'sub-done'){
+    const g = (state.goals || []).find(x => x.id === b.dataset.id);
+    const s = g && (g.subgoals || []).find(x => x.id === b.dataset.sub);
+    if (!s) return;
+    s.done = !s.done;
+    if ((g.subgoals || []).length && (g.subgoals || []).every(x => x.done)) { g.done = true; g.active = false; }
+    else if (g.done && !s.done) { g.done = false; }
+    save(); repaintGoals();
+    return;
+  }
+  if (act === 'sub-del'){
+    const g = (state.goals || []).find(x => x.id === b.dataset.id);
+    if (!g) return;
+    g.subgoals = (g.subgoals || []).filter(x => x.id !== b.dataset.sub);
+    save(); repaintGoals();
+    return;
+  }
   if (act === 'theme'){ state.theme = b.dataset.v || 'grey'; save(); applyTheme(); paintSide(); if ($('#canvas')) paintCanvas(); if (state.view === 'settings' && $('#main')) paintSettings($('#main')); toast('Accent: ' + ((THEMES.find(t => t.id === state.theme) || THEMES[0]).name)); return; }
   if (act === 'goto-secrets'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); renderApp(); return; }
-  if (act === 'save-agent-docs'){
-    const documents={};document.querySelectorAll('.agent-doc').forEach(el=>{documents[el.dataset.doc]=el.value;});
-    try{await persistAgentContext(documents);toast('Agent context saved across devices.');paintSettings($('#main'));}catch(e){toast(e.message);}return;
-  }
   if (act === 'agentpanel'){
     state.canvasTab = 'canvas';
     state.canvasOpen = true; const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
@@ -4955,6 +5825,13 @@ document.addEventListener('click', async e => {
     b.disabled = true; b.innerHTML = `${icon('refresh',12)} Running…`;
     try {
       const result = await window.LingonAuth.api('/api/sub-agents/' + encodeURIComponent(agent.id) + '/run', { method:'POST', body:'{}' });
+      subAgentsCheckedAt = 0;
+      await refreshSubAgents(false);
+      if (agent.systemKind) {
+        save(); paintCanvas();
+        toast(result.skipped ? (result.reason || `${agent.name} found no new signal.`) : `${agent.name} completed.`);
+        return;
+      }
       await syncFromBackend(true);
       state.activeChat = result.chatId || agent.chatId; state.view = 'chat'; save(); renderApp();
       toast(`${agent.name} completed its run.`);
@@ -4995,6 +5872,7 @@ document.addEventListener('click', async e => {
     state.canvasTab = ['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(next) ? next : 'canvas';
     if (next !== 'canvas') state._showLiveInCanvas = false;
     save(); paintCanvas();
+    if (next === 'subagents') refreshSubAgents(true);
     if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
     if (next === 'payments') { refreshComposioApps(true); refreshShopPay(true); }
     return;
@@ -5094,10 +5972,50 @@ document.addEventListener('click', async e => {
   }
   if (act === 'library-open' && c){
     state.activeChat = c.id; state.view = 'chat'; state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-    c.canvasSelectedMessageId = m?.card ? m.id : null; delete c.canvasSelectedFileIndex;
+    c.canvasSelectedMessageId = m ? m.id : null;
+    if (b.dataset.file !== undefined) c.canvasSelectedFileIndex = Number(b.dataset.file); else delete c.canvasSelectedFileIndex;
     save(); renderApp(); return;
   }
-  if (act === 'libcat'){ state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
+  if (act === 'library-upload-open'){
+    const item = libraryItemById('upload:' + (b.dataset.upload || ''));
+    if (!item) return;
+    if (item.card?.dataUrl){
+      const opened = window.open(item.card.dataUrl, '_blank', 'noopener');
+      if (!opened) downloadLibraryItem(item);
+    } else downloadLibraryItem(item);
+    return;
+  }
+  if (act === 'lib-download'){ downloadLibraryItem(libraryItemById(b.dataset.id)); return; }
+  if (act === 'lib-upload'){ $('#libupload')?.click(); return; }
+  if (act === 'libcat'){
+    state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = [];
+    if (state.libraryCat === 'system'){ state.systemPath = 'root'; state.systemFile = null; }
+    save(); paintSettings($('#main')); return;
+  }
+  if (act === 'system-folder'){ state.systemPath = b.dataset.path || 'root'; state.systemFile = null; save(); paintSettings($('#main')); return; }
+  if (act === 'system-open'){ state.systemFile = b.dataset.systemId || null; save(); paintSettings($('#main')); return; }
+  if (act === 'system-back'){
+    if (state.systemFile){ state.systemFile = null; }
+    else { state.systemPath = 'root'; }
+    save(); paintSettings($('#main')); return;
+  }
+  if (act === 'system-memory'){
+    state.settingsTab = 'memory'; state.systemFile = null; state.systemPath = 'root'; save();
+    if (signedIn()) await syncFromBackend(true).catch(() => {});
+    paintSettings($('#main')); return;
+  }
+  if (act === 'system-save'){
+    const field = $('#system-editor-text');
+    const key = field?.dataset.systemKey;
+    if (!field || !['identity','soul','user','agents'].includes(key)) return;
+    const documents = editableAgentDocuments(); documents[key] = field.value;
+    b.disabled = true;
+    try {
+      await persistAgentContext(documents);
+      state.systemFile = null; state.systemPath = 'root'; save(); paintSettings($('#main')); toast(`${key.toUpperCase()}.md saved.`);
+    } catch (error) { b.disabled = false; toast(error.message || 'Could not save that file.'); }
+    return;
+  }
   if (act === 'lib-select'){ state.librarySelect = true; state.librarySelected = []; save(); paintSettings($('#main')); return; }
   if (act === 'lib-clear'){ state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
   if (act === 'lib-layout'){ state.libraryLayout = state.libraryLayout === 'list' ? 'grid' : 'list'; save(); paintSettings($('#main')); return; }
@@ -5107,13 +6025,18 @@ document.addEventListener('click', async e => {
     if (sel.has(id)) sel.delete(id); else sel.add(id);
     state.librarySelected = [...sel]; save(); paintSettings($('#main')); return;
   }
-  if (act === 'lib-demo'){ toast('Sample preview — create an artifact to add your own.'); return; }
   if (act === 'lib-delete'){
-    const ids = new Set((state.librarySelected || []).filter(id => !String(id).startsWith('demo-')));
-    if (!ids.size){ toast(state.librarySelected && state.librarySelected.length ? 'Samples stay as examples.' : 'Select items first.'); state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
+    const ids = new Set(state.librarySelected || []);
+    if (!ids.size){ toast('Select items first.'); state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
     if (!window.confirm(`Delete ${ids.size} selected item${ids.size > 1 ? 's' : ''}?`)) return;
     let removed = 0;
     ids.forEach(id => {
+      if (String(id).startsWith('upload:')){
+        const before = state.libraryUploads.length;
+        state.libraryUploads = state.libraryUploads.filter(item => 'upload:' + item.id !== id);
+        if (state.libraryUploads.length !== before) removed++;
+        return;
+      }
       const parts = String(id).split(':');
       if (parts.length < 2) return;
       const chatId = parts[0], msgId = parts[1];
@@ -5142,14 +6065,12 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'lib-create'){
-    const name = window.prompt('Name your artifact (e.g. Launch plan, Moodboard, Demo video):');
-    if (name === null) return;
-    const title = String(name || '').trim() || 'Untitled artifact';
-    const c2 = { id: uid(), title: title.length > 42 ? title.slice(0, 42) + '…' : title, messages:[{ id: uid(), role:'agent', kind:'card', card:{ type:'canvas', title, format:'document', content: `# ${title}\n\nCreated from Library. Ask your agent to fill this in.` }, at: Date.now() }], trace:[], artifact:{ title, kind:'canvas' }, createdAt:Date.now(), updatedAt:Date.now() };
-    state.chats.unshift(c2); state.activeChat = c2.id; state.view = 'chat'; state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-    c2.canvasSelectedMessageId = c2.messages[0].id;
-    state.settingsTab = 'library'; save(); renderApp();
-    toast(`“${title}” created — find it under Library.`);
+    const prompt = window.prompt('What should your agent create?', 'Create an artifact for me.');
+    if (prompt === null) return;
+    const c2 = { id: uid(), title:'Create an artifact', messages:[], trace:[], artifact:null, createdAt:Date.now() };
+    state.chats.unshift(c2); state.activeChat = c2.id; state.view = 'chat'; state.canvasOpen = false; state.settingsTab = 'library'; save(); renderApp();
+    setTimeout(() => { if ($('#cprompt')) { applyPromptText(String(prompt || 'Create an artifact for me.')); $('#cprompt').focus(); } }, 0);
+    toast('Your request is ready for the agent. Send it when you’re ready.');
     return;
   }
   if (act === 'canvas-card' && c && m?.card){
@@ -5352,6 +6273,45 @@ document.addEventListener('click', async e => {
     if (state.view === 'settings') paintSettings($('#main')); else paintBilling($('#main'));
     return;
   }
+  if (act === 'opengift'){ openGift(); return; }
+  if (act === 'closegift'){ closeGift(); return; }
+  if (act === 'gift-reveal'){ giftRevealDone(); return; }
+  if (act === 'gift-copy-code'){
+    const code = (giftCache && giftCache.code) || (($('#giftcode-text') || {}).textContent || '').trim();
+    if (!code){ toast('Your code isn’t ready yet.'); return; }
+    if (!giftRevealed) giftRevealDone();
+    copyText(code).then(() => toast('Gift code copied — share it with a friend.')).catch(() => toast(code));
+    return;
+  }
+  if (act === 'gift-copy-link'){
+    const link = (giftCache && giftCache.link) || (($('#giftlink-text') || {}).textContent || '').trim();
+    if (!link){ toast('Invite link isn’t ready yet.'); return; }
+    copyText(link).then(() => toast('Invite link copied.')).catch(() => toast(link));
+    return;
+  }
+  if (act === 'gift-share'){
+    const link = (giftCache && giftCache.link) || '';
+    const code = (giftCache && giftCache.code) || '';
+    const text = `Here’s a free $50 Belna gift card ($25 each as credits): ${link || code}`;
+    if (navigator.share){ navigator.share({ title: 'Free $50 Belna gift card', text, url: link || undefined }).catch(() => {}); return; }
+    copyText(link || code).then(() => toast('Invite link copied — send it to a friend.')).catch(() => toast(text));
+    return;
+  }
+  if (act === 'gift-redeem'){
+    const code = (($('#giftfriendcode') || {}).value || '').trim();
+    if (!code){ toast('Paste your friend’s code first.'); return; }
+    const owner = billingIdentity();
+    b.disabled = true;
+    window.LingonAuth.api('/api/referrals/redeem', { method: 'POST', body: JSON.stringify({ code }) }).then((j) => {
+      if (owner !== billingIdentity()) return;
+      giftCache = null; invalidateBilling();
+      setBillingCache(j.billing);
+      paintSide();
+      toast(`+${fmtC(j.credits)} credits for you — your friend got +${fmtC(j.inviterCredits)} too.`);
+      openGift();
+    }).catch((e) => { b.disabled = false; toast(e.message); });
+    return;
+  }
   if (act === 'redeem'){
     const code = (($('#giftcode') || {}).value || '').trim();
     if (!code){ toast('Paste a gift code first.'); return; }
@@ -5419,24 +6379,38 @@ document.addEventListener('click', async e => {
     try{
       if(window.LingonAuth.signedIn()){await window.LingonAuth.api('/api/memories',{method:'POST',body:JSON.stringify({text,category,importance:2,src:'user'})});const out=await window.LingonAuth.api('/api/memories');state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}
       else{state.memory.unshift({id:uid('mem'),text,category,importance:2,src:'user',at:Date.now()});state.memoryTotal=state.memory.length;}
-      state.memoryQuery='';save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));paintSide();toast('Memory saved.');
+      state.memoryQuery=''; state.memoryEditing=null; save(); repaintSettings(); if($('#main')&&state.view==='memory')paintMemory($('#main')); paintSide(); toast('Memory saved.');
     }catch(e){toast(e.message);}return;
   }
   if(act==='searchmem' || act==='clearmemsearch'){
     const query=act==='clearmemsearch'?'':String(($('#memory-search') || {}).value || '').trim();
-    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories'+(query?'?q='+encodeURIComponent(query):''));state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}state.memoryQuery=query;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}catch(e){toast(e.message);}return;
+    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories'+(query?'?q='+encodeURIComponent(query):''));state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}state.memoryQuery=query;state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}catch(e){toast(e.message);}return;
   }
   if(act==='moremem'){
-    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories?offset='+state.memory.length);const seen=new Set(state.memory.map(x=>x.id));state.memory.push(...(out.memories || []).filter(x=>!seen.has(x.id)));state.memoryTotal=Number(out.total ?? state.memory.length);save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}}catch(e){toast(e.message);}return;
+    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories?offset='+state.memory.length);const seen=new Set(state.memory.map(x=>x.id));state.memory.push(...(out.memories || []).filter(x=>!seen.has(x.id)));state.memoryTotal=Number(out.total ?? state.memory.length);state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}}catch(e){toast(e.message);}return;
   }
   if(act==='editmem'){
     const current=state.memory.find(x=>x.id===b.dataset.id);if(!current)return;
-    const text=window.prompt('Correct this memory',current.text);if(text===null)return;const cleaned=text.trim();if(!cleaned){toast('Memory cannot be empty.');return;}
-    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories/'+encodeURIComponent(current.id),{method:'PATCH',body:JSON.stringify({text:cleaned,category:current.category,importance:current.importance})});state.memory=state.memory.map(x=>x.id===current.id?out.memory:x);}else Object.assign(current,{text:cleaned,src:'user_edit',at:Date.now()});save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));toast('Memory corrected.');}catch(e){toast(e.message);}return;
+    state.memoryEditing = current.id; save(); repaintSettings(); if($('#main')&&state.view==='memory')paintMemory($('#main')); return;
+  }
+  if(act==='cancel-editmem'){
+    state.memoryEditing = null; save(); repaintSettings(); if($('#main')&&state.view==='memory')paintMemory($('#main')); return;
+  }
+  if(act==='save-editmem'){
+    const current=state.memory.find(x=>x.id===b.dataset.id), field=$('#memory-edit');
+    if(!current || !field)return;
+    const cleaned=String(field.value || '').trim();if(!cleaned){toast('Memory cannot be empty.');return;}
+    b.disabled=true;
+    try{
+      if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories/'+encodeURIComponent(current.id),{method:'PATCH',body:JSON.stringify({text:cleaned,category:current.category,importance:current.importance})});state.memory=state.memory.map(x=>x.id===current.id?out.memory:x);}
+      else Object.assign(current,{text:cleaned,src:'user_edit',at:Date.now(),updatedAt:Date.now()});
+      state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));toast('Memory corrected.');
+    }catch(e){b.disabled=false;toast(e.message);}return;
   }
   if (act === 'delmem'){
     const id=b.dataset.id;
-    try{if(window.LingonAuth.signedIn())await window.LingonAuth.api('/api/memories/'+encodeURIComponent(id),{method:'DELETE'});state.memory=state.memory.filter(x=>x.id!==id);state.memoryTotal=Math.max(0,(state.memoryTotal || 1)-1);save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));paintSide();toast('Memory forgotten.');}catch(e){toast(e.message);}return;
+    if (!window.confirm('Forget this memory?')) return;
+    try{if(window.LingonAuth.signedIn())await window.LingonAuth.api('/api/memories/'+encodeURIComponent(id),{method:'DELETE'});state.memory=state.memory.filter(x=>x.id!==id);state.memoryTotal=Math.max(0,(state.memoryTotal || 1)-1);state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));paintSide();toast('Memory forgotten.');}catch(e){toast(e.message);}return;
   }
   if (act === 'dlfile'){ const f = window.__fileRows && window.__fileRows[+b.dataset.i]; if (f) dl(f.name, f.content); return; }
 
@@ -5530,6 +6504,15 @@ const bootReady = bootHash().then((st) => {
   }
   render();
   try {
+    // Referral gift link (?ref= / ?gift=) auto-opens the scratch popup.
+    // A pre-sign-in visit stashes the code, then opens it after login.
+    try {
+      const pending = sessionStorage.getItem('belna.pendingGift');
+      if (pending && signedIn() && !needsOnboarding()){
+        sessionStorage.removeItem('belna.pendingGift');
+        setTimeout(() => openGift(pending), 800);
+      } else giftAutoOpenFromUrl();
+    } catch { giftAutoOpenFromUrl(); }
     const q = new URLSearchParams(window.location.search);
     if (q.get('connected_app')) { handleConnectedAppReturn(); return; }
     const f = q.get('billing');

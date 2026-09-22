@@ -6,6 +6,7 @@
    Otherwise they are base64-obscured (still never sent to the model). */
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
+import { upkeepRows } from './agents/upkeep.js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
@@ -368,7 +369,7 @@ async function markStripeEvent(eventId) {
 async function logUsage(userId, { model, usage, cost }) {
   const costUsd = Number(cost || 0);
   const row = {
-    id: 'use_' + uid(), user_id: userId, model: model || 'gemini-3.5-flash',
+    id: 'use_' + uid(), user_id: userId, model: model || 'gpt-6-luna',
     prompt_tokens: (usage && (usage.promptTokenCount || 0)) || 0,
     candidates_tokens: (usage && (usage.candidatesTokenCount || 0)) || 0,
     total_tokens: (usage && (usage.totalTokenCount || 0)) || 0,
@@ -515,8 +516,30 @@ function fromSubAgentRow(row) {
     lastRunAt: row.last_run_at || row.lastRunAt || null,
     lastStatus: row.last_status || row.lastStatus || null,
     lastError: row.last_error || row.lastError || null,
+    description: row.description || '',
+    systemKind: row.system_kind || row.systemKind || null,
+    lastResult: row.last_result || row.lastResult || null,
+    lastSignalAt: row.last_signal_at || row.lastSignalAt || null,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
   };
+}
+
+async function ensureSystemSubAgents(userId) {
+  const wanted=upkeepRows(userId),s=supa();
+  if(s){
+    try{
+      await ensureProfile(userId);
+      for(const agent of wanted){
+        const row={id:agent.id,user_id:userId,chat_id:agent.chatId,name:agent.name,prompt:agent.prompt,description:agent.description,system_kind:agent.systemKind,enabled:true,trigger_type:'schedule',trigger_config:agent.trigger,next_run_at:agent.nextRunAt};
+        const {error:insertError}=await s.from('sub_agents').upsert(row,{onConflict:'id',ignoreDuplicates:true});if(insertError)throw insertError;
+        const {error:updateError}=await s.from('sub_agents').update({name:agent.name,prompt:agent.prompt,description:agent.description,system_kind:agent.systemKind,trigger_type:'schedule',trigger_config:agent.trigger,updated_at:new Date().toISOString()}).eq('id',agent.id).eq('user_id',userId);if(updateError)throw updateError;
+      }
+      return;
+    }catch(e){console.warn('[store] system upkeep fallback:',e.message);}
+  }
+  const d=loadLocal();d.subAgents=d.subAgents || [];
+  for(const agent of wanted){const index=d.subAgents.findIndex(row=>row.id===agent.id&&row.userId===userId);if(index<0)d.subAgents.push(agent);else Object.assign(d.subAgents[index],{name:agent.name,prompt:agent.prompt,description:agent.description,systemKind:agent.systemKind,trigger:agent.trigger});}
+  saveLocal(d);
 }
 
 async function listSubAgents(userId) {
@@ -586,12 +609,21 @@ async function listDueSubAgents(now, limit = 5) {
   return (loadLocal().subAgents || []).filter((row) => row.enabled && row.trigger?.type === 'schedule' && row.nextRunAt && new Date(row.nextRunAt).getTime() <= when).slice(0, limit).map(fromSubAgentRow);
 }
 
-async function markSubAgentRun(userId, id, status, errorText, nextRunAt) {
+async function markSubAgentRun(userId, id, status, errorText, nextRunAt, details = {}) {
   const patch = { last_run_at: new Date().toISOString(), last_status: status, last_error: errorText ? String(errorText).slice(0, 500) : null, next_run_at: nextRunAt || null, updated_at: new Date().toISOString() };
+  if(details.result!==undefined)patch.last_result=details.result==null?null:String(details.result).slice(0,4000);
+  if(details.signalAt)patch.last_signal_at=details.signalAt;
   const s = supa();
   if (s) { try { const { error } = await s.from('sub_agents').update(patch).eq('id', id).eq('user_id', userId); if (error) throw error; return; } catch (e) { console.warn('[store] mark sub-agent fallback:', e.message); } }
   const d = loadLocal(); const row = (d.subAgents || []).find((item) => item.id === id && item.userId === userId);
-  if (row) Object.assign(row, { lastRunAt: patch.last_run_at, lastStatus: status, lastError: patch.last_error, nextRunAt: patch.next_run_at }); saveLocal(d);
+  if (row) Object.assign(row, { lastRunAt: patch.last_run_at, lastStatus: status, lastError: patch.last_error, nextRunAt: patch.next_run_at, ...(patch.last_result!==undefined?{lastResult:patch.last_result}:{}), ...(patch.last_signal_at?{lastSignalAt:patch.last_signal_at}:{}) }); saveLocal(d);
+}
+
+async function listUpkeepSignals(userId,since,limit=24){
+  const size=Math.min(Math.max(Number(limit)||24,1),50),s=supa();
+  if(s){try{const {data:chats,error:chatError}=await s.from('chats').select('id').eq('user_id',userId).eq('source','user').limit(100);if(chatError)throw chatError;const ids=(chats || []).map(row=>row.id);if(!ids.length)return [];let query=s.from('messages').select('id,role,text,created_at').eq('user_id',userId).eq('role','user').in('chat_id',ids).order('created_at',{ascending:false}).limit(size);if(since)query=query.gt('created_at',since);const {data,error}=await query;if(error)throw error;return (data || []).reverse();}catch(e){console.warn('[store] upkeep signal fallback:',e.message);}}
+  const d=loadLocal(),userChats=new Set((d.chats || []).filter(row=>row.userId===userId&&(row.source || 'user')==='user').map(row=>row.id)),after=since?Date.parse(since):0;
+  return (d.turns || []).filter(row=>(row.user_id===userId||row.userId===userId)&&row.role==='user'&&userChats.has(row.chat_id)&&(!after||Number(row.at || Date.parse(row.created_at || 0))>after)).sort((a,b)=>Number(a.at || Date.parse(a.created_at || 0))-Number(b.at || Date.parse(b.created_at || 0))).slice(-size);
 }
 
 async function beginAutomationRun(userId, subAgentId, chatId, dedupeKey, event) {
@@ -1635,8 +1667,8 @@ export {
   createGift, redeemGift, giftsCredit, requestUpgrade,
   logToolRun,
   saveTurn, searchTurns, listChatMessages, listAutomationChats,
-  listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent,
-  listDueSubAgents, markSubAgentRun, beginAutomationRun, finishAutomationRun, listAutomationRuns,
+  listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent, ensureSystemSubAgents,
+  listDueSubAgents, markSubAgentRun, listUpkeepSignals, beginAutomationRun, finishAutomationRun, listAutomationRuns,
   getAgentWallet, upsertAgentWallet, listWalletTx, addWalletTx, reserveWalletSpend, updateWalletTx,
   getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,

@@ -1196,9 +1196,9 @@ async function statusForUser(userId) {
     ...sb,
     vm,
     leases: await leaseSnapshot(userId),
-    model: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
-    harness: 'gemini-azure-vm-harness',
-    openaiUsed: false,
+    model: process.env.AZURE_FOUNDRY_MODEL || 'gpt-6-luna',
+    harness: 'foundry-azure-vm-harness',
+    foundryUsed: true,
   };
 }
 

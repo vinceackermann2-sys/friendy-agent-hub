@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import * as records from './task-store.js';
 import { createTaskRuntime } from './task-runtime.js';
-import { callGeminiWithTools, MODEL_DEFAULT, MODEL_FALLBACK } from '../gemini.js';
+import { callFoundryWithTools, MODEL_DEFAULT, MODEL_FALLBACK } from '../foundry.js';
 import { ensureCredit, logModelUsage } from './runner.js';
 import { TOOLS } from './tools.js';
 import { TOOL_SCHEMAS, selectToolSchemas, buildSystem, emitResultCard } from './vm-harness.js';
@@ -181,14 +181,15 @@ async function finishMemory(userId,prompt,text,existing,emit) {
   for(const m of result.saved || []) emit({type:'card',id:`memory_${m.id}`,card:{type:'memory',status:'done',text:m.text}});
   return result.saved || [];
 }
-const tasks=createTaskRuntime({records,model:callGeminiWithTools,schemas:TOOL_SCHEMAS,selectSchemas:selectToolSchemas,tools:TOOLS,azure,buildSystem,emitResultCard,
+const tasks=createTaskRuntime({records,model:callFoundryWithTools,schemas:TOOL_SCHEMAS,selectSchemas:selectToolSchemas,tools:TOOLS,azure,buildSystem,emitResultCard,
   ensureCredit,logUsage,checkPrompt,protect:protectAgentResponse,memory:{list:store.listMemories,search:(userId,query,limit)=>store.searchMemories(userId,query,limit,true),rank:rankMemories,finish:async(userId,row)=>{
     const memoryHandled=(row.state.observations || []).some(o=>o.ok&&['memory_write','memory_update','memory_delete'].includes(o.name));
-    const saved=memoryHandled?[]:await finishMemory(userId,row.state.originalPrompt,row.state.result,await store.searchMemories(userId,row.state.originalPrompt,20),()=>{});
-    await store.saveTurn(userId,row.chat_id,'agent',row.state.result,{metadata:{taskId:row.id}});
+    const upkeep=!!row.state.context?.upkeep;
+    const saved=memoryHandled||upkeep?[]:await finishMemory(userId,row.state.originalPrompt,row.state.result,await store.searchMemories(userId,row.state.originalPrompt,20),()=>{});
+    if(!upkeep)await store.saveTurn(userId,row.chat_id,'agent',row.state.result,{metadata:{taskId:row.id}});
     return saved;
   }}});
-const coordinator=createCoordinator({tasks,model:callGeminiWithTools,schemas:TOOL_SCHEMAS,tools:TOOLS,azure,store,buildSystem,
+const coordinator=createCoordinator({tasks,model:callFoundryWithTools,schemas:TOOL_SCHEMAS,tools:TOOLS,azure,store,buildSystem,
   ensureCredit,logUsage,checkPrompt,protect:protectAgentResponse,rank:rankMemories,finishMemory,
   reportError:(event,details)=>console.warn(`[conversation] ${event}`,details)});
 let worker;

@@ -125,6 +125,49 @@ async function cfetch(path, { method = 'GET', body } = {}) {
   return json;
 }
 
+// ---- hidden connectors (removed from the in-app Connectors list) ----
+// These toolkits stay enabled in Composio but are never offered in the app.
+const HIDDEN_TOOLKITS = new Set([
+  'airtable',
+  'amplitude',
+  'anthropic_administrator',
+  'asana',
+  'canva',
+  'cloudflare',
+  'discord',
+  'elevenlabs',
+  'figma',
+  'firecrawl',
+  'heygen',
+  'jira',
+  'klaviyo',
+  'mailchimp',
+  'miro',
+  'openai',
+  'posthog',
+  'reddit',
+  'replicate',
+  'resend',
+  'sanity',
+  'semrush',
+  'sentry',
+  'sevdesk',
+  'slackbot',
+  'supabase',
+  'wix',
+]);
+function isHiddenToolkit(slug) {
+  const s = String(slug || '').toLowerCase();
+  if (!s) return false;
+  if (HIDDEN_TOOLKITS.has(s)) return true;
+  try {
+    const extra = String(process.env.COMPOSIO_HIDDEN_TOOLKITS || '')
+      .split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    if (extra.includes(s)) return true;
+  } catch {}
+  return false;
+}
+
 // ---- auth configs (the "apps ready for users to connect") ----
 let authCache = { at: 0, items: [] };
 async function listAuthConfigs(force = false) {
@@ -159,7 +202,7 @@ async function listAuthConfigs(force = false) {
     if (!c.toolkit) continue;
     if (!byToolkit.has(c.toolkit)) byToolkit.set(c.toolkit, c);
   }
-  const items = [...byToolkit.values()].sort((a, b) => a.toolkit.localeCompare(b.toolkit));
+  const items = [...byToolkit.values()].filter((c) => !isHiddenToolkit(c.toolkit)).sort((a, b) => a.toolkit.localeCompare(b.toolkit));
   authCache = { at: Date.now(), items };
   return items;
 }
@@ -302,6 +345,9 @@ async function appsForUser(belnaUserId) {
 }
 
 async function createLink(belnaUserId, { authConfigId, toolkit, callbackUrl }) {
+  if (toolkit && isHiddenToolkit(toolkit)) {
+    throw Object.assign(new Error('That app is not available for connection.'), { code: 'BAD_INPUT' });
+  }
   let authId = String(authConfigId || '').trim();
   const configs = await listAuthConfigs();
   if (!authId && toolkit) {
@@ -536,6 +582,7 @@ async function triggerOptionsForUser(belnaUserId) {
 async function toolkitForUser(belnaUserId, toolkit) {
   const slug = String(toolkit || '').toLowerCase();
   if (!slug) throw Object.assign(new Error('toolkit required.'), { code: 'BAD_INPUT' });
+  if (isHiddenToolkit(slug)) throw Object.assign(new Error('That connector is not available.'), { code: 'BAD_INPUT' });
   const [apps, tools, disabled] = await Promise.all([
     appsForUser(belnaUserId),
     listToolkitTools(slug, 200).catch(() => []),
@@ -566,6 +613,7 @@ async function toolkitForUser(belnaUserId, toolkit) {
 async function setToolkitPermissions(belnaUserId, toolkit, disabled) {
   const slug = String(toolkit || '').toLowerCase();
   if (!slug) throw Object.assign(new Error('toolkit required.'), { code: 'BAD_INPUT' });
+  if (isHiddenToolkit(slug)) throw Object.assign(new Error('That connector is not available.'), { code: 'BAD_INPUT' });
   const configs = await listAuthConfigs();
   if (!configs.some((c) => c.toolkit === slug)) {
     throw Object.assign(new Error('That connector is not available.'), { code: 'BAD_INPUT' });
@@ -590,6 +638,8 @@ module.exports = {
   configured,
   composioUserId,
   siteOrigin,
+  isHiddenToolkit,
+  HIDDEN_TOOLKITS,
   listAuthConfigs,
   toolkitMeta,
   listConnected,

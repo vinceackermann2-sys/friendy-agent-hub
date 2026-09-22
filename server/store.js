@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { upkeepRows } = require('./agents/upkeep');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 
@@ -499,7 +500,7 @@ async function markStripeEvent(eventId) {
 async function logUsage(userId, { model, usage, cost }) {
   const costUsd = Number(cost || 0);
   const row = {
-    id: 'use_' + uid(), user_id: userId, model: model || 'gemini-3.5-flash',
+    id: 'use_' + uid(), user_id: userId, model: model || 'gpt-6-luna',
     prompt_tokens: (usage && (usage.promptTokenCount || 0)) || 0,
     candidates_tokens: (usage && (usage.candidatesTokenCount || 0)) || 0,
     total_tokens: (usage && (usage.totalTokenCount || 0)) || 0,
@@ -627,6 +628,136 @@ async function giftsCredit(userId) {
   const d = loadLocal();
   return (d.gifts || []).filter((g) => g.redeemed_by === userId).reduce((n, g) => n + Number(g.amount_usd || 0), 0);
 }
+// ---------- referrals: dual-sided $50 gift ($25 each, credits in-app) ----------
+// The in-app "FREE $50 gift card" is the Stripe $50 gift face value, split:
+// friend redeems inviter's code → friend gets REFERRAL_CREDITS_EACH credits,
+// inviter gets REFERRAL_CREDITS_EACH credits (only then — never before).
+// One reward per unique friend: no self-redeem, no double-claim.
+// Supabase tables (see supabase/migrations/20260922110000_referrals.sql): referral_codes +
+// referrals. Local data.json fallback keeps the same guarantees.
+let REFERRAL_CREDITS_EACH = 50;
+try { REFERRAL_CREDITS_EACH = require('./plans').REFERRAL_CREDITS_EACH || 50; } catch {}
+function referralCodeGen() {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c = '';
+  for (let i = 0; i < 6; i++) c += abc[Math.floor(Math.random() * abc.length)];
+  return 'BELNA-' + c;
+}
+function normReferralCode(code) {
+  return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+}
+async function getReferralCode(userId) {
+  if (!userId) return null;
+  const s = supa();
+  if (s) {
+    try {
+      const { data } = await s.from('referral_codes').select('code').eq('user_id', userId).limit(1).maybeSingle();
+      if (data && data.code) return data.code;
+    } catch {}
+  }
+  const d = loadLocal();
+  d.referralCodes = d.referralCodes || [];
+  let row = d.referralCodes.find((r) => r.user_id === userId || r.userId === userId);
+  if (row && row.code) {
+    // Best-effort mirror to Supabase so the code survives a later migration.
+    if (s) { try { await ensureProfile(userId); await s.from('referral_codes').upsert({ user_id: userId, code: row.code }, { onConflict: 'user_id' }); } catch {} }
+    return row.code;
+  }
+  row = { user_id: userId, code: referralCodeGen(), created_at: new Date().toISOString() };
+  // Avoid collisions in the local file (Supabase has a UNIQUE on code).
+  let guard = 0;
+  while (d.referralCodes.some((r) => r.code === row.code) && guard++ < 5) row.code = referralCodeGen();
+  d.referralCodes.unshift(row);
+  saveLocal(d);
+  if (s) { try { await ensureProfile(userId); await s.from('referral_codes').upsert({ user_id: userId, code: row.code }, { onConflict: 'user_id' }); } catch {} }
+  return row.code;
+}
+async function findReferralInviter(code) {
+  const c = normReferralCode(code);
+  if (!c) return null;
+  const s = supa();
+  if (s) {
+    try {
+      const { data } = await s.from('referral_codes').select('user_id,code').eq('code', c).limit(1).maybeSingle();
+      if (data) return { inviterId: data.user_id, code: data.code };
+    } catch {}
+  }
+  const d = loadLocal();
+  const row = (d.referralCodes || []).find((r) => String(r.code || '').toUpperCase() === c);
+  return row ? { inviterId: row.user_id || row.userId, code: row.code } : null;
+}
+async function referralStats(userId) {
+  const code = await getReferralCode(userId);
+  const d = loadLocal();
+  const local = (d.referrals || []).filter((r) => (r.inviter_id || r.inviterId) === userId);
+  const s = supa();
+  if (s) {
+    try {
+      const { data } = await s.from('referrals').select('id').eq('inviter_id', userId);
+      const invited = Array.isArray(data) ? data.length : local.length;
+      const earned = invited * Number(REFERRAL_CREDITS_EACH || 50);
+      return { code, invited, earnedCredits: earned, rewardEach: Number(REFERRAL_CREDITS_EACH || 50) };
+    } catch {}
+  }
+  const earned = local.length * Number(REFERRAL_CREDITS_EACH || 50);
+  return { code, invited: local.length, earnedCredits: earned, rewardEach: Number(REFERRAL_CREDITS_EACH || 50) };
+}
+async function redeemReferral(userId, code) {
+  const c = normReferralCode(code);
+  if (!c) return { ok: false, error: 'Enter your friend’s gift code.' };
+  const found = await findReferralInviter(c);
+  if (!found) return { ok: false, error: 'Code not found. Check the code and try again.' };
+  if (String(found.inviterId) === String(userId)) return { ok: false, error: 'You can’t redeem your own gift code — share it with a friend.' };
+  const reward = Number(REFERRAL_CREDITS_EACH || 50);
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      const { data: existing } = await s.from('referrals').select('id').eq('code', found.code).eq('redeemer_id', userId).limit(1).maybeSingle();
+      if (existing) return { ok: false, error: 'You already redeemed this gift.' };
+      const { error: ins } = await s.from('referrals').insert({ code: found.code, inviter_id: found.inviterId, redeemer_id: userId, inviter_credits: reward, redeemer_credits: reward });
+      if (ins) {
+        // Unique-violation means this friend already redeemed (race-safe).
+        if (/duplicate|unique|conflict/i.test(ins.message || '')) return { ok: false, error: 'You already redeemed this gift.' };
+        throw ins;
+      }
+      await ensureFreeGrant(userId);
+      await ensureFreeGrant(found.inviterId);
+      await addGrant(userId, reward, 'referral_redeem', 'referral:' + found.code + ':' + userId);
+      // Inviter is paid ONLY now that the friend redeemed (never before).
+      if (!(await hasGrantRef(found.inviterId, 'referral-inviter:' + found.code + ':' + userId))) {
+        await addGrant(found.inviterId, reward, 'referral_inviter', 'referral-inviter:' + found.code + ':' + userId);
+      }
+      // Mirror locally so /api/billing totals stay consistent pre-migration.
+      try {
+        const d = loadLocal();
+        d.referrals = d.referrals || [];
+        if (!d.referrals.some((r) => r.code === found.code && (r.redeemer_id || r.redeemerId) === userId)) {
+          d.referrals.unshift({ id: 'rf_' + uid(), code: found.code, inviter_id: found.inviterId, redeemer_id: userId, inviter_credits: reward, redeemer_credits: reward, created_at: new Date().toISOString() });
+          saveLocal(d);
+        }
+      } catch {}
+      return { ok: true, credits: reward, inviterCredits: reward, code: found.code };
+    } catch (e) {
+      console.warn('[store] referral supabase fallback:', e.message);
+    }
+  }
+  const d = loadLocal();
+  d.referrals = d.referrals || [];
+  d.referralCodes = d.referralCodes || [];
+  if (d.referrals.some((r) => r.code === found.code && String(r.redeemer_id || r.redeemerId) === String(userId))) {
+    return { ok: false, error: 'You already redeemed this gift.' };
+  }
+  d.referrals.unshift({ id: 'rf_' + uid(), code: found.code, inviter_id: found.inviterId, redeemer_id: userId, inviter_credits: reward, redeemer_credits: reward, created_at: new Date().toISOString() });
+  saveLocal(d);
+  await ensureFreeGrant(userId);
+  await ensureFreeGrant(found.inviterId);
+  const refRedeemer = 'referral:' + found.code + ':' + userId;
+  if (!(await hasGrantRef(userId, refRedeemer))) await addGrant(userId, reward, 'referral_redeem', refRedeemer);
+  const refInviter = 'referral-inviter:' + found.code + ':' + userId;
+  if (!(await hasGrantRef(found.inviterId, refInviter))) await addGrant(found.inviterId, reward, 'referral_inviter', refInviter);
+  return { ok: true, credits: reward, inviterCredits: reward, code: found.code };
+}
 async function requestUpgrade(userId, plan) {
   const row = { id: 'up_' + uid(), user_id: userId, plan, status: 'requested' };
   const s = supa();
@@ -660,8 +791,44 @@ function fromSubAgentRow(row) {
     lastRunAt: row.last_run_at || row.lastRunAt || null,
     lastStatus: row.last_status || row.lastStatus || null,
     lastError: row.last_error || row.lastError || null,
+    description: row.description || '',
+    systemKind: row.system_kind || row.systemKind || null,
+    lastResult: row.last_result || row.lastResult || null,
+    lastSignalAt: row.last_signal_at || row.lastSignalAt || null,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
   };
+}
+
+async function ensureSystemSubAgents(userId) {
+  const wanted = upkeepRows(userId);
+  const s = supa();
+  if (s) {
+    try {
+      await ensureProfile(userId);
+      for (const agent of wanted) {
+        const row = {
+          id:agent.id,user_id:userId,chat_id:agent.chatId,name:agent.name,prompt:agent.prompt,
+          description:agent.description,system_kind:agent.systemKind,enabled:true,
+          trigger_type:'schedule',trigger_config:agent.trigger,next_run_at:agent.nextRunAt,
+        };
+        const { error:insertError } = await s.from('sub_agents').upsert(row,{onConflict:'id',ignoreDuplicates:true});
+        if (insertError) throw insertError;
+        const { error:updateError } = await s.from('sub_agents').update({
+          name:agent.name,prompt:agent.prompt,description:agent.description,system_kind:agent.systemKind,
+          trigger_type:'schedule',trigger_config:agent.trigger,updated_at:new Date().toISOString(),
+        }).eq('id',agent.id).eq('user_id',userId);
+        if (updateError) throw updateError;
+      }
+      return;
+    } catch (e) { console.warn('[store] system upkeep fallback:', e.message); }
+  }
+  const d=loadLocal();d.subAgents=d.subAgents || [];
+  for(const agent of wanted){
+    const index=d.subAgents.findIndex(row=>row.id===agent.id&&row.userId===userId);
+    if(index<0)d.subAgents.push(agent);
+    else Object.assign(d.subAgents[index],{name:agent.name,prompt:agent.prompt,description:agent.description,systemKind:agent.systemKind,trigger:agent.trigger});
+  }
+  saveLocal(d);
 }
 
 async function listSubAgents(userId) {
@@ -759,8 +926,10 @@ async function listDueSubAgents(now, limit = 5) {
   return (d.subAgents || []).filter((row) => row.enabled && row.trigger?.type === 'schedule' && row.nextRunAt && new Date(row.nextRunAt).getTime() <= when).slice(0, limit).map(fromSubAgentRow);
 }
 
-async function markSubAgentRun(userId, id, status, errorText, nextRunAt) {
+async function markSubAgentRun(userId, id, status, errorText, nextRunAt, details = {}) {
   const patch = { last_run_at: new Date().toISOString(), last_status: status, last_error: errorText ? String(errorText).slice(0, 500) : null, next_run_at: nextRunAt || null, updated_at: new Date().toISOString() };
+  if (details.result !== undefined) patch.last_result=details.result==null?null:String(details.result).slice(0,4000);
+  if (details.signalAt) patch.last_signal_at=details.signalAt;
   const s = supa();
   if (s) {
     try {
@@ -771,8 +940,24 @@ async function markSubAgentRun(userId, id, status, errorText, nextRunAt) {
   }
   const d = loadLocal();
   const row = (d.subAgents || []).find((item) => item.id === id && item.userId === userId);
-  if (row) Object.assign(row, { lastRunAt: patch.last_run_at, lastStatus: status, lastError: patch.last_error, nextRunAt: patch.next_run_at });
+  if (row) Object.assign(row, { lastRunAt: patch.last_run_at, lastStatus: status, lastError: patch.last_error, nextRunAt: patch.next_run_at, ...(patch.last_result!==undefined?{lastResult:patch.last_result}:{}), ...(patch.last_signal_at?{lastSignalAt:patch.last_signal_at}:{}) });
   saveLocal(d);
+}
+
+async function listUpkeepSignals(userId, since, limit = 24) {
+  const size=Math.min(Math.max(Number(limit)||24,1),50),s=supa();
+  if(s){
+    try{
+      const {data:chats,error:chatError}=await s.from('chats').select('id').eq('user_id',userId).eq('source','user').limit(100);
+      if(chatError)throw chatError;
+      const ids=(chats || []).map(row=>row.id);if(!ids.length)return [];
+      let query=s.from('messages').select('id,role,text,created_at').eq('user_id',userId).eq('role','user').in('chat_id',ids).order('created_at',{ascending:false}).limit(size);
+      if(since)query=query.gt('created_at',since);
+      const {data,error}=await query;if(error)throw error;return (data || []).reverse();
+    }catch(e){console.warn('[store] upkeep signal fallback:',e.message);}
+  }
+  const d=loadLocal(),userChats=new Set((d.chats || []).filter(row=>row.userId===userId&&(row.source || 'user')==='user').map(row=>row.id)),after=since?Date.parse(since):0;
+  return (d.turns || []).filter(row=>(row.user_id===userId||row.userId===userId)&&row.role==='user'&&userChats.has(row.chat_id)&&(!after||Number(row.at || Date.parse(row.created_at || 0))>after)).sort((a,b)=>Number(a.at || Date.parse(a.created_at || 0))-Number(b.at || Date.parse(b.created_at || 0))).slice(-size);
 }
 
 async function beginAutomationRun(userId, subAgentId, chatId, dedupeKey, event) {
@@ -1860,10 +2045,11 @@ module.exports = {
   addGrant, grantsTotal, grantsTotalByReason, ensureFreeGrant, hasGrantRef,
   stripeEventSeen, markStripeEvent,
   createGift, findGiftByFrom, redeemGift, giftsCredit, requestUpgrade,
+  getReferralCode, findReferralInviter, referralStats, redeemReferral,
   logToolRun,
   saveTurn, searchTurns, listChatMessages, listAutomationChats,
-  listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent,
-  listDueSubAgents, markSubAgentRun, beginAutomationRun, finishAutomationRun, listAutomationRuns,
+  listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent, ensureSystemSubAgents,
+  listDueSubAgents, markSubAgentRun, listUpkeepSignals, beginAutomationRun, finishAutomationRun, listAutomationRuns,
   getAgentWallet, upsertAgentWallet, listWalletTx, addWalletTx, reserveWalletSpend, updateWalletTx,
   getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,

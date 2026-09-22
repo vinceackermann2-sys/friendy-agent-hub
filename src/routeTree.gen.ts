@@ -15,6 +15,7 @@ import { Route as AppRouteImport } from './routes/app'
 import { Route as CookiesRouteImport } from './routes/cookies'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as PromoRouteImport } from './routes/promo'
 import { Route as ResearchRouteImport } from './routes/research'
 import { Route as Research100mRouteImport } from './routes/research-100m'
 import { Route as ResearchArche10RouteImport } from './routes/research-arche-1-0'
@@ -52,6 +53,11 @@ const PricingRoute = PricingRouteImport.update({
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PromoRoute = PromoRouteImport.update({
+  id: '/promo',
+  path: '/promo',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResearchRoute = ResearchRouteImport.update({
@@ -102,6 +108,7 @@ export interface FileRoutesByFullPath {
   '/cookies': typeof CookiesRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
+  '/promo': typeof PromoRoute
   '/research': typeof ResearchRoute
   '/research-100m': typeof Research100mRoute
   '/research-arche-1-0': typeof ResearchArche10Route
@@ -118,6 +125,7 @@ export interface FileRoutesByTo {
   '/cookies': typeof CookiesRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
+  '/promo': typeof PromoRoute
   '/research': typeof ResearchRoute
   '/research-100m': typeof Research100mRoute
   '/research-arche-1-0': typeof ResearchArche10Route
@@ -135,6 +143,7 @@ export interface FileRoutesById {
   '/cookies': typeof CookiesRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
+  '/promo': typeof PromoRoute
   '/research': typeof ResearchRoute
   '/research-100m': typeof Research100mRoute
   '/research-arche-1-0': typeof ResearchArche10Route
@@ -153,6 +162,7 @@ export interface FileRouteTypes {
     | '/cookies'
     | '/pricing'
     | '/privacy'
+    | '/promo'
     | '/research'
     | '/research-100m'
     | '/research-arche-1-0'
@@ -169,6 +179,7 @@ export interface FileRouteTypes {
     | '/cookies'
     | '/pricing'
     | '/privacy'
+    | '/promo'
     | '/research'
     | '/research-100m'
     | '/research-arche-1-0'
@@ -185,6 +196,7 @@ export interface FileRouteTypes {
     | '/cookies'
     | '/pricing'
     | '/privacy'
+    | '/promo'
     | '/research'
     | '/research-100m'
     | '/research-arche-1-0'
@@ -202,6 +214,7 @@ export interface RootRouteChildren {
   CookiesRoute: typeof CookiesRoute
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
+  PromoRoute: typeof PromoRoute
   ResearchRoute: typeof ResearchRoute
   Research100mRoute: typeof Research100mRoute
   ResearchArche10Route: typeof ResearchArche10Route
@@ -254,6 +267,13 @@ declare module '@tanstack/react-router' {
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/promo': {
+      id: '/promo'
+      path: '/promo'
+      fullPath: '/promo'
+      preLoaderRoute: typeof PromoRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/research': {
@@ -322,6 +342,7 @@ const rootRouteChildren: RootRouteChildren = {
   CookiesRoute: CookiesRoute,
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,
+  PromoRoute: PromoRoute,
   ResearchRoute: ResearchRoute,
   Research100mRoute: Research100mRoute,
   ResearchArche10Route: ResearchArche10Route,

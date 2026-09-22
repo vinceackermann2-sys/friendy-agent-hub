@@ -1,15 +1,20 @@
 # Lingon — your personal agent (REAL backend)
 
-**Runtime:** Gemini 3.5 is the model. Each user gets an isolated Azure VM
+**Runtime:** Microsoft Foundry serves `gpt-6-luna` with `xhigh` reasoning.
+Each user gets an isolated Azure VM
 sandbox for untrusted code/files/browser. Until `AZURE_*` is set, the harness
-uses a per-user local workspace and keeps `code_run` disabled. OpenAI / Codex
-Agents API is **not** used. See `server/agents/azure-vm.js`.
+uses a per-user local workspace and keeps `code_run` disabled. The agent uses
+the Foundry project Responses API; no hosted Codex agent is used. See
+`server/foundry.js` and `server/agents/azure-vm.js`.
 
 Every user claims, names and customizes their own agent, then works with it
 through chat + visual canvas + sealed vault. **This build is real: nothing is
-simulated.** AI answers come from Gemini server-side, research does live web
+simulated.** AI answers come from Foundry server-side, research does live web
 fetches with citations, GitHub reviews hit the real api.github.com with your
-own token, pages are Gemini-generated.
+own token, and pages are model-generated. Microphone speech is converted into
+prompt-box text with `gpt-4o-transcribe`, and image creation uses `gpt-image-2`.
+Those values are Azure deployment names; each model must be deployed in the
+resource, or its custom deployment alias must be supplied in `.env`.
 
 Browser/computer work appears in Canvas through a persistent Chromium CDP
 screencast relay. It is a continuous interactive stream over an authenticated
@@ -21,13 +26,13 @@ wait for a new screenshot after every action. Set `LINGON_PUBLIC_ORIGIN` (or
 
 ```powershell
 cd C:\lingon
-Copy-Item .env.example .env   # then edit .env and paste GEMINI_API_KEY
+Copy-Item .env.example .env   # then set the Foundry endpoint, key, and deployment names
 npm install
 npm start
 ```
 
 Open http://localhost:8000
-Health: http://localhost:8000/api/health → `{ ok:true, gemini:true, ... }`
+Health: http://localhost:8000/api/health → `{ ok:true, foundry:true, ... }`
 
 `.env` is gitignored and never committed. The frontend never sees the key —
 it only calls `/api/*` on the same origin.
@@ -76,24 +81,26 @@ capacity.
 - Free $0 → 20 starter credits
 - Pro $50/mo → 60 credits monthly
 - Max $100/mo → 100 credits monthly
-Usage is metered from real Gemini token counts. Caps return 402 with upgrade
+Usage is metered from real Foundry token counts. Caps return 402 with upgrade
 prompt. Gift redeem adds real credit. Upgrades are recorded requests until
 payments connect — no charge is made. See Billing in the app.
 
 ## Harness (honest)
 
-Gemini 3.5 decides tools via function calling (`server/agents/vm-harness.js`).
+GPT-6 Luna decides tools through the Foundry Responses API (`server/agents/vm-harness.js`).
 Untrusted work runs in the user's Azure VM (`server/agents/azure-vm.js`).
 Until Azure is configured, the fallback is an isolated per-user workspace and
 `code_run` stays disabled. Secrets never enter the model or the VM.
 
 ## What is real vs honest
 
-- Chat / build / research: real Gemini `gemini-2.5-flash`, usage-logged.
+- Chat / build / research: Foundry `gpt-6-luna` with `xhigh` reasoning, usage-logged.
+- Voice input: `gpt-4o-transcribe` converts microphone recordings into prompt-box text.
+- Images: `gpt-image-2` through the `image_generate` agent tool, returned as Canvas PNG files.
 - Agent chat: the main agent stays responsive while cancellable sub-agents do
   task work; unrelated tasks are isolated in automatically opened chats.
 - Research: live HN / DuckDuckGo / Wikipedia fetch + cited briefing, no invented stats.
-- GitHub: real PR list + diff + Gemini review. PAT per-request, never logged/sent to model.
+- GitHub: real PR list + diff + model review. PAT per-request, never logged/sent to model.
 - Memory + vault: Supabase per-account, encrypted at rest. `sec_••••` only in traces.
 - Triggers + sub-agents: durable schedule/app/sub-agent watchers. Every run is an isolated chat, usage-metered and visible in Trace.
 - Apps: per-user Composio OAuth connections, including multiple accounts per
@@ -118,6 +125,6 @@ gh repo create lingon-agent --private --source=. --push
 ## Project layout
 
 - `app/` — frontend (config.js, mascot.js, engine.js fallback, engine.real.js, app.js, styles.css)
-- `server/` — real backend (index.js, gemini.js, research.js, store.js)
+- `server/` — real backend (index.js, foundry.js, research.js, store.js)
 - `supabase/` — schema, tracked migrations, Auth email template, and setup guide
 - `tests/smoke.real.js` — Playwright verification against the real backend

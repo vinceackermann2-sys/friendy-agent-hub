@@ -5,10 +5,10 @@
    - Picks relevant tools (tool search), fans out subagents (max 3),
    - enforces guardrails + credits, compacts long sessions,
    - returns { output, trace, usage } with every step traceable.
-   Model: Gemini (our key). Shape: Agents API. Extras: auth, vault refs,
+   Model: Microsoft Foundry (server key). Shape: Agents API. Extras: auth, vault refs,
    approvals (frontend-gated for github_*), billing, Supabase persistence.
 */
-import { callGemini, MODEL_DEFAULT } from '../gemini.js';
+import { callFoundry, MODEL_DEFAULT } from '../foundry.js';
 import { costOf, PLANS } from '../plans.js';
 import * as store from '../store.js';
 import { checkPrompt } from './guardrails.js';
@@ -68,7 +68,7 @@ async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, 
   const replyContext = replyTo && replyTo.text
     ? `[The user is replying to this ${replyTo.role === 'user' ? 'user' : 'assistant'} message: ${String(replyTo.text).slice(0, 500)}]\n\n`
     : '';
-  const r = await callGemini({ prompt: replyContext + task, system, history: h2, model, signal, onDelta });
+  const r = await callFoundry({ prompt: replyContext + task, system, history: h2, model, signal, onDelta });
   return { text: r.text, usage: r.usage, model: r.model || model, compacted, compactUsage: costUsage || null };
 }
 
