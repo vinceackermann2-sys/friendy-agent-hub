@@ -90,7 +90,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
           "Belna builds Swedish safe AI agents with privacy and safety at the core. Arche 1.0 is your personal AI agent.",
       },
       { property: "og:type", content: "website" },
+      { property: "og:site_name", content: "Belna" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "Belna — Swedish Safe AI Agents" },
+      {
+        name: "twitter:description",
+        content:
+          "Belna builds Swedish safe AI agents with privacy and safety at the core. Arche 1.0 is your personal AI agent.",
+      },
     ],
     links: [
       { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },

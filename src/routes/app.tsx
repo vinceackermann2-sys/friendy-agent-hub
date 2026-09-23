@@ -24,5 +24,5 @@ export const Route = createFileRoute("/app")({
       { rel: "canonical", href: "https://belna.se/app" },
     ],
   }),
-  component: LingonApp,
+  component: () => <LingonApp page="app" />,
 });

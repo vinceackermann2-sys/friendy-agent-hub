@@ -16,7 +16,7 @@ function loadScript(src: string) {
     const el = document.createElement("script");
     el.src = src;
     el.async = false;
-    el.dataset.lingon = src;
+    el.dataset["lingon"] = src;
     el.onload = () => resolve();
     el.onerror = () => {
       el.remove();
@@ -56,7 +56,46 @@ export const lingonHeadLinks: Array<
   },
 ];
 
-export function LingonApp() {
+function CrawlableOverview({ page }: { page: "home" | "app" }) {
+  return (
+    <main style={{ maxWidth: 900, margin: "64px auto", padding: "0 24px", fontFamily: "system-ui, sans-serif" }}>
+      <nav aria-label="Public pages" style={{ display: "flex", flexWrap: "wrap", gap: 20, marginBottom: 64 }}>
+        <a href="/">Belna</a>
+        <a href="/research">Research</a>
+        <a href="/pricing">Pricing</a>
+        <a href="/security">Security</a>
+      </nav>
+      {page === "home" ? (
+        <>
+          <h1>Bring anything to life with Belna</h1>
+          <p>Belna is a personal AI agent that can research, build, and handle work for you. Arche 1.0 is built on open Kimi K3 weights inside an agentic harness designed for privacy and safety.</p>
+          <section id="agent">
+            <h2>One personal agent that does the work</h2>
+            <p>Your agent has a personal identity, private mailbox, secure wallet, and its own computer, under your control.</p>
+          </section>
+          <section>
+            <h2>Safe Swedish AI</h2>
+            <p>Explore the <a href="/research-arche-1-0">Arche 1.0 model card</a>, read about our <a href="/security">security approach</a>, or see <a href="/pricing">plans and credits</a>.</p>
+          </section>
+          <p><a href="/app">Get started with your agent</a></p>
+        </>
+      ) : (
+        <>
+          <h1>Belna Arche 1.0 personal AI agent</h1>
+          <p>Use your agent to chat, research, build artifacts, and manage private information. Sign in to access your own agent and its workspace.</p>
+          <p>Learn about <a href="/">Belna</a>, <a href="/research">our research</a>, and <a href="/pricing">pricing</a>.</p>
+        </>
+      )}
+      <footer style={{ display: "flex", flexWrap: "wrap", gap: 20, marginTop: 64 }}>
+        <a href="/terms">Terms</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/cookies">Cookies</a>
+      </footer>
+    </main>
+  );
+}
+
+export function LingonApp({ page = "home" }: { page?: "home" | "app" }) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("loading");
   useEffect(() => {
@@ -84,7 +123,8 @@ export function LingonApp() {
     {status === "error" ? <div role="alert" style={{ padding: 32 }}>
       <p>We couldn’t open your agent. Your setup and saved request are still here.</p>
       <button onClick={() => window.location.reload()}>Try again</button>
-    </div> : status === "loading" ? <p role="status" style={{ padding: 32 }}>Opening your agent…</p> : null}
+    </div> : null}
+    {status !== "ready" ? <CrawlableOverview page={page} /> : null}
   </>;
 }
 
