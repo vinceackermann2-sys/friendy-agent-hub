@@ -18,7 +18,7 @@ const sse = (events) => new Response(events.map((e) => `data: ${JSON.stringify(e
 global.fetch = async (url, options = {}) => {
   calls.push({ url: String(url), options });
   if (queued.length) return queued.shift()();
-  if (String(url).endsWith('/api/projects/unit-project/openai/v1/responses')) {
+  if (String(url).endsWith('/openai/v1/responses')) {
     const body = JSON.parse(options.body);
     if (body.tools?.length) {
       return new Response(JSON.stringify({
@@ -52,6 +52,7 @@ global.fetch = async (url, options = {}) => {
   const answer = await provider.callFoundry({ prompt: 'Hello', system: 'Be concise.' });
   assert.equal(answer.text, 'Foundry answer');
   assert.equal(answer.usage.promptTokenCount, 12);
+  assert.equal(calls[0].url, 'https://unit-resource.services.ai.azure.com/openai/v1/responses');
   const answerBody = JSON.parse(calls[0].options.body);
   assert.equal(answerBody.model, 'gpt-6-luna');
   assert.equal(answerBody.reasoning.effort, 'xhigh');
@@ -148,6 +149,8 @@ global.fetch = async (url, options = {}) => {
   assert.deepEqual(t2.input.slice(0, marked(t1) + 1), t1.input.slice(0, marked(t1) + 1), 'turn 2 repeats turn 1 cached prefix');
   assert.equal(t1.input.at(-1).content.length, 1);
   assert.equal(t1.input.at(-1).content[0].prompt_cache_breakpoint, undefined, 'volatile tail is not written to the cache');
+  // Some deployments reject input items without an explicit type ("Invalid value: ''").
+  for (const item of t2.input) assert.equal(item.type, 'message');
 
   // The history window start holds while turns are appended, instead of sliding every turn.
   const long = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'agent' : 'user', text: `turn ${i}` }));
@@ -166,6 +169,7 @@ global.fetch = async (url, options = {}) => {
   assert.equal(calls.length - before, 2);
   assert.equal(plain.instructions, 'Policy.');
   assert.equal(plain.prompt_cache_options, undefined);
+  for (const item of plain.input) assert.equal(item.type, 'message');
 
   const audio = Buffer.alloc(300).toString('base64');
   const transcript = await provider.transcribeAudio({ audio, mime: 'audio/webm' });

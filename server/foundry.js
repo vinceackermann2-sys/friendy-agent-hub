@@ -1,5 +1,5 @@
 /* Microsoft Foundry provider (server-side only).
-   - Agent turns use the project-scoped OpenAI-compatible Responses API.
+   - Agent turns use the resource-scoped OpenAI-compatible Responses API.
    - Audio and image operations use the resource-scoped OpenAI v1 API.
    - The API key never leaves the server. */
 const MODEL_DEFAULT = process.env.AZURE_FOUNDRY_MODEL || 'gpt-6-luna';
@@ -148,6 +148,8 @@ function foundryError(data, status) {
   error.code = 'FOUNDRY_HTTP';
   error.status = status;
   error.quota = status === 429 || /quota|rate limit/i.test(message);
+  // The deployment itself cannot serve this request: another deployment may.
+  error.unavailable = status >= 500 || (status === 404 && /deployment/i.test(message)) || (status === 400 && /not supported with this model/i.test(message));
   return error;
 }
 
@@ -217,15 +219,15 @@ const breakpoint = () => ({ mode: 'explicit' });
 function inputItems(prompt, history, attachments, system = '', cache = false) {
   const input = [];
   if (cache && system) {
-    input.push({ role: 'developer', content: [{ type: 'input_text', text: system, prompt_cache_breakpoint: breakpoint() }] });
+    input.push({ type: 'message', role: 'developer', content: [{ type: 'input_text', text: system, prompt_cache_breakpoint: breakpoint() }] });
   }
   for (const item of stableTail(history, 14, 20)) {
     if (!item?.text) continue;
     const text = String(item.text).slice(0, 4000);
-    if (item.role === 'agent') input.push({ role: 'assistant', content: text });
+    if (item.role === 'agent') input.push({ type: 'message', role: 'assistant', content: text });
     // Breakpoints are only accepted on input_text blocks, i.e. user content.
-    else if (cache) input.push({ role: 'user', content: [{ type: 'input_text', text, prompt_cache_breakpoint: breakpoint() }] });
-    else input.push({ role: 'user', content: text });
+    else if (cache) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text, prompt_cache_breakpoint: breakpoint() }] });
+    else input.push({ type: 'message', role: 'user', content: text });
   }
   // Room for the message plus per-turn memory, task state and supplied context.
   const content = [{ type: 'input_text', text: String(prompt || '').slice(0, 18000) }];
@@ -236,7 +238,7 @@ function inputItems(prompt, history, attachments, system = '', cache = false) {
       content.push({ type: 'input_image', image_url: `data:${mime};base64,${data}`, detail: 'auto' });
     }
   }
-  input.push({ role: 'user', content });
+  input.push({ type: 'message', role: 'user', content });
   return input;
 }
 
@@ -348,7 +350,7 @@ async function attemptResponse(options, modelName) {
   let completed = null;
   let streamedText = '';
   try {
-    const response = await fetch(`${config.project}/openai/v1/responses`, {
+    const response = await fetch(`${config.openai}/responses`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'api-key': config.apiKey, Accept: 'text/event-stream' },
       body: JSON.stringify(body),
@@ -460,7 +462,7 @@ async function runWithFallback(options, { tools = false } = {}) {
   try {
     return finish(await attempt(first, (error) => canFallBack && error.quota));
   } catch (error) {
-    if (error.quota && !error.streamed && canFallBack) return finish(await attempt(MODEL_FALLBACK));
+    if ((error.quota || error.unavailable) && !error.streamed && canFallBack) return finish(await attempt(MODEL_FALLBACK));
     throw error;
   }
 }
