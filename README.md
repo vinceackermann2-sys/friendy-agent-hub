@@ -4,7 +4,7 @@
 Each user gets an isolated Azure VM
 sandbox for untrusted code/files/browser. Until `AZURE_*` is set, the harness
 uses a per-user local workspace and keeps `code_run` disabled. The agent uses
-the Foundry project Responses API; no hosted Codex agent is used. See
+the Foundry resource Responses API; no hosted Codex agent is used. See
 `server/foundry.js` and `server/agents/azure-vm.js`.
 
 Every user claims, names and customizes their own agent, then works with it
