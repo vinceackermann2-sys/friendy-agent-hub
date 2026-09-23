@@ -526,8 +526,10 @@ app.get('/api/billing/checkout-result', requireAuth(async (req, res) => {
       || (!session.client_reference_id && !session.metadata?.user_id)) {
       return res.status(403).json({ error: 'This checkout belongs to another account.' });
     }
-    const result = await stripeMod.fulfillCheckout(session);
-    res.json({ ...result, billing: await billingFor(req.user.id) });
+    // SECURITY: fulfillment only happens in the signature-verified Stripe
+    // webhook. The return page just reports status; it never grants anything.
+    const paid = session.payment_status === 'paid' || session.payment_status === 'no_payment_required' || session.status === 'complete';
+    res.json({ ok: true, pending: !paid, status: session.status || null, payment_status: session.payment_status || null, billing: await billingFor(req.user.id) });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
