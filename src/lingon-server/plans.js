@@ -24,6 +24,9 @@ const CREDIT_PACKS = [
 ];
 
 const GIFT_AMOUNTS = [50, 100];
+const REFERRAL_TOTAL_USD = 50;
+const REFERRAL_GIFT_USD_EACH = 25;
+const REFERRAL_CREDITS_EACH = 50;
 
 const PLANS = {
   free: { id: 'free', name: 'Free', price: 0, was: null, credits: 20, giftUsd: 0, interval: null, blurb: '20 credits to start. No card.' },
@@ -60,4 +63,5 @@ function creditsForGiftUsd(amountUsd) {
 export {
   PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, creditPackFor,
   CREDIT_VALUE_USD, BILLING_MARKUP, CREDITS_PER_USD, costOf, creditsForCost, creditsForGiftUsd,
+  REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH, REFERRAL_CREDITS_EACH,
 };

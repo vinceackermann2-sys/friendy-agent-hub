@@ -431,20 +431,24 @@ app.post('/api/billing/redeem', requireAuth(async (req, res) => {
 // Same $50 face value as the Stripe $50 gift card. The inviter is credited
 // ONLY after the friend redeems (one reward per unique friend).
 function referralLink(req, code) {
-  const origin = (process.env.SITE_URL || '').replace(/\/$/, '')
-    || (req.headers.origin || '').replace(/\/$/, '')
-    || ((req.protocol + '://' + req.get('host')).replace(/\/$/, ''));
+  const origin = (process.env.SITE_URL || 'https://belna.se').replace(/\/$/, '');
   return origin + '/app?ref=' + encodeURIComponent(code);
 }
 app.get('/api/referrals/mine', requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
-  const stats = await store.referralStats(req.user.id);
-  res.json({ ok: true, code: stats.code, link: referralLink(req, stats.code), invited: stats.invited, earnedCredits: stats.earnedCredits, rewardEach: stats.rewardEach, totalUsd: REFERRAL_TOTAL_USD, eachUsd: REFERRAL_GIFT_USD_EACH });
+  try {
+    const stats = await store.referralStats(req.user.id);
+    res.json({ ok: true, code: stats.code, link: referralLink(req, stats.code), invited: stats.invited, earnedCredits: stats.earnedCredits, rewardEach: stats.rewardEach, totalUsd: REFERRAL_TOTAL_USD, eachUsd: REFERRAL_GIFT_USD_EACH });
+  } catch { res.status(503).json({ error: 'Referral service is unavailable.' }); }
 }));
 app.post('/api/referrals/redeem', requireAuth(async (req, res) => {
-  const r = await store.redeemReferral(req.user.id, (req.body || {}).code);
-  if (!r.ok) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, code: r.code, credits: r.credits, inviterCredits: r.inviterCredits, billing: await billingFor(req.user.id) });
+  try {
+    const r = await store.redeemReferral(req.user.id, (req.body || {}).code);
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    let billing = null;
+    try { billing = await billingFor(req.user.id); } catch {}
+    res.json({ ok: true, code: r.code, credits: r.credits, inviterCredits: r.inviterCredits, billing });
+  } catch { res.status(503).json({ error: 'Referral service is unavailable.' }); }
 }));
 // Real Stripe Checkout: returns a hosted payment URL for a monthly subscription.
 app.post('/api/billing/checkout', requireAuth(async (req, res) => {

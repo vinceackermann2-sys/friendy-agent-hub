@@ -640,7 +640,7 @@ try { REFERRAL_CREDITS_EACH = require('./plans').REFERRAL_CREDITS_EACH || 50; } 
 function referralCodeGen() {
   const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let c = '';
-  for (let i = 0; i < 6; i++) c += abc[Math.floor(Math.random() * abc.length)];
+  for (const byte of crypto.randomBytes(6)) c += abc[byte % abc.length];
   return 'BELNA-' + c;
 }
 function normReferralCode(code) {
@@ -650,26 +650,32 @@ async function getReferralCode(userId) {
   if (!userId) return null;
   const s = supa();
   if (s) {
-    try {
-      const { data } = await s.from('referral_codes').select('code').eq('user_id', userId).limit(1).maybeSingle();
-      if (data && data.code) return data.code;
-    } catch {}
+    await ensureProfile(userId);
+    const { data: existing, error: readError } = await s.from('referral_codes').select('code').eq('user_id', userId).maybeSingle();
+    if (readError) throw readError;
+    if (existing?.code) return existing.code;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = referralCodeGen();
+      const { error } = await s.from('referral_codes').upsert({ user_id:userId, code }, { onConflict:'user_id', ignoreDuplicates:true });
+      if (!error || /duplicate|unique/i.test(error.message || '')) {
+        const { data, error: lookupError } = await s.from('referral_codes').select('code').eq('user_id', userId).maybeSingle();
+        if (lookupError) throw lookupError;
+        if (data?.code) return data.code;
+        if (!error) continue;
+      } else throw error;
+    }
+    throw new Error('Could not create a referral code.');
   }
   const d = loadLocal();
   d.referralCodes = d.referralCodes || [];
   let row = d.referralCodes.find((r) => r.user_id === userId || r.userId === userId);
-  if (row && row.code) {
-    // Best-effort mirror to Supabase so the code survives a later migration.
-    if (s) { try { await ensureProfile(userId); await s.from('referral_codes').upsert({ user_id: userId, code: row.code }, { onConflict: 'user_id' }); } catch {} }
-    return row.code;
-  }
+  if (row && row.code) return row.code;
   row = { user_id: userId, code: referralCodeGen(), created_at: new Date().toISOString() };
   // Avoid collisions in the local file (Supabase has a UNIQUE on code).
   let guard = 0;
   while (d.referralCodes.some((r) => r.code === row.code) && guard++ < 5) row.code = referralCodeGen();
   d.referralCodes.unshift(row);
   saveLocal(d);
-  if (s) { try { await ensureProfile(userId); await s.from('referral_codes').upsert({ user_id: userId, code: row.code }, { onConflict: 'user_id' }); } catch {} }
   return row.code;
 }
 async function findReferralInviter(code) {
@@ -692,12 +698,11 @@ async function referralStats(userId) {
   const local = (d.referrals || []).filter((r) => (r.inviter_id || r.inviterId) === userId);
   const s = supa();
   if (s) {
-    try {
-      const { data } = await s.from('referrals').select('id').eq('inviter_id', userId);
-      const invited = Array.isArray(data) ? data.length : local.length;
-      const earned = invited * Number(REFERRAL_CREDITS_EACH || 50);
-      return { code, invited, earnedCredits: earned, rewardEach: Number(REFERRAL_CREDITS_EACH || 50) };
-    } catch {}
+    const { count, error } = await s.from('referrals').select('id', { count:'exact', head:true }).eq('inviter_id', userId);
+    if (error) throw error;
+    const invited = count || 0;
+    const earned = invited * Number(REFERRAL_CREDITS_EACH || 50);
+    return { code, invited, earnedCredits: earned, rewardEach: Number(REFERRAL_CREDITS_EACH || 50) };
   }
   const earned = local.length * Number(REFERRAL_CREDITS_EACH || 50);
   return { code, invited: local.length, earnedCredits: earned, rewardEach: Number(REFERRAL_CREDITS_EACH || 50) };
@@ -705,43 +710,17 @@ async function referralStats(userId) {
 async function redeemReferral(userId, code) {
   const c = normReferralCode(code);
   if (!c) return { ok: false, error: 'Enter your friend’s gift code.' };
+  const s = supa();
+  if (s) {
+    await ensureProfile(userId);
+    const { data, error } = await s.rpc('redeem_referral', { p_user_id:userId, p_code:c });
+    if (error) throw error;
+    return data;
+  }
   const found = await findReferralInviter(c);
   if (!found) return { ok: false, error: 'Code not found. Check the code and try again.' };
   if (String(found.inviterId) === String(userId)) return { ok: false, error: 'You can’t redeem your own gift code — share it with a friend.' };
   const reward = Number(REFERRAL_CREDITS_EACH || 50);
-  const s = supa();
-  if (s) {
-    try {
-      await ensureProfile(userId);
-      const { data: existing } = await s.from('referrals').select('id').eq('code', found.code).eq('redeemer_id', userId).limit(1).maybeSingle();
-      if (existing) return { ok: false, error: 'You already redeemed this gift.' };
-      const { error: ins } = await s.from('referrals').insert({ code: found.code, inviter_id: found.inviterId, redeemer_id: userId, inviter_credits: reward, redeemer_credits: reward });
-      if (ins) {
-        // Unique-violation means this friend already redeemed (race-safe).
-        if (/duplicate|unique|conflict/i.test(ins.message || '')) return { ok: false, error: 'You already redeemed this gift.' };
-        throw ins;
-      }
-      await ensureFreeGrant(userId);
-      await ensureFreeGrant(found.inviterId);
-      await addGrant(userId, reward, 'referral_redeem', 'referral:' + found.code + ':' + userId);
-      // Inviter is paid ONLY now that the friend redeemed (never before).
-      if (!(await hasGrantRef(found.inviterId, 'referral-inviter:' + found.code + ':' + userId))) {
-        await addGrant(found.inviterId, reward, 'referral_inviter', 'referral-inviter:' + found.code + ':' + userId);
-      }
-      // Mirror locally so /api/billing totals stay consistent pre-migration.
-      try {
-        const d = loadLocal();
-        d.referrals = d.referrals || [];
-        if (!d.referrals.some((r) => r.code === found.code && (r.redeemer_id || r.redeemerId) === userId)) {
-          d.referrals.unshift({ id: 'rf_' + uid(), code: found.code, inviter_id: found.inviterId, redeemer_id: userId, inviter_credits: reward, redeemer_credits: reward, created_at: new Date().toISOString() });
-          saveLocal(d);
-        }
-      } catch {}
-      return { ok: true, credits: reward, inviterCredits: reward, code: found.code };
-    } catch (e) {
-      console.warn('[store] referral supabase fallback:', e.message);
-    }
-  }
   const d = loadLocal();
   d.referrals = d.referrals || [];
   d.referralCodes = d.referralCodes || [];

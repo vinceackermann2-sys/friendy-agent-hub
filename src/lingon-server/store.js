@@ -483,6 +483,46 @@ async function giftsCredit(userId) {
   const d = loadLocal();
   return (d.gifts || []).filter((g) => g.redeemed_by === userId).reduce((n, g) => n + Number(g.amount_usd || 0), 0);
 }
+// Referral codes and rewards are durable Supabase data. Edge workers cannot
+// safely fall back to process memory for a credit-bearing operation.
+function referralCodeGen() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return 'BELNA-' + Array.from(crypto.randomBytes(6), (byte) => alphabet[byte % alphabet.length]).join('');
+}
+async function getReferralCode(userId) {
+  const s = supa();
+  if (!s) throw new Error('Referral service is unavailable.');
+  await ensureProfile(userId);
+  const { data: existing, error: readError } = await s.from('referral_codes').select('code').eq('user_id', userId).maybeSingle();
+  if (readError) throw readError;
+  if (existing?.code) return existing.code;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = referralCodeGen();
+    const { error } = await s.from('referral_codes').upsert({ user_id:userId, code }, { onConflict:'user_id', ignoreDuplicates:true });
+    if (!error || /duplicate|unique/i.test(error.message || '')) {
+      const { data, error: lookupError } = await s.from('referral_codes').select('code').eq('user_id', userId).maybeSingle();
+      if (lookupError) throw lookupError;
+      if (data?.code) return data.code;
+      if (!error) continue;
+    } else throw error;
+  }
+  throw new Error('Could not create a referral code.');
+}
+async function referralStats(userId) {
+  const code = await getReferralCode(userId);
+  const { count, error } = await supa().from('referrals').select('id', { count:'exact', head:true }).eq('inviter_id', userId);
+  if (error) throw error;
+  const invited = count || 0;
+  return { code, invited, earnedCredits:invited * 50, rewardEach:50 };
+}
+async function redeemReferral(userId, code) {
+  const s = supa();
+  if (!s) throw new Error('Referral service is unavailable.');
+  await ensureProfile(userId);
+  const { data, error } = await s.rpc('redeem_referral', { p_user_id:userId, p_code:String(code || '') });
+  if (error) throw error;
+  return data;
+}
 async function requestUpgrade(userId, plan) {
   const row = { id: 'up_' + uid(), user_id: userId, plan, status: 'requested' };
   const s = supa();
@@ -1664,7 +1704,7 @@ export {
   logUsage, usageTotal, creditsUsed, billingTotals, creditsForUsageUsd, creditsForGift,
   addGrant, grantsTotal, grantsTotalByReason, ensureFreeGrant, hasGrantRef,
   stripeEventSeen, markStripeEvent,
-  createGift, redeemGift, giftsCredit, requestUpgrade,
+  createGift, redeemGift, giftsCredit, getReferralCode, referralStats, redeemReferral, requestUpgrade,
   logToolRun,
   saveTurn, searchTurns, listChatMessages, listAutomationChats,
   listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent, ensureSystemSubAgents,
