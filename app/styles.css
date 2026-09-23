@@ -1313,18 +1313,18 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .payments-intro p{ color:var(--mut); font-size:13px; line-height:1.5; }
 .payments-option{ padding:17px; border:1px solid var(--line); border-radius:16px; background:#fff; box-shadow:var(--shadow); }
 .payments-option-head{ display:flex; align-items:flex-start; gap:12px; }
-.payments-option-icon{ width:42px; height:42px; flex:none; display:grid; place-items:center; border-radius:12px; background:var(--panel); color:var(--acc); font-size:22px; font-weight:800; overflow:hidden; }
+.payments-option-icon{ width:106px; height:48px; flex:none; display:grid; place-items:center; border-radius:12px; background:var(--panel); color:var(--acc); overflow:hidden; }
 .payments-option-icon.stripe-mark{ background:#635bff; color:#fff; }
 .payments-option-icon.shop-pay-mark{ background:#5a31f4; color:#fff; font-weight:800; }
 .payments-option-icon .brandmark{ display:block; }
-.payments-option-icon.stripe-mark .brandmark{ width:34px; height:auto; }
-.payments-option-icon.shop-pay-mark .brandmark{ width:22px; height:22px; }
+.payments-option-icon.stripe-mark .brandmark{ width:72px; height:auto; }
+.payments-option-icon.shop-pay-mark .brandmark{ width:86px; height:auto; }
 .payments-limit{ display:flex; align-items:center; gap:8px; color:var(--mut); font-size:12px; }
 .payments-limit input{ width:88px; }
 .payments-orders{ list-style:none; margin:14px 0 0; padding:0; display:flex; flex-direction:column; gap:8px; }
 .payments-orders li{ display:flex; flex-wrap:wrap; gap:6px 12px; align-items:baseline; font-size:12.5px; }
 .payments-orders li span,.payments-orders li a{ color:var(--mut); }
-.payments-option-icon img{ width:28px; height:28px; object-fit:contain; }
+
 .payments-option-head > div{ flex:1; min-width:0; }
 .payments-option h3{ font-size:15px; line-height:1.3; }
 .payments-option p{ margin-top:3px; color:var(--mut); font-size:12.5px; line-height:1.45; }
@@ -1335,7 +1335,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 @media (max-width:560px){
   .payments-intro{ padding:18px; }
   .payments-option-head{ flex-wrap:wrap; }
-  .payments-option .chip{ margin-left:54px; }
+  .payments-option .chip{ margin-left:118px; }
 }
 .mail-panel .warnband{ margin-bottom:14px; }
 .mail-address{ display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--line); border-radius:14px; background:linear-gradient(145deg,#fff,var(--panel)); margin-bottom:12px; }

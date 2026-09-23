@@ -17,11 +17,18 @@ function env(name) {
   return String(process.env[name] || process.env['LINGON_' + name] || '').trim();
 }
 let credentialCache = { clientId: '', clientSecret: '', expiresAt: 0 };
-function clientId() { return env('SHOPIFY_CLIENT_ID') || env('SHOP_PAY_CLIENT_ID') || credentialCache.clientId; }
-function clientSecret() { return env('SHOPIFY_CLIENT_SECRET') || env('SHOP_PAY_CLIENT_SECRET') || credentialCache.clientSecret; }
-function configured() { return clientId().length > 8 && clientSecret().length > 8; }
+function pair(id, secret) { return id && secret ? { id, secret } : null; }
+function catalogCredentials() {
+  return pair(env('SHOPIFY_CLIENT_ID'), env('SHOPIFY_CLIENT_SECRET'))
+    || pair(credentialCache.clientId, credentialCache.clientSecret);
+}
+function shopCredentials() {
+  return pair(env('SHOP_PAY_CLIENT_ID'), env('SHOP_PAY_CLIENT_SECRET'))
+    || pair(credentialCache.clientId, credentialCache.clientSecret)
+    || pair(env('SHOPIFY_CLIENT_ID'), env('SHOPIFY_CLIENT_SECRET'));
+}
+function configured() { return !!shopCredentials(); }
 async function loadCredentials() {
-  if (env('SHOPIFY_CLIENT_ID') && env('SHOPIFY_CLIENT_SECRET')) return;
   if (credentialCache.expiresAt > Date.now()) return;
   const url = env('SUPABASE_URL').replace(/\/$/, '');
   const key = env('SUPABASE_SERVICE_ROLE_KEY') || env('SUPABASE_SECRET_KEY');
@@ -163,6 +170,29 @@ async function shopAuthServer() {
   });
 }
 
+// A Catalog API key can mint app tokens yet still be unknown to Shop's sign-in
+// service. Check the OAuth client before redirecting the buyer to that error.
+const shopClientChecks = new Map();
+async function checkShopClient(shop, credentials, redirectUri) {
+  const cacheKey = crypto.createHash('sha256').update(credentials.id + '\0' + credentials.secret + '\0' + redirectUri).digest('hex');
+  if (shopClientChecks.get(cacheKey) > Date.now()) return;
+  const response = await fetch(shop.token_endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code', code: 'lingon-client-check', redirect_uri: redirectUri,
+      client_id: credentials.id, client_secret: credentials.secret, code_verifier: 'lingon-client-check',
+    }),
+  });
+  const result = await response.json().catch(() => ({}));
+  const error = String(result.error || result.error_description || '').toLowerCase();
+  if (error === 'invalid_client' || /unknown[ _-]client/.test(error)) {
+    fail('SHOP_CONFIG', 'Shop does not recognize the configured OAuth client. Add the Shop sign-in client ID and secret and register ' + redirectUri + ' as its redirect URI.');
+  }
+  if (error !== 'invalid_grant') fail('SHOP_HTTP', 'Could not verify the Shop Pay sign-in configuration. Try again shortly.');
+  shopClientChecks.set(cacheKey, Date.now() + 10 * 60e3);
+}
+
 async function shopifyTokenEndpoint(resourceHost) {
   const host = resourceHost || CATALOG_HOST;
   return cached('shopify-as:' + host, async () => {
@@ -196,12 +226,13 @@ async function formPost(url, fields, extraHeaders) {
 let appTokenCache = { token: '', exp: 0 };
 async function appAccessToken() {
   await loadCredentials();
-  if (!configured()) fail('NO_SHOP', 'Shop Pay is not configured (SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET).');
+  const credentials = catalogCredentials();
+  if (!credentials) fail('NO_SHOP', 'Shopify Catalog is not configured (SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET).');
   if (appTokenCache.token && appTokenCache.exp > Date.now() + 30e3) return appTokenCache.token;
   const r = await fetch('https://api.shopify.com/auth/access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Lingon/1.0 (+ucp)' },
-    body: JSON.stringify({ client_id: clientId(), client_secret: clientSecret(), grant_type: 'client_credentials' }),
+    body: JSON.stringify({ client_id: credentials.id, client_secret: credentials.secret, grant_type: 'client_credentials' }),
   });
   const json = await r.json().catch(() => ({}));
   if (!r.ok || !json.access_token) fail('SHOP_HTTP', String(json.error_description || json.error || 'Could not mint Shopify token.').slice(0, 240));
@@ -216,6 +247,8 @@ function shopTokenFromRow(row) {
 
 async function buyerLinkedToken(userId, { resourceHost, scope } = {}) {
   await loadCredentials();
+  const credentials = shopCredentials();
+  if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured.');
   const row = await store.getShopPayAccount(userId);
   const shopToken = shopTokenFromRow(row);
   if (!shopToken) fail('NO_SHOP_LINK', 'Connect Shop Pay in Payments first.');
@@ -228,15 +261,15 @@ async function buyerLinkedToken(userId, { resourceHost, scope } = {}) {
     subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
     requested_token_type: 'urn:ietf:params:oauth:token-type:jwt',
     audience: shopify.audience,
-    client_id: clientId(),
-    client_secret: clientSecret(),
+    client_id: credentials.id,
+    client_secret: credentials.secret,
   });
   const redeemed = await formPost(shopify.tokenEndpoint, {
     grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
     assertion: grant.access_token,
     scope: scope || 'dev.ucp.shopping.catalog.search:read dev.ucp.shopping.checkout:manage openid',
-    client_id: clientId(),
-    client_secret: clientSecret(),
+    client_id: credentials.id,
+    client_secret: credentials.secret,
   });
   return redeemed.access_token;
 }
@@ -393,14 +426,16 @@ async function agentStatus(userId) {
 async function startConnect(userId, { origin } = {}) {
   requireUser(userId);
   await loadCredentials();
-  if (!configured()) fail('NO_SHOP', 'Shop Pay is not configured on this server yet.');
+  const credentials = shopCredentials();
+  if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured on this server yet.');
   const shop = await shopAuthServer();
   const state = crypto.randomBytes(24).toString('hex');
   const verifier = pkceVerifier();
   const nonce = crypto.randomBytes(16).toString('hex');
   const base = String(origin || siteUrl() || '').replace(/\/$/, '');
   if (!base) fail('BAD_INPUT', 'Site origin is required to connect Shop Pay.');
-  const redirectUri = base + '/api/shop-pay/callback';
+  const redirectUri = env('SHOP_PAY_REDIRECT_URI') || base + '/api/shop-pay/callback';
+  await checkShopClient(shop, credentials, redirectUri);
   await store.upsertShopPayAccount(userId, {
     oauthState: state,
     oauthVerifier: verifier,
@@ -410,7 +445,7 @@ async function startConnect(userId, { origin } = {}) {
   });
   const url = new URL(shop.authorization_endpoint);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('client_id', clientId());
+  url.searchParams.set('client_id', credentials.id);
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('scope', SHOP_SCOPES);
   url.searchParams.set('state', state);
@@ -422,6 +457,8 @@ async function startConnect(userId, { origin } = {}) {
 
 async function finishConnect({ code, state, error, error_description }) {
   await loadCredentials();
+  const credentials = shopCredentials();
+  if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured on this server yet.');
   if (error) fail('BAD_INPUT', String(error_description || error || 'Shop Pay connect cancelled.').slice(0, 200));
   const row = await store.findShopPayByOAuthState(state);
   if (!row || !row.oauthExp || row.oauthExp < Date.now()) fail('BAD_INPUT', 'Shop Pay connect expired — try again.');
@@ -431,8 +468,8 @@ async function finishConnect({ code, state, error, error_description }) {
     grant_type: 'authorization_code',
     code: String(code),
     redirect_uri: row.oauthRedirect,
-    client_id: clientId(),
-    client_secret: clientSecret(),
+    client_id: credentials.id,
+    client_secret: credentials.secret,
     code_verifier: row.oauthVerifier,
   });
   const claims = decodeJwt(tok.id_token);
@@ -461,12 +498,13 @@ async function disconnect(userId) {
   await loadCredentials();
   const row = await store.getShopPayAccount(userId);
   const token = shopTokenFromRow(row);
+  const credentials = shopCredentials();
   if (token) {
     try {
       const shop = await shopAuthServer();
-      if (shop.revocation_endpoint) {
+      if (shop.revocation_endpoint && credentials) {
         await formPost(shop.revocation_endpoint, {
-          token, token_type_hint: 'access_token', client_id: clientId(), client_secret: clientSecret(),
+          token, token_type_hint: 'access_token', client_id: credentials.id, client_secret: credentials.secret,
         });
       }
     } catch {}

@@ -1256,7 +1256,7 @@ app.post('/api/wallet/limit', rateLimit(20, 60000), requireAuth(async (req, res)
 
 function shopPayErr(e) {
   return e.code === 'BAD_INPUT' || e.code === 'NEED_CONFIRM' || e.code === 'LIMIT' || e.code === 'NO_SHOP_LINK' ? 400
-    : e.code === 'NO_SHOP' ? 503
+    : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
 app.get('/.well-known/ucp', (req, res) => {
@@ -1274,7 +1274,7 @@ app.post('/api/shop-pay/connect', rateLimit(20, 60000), requireAuth(async (req, 
   catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
 }));
 app.get('/api/shop-pay/callback', rateLimit(20, 60000), async (req, res) => {
-  const back = (ok, msg) => res.redirect('/?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
+  const back = (ok, msg) => res.redirect('/app?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
   try {
     await shoppay.finishConnect(req.query || {});
     back(true);
