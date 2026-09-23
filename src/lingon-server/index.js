@@ -210,10 +210,11 @@ app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
     const admin = adminClient();
     const pub = pubClient();
     if (!admin || !pub) return res.status(500).json({ error: 'Auth not configured on server.' });
-    const { data: created, error: cErr } = await admin.auth.admin.createUser({ email: String(email), password: String(password), email_confirm: true });
-    if (cErr && !/already exists/i.test(cErr.message)) return res.status(400).json({ error: cErr.message });
-    const { data, error } = await pub.auth.signInWithPassword({ email: String(email), password: String(password) });
+    // SECURITY: never auto-confirm emails on public sign-up. A normal sign-up
+    // requires the user to prove control of the address before it is trusted.
+    const { data, error } = await pub.auth.signUp({ email: String(email), password: String(password) });
     if (error) return res.status(400).json({ error: error.message });
+    if (!data.session || !data.user) return res.json({ ok: true, confirm_email: true, message: 'Check your inbox to confirm your email, then sign in.' });
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
     res.status(500).json({ error: 'Signup failed: ' + e.message });
@@ -535,7 +536,7 @@ function isAdmin(user) {
   if (!user) return false;
   const ids = adminList('LINGON_ADMIN_USER_IDS');
   const emails = adminList('LINGON_ADMIN_EMAILS');
-  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && emails.includes(String(user.email).toLowerCase()));
+  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && !!user.email_confirmed_at && emails.includes(String(user.email).toLowerCase()));
 }
 
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
