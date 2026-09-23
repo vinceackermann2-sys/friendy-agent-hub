@@ -1127,6 +1127,7 @@ async function doAuth(kind){
     const r = await fetch('/api/auth/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Auth failed');
+    if (j.confirm_email || !j.access_token) { if (msg) msg.textContent = j.message || 'Check your inbox to confirm your email, then sign in.'; return; }
     window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
     try { window.LingonConfig.userId = j.user.id; } catch {}
     await afterSignIn(j.user);

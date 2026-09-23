@@ -1221,7 +1221,9 @@ async function upsertMailbox(userId, patch) {
 }
 async function listMailMessages(userId, { folder, q, limit } = {}) {
   const cap = Math.min(80, Number(limit) || 40);
-  const needle = String(q || '').trim().toLowerCase();
+  // SECURITY: allowlist characters so the search text can never alter the
+  // PostgREST filter expression (commas, parentheses, wildcards, quotes).
+  const needle = String(q || '').toLowerCase().replace(/[^\p{L}\p{N}\s@._+-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
   const s = supa();
   if (s) {
     try {
@@ -1405,6 +1407,12 @@ async function upsertMailDraft(userId, input) {
   if (s) {
     try {
       await ensureProfile(userId);
+      // SECURITY: a caller-supplied draft id may only update the caller's own draft.
+      if (input.id) {
+        const { data: existing, error: exErr } = await s.from('agent_mail_drafts').select('user_id').eq('id', row.id).maybeSingle();
+        if (exErr) throw exErr;
+        if (existing && existing.user_id !== userId) row.id = 'dft_' + crypto.randomBytes(9).toString('hex');
+      }
       const { error } = await s.from('agent_mail_drafts').upsert({
         id: row.id,
         user_id: userId,

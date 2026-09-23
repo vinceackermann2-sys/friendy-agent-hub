@@ -218,10 +218,11 @@ app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
     const admin = adminClient();
     const pub = pubClient();
     if (!admin || !pub) return res.status(500).json({ error: 'Auth not configured on server.' });
-    const { data: created, error: cErr } = await admin.auth.admin.createUser({ email: String(email), password: String(password), email_confirm: true });
-    if (cErr && !/already exists/i.test(cErr.message)) return res.status(400).json({ error: cErr.message });
-    const { data, error } = await pub.auth.signInWithPassword({ email: String(email), password: String(password) });
+    // SECURITY: never auto-confirm emails on public sign-up. A normal sign-up
+    // requires the user to prove control of the address before it is trusted.
+    const { data, error } = await pub.auth.signUp({ email: String(email), password: String(password) });
     if (error) return res.status(400).json({ error: error.message });
+    if (!data.session || !data.user) return res.json({ ok: true, confirm_email: true, message: 'Check your inbox to confirm your email, then sign in.' });
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
     res.status(500).json({ error: 'Signup failed: ' + e.message });
@@ -525,8 +526,10 @@ app.get('/api/billing/checkout-result', requireAuth(async (req, res) => {
       || (!session.client_reference_id && !session.metadata?.user_id)) {
       return res.status(403).json({ error: 'This checkout belongs to another account.' });
     }
-    const result = await stripeMod.fulfillCheckout(session);
-    res.json({ ...result, billing: await billingFor(req.user.id) });
+    // SECURITY: fulfillment only happens in the signature-verified Stripe
+    // webhook. The return page just reports status; it never grants anything.
+    const paid = session.payment_status === 'paid' || session.payment_status === 'no_payment_required' || session.status === 'complete';
+    res.json({ ok: true, pending: !paid, status: session.status || null, payment_status: session.payment_status || null, billing: await billingFor(req.user.id) });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
@@ -566,7 +569,7 @@ function isAdmin(user) {
   if (!user) return false;
   const ids = adminList('LINGON_ADMIN_USER_IDS');
   const emails = adminList('LINGON_ADMIN_EMAILS');
-  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && emails.includes(String(user.email).toLowerCase()));
+  return ids.includes(String(user.id || '').toLowerCase()) || (!!user.email && !!user.email_confirmed_at && emails.includes(String(user.email).toLowerCase()));
 }
 
 app.post('/api/gifts/create', requireAuth(async (req, res) => {
@@ -1225,6 +1228,11 @@ app.post('/api/wallet/ensure', rateLimit(20, 60000), requireAuth(async (req, res
 }));
 app.post('/api/wallet/transfer', rateLimit(20, 60000), requireAuth(async (req, res) => {
   try {
+    // SECURITY: outbound transfers to arbitrary addresses are disabled. A
+    // client-set confirm flag is not proof of owner intent, so funds can only
+    // leave the wallet through the owner's own Privy wallet tools.
+    return res.status(403).json({ error: 'Sending funds from Belna is disabled. Withdraw from your wallet directly in Privy.' });
+    // eslint-disable-next-line no-unreachable
     const { to, amount, asset, confirm } = req.body || {};
     const result = await privy.transfer(req.user.id, { to, amount, asset, confirm: confirm === true });
     res.json({ ok: true, transfer: result, wallet: await privy.snapshot(req.user.id) });
@@ -1340,7 +1348,7 @@ app.post('/api/mail/messages/:id/read', rateLimit(60, 60000), requireAuth(async 
 app.post('/api/mail/send', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try {
     const body = req.body || {};
-    const sent = await mail.send(req.user.id, Object.assign({}, body, { confirm: body.confirm === true }));
+    const sent = await mail.send(req.user.id, Object.assign({}, body, { confirm: body.confirm === true, ownerEmail: req.user.email_confirmed_at ? req.user.email : null }));
     res.json({ ok: true, message: sent, mailbox: await mail.snapshot(req.user.id, { folder: 'sent' }) });
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));

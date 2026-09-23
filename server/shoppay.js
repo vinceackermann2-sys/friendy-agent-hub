@@ -661,62 +661,26 @@ async function completePurchase(userId, { merchant, checkoutId, confirm } = {}) 
     title, status: current.status === 'ready_for_complete' ? 'authorized' : 'pending',
   }, limit);
 
-  if (current.status === 'requires_escalation' || current.status === 'incomplete' || !shopTokenFromRow(row)) {
-    await store.updateShopPayOrder(userId, reserved.id, {
-      status: 'escalated', continueUrl: current.continueUrl || null,
-    });
-    return {
-      status: 'needs_buyer',
-      method: 'shop_pay',
-      merchant: host,
-      amount,
-      currency: current.currency || 'USD',
-      checkoutId: id,
-      continueUrl: current.continueUrl || null,
-      messages: current.messages || [],
-      orderId: reserved.id,
-      note: current.continueUrl
-        ? 'Open continueUrl to finish with Shop Pay on the merchant checkout. Card numbers stay in Shop Pay.'
-        : 'Merchant needs more buyer input before this can be completed.',
-    };
-  }
-
-  try {
-    const token = await bearerFor(userId, { resourceHost: host, scope: 'openid dev.ucp.shopping.checkout:manage', allowApp: false });
-    const out = await mcpCall('https://' + host + '/api/ucp/mcp', 'complete_checkout', {
-      meta: Object.assign({ 'idempotency-key': crypto.randomBytes(16).toString('hex') }, mcpMeta()),
-      id,
-      checkout: { payment: { instruments: [{ handler_id: 'shop_pay', type: 'shop_pay', selected: true }] } },
-    }, token);
-    const pub = publicCheckout(out, host);
-    if (pub.status === 'completed') {
-      await store.updateShopPayOrder(userId, reserved.id, {
-        status: 'completed', orderId: pub.orderId, continueUrl: pub.continueUrl || null,
-      });
-      return { status: 'completed', method: 'shop_pay', merchant: host, amount, currency: pub.currency, checkoutId: id, orderId: pub.orderId, orderUrl: pub.orderUrl };
-    }
-    if (pub.status === 'requires_escalation' || pub.continueUrl) {
-      await store.updateShopPayOrder(userId, reserved.id, { status: 'escalated', continueUrl: pub.continueUrl || null });
-      return { status: 'needs_buyer', method: 'shop_pay', merchant: host, amount, currency: pub.currency, checkoutId: id, continueUrl: pub.continueUrl, orderId: reserved.id, messages: pub.messages };
-    }
-    await store.updateShopPayOrder(userId, reserved.id, { status: pub.status || 'authorized', continueUrl: pub.continueUrl || null, orderId: pub.orderId });
-    return { status: pub.status || 'pending', method: 'shop_pay', merchant: host, amount, currency: pub.currency, checkoutId: id, continueUrl: pub.continueUrl, orderId: pub.orderId || reserved.id };
-  } catch (e) {
-    await store.updateShopPayOrder(userId, reserved.id, {
-      status: 'escalated', error: String(e.message || 'complete failed').slice(0, 200), continueUrl: current.continueUrl || null,
-    });
-    return {
-      status: 'needs_buyer',
-      method: 'shop_pay',
-      merchant: host,
-      amount,
-      currency: current.currency || 'USD',
-      checkoutId: id,
-      continueUrl: current.continueUrl || null,
-      orderId: reserved.id,
-      note: 'Could not complete in-app. Finish with Shop Pay via continueUrl. ' + String(e.message || '').slice(0, 160),
-    };
-  }
+  // SECURITY: the server never completes a charge on the buyer's behalf.
+  // The buyer always finishes payment in Shop Pay on the merchant checkout,
+  // where Shop Pay authenticates them directly.
+  await store.updateShopPayOrder(userId, reserved.id, {
+    status: 'escalated', continueUrl: current.continueUrl || null,
+  });
+  return {
+    status: 'needs_buyer',
+    method: 'shop_pay',
+    merchant: host,
+    amount,
+    currency: current.currency || 'USD',
+    checkoutId: id,
+    continueUrl: current.continueUrl || null,
+    messages: current.messages || [],
+    orderId: reserved.id,
+    note: current.continueUrl
+      ? 'Open continueUrl to finish with Shop Pay on the merchant checkout. Card numbers stay in Shop Pay.'
+      : 'Merchant needs more buyer input before this can be completed.',
+  };
 }
 
 async function getOrder(userId, { merchant, orderId } = {}) {
