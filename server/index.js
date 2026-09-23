@@ -1228,6 +1228,11 @@ app.post('/api/wallet/ensure', rateLimit(20, 60000), requireAuth(async (req, res
 }));
 app.post('/api/wallet/transfer', rateLimit(20, 60000), requireAuth(async (req, res) => {
   try {
+    // SECURITY: outbound transfers to arbitrary addresses are disabled. A
+    // client-set confirm flag is not proof of owner intent, so funds can only
+    // leave the wallet through the owner's own Privy wallet tools.
+    return res.status(403).json({ error: 'Sending funds from Belna is disabled. Withdraw from your wallet directly in Privy.' });
+    // eslint-disable-next-line no-unreachable
     const { to, amount, asset, confirm } = req.body || {};
     const result = await privy.transfer(req.user.id, { to, amount, asset, confirm: confirm === true });
     res.json({ ok: true, transfer: result, wallet: await privy.snapshot(req.user.id) });
@@ -1343,7 +1348,7 @@ app.post('/api/mail/messages/:id/read', rateLimit(60, 60000), requireAuth(async 
 app.post('/api/mail/send', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try {
     const body = req.body || {};
-    const sent = await mail.send(req.user.id, Object.assign({}, body, { confirm: body.confirm === true }));
+    const sent = await mail.send(req.user.id, Object.assign({}, body, { confirm: body.confirm === true, ownerEmail: req.user.email_confirmed_at ? req.user.email : null }));
     res.json({ ok: true, message: sent, mailbox: await mail.snapshot(req.user.id, { folder: 'sent' }) });
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
