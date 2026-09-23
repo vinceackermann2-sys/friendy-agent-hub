@@ -9,7 +9,7 @@
 */
 import { createApp } from './express-shim.js';
 import { transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT, TRANSCRIPTION_MODEL, IMAGE_MODEL } from './foundry.js';
-import { PLANS, costOf, creditsForGiftUsd } from './plans.js';
+import { PLANS, costOf, creditsForGiftUsd, REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH } from './plans.js';
 import * as store from './store.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
 import { rankMemories, maybeExtract } from './agents/memory.js';
@@ -352,6 +352,27 @@ app.post('/api/billing/redeem', requireAuth(async (req, res) => {
   const r = await store.redeemGift(req.user.id, (req.body || {}).code);
   if (!r.ok) return res.status(400).json({ error: r.error });
   res.json({ ok: true, amount: r.amount, credits: r.credits, billing: await billingFor(req.user.id) });
+}));
+app.get('/api/referrals/mine', requireAuth(async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const stats = await store.referralStats(req.user.id);
+    const origin = (process.env.SITE_URL || 'https://belna.se').replace(/\/$/, '');
+    res.json({
+      ok:true, code:stats.code, link:origin + '/app?ref=' + encodeURIComponent(stats.code),
+      invited:stats.invited, earnedCredits:stats.earnedCredits, rewardEach:stats.rewardEach,
+      totalUsd:REFERRAL_TOTAL_USD, eachUsd:REFERRAL_GIFT_USD_EACH,
+    });
+  } catch { res.status(503).json({ error:'Referral service is unavailable.' }); }
+}));
+app.post('/api/referrals/redeem', requireAuth(async (req, res) => {
+  try {
+    const result = await store.redeemReferral(req.user.id, (req.body || {}).code);
+    if (!result.ok) return res.status(400).json({ error:result.error });
+    let billing = null;
+    try { billing = await billingFor(req.user.id); } catch {}
+    res.json({ ...result, billing });
+  } catch { res.status(503).json({ error:'Referral service is unavailable.' }); }
 }));
 app.post('/api/billing/checkout', requireAuth(async (req, res) => {
   res.status(501).json({ error: 'Checkout runs on the main backend — this edge port records requests only. Use POST /api/billing/upgrade.' });
