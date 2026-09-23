@@ -15,15 +15,117 @@ import * as mail from '../mail.js';
 import * as shoppay from '../shoppay.js';
 import { execInSandbox, isAzureConfigured } from './azure-vm.js';
 import { generateImage } from '../foundry.js';
+import { PLANS } from '../plans.js';
+
+// Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
+const foldText = (text) => String(text || '').toLowerCase().replace(/ø/g,'o').replace(/æ/g,'ae').replace(/ß/g,'ss').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+
+// Web search runs on Firecrawl (FIRECRAWL_API_KEY, managed through Lovable).
+// This copy has no direct page reader, so Firecrawl returns the text of the top
+// results (1 credit each) except in quick chat lookups, which use snippets.
+const FIRECRAWL_API = 'https://api.firecrawl.dev/v2';
+const SEARCH_COUNTRIES = new Set(['US','GB','SE','NO','DK','FI','DE','FR','ES','NL','IT','PT','PL','AT','CH','BE','IE','CA','AU','NZ']);
+const firecrawlKey = () => String(process.env.FIRECRAWL_API_KEY || '').trim();
+async function searchWeb(query, { country } = {}, ctx) {
+  const q = String(query).slice(0, 400);
+  if (!firecrawlKey()) {
+    const u = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(q.slice(0, 300)) + '&format=json&no_html=1&skip_disambig=1';
+    const r = await fetchAllowlisted(u, { signal: ctx.signal });
+    return { url: u, provider: 'duckduckgo', text: instantAnswer(await r.text()) };
+  }
+  const body = { query: q, limit: ctx.quick ? 8 : 5, sources: ['web'] };
+  if (!ctx.quick) body.scrapeOptions = { formats: ['markdown'], onlyMainContent: true };
+  const cc = String(country || '').toUpperCase();
+  if (SEARCH_COUNTRIES.has(cc)) body.country = cc;
+  const timeout = AbortSignal.timeout(ctx.quick ? 15000 : 45000);
+  const r = await fetch(FIRECRAWL_API + '/search', { method: 'POST', redirect: 'error',
+    headers: { Authorization: 'Bearer ' + firecrawlKey(), 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body), signal: ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok || json.success === false) throw new Error('Firecrawl search failed: ' + String(json.error || 'HTTP ' + r.status).slice(0, 200));
+  const seen = new Set();
+  const results = (json.data?.web || []).filter((item) => item.url && !seen.has(item.url) && seen.add(item.url)).slice(0, 8)
+    .map((item) => ({ title: String(item.title || '').slice(0, 200), url: item.url, snippet: String(item.description || '').slice(0, 400), text: item.markdown ? String(item.markdown).slice(0, 1800) : undefined }));
+  const text = results.length ? JSON.stringify({ results }) : JSON.stringify({ note: 'No results found for this query.' });
+  return { url: 'search:' + q, provider: 'firecrawl', text };
+}
+
+// DuckDuckGo instant answers arrive as verbose JSON; keep only what a model can use.
+function instantAnswer(raw) {
+  let json;
+  try { json = JSON.parse(raw); } catch { return raw; }
+  const topics = (json.RelatedTopics || []).flatMap((t) => t.Topics || [t]).filter((t) => t.Text).slice(0, 8);
+  const out = { heading:json.Heading || undefined, answer:json.Answer || undefined, abstract:json.AbstractText || undefined,
+    source:json.AbstractURL || undefined, definition:json.Definition || undefined, related:topics.map((t) => ({ text:t.Text, url:t.FirstURL })) };
+  if (!out.answer && !out.abstract && !out.definition && !topics.length) return JSON.stringify({ note:'No instant answer found for this query.' });
+  return JSON.stringify(out);
+}
+
+const BROWSER_ACTIONS = new Set(['click', 'double_click', 'right_click', 'click_text', 'hover', 'type', 'key', 'scroll', 'select', 'drag', 'back', 'forward', 'reload', 'wait']);
+const badInput = (message) => Object.assign(new Error(message), { code: 'BAD_INPUT' });
+const inViewport = (x, y) => Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1280 && y >= 0 && y <= 900;
+const elementRef = (value) => (value == null || value === '' ? null : Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : NaN);
+// Validates a model browser action into a relay input event. Agent events are
+// marked so the VM moves the pointer visibly and refuses password and payment fields.
+function browserEvent(args) {
+  const type = String(args.type || '');
+  if (!BROWSER_ACTIONS.has(type)) throw badInput('Unsupported browser action.');
+  const event = { type, agent: true };
+  const ref = elementRef(args.ref);
+  if (Number.isNaN(ref)) throw badInput('ref must be an element number from the latest page state.');
+  if (ref) event.ref = ref;
+  else if (args.x != null || args.y != null) {
+    if (!inViewport(args.x, args.y)) throw badInput('Coordinates must be inside the 1280x900 browser viewport.');
+    event.x = args.x; event.y = args.y;
+  }
+  const targeted = ref || event.x != null;
+  if (['click', 'double_click', 'right_click', 'hover', 'select'].includes(type) && !targeted) throw badInput(`${type} needs a ref, or x and y.`);
+  if (type === 'click_text') {
+    event.text = String(args.text || '').slice(0, 200);
+    if (!event.text) throw badInput('click_text needs the visible text.');
+  } else if (type === 'type') {
+    event.text = String(args.text ?? '').slice(0, 1000);
+    if (!event.text && args.clear !== true) throw badInput('type needs text.');
+    event.clear = args.clear === true;
+    event.submit = args.submit === true;
+  } else if (type === 'key') {
+    event.key = String(args.key || 'Escape').slice(0, 40);
+  } else if (type === 'scroll') {
+    for (const axis of ['dx', 'dy']) {
+      if (args[axis] == null) continue;
+      if (!Number.isFinite(args[axis]) || Math.abs(args[axis]) > 5000) throw badInput('Invalid scroll distance.');
+      event[axis] = args[axis];
+    }
+  } else if (type === 'select') {
+    if (!ref) throw badInput('select needs the ref of a dropdown.');
+    event.value = String(args.value ?? args.text ?? '').slice(0, 200);
+  } else if (type === 'drag') {
+    const toRef = elementRef(args.to_ref);
+    if (Number.isNaN(toRef)) throw badInput('to_ref must be an element number.');
+    if (!targeted) throw badInput('drag needs a start ref, or x and y.');
+    if (toRef) event.to_ref = toRef;
+    else if (inViewport(args.to_x, args.to_y)) { event.to_x = args.to_x; event.to_y = args.to_y; }
+    else throw badInput('drag needs to_ref, or to_x and to_y inside the viewport.');
+  } else if (type === 'wait') {
+    if (args.text) event.text = String(args.text).slice(0, 200);
+    else event.ms = Math.min(10000, Math.max(0, Number(args.ms) || 1000));
+  }
+  return event;
+}
 
 const CAPABILITY_ALIASES = {
   mejl:'email mail inbox', epost:'email mail inbox', kalender:'calendar schedule',
   minne:'memory remember', glom:'forget memory', webb:'web browser search',
   sok:'search find', fil:'file workspace', kod:'code script', kop:'buy shop purchase',
   betala:'pay payment shop', automatisera:'automation schedule trigger',
+  webblasare:'web browser', surfa:'web browser', boka:'book browser form', formular:'form browser',
+  nettleser:'web browser', bestill:'book browser shop', husk:'memory remember', glem:'forget memory',
+  suche:'search find', suchen:'search find', buchen:'book browser form', datei:'file workspace',
+  recherche:'search find', chercher:'search find', navigateur:'web browser', reserver:'book browser form', fichier:'file workspace',
+  buscar:'search find', navegador:'web browser', reservar:'book browser form', archivo:'file workspace', correo:'email mail inbox',
 };
 function capabilityTerms(query) {
-  const raw=String(query || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const raw=foldText(query);
   const terms=raw.replace(/[^a-z0-9_\s-]/g,' ').split(/\s+/).filter(Boolean);
   return [...new Set(terms.flatMap(term=>[term,...String(CAPABILITY_ALIASES[term] || '').split(/\s+/).filter(Boolean)]))];
 }
@@ -46,11 +148,21 @@ const TOOLS = {
   },
   web_search: {
     name: 'web_search', type: 'web_search', approval: false,
-    description: 'Search the public web or fetch allowlisted public sources.',
-    run: async ({ query, urls = [] }, ctx) => {
-      const targets=query?[`https://api.duckduckgo.com/?q=${encodeURIComponent(String(query).slice(0,300))}&format=json&no_html=1&skip_disambig=1`]:urls;
-      if(!targets.length)throw Object.assign(new Error('A search query or URL is required.'),{code:'BAD_INPUT'});
-      return Promise.all(targets.slice(0, 4).map(async (u) => {
+    description: 'Search the public web (results include text extracted from the pages) or fetch allowlisted public sources.',
+    run: async ({ query, urls = [], country, language }, ctx) => {
+      if (query) {
+        const t0 = Date.now();
+        try {
+          const out = await searchWeb(query, { country }, ctx);
+          ctx.trace(entry('globe', `web_search: ${out.provider} · ${Date.now() - t0}ms`));
+          return [{ url: out.url, ok: true, text: out.text.slice(0, 12000) }];
+        } catch (e) {
+          ctx.trace(entry('alert', `web_search failed: ${e.message}`));
+          return [{ url: `search:${String(query).slice(0, 100)}`, ok: false, error: e.message }];
+        }
+      }
+      if (!urls.length) throw Object.assign(new Error('A search query or URL is required.'), { code:'BAD_INPUT' });
+      return Promise.all(urls.slice(0, 4).map(async (u) => {
         const t0 = Date.now();
         try {
           const r = await fetchAllowlisted(u, { signal: ctx.signal });
@@ -161,25 +273,22 @@ const TOOLS = {
   },
   browser_action: {
     name: 'browser_action', type: 'browser', approval: false,
-    description: 'Click or scroll the current Azure VM browser page.',
+    description: 'Use the current browser page like a person: click, double_click, right_click, hover, type, key, scroll, select, drag, back, forward, reload, wait. Target elements by ref from the latest page state, or by x,y from the screenshot.',
     run: async (args, ctx) => {
-      const type = String(args.type || '');
-      if (!['click', 'click_text', 'scroll', 'type', 'key'].includes(type)) throw Object.assign(new Error('Unsupported browser action.'), { code: 'BAD_INPUT' });
-      const event = { type };
-      if (type === 'click') {
-        if (!Number.isFinite(args.x) || !Number.isFinite(args.y) || args.x < 0 || args.x > 1280 || args.y < 0 || args.y > 900) throw Object.assign(new Error('Click coordinates must be inside the browser viewport.'), { code: 'BAD_INPUT' });
-        event.x = args.x; event.y = args.y;
-      } else if (type === 'scroll') {
-        if (!Number.isFinite(args.dy) || Math.abs(args.dy) > 3000) throw Object.assign(new Error('Invalid scroll distance.'), { code: 'BAD_INPUT' });
-        event.dy = args.dy;
-      } else if (type === 'click_text') {
-        event.text = String(args.text || '').slice(0, 200);
-        if (!event.text) throw Object.assign(new Error('Browser action text required.'), { code: 'BAD_INPUT' });
-      } else if(type==='type'){
-        event.text=String(args.text || '').slice(0,1000);if(!event.text)throw Object.assign(new Error('Text required.'),{code:'BAD_INPUT'});
-      } else if(type==='key')event.key=String(args.key || 'Escape').slice(0,40);
+      const event = browserEvent(args || {});
       const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
-      ctx.trace(entry('globe', `browser_action: ${type} on ${out.vmName}`));
+      ctx.trace(entry('globe', `browser_action: ${event.type} on ${out.vmName}`));
+      return out;
+    },
+  },
+  browser_submit: {
+    name: 'browser_submit', type: 'browser', approval: true,
+    description: 'The final click or key press that buys, pays, books, sends, posts, deletes or changes account settings on a website. Same arguments as browser_action plus a summary. REQUIRES owner approval.',
+    run: async (args, ctx) => {
+      const event = browserEvent(args || {});
+      if (!String(args.summary || '').trim()) throw badInput('browser_submit needs a summary of what the action will do.');
+      const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      ctx.trace(entry('globe', `browser_submit: ${event.type} on ${out.vmName}`));
       return out;
     },
   },
@@ -245,7 +354,17 @@ const TOOLS = {
     name: 'image_generate', type: 'image', approval: false,
     description: 'Create a new image with GPT Image 2 and return it as a PNG file in Canvas.',
     run: async ({ prompt, size, quality, background }, ctx) => {
-      const out = await generateImage({ prompt, size, quality, background, signal: ctx.signal });
+      const sub = await store.getSubscription(ctx.userId);
+      const paid = ['active','canceling','trialing'].includes(sub.status)
+        && (!sub.current_period_end || new Date(sub.current_period_end).getTime() > Date.now());
+      const plan = paid && PLANS[sub.plan] ? sub.plan : 'free';
+      const claimId = await store.claimTokenDaily(ctx.userId, 'image', PLANS[plan].imagesPerDay);
+      if (!claimId) throw Object.assign(new Error('Your daily image limit or token allowance is used up.'), { code: 'NO_CREDIT' });
+      let out;
+      try { out = await generateImage({ prompt, size, quality, background, signal: ctx.signal }); }
+      catch (error) { await store.releaseTokenDaily(ctx.userId, claimId); throw error; }
+      await store.logUsage(ctx.userId, { model: out.model, usage: out.usage, cost: out.costUsd,
+        usageEstimated: out.usageEstimated, claimId });
       ctx.trace(entry('image', `image_generate: ${out.name}`));
       return out;
     },
@@ -386,23 +505,38 @@ const TOOLS = {
 };
 
 // Tool search: load only relevant definitions for the task (token saving).
+// Keywords cover English, Swedish, Norwegian, Danish, German, French and Spanish,
+// matched against foldText output, so stems are ASCII. capability_search still
+// covers anything these patterns miss.
+const TOOL_KEYWORDS = {
+  memory: /(remember|memory|memories|forget|forgot|correct that|actually|used to|no longer|kom ihag|minns|minne|glom|husk|glem|merk dir|erinner|vergiss|gedachtnis|souviens|rappelle-toi|oublie|memoire|recuerda|olvida|memoria)/,
+  apps: /(gmail|slack|calendar|kalender|calendrier|calendario|agenda|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket|arende)/,
+  mail: /(email|e-mail|e-post|epost|inbox|inkorg|innboks|indbakke|posteingang|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl|courriel|boite de reception|correo)/,
+  page: /(build|landing|page|site|website|dashboard|bygg|webbsida|hemsida|landningssida|nettside|hjemmeside|webseite|pagina|sitio)/,
+  image: /(generate|create|make|draw|design|skapa|gor|rita|generera|designa|lag|tegn|erstell|zeichne|generier|genere|cree|creer|dessine|crea|dibuja|genera).{0,30}(image|picture|photo|illustration|artwork|logo|bild|foto|logga|logotyp|bilde|billede|dessin|imagen|dibujo|ilustracion)|\b(image|picture|photo|illustration)\s+(?:of|for)\b/,
+  browser: /(browse|browser|website|web page|fill|form|book|reservation|sign in|log in|surfa|webblasare|webbsida|hemsida|fyll i|formular|boka|reserv|logga in|nettleser|nettside|hjemmeside|skjema|bestill|logg inn|log ind|webseite|ausfull|buchen|anmeld|einlogg|navigat|site web|formulaire|rempli|connecte|connexion|naveg|sitio web|pagina web|formulario|rellen|inicia sesion|inicie sesion)/,
+  code: /(code|script|terminal|shell|file|workspace|python|javascript|debug|compile|install|kod|skript|fil\b|filen|filer|datei|programm|fichier|codigo|archivo|instala)/,
+  history: /(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous|igar|i gar|forra veckan|senast|vi pratade|diskuterade|tidigare|forrige uke|sidste uge|snakket|talte om|tidligere|gestern|letzte woche|besprochen|vorhin|la semaine derniere|on a parle|discute|precedent|ayer|la semana pasada|hablamos|discutimos|anterior)/,
+  triggers: /(trigger|watch|schedule|recurring|every (?:hour|day|week)|sub.?agent|automation|schemalagg|varje (?:timme|dag|vecka)|aterkommande|bevaka|automatiser|paminn|hver (?:time|dag|uke|uge)|overvak|zeitplan|jede (?:stunde|woche)|jeden tag|wiederkehrend|automatisier|uberwach|chaque (?:heure|jour|semaine)|planifi|recurren|automatis|surveill|cada (?:hora|dia|semana)|programa|automatiz|vigila)/,
+  shop: /(shop pay|shopify|shop_pay|\bshop\b|catalog|checkout|order|merchant|butik|bestall|kassa|bestell|kasse|boutique|commande|panier|marchand|tienda|pedido|carrito)/,
+  wallet: /(wallet|pay|payment|transfer|usdc|\beth\b|invoice|payout|spend|debit card|virtual card|buy |purchase|planbok|betal|overfor|faktura|kop |lommebok|tegnebog|geldborse|bezahl|zahlung|uberweis|rechnung|kaufe|portefeuille|paie|paiement|virement|facture|achet|billetera|cartera|pago|paga|transferencia|factura|compra)/,
+};
 function pickTools(task) {
-  const t = String(task || '').toLowerCase();
-  const names = new Set(['memory_write','capability_search']);
-  if (/(remember|memory|memories|forget|forgot|correct that|actually|used to|no longer)/.test(t)) { names.add('memory_search'); names.add('memory_get'); names.add('memory_update'); names.add('memory_delete'); }
-  if (/(research|investigat|social|poll|sentiment|news|search|find)/.test(t)) names.add('web_search');
-  if (/(gmail|slack|calendar|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket)/.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); }
-  if (/(email|e-mail|inbox|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl)/.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
-  if (/(build|landing|page|site|website|dashboard)/.test(t)) names.add('build_page');
-  if (/(generate|create|make|draw|design).{0,30}(image|picture|photo|illustration|artwork|logo)|\b(image|picture|photo|illustration)\s+(?:of|for)\b/.test(t)) names.add('image_generate');
-  if (/(browse|browser|website|web page|fill|form|book|reservation|sign in|log in)/.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('computer_screenshot'); }
-  if (/(code|script|terminal|shell|file|workspace|python|javascript|debug|compile|install)/.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
-  if (/(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous)/.test(t)) names.add('history_search');
-  if (/(trigger|watch|schedule|recurring|every (?:hour|day|week)|sub.?agent|automation)/.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
-  const shopRequest = /(shop pay|shopify|shop_pay|\bshop\b|catalog|checkout|order|merchant)/.test(t);
+  const t = foldText(task);
+  // web_search is read-only and cheap, so every task can look things up.
+  const names = new Set(['memory_write','capability_search','web_search']);
+  if (TOOL_KEYWORDS.memory.test(t)) { names.add('memory_search'); names.add('memory_get'); names.add('memory_update'); names.add('memory_delete'); }
+  if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); }
+  if (TOOL_KEYWORDS.mail.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
+  if (TOOL_KEYWORDS.page.test(t)) names.add('build_page');
+  if (TOOL_KEYWORDS.image.test(t)) names.add('image_generate');
+  if (TOOL_KEYWORDS.browser.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('browser_submit'); names.add('computer_screenshot'); }
+  if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
+  if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
+  if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
+  const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
-  if (!shopRequest && /(wallet|pay|payment|transfer|usdc|\beth\b|invoice|payout|spend|debit card|virtual card|buy |purchase)/.test(t)) { names.add('wallet_status'); names.add('wallet_transfer'); names.add('wallet_purchase'); }
-  if (names.size === 2) names.add('web_search'); // default research capability
+  if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('wallet_status'); names.add('wallet_transfer'); names.add('wallet_purchase'); }
   return [...names].map((n) => TOOLS[n]);
 }
 

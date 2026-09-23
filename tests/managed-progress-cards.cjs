@@ -5,8 +5,9 @@ const source=fs.readFileSync(require.resolve('../app/app.js'),'utf8');
 const start=source.indexOf('const managedRunTokens = new WeakMap();');
 const end=source.indexOf('\nfunction replaceNode(c, m){',start);
 let nextId=0;
+const narrated=[];
 const context=vm.createContext({WeakMap,Promise,state:{agent:{name:'Agent'},vault:{},memory:[]},uid:()=>`id-${++nextId}`,isActive:()=>false,
-  $:()=>null,msgNode:()=>null,replaceNode:()=>{},save:()=>{},setTimeout:()=>{throw Error('Cards must not use timers');}});
+  noteActivity:(c,t)=>narrated.push(t),$:()=>null,msgNode:()=>null,replaceNode:()=>{},save:()=>{},setTimeout:()=>{throw Error('Cards must not use timers');}});
 vm.runInContext(source.slice(start,end),context);
 const chat={id:'chat',messages:[{id:'old',kind:'card',card:{type:'progress',status:'done',label:'Earlier published update'}}]};
 const first=context.makeRT(chat);
@@ -14,6 +15,7 @@ first.managedEvent({type:'session',status:'running'});
 for(const stage of ['checking','model','tool','vm','approval'])first.managedEvent({type:'progress',stage,label:stage});
 first.managedEvent({type:'heartbeat'});
 assert.equal(chat.messages.length,1,'internal stages and heartbeat add no cards');
+assert.deepEqual(narrated,['checking','model','tool','vm','approval'],'internal stages narrate the header status instead');
 const task={id:'task',chatId:'chat',title:'Research',status:'running',version:1,revision:5,sequence:1,events:[{id:'milestone',seq:1,type:'card',card:{type:'progress',status:'done',label:'Found three suitable options'}}]};
 first.managedTask(task);
 first.managedTask(task);

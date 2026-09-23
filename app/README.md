@@ -54,7 +54,9 @@ in `localStorage`.
 
 ## Architecture
 
-- `mascot.js` — code-drawn recolorable **star** mascot (idle/happy/think/wave moods),
+- `mascot.js` — soft 3D **star** mascot: Blender-rendered body sprites in `mascot/`
+  (one ~10 KB WebP per palette colour, rebuilt with `blender -b -P design/mascot/build_mascot.py`)
+  with an SVG face on top (idle/happy/think/wave/wow moods, blinking),
   also used as logo and floating chat status avatar.
 - `engine.real.js` and `engine.managed.js` — browser adapters for the real
   server-side Gemini agent and managed task runtime. The server owns auth,

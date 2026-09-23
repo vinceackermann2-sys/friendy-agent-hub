@@ -65,6 +65,45 @@ async function main() {
   assert.match(verifier, /^[A-Za-z0-9_-]+$/);
   assert.equal(shoppay.pkceChallenge(verifier).length > 20, true);
 
+  // A stale deployment env pair must not override the registered OAuth pair
+  // stored on the server. Unknown clients must fail before browser redirect.
+  const store = require('../server/store');
+  const originalFetch = global.fetch;
+  const originalUpsert = store.upsertShopPayAccount;
+  const envNames = ['SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'SHOP_PAY_CLIENT_ID', 'SHOP_PAY_CLIENT_SECRET', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
+  const originalEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+  try {
+    process.env.SHOPIFY_CLIENT_ID = 'stale-catalog-client';
+    process.env.SHOPIFY_CLIENT_SECRET = 'stale-catalog-secret';
+    process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key';
+    store.upsertShopPayAccount = async () => ({});
+    global.fetch = async (url, init = {}) => {
+      const href = String(url);
+      if (href.endsWith('/rpc/get_server_secret')) {
+        const { p_name } = JSON.parse(init.body);
+        return Response.json(p_name === 'shopify_client_id' ? 'registered-shop-client' : 'registered-shop-secret');
+      }
+      if (href.endsWith('/.well-known/oauth-authorization-server')) {
+        return Response.json({ authorization_endpoint: 'https://accounts.shop.app/oauth/authorize', token_endpoint: 'https://accounts.shop.app/oauth/token' });
+      }
+      if (href.endsWith('/oauth/token')) {
+        const id = new URLSearchParams(init.body).get('client_id');
+        return Response.json({ error: id === 'registered-shop-client' ? 'invalid_grant' : 'invalid_client' }, { status: 400 });
+      }
+      throw new Error('Unexpected request: ' + href);
+    };
+    const connect = await shoppay.startConnect('user_test', { origin: 'https://belna.se' });
+    assert.equal(new URL(connect.url).searchParams.get('client_id'), 'registered-shop-client');
+    process.env.SHOP_PAY_CLIENT_ID = 'unregistered-shop-client';
+    process.env.SHOP_PAY_CLIENT_SECRET = 'unregistered-shop-secret';
+    await assert.rejects(shoppay.startConnect('user_test', { origin: 'https://belna.se' }), (e) => e.code === 'SHOP_CONFIG' && /does not recognize/.test(e.message));
+  } finally {
+    global.fetch = originalFetch;
+    store.upsertShopPayAccount = originalUpsert;
+    for (const name of envNames) originalEnv[name] === undefined ? delete process.env[name] : process.env[name] = originalEnv[name];
+  }
+
   console.log('shop pay: ok');
 }
 

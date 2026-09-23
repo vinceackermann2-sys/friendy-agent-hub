@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>STLM and Mini-SLA — Model cards | Belna Research</title>
-<meta name="description" content="Model cards for STLM and Mini-SLA: small models that reason. Matched Transformer baselines, negation results, and one downloadable training folder.">
-<meta name="keywords" content="STLM, Mini-SLA, model card, small language models, negation reasoning, topology embeddings, reproducible training">
+<meta name="description" content="Technical model cards for STLM and Mini-SLA: architecture, matched small-model protocol, measured perplexity and negation results, and limitations.">
+<meta name="keywords" content="STLM, Mini-SLA, model card, small language models, negation probes, topology embeddings, training protocol">
 <link rel="canonical" href="https://belna.se/research-stlm-sla">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,29 +15,31 @@
 <link rel="stylesheet" href="research.css">
 </head>
 <body class="rx">
-<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
 <main class="legal rx-page rx-article">
 <a class="rx-back" href="/research#research"><span class="arr">←</span> Research</a>
-<h1>Small models that actually reason</h1>
-<p class="rx-lede">Meaning axes, then an explicit memory — raced against a matched Transformer on one consumer GPU.</p>
+<h1>Semantic structure and explicit memory at small scale</h1>
+<p class="rx-lede">STLM and Mini-SLA compared with a Transformer baseline on language modelling, meaning alignment and targeted negation probes.</p>
 <p class="rx-byline">Small-scale programme · STLM · Mini-SLA · The Belna team</p>
 
 <div class="rx-prose">
-<p>A 20-million-parameter Transformer can finish a sentence. It cannot tell you that <i>hot</i> is the opposite of <i>cold</i>, or that <i>not open</i> means closed. Those failures are not a data problem. They are a representation problem.</p>
-<p>We ran two tiny architectures against a matched baseline, on a single consumer GPU, in minutes. First we pin words to meaning. Then we put negation in the architecture so the model does not need a hint at inference.</p>
+<p>This programme tests two ways to encode structure in small language models. STLM adds supervised semantic axes to a Transformer core. Mini-SLA adds shared recurrent computation, explicit entity memory and a negation router.</p>
+<p>Both are evaluated against a Transformer baseline on the reported WikiText-2 and templated-state mixture. The main outcomes are test perplexity, next-token accuracy, meaning correlation and two small targeted probe suites.</p>
 </div>
 
-<blockquote class="rx-pull">STLM understands opposites and still needs a nudge. Mini-SLA goes 35/35 on negation with zero help.</blockquote>
+<blockquote class="rx-pull">STLM reaches 35/35 on the negation probe only with an inference constraint. Mini-SLA reaches 35/35 without one; neither result establishes general reasoning beyond this probe.</blockquote>
 
 <nav class="rx-nav" aria-label="On this page">
-  <a href="#stlm">STLM</a><a href="#sla">Mini-SLA</a><a href="#protocol">Protocol</a><a href="#code">Download</a>
+  <a href="#stlm">STLM</a><a href="#sla">Mini-SLA</a><a href="#protocol">Shared protocol</a>
 </nav>
 
 <article class="rx-sec rx-chapter" id="stlm">
   <div class="rx-kicker">Model card 01</div>
   <h2>STLM</h2>
-  <p>Semantic Topology Language Model. Same Transformer core as the baseline, plus a topology classifier, a coordinate regressor, and one reusable axis embedding per meaning. Opposites live on opposite ends of an axis. The baseline files “hot” and “cold” as similar because they appear in similar sentences.</p>
+  <p class="rx-question"><strong>Research question.</strong> Can explicit semantic axes improve next-token prediction and distinguish antonyms in a small language model?</p>
+  <h3>Architecture</h3>
+  <p>Semantic Topology Language Model uses a Transformer core with a topology classifier, coordinate regressor and axis embedding. Its joint objective combines language-model loss with topology classification and seed-coordinate supervision, encouraging selected antonyms to occupy opposite ends of an axis.</p>
 
   <figure class="diagram" aria-hidden="true">
     <svg viewBox="0 0 840 230" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -59,10 +61,10 @@
       <rect x="684" y="86" width="132" height="58" rx="14" fill="#fff" stroke="#E7E7EA"/>
       <text x="750" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#17181A">LM logits</text>
     </svg>
-    <figcaption class="diagram-cap">Opposites live on opposite ends of an axis. The baseline files “hot” and “cold” as similar because they appear in similar sentences.</figcaption>
+    <figcaption class="diagram-cap">Auxiliary heads predict an axis and a coordinate for each supervised concept; those predictions train the embedding geometry.</figcaption>
   </figure>
 
-  <h3>Specs</h3>
+  <h3>Experimental setup</h3>
   <dl class="spec">
     <div><dt>Core</dt><dd>Matched Transformer + topology heads</dd></div>
     <div><dt>Axes</dt><dd>Temperature, size, brightness, speed, door, truth, life</dd></div>
@@ -70,9 +72,11 @@
     <div><dt>Inference</dt><dd>Optional constraint bias along learned axes</dd></div>
     <div><dt>Alignment</dt><dd>98.3% topology accuracy</dd></div>
     <div><dt>Budget</dt><dd>Consumer GPU · minutes</dd></div>
+    <div><dt>Comparison</dt><dd>Transformer baseline on the shared split, seed 42 and 35-item negation probe below</dd></div>
   </dl>
 
   <h3>Results</h3>
+  <p>Plain test perplexity is 80.89 versus 111.45 for the baseline; Pearson correlation on 30 meaning pairs is 0.957 versus −0.069. The 35-item negation probe is solved only with an inference-time constraint.</p>
   <div class="stat-row">
     <div class="stat-pill win"><span class="val">80.89</span><span class="lab">STLM PPL</span></div>
     <div class="stat-pill lose"><span class="val">111.45</span><span class="lab">Baseline PPL</span></div>
@@ -96,15 +100,17 @@
   <p class="fineprint">Constraints only work because training aligned embeddings to axes — the same bias on the baseline stays at 0/35.</p>
 
   <div class="verdict">
-    <h3>Geometry for meaning, help still needed</h3>
-    <p>STLM’s vector space understands opposites. Negation still needs the constraint bias at inference (0/35 plain). Grammar stays with the Transformer. That is the gap the next model is for.</p>
+    <h3>Interpretation and limitations</h3>
+    <p>Auxiliary semantic supervision improves the reported correlation and plain perplexity, but the plain model solves 0/35 negation probes. The 35/35 result requires an inference-time bias, while grammar agreement is 40/50 versus 46/50 for the baseline. The 30-pair correlation and 35-item negation sets are narrow probes.</p>
   </div>
 </article>
 
 <article class="rx-sec rx-chapter" id="sla">
   <div class="rx-kicker">Model card 02</div>
   <h2>Mini-SLA</h2>
-  <p>Geometry can hold meaning and still need a hint. Mini-SLA puts negation in the architecture instead. One Transformer layer, applied four times, wrapped around an explicit key-value memory with ten entity slots. A symbolic router flips retrieval when <i>not</i> is in play. Memory is a database. Compute is a loop. Negation is a switch — which is why SLA needs no constraint injection.</p>
+  <p class="rx-question"><strong>Research question.</strong> Can an explicit memory and negation router solve the same probes without an inference-time constraint?</p>
+  <h3>Architecture</h3>
+  <p>Mini-SLA applies one Transformer layer four times with shared weights. It reads and writes a ten-slot key-value entity memory. A symbolic router blends a memory read with its negated value when the negation path fires, so this probe does not require an inference-time constraint.</p>
 
   <figure class="diagram" aria-hidden="true">
     <svg viewBox="0 0 840 230" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -126,10 +132,10 @@
       <rect x="640" y="86" width="176" height="58" rx="14" fill="#E9F4EE" stroke="#BFE0CC"/>
       <text x="728" y="120" text-anchor="middle" font-family="Hanken Grotesk,sans-serif" font-size="13" font-weight="800" fill="#3E8E5A">35 / 35 negation</text>
     </svg>
-    <figcaption class="diagram-cap">Memory is a database. Compute is a loop. Negation is a switch — which is why SLA needs no constraint injection.</figcaption>
+    <figcaption class="diagram-cap">Shared computation loops over the token representation; a ten-slot memory and negation router provide an explicit path for the targeted probe.</figcaption>
   </figure>
 
-  <h3>Specs</h3>
+  <h3>Experimental setup</h3>
   <dl class="spec">
     <div><dt>Parameters</dt><dd>11,281,469 vs baseline 11,217,337 (±0.6%)</dd></div>
     <div><dt>Depth</dt><dd>1 layer × 4 recurrent passes</dd></div>
@@ -137,9 +143,11 @@
     <div><dt>Router</dt><dd>Blends read with −read when negation fires</dd></div>
     <div><dt>Loss</dt><dd>Plain language-model loss only</dd></div>
     <div><dt>Train time</dt><dd>567.8 s vs 498.3 s baseline</dd></div>
+    <div><dt>Comparison</dt><dd>11,217,337-parameter, four-layer Transformer on the shared split and probes below</dd></div>
   </dl>
 
   <h3>Results</h3>
+  <p>Mini-SLA reaches 63.89 test perplexity versus 111.45 for the baseline and solves all 35 negation probes with no inference constraint. Training takes 69.5 seconds longer and grammar agreement remains lower.</p>
   <div class="stat-row">
     <div class="stat-pill win"><span class="val">63.89</span><span class="lab">SLA PPL</span></div>
     <div class="stat-pill lose"><span class="val">111.45</span><span class="lab">Baseline PPL</span></div>
@@ -169,22 +177,22 @@
       <tr><td>Mini-SLA (d=128)</td><td class="hl">10,252,969</td><td class="hl">230.36</td><td class="hl">20.09%</td></tr>
     </tbody>
   </table></div>
-  <p class="fineprint">At ~10M params and 8 epochs the simpler baseline converges faster on raw prediction. Matched, fully-run comparisons above are the headline.</p>
+  <p class="fineprint">These saved checkpoints use different parameter counts and training budgets from the matched results above; they are diagnostic snapshots, not a controlled three-way comparison.</p>
 
   <div class="verdict">
-    <h3>Negation is solvable at tiny scale</h3>
-    <p>SLA goes 35/35 with no inference help. Memory networks are harder to optimize, and grammar still sits with the Transformer. An idea that works at 11M earns its GPU budget at 100M.</p>
+    <h3>Interpretation and limitations</h3>
+    <p>Mini-SLA solves all 35 templated negation items without an inference constraint, but grammar agreement is 41/50 versus 46/50 for the baseline and training takes longer. The narrow probe cannot establish broad reasoning ability or predict behaviour at 100M parameters.</p>
     <ul>
-      <li><span class="mark yes">+</span><span>Explicit meaning halves perplexity versus matched baselines.</span></li>
-      <li><span class="mark yes">+</span><span>Only SLA reasons fully autonomously on negation.</span></li>
-      <li><span class="mark no">−</span><span>Grammar 41–40 / 50 vs 46 / 50. Syntax dips when you structure for meaning.</span></li>
+      <li><span class="mark yes">+</span><span>Lower reported test perplexity than the baseline: 63.89 versus 111.45.</span></li>
+      <li><span class="mark yes">+</span><span>35/35 on the targeted negation probe without inference-time constraints.</span></li>
+      <li><span class="mark no">−</span><span>Grammar agreement is 41/50 versus 46/50; training takes 567.8 versus 498.3 seconds.</span></li>
     </ul>
   </div>
 </article>
 
 <div class="rx-sec" id="protocol">
   <h2>Shared protocol</h2>
-  <p>Same seed, same split, same probes. The only thing that changes is the architecture.</p>
+  <p>The reported comparison uses seed 42, an 85/5/10 train/validation/test split and the same probes. STLM also changes the training objective through its auxiliary supervision; Mini-SLA uses language-model loss alone. Perplexity is the exponential of mean token negative log-likelihood, so lower is better.</p>
   <div class="rx-grid">
     <div class="rx-box"><span class="num">25k+</span><p><b>Lines</b> — WikiText-2 + 214 state sentences + seed-graph negation templates</p></div>
     <div class="rx-box"><span class="num">42</span><p><b>Same seed</b> — AdamW 2e-4, batch 32, clip 1.0, 85/5/10 split</p></div>
@@ -193,28 +201,8 @@
   </div>
 </div>
 
-<div class="rx-sec" id="code">
-  <h2>Download the folder</h2>
-  <p>One package — STLM core, Mini-SLA core, shared train-and-probe loop. Unzip and run.</p>
-  <div class="pack">
-    <div class="pack-copy">
-      <h3>belna-stlm-sla</h3>
-      <p>The protocol from these cards, as a folder. Same classes, losses and hyperparameters as the reported runs.</p>
-      <div class="pack-actions">
-        <a class="btn small" href="/research-code/belna-stlm-sla.zip" download>Download folder (.zip)</a>
-      </div>
-    </div>
-    <div class="pack-tree">
-      <div class="dir">belna-stlm-sla/</div>
-      <div class="file">  README.md <span class="muted">setup + launch</span></div>
-      <div class="file">  stlm_core.py</div>
-      <div class="file">  sla_core.py</div>
-      <div class="file">  train_and_probe.py</div>
-    </div>
-  </div>
-</div>
 </main>
 
-<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 </body>
 </html>

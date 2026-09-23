@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TAM v3 and Cortex-S — Model cards | Belna Research</title>
-<meta name="description" content="Model cards for TAM v3 and Cortex-S: 100M hybrids trained on 2B tokens against a matched Transformer. Results, architecture, and one downloadable training folder.">
-<meta name="keywords" content="TAM v3, Cortex-S, model card, Transformer comparison, hybrid architecture, 100M parameters, reproducible training">
+<meta name="description" content="Technical model cards for TAM v3 and Cortex-S: architecture, matched 2B-token protocol, measured results and limitations against a 100M Transformer.">
+<meta name="keywords" content="TAM v3, Cortex-S, model card, Transformer comparison, hybrid architecture, 100M parameters, training protocol">
 <link rel="canonical" href="https://belna.se/research-100m">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,28 +15,30 @@
 <link rel="stylesheet" href="research.css">
 </head>
 <body class="rx">
-<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
 <main class="legal rx-page rx-article">
 <a class="rx-back" href="/research#research"><span class="arr">←</span> Research</a>
 <h1>Can a hybrid beat the Transformer?</h1>
-<p class="rx-lede">Two 100M designs with a running memory, raced on the same 2B tokens.</p>
+<p class="rx-lede">Two recurrent 100M architectures evaluated against a parameter-matched causal Transformer on a fixed 2B-token corpus.</p>
 <p class="rx-byline">100M programme · TAM v3 · Cortex-S · The Belna team</p>
 
 <div class="rx-prose">
-<p>The Transformer is the default because it is simple, fast, and good at quizzes. We asked a narrower question: if you give a model a <b>running memory</b> alongside attention, does the loss actually move?</p>
-<p>Two answers, same protocol. Each model is about 100 million parameters, trained on 2 billion tokens, against an identical Transformer. Same data mix. Same seed. Same H100. If the hybrid signal is real, it should show up twice.</p>
+<p>The experiment tests whether persistent state improves next-token likelihood at roughly fixed parameter count. TAM v3 combines causal attention with a diagonal affine scan; Cortex-S combines sparse experts, recurrent state and periodic full attention.</p>
+<p>Both architectures use the same frozen data mix, seed 8100, 512-token context and H100 setup as the Transformer baseline. We report language-model loss and perplexity for both hybrids, plus TAM v3 throughput, post-training and downstream probes.</p>
 </div>
 
-<blockquote class="rx-pull">Both hybrids beat a matched Transformer on loss. Predicting text is not the whole story — the Transformer is still about a third faster, and it still wins most quizzes.</blockquote>
+<blockquote class="rx-pull">Both hybrids record lower pretraining loss. TAM v3 takes about 33% longer wall-clock time and trails the baseline on four of five multiple-choice tasks.</blockquote>
 
 <nav class="rx-nav" aria-label="On this page">
-  <a href="#tam-v3">TAM v3</a><a href="#cortex-s">Cortex-S</a><a href="#protocol">Protocol</a><a href="#code">Download</a>
+  <a href="#tam-v3">TAM v3</a><a href="#cortex-s">Cortex-S</a><a href="#protocol">Shared protocol</a>
 </nav>
 
 <article class="rx-sec rx-chapter" id="tam-v3">
   <div class="rx-kicker">Model card 01</div>
   <h2>TAM v3</h2>
+  <p class="rx-question"><strong>Research question.</strong> Does a gated recurrent state lower language-model loss when parameter count, data and training budget match a causal Transformer?</p>
+  <h3>Architecture</h3>
   <p>Temporal Associative Memory: reduced-width causal attention and a diagonal affine scan run in parallel. A learned gate mixes them. About 55% of the signal goes through state.</p>
 
   <figure class="diagram" aria-hidden="true">
@@ -61,7 +63,7 @@
     <figcaption class="diagram-cap">Attention and the recurrent notebook update together. The gate learns to send about 55% of the signal through state.</figcaption>
   </figure>
 
-  <h3>Specs</h3>
+  <h3>Experimental setup</h3>
   <dl class="spec">
     <div><dt>Parameters</dt><dd>101,806,616 (Transformer: 101,803,520)</dd></div>
     <div><dt>Block</dt><dd>Attention ∥ diagonal affine scan, gated mix</dd></div>
@@ -69,11 +71,12 @@
     <div><dt>Data</dt><dd>2B tokens, identical mix and seed 8100</dd></div>
     <div><dt>Context</dt><dd>512 · GPT-2 tokenizer</dd></div>
     <div><dt>Hardware</dt><dd>H100 · bfloat16 · torch.compile · AdamW</dd></div>
+    <div><dt>Comparison</dt><dd>Matched 101,803,520-parameter Transformer; pretrain and post-train on the shared protocol below</dd></div>
   </dl>
   <p class="formula">output = 2 × ((1 − g) × attention + g × world_state)</p>
 
   <h3>Results</h3>
-  <p>Lower loss at every scale we tested. Not a faster model. Not a better quiz-taker.</p>
+  <p>Pretrain NLL falls by 0.0132 nats/token and perplexity by 0.19 versus the matched Transformer. The 100M run uses one seed; the 25M and 50M checks use three seeds each.</p>
   <div class="stat-row">
     <div class="stat-pill win"><span class="val">14.86</span><span class="lab">TAM PPL</span></div>
     <div class="stat-pill lose"><span class="val">15.05</span><span class="lab">Transformer PPL</span></div>
@@ -133,12 +136,12 @@
   <p class="fineprint">At 256 tokens, state tracking was +11.5 pp and needle retrieval +12.5 pp. The edge fades where full attention already holds the dependency.</p>
 
   <div class="verdict">
-    <h3>Real signal, not a breakthrough</h3>
+    <h3>Interpretation and limitations</h3>
     <p>The recurrent state helps language modelling. It does not yet buy wall-clock or quiz wins.</p>
     <ul>
       <li><span class="mark yes">+</span><span><b>Lower loss at every scale</b> we tested.</span></li>
       <li><span class="mark yes">+</span><span><b>Significant memory edge at 256 tokens.</b></span></li>
-      <li><span class="mark no">−</span><span>Transformer is <b>~⅓ faster</b> and wins 4 of 5 quizzes.</span></li>
+      <li><span class="mark no">−</span><span>TAM takes <b>~33% more wall-clock time</b> and loses 4 of 5 multiple-choice benchmarks.</span></li>
       <li><span class="mark no">−</span><span>No broad long-context win past 512.</span></li>
     </ul>
     <p style="margin-top:16px">Next: TAM v4 (cross-chunk state, novelty write gate) at small scale before more GPU budget. Scaling v3 past 100M is not justified on these numbers.</p>
@@ -148,7 +151,9 @@
 <article class="rx-sec rx-chapter" id="cortex-s">
   <div class="rx-kicker">Model card 02</div>
   <h2>Cortex-S</h2>
-  <p>One design can be a fluke. Cortex-S is a completely separate architecture on the same frozen 2B-token corpus: sparse mixture-of-experts, persistent recurrent state, full attention only every sixth layer. The rest ride the state. The write is tanh-bounded, so every step stays in a fixed range and is auditable by construction.</p>
+  <p class="rx-question"><strong>Research question.</strong> Does a separate sparse-expert and recurrent-state architecture reproduce the loss improvement under the same 2B-token protocol?</p>
+  <h3>Architecture</h3>
+  <p>Cortex-S combines top-2 routing across eight feed-forward experts with a 128-value recurrent state per layer. Full causal attention appears when <code>layer_id % 6 == 0</code>; the remaining layers use experts and state. A tanh-bounded write limits the range of the recurrent update.</p>
 
   <figure class="diagram" aria-hidden="true">
     <svg viewBox="0 0 840 210" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -175,17 +180,19 @@
     <figcaption class="diagram-cap">State write is tanh-bounded, so every step stays in a fixed range and is auditable by construction.</figcaption>
   </figure>
 
-  <h3>Specs</h3>
+  <h3>Experimental setup</h3>
   <dl class="spec">
     <div><dt>Parameters</dt><dd>101,778,112</dd></div>
     <div><dt>Experts</dt><dd>8 feed-forward, top-2 routing</dd></div>
     <div><dt>Attention</dt><dd>Full causal only when layer_id % 6 == 0</dd></div>
     <div><dt>State</dt><dd>128 values per layer, tanh-bounded write</dd></div>
     <div><dt>Safety</dt><dd>Deterministic kernel bound on every step</dd></div>
-    <div><dt>Protocol</dt><dd>Same data, seed, hardware as TAM / Transformer</dd></div>
+    <div><dt>Protocol</dt><dd>Same 2B-token mix, seed 8100, H100 and 512-token context as TAM / Transformer</dd></div>
+    <div><dt>Comparison</dt><dd>101,803,520-parameter causal Transformer; one reported seed</dd></div>
   </dl>
 
   <h3>Results</h3>
+  <p>Final NLL improves by 0.0025 nats/token and perplexity by 0.039. This is a smaller gain than TAM v3 under the same reported pretraining protocol.</p>
   <div class="stat-row">
     <div class="stat-pill win"><span class="val">15.015</span><span class="lab">Cortex-S PPL</span></div>
     <div class="stat-pill lose"><span class="val">15.054</span><span class="lab">Transformer PPL</span></div>
@@ -203,14 +210,14 @@
   </table></div>
 
   <div class="verdict">
-    <h3>Not a fluke of one design</h3>
-    <p>A completely separate architecture, same frozen corpus — and it also beats the Transformer on loss. The hybrid signal is real. The compute and quiz caveats from TAM still apply.</p>
+    <h3>Interpretation and limitations</h3>
+    <p>A separate architecture also records lower loss on the frozen corpus. This is one reported seed with a small absolute gap; the card does not report Cortex-S throughput or downstream benchmark scores, so the TAM speed and quiz results cannot be assigned to Cortex-S.</p>
   </div>
 </article>
 
 <div class="rx-sec" id="protocol">
   <h2>Shared protocol</h2>
-  <p>One race, three runners. Nothing below is free to drift between TAM, Cortex-S, and the Transformer.</p>
+  <p>TAM v3, Cortex-S and the Transformer use the same reported pretraining data mix and optimizer settings. NLL is mean negative log-likelihood per token; perplexity is its exponential, so lower is better for both. The 100M comparison reports one seed and should not be read as a variance estimate.</p>
   <div class="rx-grid">
     <div class="rx-box"><span class="num">2B</span><p><b>Tokens</b> — FineWeb-Edu 45%, FineMath 17.5%, StackV2 15%, Cosmopedia 15%, ArXiv 7.5%</p></div>
     <div class="rx-box"><span class="num">8100</span><p><b>Same seed</b> — AdamW, cosine 3e-4, wd 0.1, clip 1.0, effective batch 128</p></div>
@@ -219,29 +226,8 @@
   </div>
 </div>
 
-<div class="rx-sec" id="code">
-  <h2>Download the folder</h2>
-  <p>One package — data prep, TAM / Transformer trainer, Cortex-S block, compare script. Unzip and run; do not scroll a wall of files here.</p>
-  <div class="pack">
-    <div class="pack-copy">
-      <h3>belna-100m</h3>
-      <p>Reference implementation of this programme. The 2B-token runs used a fused scan kernel; the loop in the folder is mathematically identical and easier to audit.</p>
-      <div class="pack-actions">
-        <a class="btn small" href="/research-code/belna-100m.zip" download>Download folder (.zip)</a>
-      </div>
-    </div>
-    <div class="pack-tree">
-      <div class="dir">belna-100m/</div>
-      <div class="file">  README.md <span class="muted">setup + launch</span></div>
-      <div class="file">  prepare_data.py</div>
-      <div class="file">  train_hybrid.py</div>
-      <div class="file">  cortex_s.py</div>
-      <div class="file">  compare_runs.py</div>
-    </div>
-  </div>
-</div>
 </main>
 
-<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 </body>
 </html>

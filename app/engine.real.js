@@ -352,7 +352,7 @@ window.Engine = (() => {
     rt.remember(text, 'you said so');
     try { await api('/api/memories', { method: 'POST', body: JSON.stringify({ text, src: 'you said so' }) }); } catch {}
     rt.card({ type: 'memory', text, status: 'done' });
-    await rt.say(`Noted and saved to your account memory — it shapes future chats, and you can delete it under **Memory** anytime.`, { mood: 'happy' });
+    await rt.say(`Noted and saved to your account memory — it shapes future chats, and you can delete it in **Library → Memory** anytime.`, { mood: 'happy' });
   }
 
   async function automationFlow(rt, raw) {
@@ -375,7 +375,7 @@ window.Engine = (() => {
     if (/what do you remember|do you remember|your memor|recall|what do you know about me/.test(p)) {
       const ms = rt.recall().filter((m) => m.src !== 'onboarding');
       if (!ms.length) return rt.say(`I don't have any memories of yours yet — say "remember that …" and I'll persist it to your account.`);
-      return rt.say(`Here's what I'm carrying (account-scoped):\n\n` + ms.slice(0, 6).map((m) => `- ${m.text}`).join('\n') + `\n\nDelete any under **Memory**.`, { mood: 'happy' });
+      return rt.say(`Here's what I'm carrying (account-scoped):\n\n` + ms.slice(0, 6).map((m) => `- ${m.text}`).join('\n') + `\n\nDelete any in **Library → Memory**.`, { mood: 'happy' });
     }
     if (/what can you do/.test(p)) {
       await rt.say(`I can do **live research** with cited sources, **act on your connected apps** (Gmail, GitHub, Slack, Calendar and 50+ more), **sub-agent automations with triggers**, **page generation**, and **account memory plus secure credential storage**. If something isn't available, I'll say so. Sensitive actions pause for approval and appear in your activity history.`);

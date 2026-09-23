@@ -27,11 +27,11 @@ assert.equal(prepareUpkeepSignal(quiet,[{role:'user',text:'We decided to ship Fr
 assert.equal(Date.parse(nextUpkeepRun(memory,Date.parse('2026-09-22T08:00:00Z'))),Date.parse('2026-09-22T09:00:00Z'));
 
 const ui=fs.readFileSync(path.join(__dirname,'../app/app.js'),'utf8');
-assert.match(ui,/Agent upkeep/);
-assert.match(ui,/User automations/);
+assert.match(ui,/Built-in routines/);
+assert.doesNotMatch(ui,/Built-in routines maintain context and improve future work/);
 assert.match(ui,/agent\.systemKind/);
 const backend=fs.readFileSync(path.join(__dirname,'../server/agents/automations.js'),'utf8');
 assert.match(backend,/listUpkeepSignals/);
 assert.match(backend,/if\(!upkeepSignal\.eligible\)/);
 assert.match(backend,/allowedTools/);
-console.log('agent upkeep: seven visible routines, stable seeding, signal gating, quiet delay, and tool limits: ok');
+console.log('agent upkeep: seven routines, stable seeding, signal gating, quiet delay, and tool limits: ok');

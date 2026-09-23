@@ -1,5 +1,4 @@
-/* Lingon real backend — Express (edge port; Stripe Checkout lives on the
-   Node backend in server/, this port mirrors the credit ledger).
+/* Lingon real backend — Express edge port, including Stripe Checkout.
    Auth: Supabase JWT required on all stateful routes (user_id comes from the
    verified token, never from the client). Health + plans are public.
    Billing: credits (1 credit = $0.50 face, margin built in). Free: 20 starter
@@ -9,8 +8,9 @@
 */
 import { createApp } from './express-shim.js';
 import { transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT, TRANSCRIPTION_MODEL, IMAGE_MODEL } from './foundry.js';
-import { PLANS, costOf, creditsForGiftUsd, REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH } from './plans.js';
+import { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd, REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH } from './plans.js';
 import * as store from './store.js';
+import * as stripeMod from './stripe.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
 import { rankMemories, maybeExtract } from './agents/memory.js';
 import { TOOLS } from './agents/tools.js';
@@ -36,6 +36,65 @@ import { handle as conversationHandle, tasks as chatTasks } from './agents/conve
 
 const app = createApp();
 const requestSignal = (req) => req.signal;
+app.post('/api/stripe/webhook', async (req, res) => {
+  const stripe = stripeMod.client();
+  const secret = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+  if (!stripe || !secret) return res.status(503).json({ error: 'Stripe webhook is not configured.' });
+  let event;
+  try {
+    event = await stripe.webhooks.constructEventAsync(
+      req.rawText, req.headers['stripe-signature'] || '', secret,
+      undefined, stripeMod.subtleCryptoProvider(),
+    );
+  } catch {
+    return res.status(400).json({ error: 'Bad Stripe signature.' });
+  }
+  try {
+    if (await store.stripeEventSeen(event.id)) return res.json({ ok: true, dup: true });
+    const obj = event.data?.object || {};
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+      await stripeMod.fulfillCheckout(obj);
+    } else if (event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded') {
+      await stripeMod.fulfillInvoice(stripe, obj);
+    } else if (event.type === 'customer.subscription.created' || event.type === 'customer.subscription.updated') {
+      const userId = obj.metadata?.user_id;
+      const plan = stripeMod.planForPrice(obj.items?.data?.[0]?.price?.id) || obj.metadata?.plan;
+      if (userId && PLANS[plan]) {
+        const prev = await store.getSubscription(userId);
+        if (prev.stripe_subscription_id && prev.stripe_subscription_id !== obj.id) {
+          await store.markStripeEvent(event.id);
+          return res.json({ ok: true, stale: true });
+        }
+        const customerId = typeof obj.customer === 'string' ? obj.customer : obj.customer?.id;
+        const item = obj.items?.data?.[0];
+        await store.setSubscription(userId, plan, obj.cancel_at_period_end ? 'canceling' : obj.status, {
+          stripe_customer_id: customerId || prev.stripe_customer_id,
+          stripe_subscription_id: obj.id,
+          current_period_end: item?.current_period_end ? new Date(item.current_period_end * 1000).toISOString() : prev.current_period_end,
+          gift_issued: prev.gift_issued,
+        });
+      }
+    } else if (event.type === 'customer.subscription.deleted') {
+      const userId = obj.metadata?.user_id;
+      if (userId) {
+        const prev = await store.getSubscription(userId);
+        if (prev.stripe_subscription_id && prev.stripe_subscription_id !== obj.id) {
+          await store.markStripeEvent(event.id);
+          return res.json({ ok: true, stale: true });
+        }
+        await store.setSubscription(userId, 'free', 'active', {
+          stripe_customer_id: prev.stripe_customer_id, stripe_subscription_id: null,
+          current_period_end: prev.current_period_end, gift_issued: prev.gift_issued,
+        });
+      }
+    }
+    await store.markStripeEvent(event.id);
+    res.json({ ok: true });
+  } catch (error) {
+    console.warn('[stripe] webhook failed:', error.message);
+    res.status(500).json({ error: 'Stripe webhook handler failed.' });
+  }
+});
 // Set BEHIND_PROXY=1 in production (Caddy/Nginx/Traefik in front) so req.ip,
 // protocol and rate limiting see the real client instead of the proxy.
 
@@ -92,11 +151,22 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(vmHarnessHandle));
 app.post('/api/chat/stream', rateLimit(60, 60000), requireAuth(vmHarnessHandle));
 app.post('/api/voice/transcribe', rateLimit(20, 60000), requireAuth(async (req, res) => {
   try {
-    const out = await transcribeAudio({ audio: req.body?.audio, mime: req.body?.mime, signal: requestSignal(req) });
+    await Runner.ensureCredit(req.user.id);
+    const sub = await store.getSubscription(req.user.id);
+    const paid = ['active','canceling','trialing'].includes(sub.status)
+      && (!sub.current_period_end || new Date(sub.current_period_end).getTime() > Date.now());
+    const plan = paid && PLANS[sub.plan] ? sub.plan : 'free';
+    const claimId = await store.claimTokenDaily(req.user.id, 'transcription', PLANS[plan].transcriptionsPerDay);
+    if (!claimId) throw Object.assign(new Error('Your daily transcription limit is used up.'), { code: 'NO_CREDIT' });
+    let out;
+    try { out = await transcribeAudio({ audio: req.body?.audio, mime: req.body?.mime, signal: requestSignal(req) }); }
+    catch (error) { await store.releaseTokenDaily(req.user.id, claimId); throw error; }
+    await store.logUsage(req.user.id, { model: out.model, usage: out.usage, cost: out.costUsd,
+      usageEstimated: out.usageEstimated, claimId });
     res.json({ text: out.text || '' });
   } catch (e) {
-    const status = e.code === 'BAD_INPUT' ? 400 : e.code === 'NO_KEY' ? 503 : 502;
-    res.status(status).json({ error: e.code === 'BAD_INPUT' ? e.message : 'Couldn’t transcribe that.' });
+    const status = e.code === 'NO_CREDIT' ? 402 : e.code === 'BAD_INPUT' ? 400 : e.code === 'NO_KEY' ? 503 : 502;
+    res.status(status).json({ error: e.code === 'BAD_INPUT' || e.code === 'NO_CREDIT' ? e.message : 'Couldn’t transcribe that.' });
   }
 }));
 
@@ -119,7 +189,7 @@ app.get('/api/health', (req, res) => {
     mailDomain: mail.mailDomain(),
     harness: 'foundry-azure-vm-harness',
     sandbox: isAzureConfigured() ? 'azure-vm-per-user' : 'local-per-user-fallback',
-    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval })),
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, tokens: p.tokens, imagesPerDay: p.imagesPerDay, transcriptionsPerDay: p.transcriptionsPerDay, giftUsd: p.giftUsd, interval: p.interval })),
     time: new Date().toISOString(),
   });
 });
@@ -312,13 +382,10 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
 });
 
 // ---------- billing (credits — users never see raw API costs) ----------
-// NOTE: real Stripe Checkout + webhooks run on the Node backend (server/).
-// This edge port serves the same credit ledger; upgrades here record a
-// request and point at Checkout on the main backend.
 async function billingFor(userId) {
   const subPromise = store.getSubscription(userId);
   await store.ensureFreeGrant(userId);
-  const [sub, totals] = await Promise.all([subPromise, store.billingTotals(userId)]);
+  const [sub, totals, purchasedGifts] = await Promise.all([subPromise, store.billingTotals(userId), store.listPurchasedGifts(userId)]);
   const plan = PLANS[sub.plan] || PLANS.free;
   try {
     const expected = creditsForGiftUsd(totals.giftsUsd);
@@ -332,14 +399,30 @@ async function billingFor(userId) {
   const usedCredits = totals.used;
   const giftsRedeemedUsd = totals.giftsUsd;
   const remaining = Math.max(0, granted - usedCredits);
+  const paid = ['active','canceling','trialing'].includes(sub.status)
+    && (!sub.current_period_end || new Date(sub.current_period_end).getTime() > Date.now());
+  const effectivePlan = paid && PLANS[sub.plan] ? sub.plan : 'free';
+  const wallet = await store.getTokenWallet(userId, effectivePlan, sub.current_period_end);
   return {
-    plan: sub.plan, status: sub.status,
+    plan: effectivePlan, status: sub.status,
+    tokens: wallet.remaining, tokensGranted: wallet.granted, tokensUsed: wallet.used,
+    planTokens: wallet.planGranted, planTokensUsed: wallet.planUsed,
+    packTokens: wallet.packGranted, packTokensUsed: wallet.packUsed,
+    imagesToday: wallet.imagesToday, imagesPerDay: wallet.imagesPerDay,
+    transcriptionsToday: wallet.transcriptionsToday, transcriptionsPerDay: wallet.transcriptionsPerDay,
+    resetAt: wallet.resetAt,
     credits: Math.round(remaining * 100) / 100,
     creditsGranted: Math.round(granted * 100) / 100,
     creditsUsed: Math.round(usedCredits * 100) / 100,
     giftsRedeemedUsd,
+    purchasedGifts,
     currentPeriodEnd: sub.current_period_end || null,
-    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval, blurb: p.blurb })),
+    stripe: stripeMod.isConfigured(),
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, tokens: p.tokens, imagesPerDay: p.imagesPerDay, transcriptionsPerDay: p.transcriptionsPerDay, giftUsd: p.giftUsd, interval: p.interval, blurb: p.blurb })),
+    prelander: PRELANDER_OFFERS,
+    creditPacks: CREDIT_PACKS,
+    tokenPacks: TOKEN_PACKS,
+    giftAmounts: GIFT_AMOUNTS,
     credit: plan.credits / 2, gifts: giftsRedeemedUsd, used: usedCredits / 2, total: granted / 2, remaining: remaining / 2,
     plansLegacy: PLANS,
   };
@@ -351,7 +434,7 @@ app.get('/api/billing', requireAuth(async (req, res) => {
 app.post('/api/billing/redeem', requireAuth(async (req, res) => {
   const r = await store.redeemGift(req.user.id, (req.body || {}).code);
   if (!r.ok) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, amount: r.amount, credits: r.credits, billing: await billingFor(req.user.id) });
+  res.json({ ok: true, amount: r.amount, credits: r.credits, tokens: r.tokens, billing: await billingFor(req.user.id) });
 }));
 app.get('/api/referrals/mine', requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -375,16 +458,72 @@ app.post('/api/referrals/redeem', requireAuth(async (req, res) => {
   } catch { res.status(503).json({ error:'Referral service is unavailable.' }); }
 }));
 app.post('/api/billing/checkout', requireAuth(async (req, res) => {
-  res.status(501).json({ error: 'Checkout runs on the main backend — this edge port records requests only. Use POST /api/billing/upgrade.' });
+  try {
+    const { plan, extraCredits, extraTokens, promo } = req.body || {};
+    const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, extraCredits, extraTokens, promo, req });
+    res.json({ ok: true, url: session.url });
+  } catch (error) {
+    res.status(error.code === 'BAD_PLAN' ? 400 : 503).json({ error: error.message });
+  }
+}));
+app.post('/api/billing/credits', requireAuth(async (req, res) => {
+  try {
+    const packCredits = req.body?.extraCredits || req.body?.packCredits;
+    const session = await stripeMod.createCreditsCheckout({ userId: req.user.id, email: req.user.email, packCredits, req });
+    res.json({ ok: true, url: session.url });
+  } catch (error) {
+    res.status(error.code === 'BAD_PLAN' ? 400 : 503).json({ error: error.message });
+  }
+}));
+app.post('/api/billing/tokens', requireAuth(async (req, res) => {
+  try {
+    const session = await stripeMod.createTokenCheckout({ userId: req.user.id, email: req.user.email,
+      packTokens: req.body?.packTokens, req });
+    res.json({ ok: true, url: session.url });
+  } catch (error) {
+    res.status(error.code === 'BAD_PLAN' ? 400 : 503).json({ error: error.message });
+  }
+}));
+app.post('/api/billing/gift', requireAuth(async (req, res) => {
+  try {
+    const session = await stripeMod.createGiftCheckout({ userId: req.user.id, email: req.user.email, amountUsd: req.body?.amount, req });
+    res.json({ ok: true, url: session.url });
+  } catch (error) {
+    res.status(error.code === 'BAD_PLAN' ? 400 : 503).json({ error: error.message });
+  }
+}));
+app.get('/api/billing/checkout-result', requireAuth(async (req, res) => {
+  try {
+    const session = await stripeMod.loadSession(String(req.query.session_id || req.query.sessionId || ''));
+    if (!session) return res.status(404).json({ error: 'Checkout not found.' });
+    if ((session.client_reference_id && session.client_reference_id !== req.user.id)
+      || (session.metadata?.user_id && session.metadata.user_id !== req.user.id)
+      || (!session.client_reference_id && !session.metadata?.user_id)) {
+      return res.status(403).json({ error: 'This checkout belongs to another account.' });
+    }
+    const result = await stripeMod.fulfillCheckout(session);
+    res.json({ ...result, billing: await billingFor(req.user.id) });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
 }));
 app.post('/api/billing/portal', requireAuth(async (req, res) => {
-  res.status(501).json({ error: 'Customer portal runs on the main backend.' });
+  try {
+    const portal = await stripeMod.createPortal({ userId: req.user.id, req });
+    res.json({ ok: true, url: portal.url });
+  } catch (error) {
+    res.status(error.code === 'NO_CUSTOMER' ? 400 : 503).json({ error: error.message });
+  }
 }));
 app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
-  const { plan } = req.body || {};
+  const { plan, extraCredits, extraTokens, promo } = req.body || {};
   if (!PLANS[plan] || plan === 'free') return res.status(400).json({ error: 'Choose pro or max.' });
-  const r = await store.requestUpgrade(req.user.id, plan);
-  res.json({ ok: true, status: 'requested', request: r.id, note: `Your ${PLANS[plan].name} request is recorded. Complete payment via Stripe Checkout on the main backend to activate — you keep your current credits until then.` });
+  try {
+    const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, extraCredits, extraTokens, promo, req });
+    res.json({ ok: true, status: 'checkout', url: session.url });
+  } catch (error) {
+    res.status(error.code === 'BAD_PLAN' ? 400 : 503).json({ error: error.message });
+  }
 }));
 /* Staff allowlist for privileged actions (gift-code issuance).
    Set LINGON_ADMIN_USER_IDS and/or LINGON_ADMIN_EMAILS (comma-separated).
@@ -413,8 +552,8 @@ app.post('/api/gifts/create', requireAuth(async (req, res) => {
 
 async function checkCredit(userId) {
   const b = await billingFor(userId);
-  if (b.credits <= 0.001) {
-    const e = new Error(`You're out of credits (${b.creditsUsed.toFixed(1)} of ${b.creditsGranted.toFixed(0)} used). Upgrade your plan or redeem a gift card under Billing.`);
+  if (b.tokens <= 0) {
+    const e = new Error('You have used your available tokens. Upgrade or add a token pack under Billing.');
     e.code = 'NO_CREDIT';
     throw e;
   }
@@ -990,7 +1129,7 @@ app.post('/api/wallet/limit', rateLimit(20, 60000), requireAuth(async (req, res)
 
 function shopPayErr(e) {
   return e.code === 'BAD_INPUT' || e.code === 'NEED_CONFIRM' || e.code === 'LIMIT' || e.code === 'NO_SHOP_LINK' ? 400
-    : e.code === 'NO_SHOP' ? 503
+    : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
 app.get('/api/ucp-profile', (req, res) => {
@@ -1005,7 +1144,7 @@ app.post('/api/shop-pay/connect', rateLimit(20, 60000), requireAuth(async (req, 
   catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
 }));
 app.get('/api/shop-pay/callback', rateLimit(20, 60000), async (req, res) => {
-  const back = (ok, msg) => res.redirect('/?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
+  const back = (ok, msg) => res.redirect('/app?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
   try {
     await shoppay.finishConnect(req.query || {});
     back(true);

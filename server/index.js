@@ -12,7 +12,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT, TRANSCRIPTION_MODEL, IMAGE_MODEL } = require('./foundry');
-const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd, REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH, REFERRAL_CREDITS_EACH } = require('./plans');
+const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd, REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH, REFERRAL_CREDITS_EACH } = require('./plans');
 const store = require('./store');
 const stripeMod = require('./stripe');
 const { pubClient, adminClient, requireAuth } = require('./auth');
@@ -154,11 +154,22 @@ app.post('/api/chat', rateLimit(60, 60000), requireAuth(vmHarness.handle));
 app.post('/api/chat/stream', rateLimit(60, 60000), requireAuth(vmHarness.handle));
 app.post('/api/voice/transcribe', rateLimit(20, 60000), requireAuth(async (req, res) => {
   try {
-    const out = await transcribeAudio({ audio: req.body?.audio, mime: req.body?.mime, signal: requestSignal(req) });
+    await Runner.ensureCredit(req.user.id);
+    const sub = await store.getSubscription(req.user.id);
+    const paid = ['active','canceling','trialing'].includes(sub.status)
+      && (!sub.current_period_end || new Date(sub.current_period_end).getTime() > Date.now());
+    const plan = paid && PLANS[sub.plan] ? sub.plan : 'free';
+    const claimId = await store.claimTokenDaily(req.user.id, 'transcription', PLANS[plan].transcriptionsPerDay);
+    if (!claimId) throw Object.assign(new Error('Your daily transcription limit is used up.'), { code: 'NO_CREDIT' });
+    let out;
+    try { out = await transcribeAudio({ audio: req.body?.audio, mime: req.body?.mime, signal: requestSignal(req) }); }
+    catch (error) { await store.releaseTokenDaily(req.user.id, claimId); throw error; }
+    await store.logUsage(req.user.id, { model: out.model, usage: out.usage, cost: out.costUsd,
+      usageEstimated: out.usageEstimated, claimId });
     res.json({ text: out.text || '' });
   } catch (e) {
-    const status = e.code === 'BAD_INPUT' ? 400 : e.code === 'NO_KEY' ? 503 : 502;
-    res.status(status).json({ error: e.code === 'BAD_INPUT' ? e.message : 'Couldn’t transcribe that.' });
+    const status = e.code === 'NO_CREDIT' ? 402 : e.code === 'BAD_INPUT' ? 400 : e.code === 'NO_KEY' ? 503 : 502;
+    res.status(status).json({ error: e.code === 'BAD_INPUT' || e.code === 'NO_CREDIT' ? e.message : 'Couldn’t transcribe that.' });
   }
 }));
 
@@ -182,7 +193,7 @@ app.get('/api/health', (req, res) => {
     mailDomain: mail.mailDomain(),
     harness: 'foundry-azure-vm-harness',
     sandbox: azure.isAzureConfigured() ? 'azure-vm-per-user' : 'local-per-user-fallback',
-    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval })),
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, tokens: p.tokens, imagesPerDay: p.imagesPerDay, transcriptionsPerDay: p.transcriptionsPerDay, giftUsd: p.giftUsd, interval: p.interval })),
     prelander: PRELANDER_OFFERS,
     creditPacks: CREDIT_PACKS,
     giftAmounts: GIFT_AMOUNTS,
@@ -380,11 +391,11 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
   }
 });
 
-// ---------- billing (credits — users never see raw API costs) ----------
+// ---------- billing: raw token allowances and legacy credit history ----------
 async function billingFor(userId) {
   const subPromise = store.getSubscription(userId);
   await store.ensureFreeGrant(userId);
-  const [sub, totals] = await Promise.all([subPromise, store.billingTotals(userId)]);
+  const [sub, totals, purchasedGifts] = await Promise.all([subPromise, store.billingTotals(userId), store.listPurchasedGifts(userId)]);
   const plan = PLANS[sub.plan] || PLANS.free;
   // Backfill: gift codes redeemed before the credit ledger existed granted no
   // credits — top them up once at face value (2 credits per $1).
@@ -401,17 +412,29 @@ async function billingFor(userId) {
   const giftsRedeemedUsd = totals.giftsUsd;
   const total = granted;
   const remaining = Math.max(0, total - usedCredits);
+  const paid = ['active','canceling','trialing'].includes(sub.status)
+    && (!sub.current_period_end || new Date(sub.current_period_end).getTime() > Date.now());
+  const effectivePlan = paid && PLANS[sub.plan] ? sub.plan : 'free';
+  const wallet = await store.getTokenWallet(userId, effectivePlan, sub.current_period_end);
   return {
-    plan: sub.plan, status: sub.status,
+    plan: effectivePlan, status: sub.status,
+    tokens: wallet.remaining, tokensGranted: wallet.granted, tokensUsed: wallet.used,
+    planTokens: wallet.planGranted, planTokensUsed: wallet.planUsed,
+    packTokens: wallet.packGranted, packTokensUsed: wallet.packUsed,
+    imagesToday: wallet.imagesToday, imagesPerDay: wallet.imagesPerDay,
+    transcriptionsToday: wallet.transcriptionsToday, transcriptionsPerDay: wallet.transcriptionsPerDay,
+    resetAt: wallet.resetAt,
     credits: Math.round(remaining * 100) / 100,
     creditsGranted: Math.round(total * 100) / 100,
     creditsUsed: Math.round(usedCredits * 100) / 100,
     giftsRedeemedUsd,
+    purchasedGifts,
     currentPeriodEnd: sub.current_period_end || null,
     stripe: stripeMod.isConfigured(),
-    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, credits: p.credits, giftUsd: p.giftUsd, interval: p.interval, blurb: p.blurb })),
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, was: p.was, tokens: p.tokens, imagesPerDay: p.imagesPerDay, transcriptionsPerDay: p.transcriptionsPerDay, giftUsd: p.giftUsd, interval: p.interval, blurb: p.blurb })),
     prelander: PRELANDER_OFFERS,
     creditPacks: CREDIT_PACKS,
+    tokenPacks: TOKEN_PACKS,
     giftAmounts: GIFT_AMOUNTS,
     // Legacy dollar fields (kept for old clients, derived — not shown in UI):
     credit: plan.credits / 2, gifts: giftsRedeemedUsd, used: usedCredits / 2, total: total / 2, remaining: remaining / 2,
@@ -425,7 +448,7 @@ app.get('/api/billing', requireAuth(async (req, res) => {
 app.post('/api/billing/redeem', requireAuth(async (req, res) => {
   const r = await store.redeemGift(req.user.id, (req.body || {}).code);
   if (!r.ok) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, amount: r.amount, credits: r.credits, billing: await billingFor(req.user.id) });
+  res.json({ ok: true, amount: r.amount, credits: r.credits, tokens: r.tokens, billing: await billingFor(req.user.id) });
 }));
 // ---------- referrals: FREE $50 gift card ($25 you + $25 friend, as credits) ----------
 // Same $50 face value as the Stripe $50 gift card. The inviter is credited
@@ -447,15 +470,16 @@ app.post('/api/referrals/redeem', requireAuth(async (req, res) => {
     if (!r.ok) return res.status(400).json({ error: r.error });
     let billing = null;
     try { billing = await billingFor(req.user.id); } catch {}
-    res.json({ ok: true, code: r.code, credits: r.credits, inviterCredits: r.inviterCredits, billing });
+    res.json({ ok: true, code: r.code, credits: r.credits, inviterCredits: r.inviterCredits,
+      tokens: r.tokens, inviterTokens: r.inviterTokens, billing });
   } catch { res.status(503).json({ error: 'Referral service is unavailable.' }); }
 }));
 // Real Stripe Checkout: returns a hosted payment URL for a monthly subscription.
 app.post('/api/billing/checkout', requireAuth(async (req, res) => {
   try {
-    const { plan, extraCredits, promo } = req.body || {};
+    const { plan, extraCredits, extraTokens, promo } = req.body || {};
     const email = req.user.email || undefined;
-    const session = await stripeMod.createCheckout({ userId: req.user.id, email, plan, extraCredits, promo, req });
+    const session = await stripeMod.createCheckout({ userId: req.user.id, email, plan, extraCredits, extraTokens, promo, req });
     res.json({ ok: true, url: session.url });
   } catch (e) {
     const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
@@ -466,6 +490,16 @@ app.post('/api/billing/credits', requireAuth(async (req, res) => {
   try {
     const extraCredits = (req.body || {}).extraCredits || (req.body || {}).packCredits;
     const session = await stripeMod.createCreditsCheckout({ userId: req.user.id, email: req.user.email, packCredits: extraCredits, req });
+    res.json({ ok: true, url: session.url });
+  } catch (e) {
+    const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
+    res.status(code).json({ error: e.message });
+  }
+}));
+app.post('/api/billing/tokens', requireAuth(async (req, res) => {
+  try {
+    const session = await stripeMod.createTokenCheckout({ userId: req.user.id, email: req.user.email,
+      packTokens: (req.body || {}).packTokens, req });
     res.json({ ok: true, url: session.url });
   } catch (e) {
     const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
@@ -486,12 +520,13 @@ app.get('/api/billing/checkout-result', requireAuth(async (req, res) => {
     const sessionId = String(req.query.session_id || req.query.sessionId || '');
     const session = await stripeMod.loadSession(sessionId);
     if (!session) return res.status(404).json({ error: 'Checkout not found.' });
-    if (session.client_reference_id && session.client_reference_id !== req.user.id
-      && session.metadata && session.metadata.user_id && session.metadata.user_id !== req.user.id) {
+    if ((session.client_reference_id && session.client_reference_id !== req.user.id)
+      || (session.metadata?.user_id && session.metadata.user_id !== req.user.id)
+      || (!session.client_reference_id && !session.metadata?.user_id)) {
       return res.status(403).json({ error: 'This checkout belongs to another account.' });
     }
     const result = await stripeMod.fulfillCheckout(session);
-    res.json({ ok: true, ...result, billing: await billingFor(req.user.id) });
+    res.json({ ...result, billing: await billingFor(req.user.id) });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
@@ -508,11 +543,11 @@ app.post('/api/billing/portal', requireAuth(async (req, res) => {
 }));
 // Legacy endpoint (pre-Stripe): upgrades now go through Stripe Checkout.
 app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
-  const { plan, extraCredits, promo } = req.body || {};
+  const { plan, extraCredits, extraTokens, promo } = req.body || {};
   if (!PLANS[plan] || plan === 'free') return res.status(400).json({ error: 'Choose pro or max.' });
   if (stripeMod.isConfigured() && stripeMod.priceFor(plan, promo)) {
     try {
-      const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, extraCredits, promo, req });
+      const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, extraCredits, extraTokens, promo, req });
       return res.json({ ok: true, status: 'checkout', url: session.url, note: `Continue to Stripe to start ${PLANS[plan].name}.` });
     } catch (e) {
       return res.status(502).json({ error: e.message });
@@ -547,8 +582,8 @@ app.post('/api/gifts/create', requireAuth(async (req, res) => {
 
 async function checkCredit(userId) {
   const b = await billingFor(userId);
-  if (b.credits <= 0.001) {
-    const e = new Error(`You're out of credits (${b.creditsUsed.toFixed(1)} of ${b.creditsGranted.toFixed(0)} used). Upgrade your plan or redeem a gift card under Billing.`);
+  if (b.tokens <= 0) {
+    const e = new Error('You have used your available tokens. Upgrade or add a token pack under Billing.');
     e.code = 'NO_CREDIT';
     throw e;
   }
@@ -559,32 +594,12 @@ async function checkCredit(userId) {
 async function handleStripeEvent(s, event) {
   const t = event.type;
   const obj = event.data && event.data.object ? event.data.object : {};
-  if (t === 'checkout.session.completed') {
+  if (t === 'checkout.session.completed' || t === 'checkout.session.async_payment_succeeded') {
     await stripeMod.fulfillCheckout(obj);
     return;
   }
   if (t === 'invoice.paid' || t === 'invoice.payment_succeeded') {
-    const customerId = typeof obj.customer === 'string' ? obj.customer : (obj.customer && obj.customer.id) || null;
-    const subId = typeof obj.subscription === 'string' ? obj.subscription : (obj.subscription && obj.subscription.id) || null;
-    const uid = customerId && await store.findUserByStripeCustomer(customerId);
-    if (!uid) return;
-    const sub = await store.getSubscription(uid);
-    const plan = sub.plan;
-    if (!PLANS[plan] || plan === 'free') return;
-    if (!sub.gift_issued) {
-      const promo = !!(obj.subscription_details && obj.subscription_details.metadata && obj.subscription_details.metadata.promo === '1');
-      const gift = await stripeMod.issueFirstInvoiceGift(uid, plan, promo);
-      if (gift) console.log(`[stripe] issued $${gift.amount_usd} gift ${gift.code} for ${uid} (${plan})`);
-    }
-    const periodRef = (obj.lines && obj.lines.data && obj.lines.data[0] && obj.lines.data[0].period && obj.lines.data[0].period.end)
-      || obj.created || event.id;
-    await stripeMod.grantSubscriptionCredits(uid, plan, `inv:${periodRef}`);
-    await store.setSubscription(uid, plan, 'active', {
-      stripe_customer_id: customerId || sub.stripe_customer_id,
-      stripe_subscription_id: subId || sub.stripe_subscription_id,
-      current_period_end: obj.period_end ? new Date(obj.period_end * 1000).toISOString() : (sub.current_period_end || null),
-      gift_issued: true,
-    });
+    await stripeMod.fulfillInvoice(s, obj);
     return;
   }
   if (t === 'customer.subscription.updated' || t === 'customer.subscription.created') {
@@ -594,6 +609,7 @@ async function handleStripeEvent(s, event) {
     const priceId = obj.items && obj.items.data && obj.items.data[0] && obj.items.data[0].price && obj.items.data[0].price.id;
     const plan = stripeMod.planForPrice(priceId);
     const prev = await store.getSubscription(uid);
+    if (prev.stripe_subscription_id && prev.stripe_subscription_id !== obj.id) return;
     const status = obj.cancel_at_period_end ? 'canceling' : (obj.status === 'active' || obj.status === 'trialing' ? 'active' : prev.status || 'active');
     await store.setSubscription(uid, plan || prev.plan || 'free', status, {
       stripe_customer_id: customerId || prev.stripe_customer_id,
@@ -608,6 +624,7 @@ async function handleStripeEvent(s, event) {
     const uid = customerId && await store.findUserByStripeCustomer(customerId);
     if (!uid) return;
     const prev = await store.getSubscription(uid);
+    if (prev.stripe_subscription_id && prev.stripe_subscription_id !== obj.id) return;
     // Downgrade to Free at period end — already-granted credits stay.
     await store.setSubscription(uid, 'free', 'active', {
       stripe_customer_id: customerId || prev.stripe_customer_id,
@@ -1256,7 +1273,7 @@ app.post('/api/wallet/limit', rateLimit(20, 60000), requireAuth(async (req, res)
 
 function shopPayErr(e) {
   return e.code === 'BAD_INPUT' || e.code === 'NEED_CONFIRM' || e.code === 'LIMIT' || e.code === 'NO_SHOP_LINK' ? 400
-    : e.code === 'NO_SHOP' ? 503
+    : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
 app.get('/.well-known/ucp', (req, res) => {
@@ -1274,7 +1291,7 @@ app.post('/api/shop-pay/connect', rateLimit(20, 60000), requireAuth(async (req, 
   catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
 }));
 app.get('/api/shop-pay/callback', rateLimit(20, 60000), async (req, res) => {
-  const back = (ok, msg) => res.redirect('/?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
+  const back = (ok, msg) => res.redirect('/app?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
   try {
     await shoppay.finishConnect(req.query || {});
     back(true);
@@ -1539,7 +1556,7 @@ server.on('upgrade', async (req, socket, head) => {
             try { ws.readyState === 1 && ws.send(JSON.stringify({ type: 'input_error', error: String(error.message || error).slice(0, 240) })); } catch {}
           });
         });
-        ws.send(JSON.stringify({ hello: s.id, url: s.url, title: s.title }));
+        ws.send(JSON.stringify({ hello: s.id, url: s.url, title: s.title, kind: s.kind || 'browser', transport: s.transport }));
       // Compatibility only: a live relay sends binary screencast frames as
       // soon as it connects. This poster helps older/fallback sessions paint.
       live.screenshot(s).then(

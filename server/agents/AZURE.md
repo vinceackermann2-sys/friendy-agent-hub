@@ -21,7 +21,7 @@ Microsoft Foundry calls stay on the Lingon server (the API key is never copied t
 
 ## Cost (pay-as-you-go, Sweden Central, Linux B2als v2)
 
-Illustrative Linux B2als v2 meter from an older estimate: **$0.0432 / hour** while running; verify the current Sweden Central Azure Retail Price before using it for billing.
+The [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices) currently lists the Sweden Central Linux `Standard_B2als_v2` consumption meter at **$0.0389/hour**. Lingon meters VM runtime at a conservative **$0.06/hour** to cover compute and a storage allowance, then deducts 20 credits per metered dollar. That is **1.2 credits/hour** while running, including the five-minute idle grace. Set `AZURE_VM_BILLING_USD_PER_HOUR` for any other VM size or region.
 
 The worker container runs inside that VM and does not create a second Container
 Apps compute meter. Stopped VMs can still incur managed-disk, Blob, image, and
@@ -30,8 +30,8 @@ network charges. Verify current regional pricing before publishing a price.
 | Usage | Approx. compute | Plus disk when stopped |
 |---|---|---|
 | Idle / deallocated | $0 | ~$1–3 / mo (30 GB Standard_LRS) |
-| 2 hours/day | ~$2.60 / mo | + disk |
-| Always on 24/7 | ~$31.50 / mo | compute already includes disk attach |
+| 2 hours/day | ~$2.33 / mo | + disk |
+| Always on 24/7 | ~$28.40 / mo | compute already includes disk attach |
 
 Windows SKU is more; we use Linux. Prices change — check Azure retail prices.
 
@@ -46,6 +46,7 @@ AZURE_RESOURCE_GROUP=
 AZURE_LOCATION=swedencentral
 AZURE_VM_SIZE=Standard_B2als_v2
 AZURE_VM_IDLE_MINUTES=5
+AZURE_VM_BILLING_USD_PER_HOUR=0.06
 AZURE_AUTO_PROVISION=true
 # Optional; otherwise a deterministic Belna-only name is generated.
 AZURE_STORAGE_ACCOUNT=

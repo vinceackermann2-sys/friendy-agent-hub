@@ -85,10 +85,12 @@ const IC = {
   user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   refresh:'<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 15-3.5L23 10M20.5 15a9 9 0 0 1-15 3.5L1 14"/>',
   menu:'<path d="M4 7h16M4 12h16M4 17h16"/>',
+  more:'<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/>',
   alert:'<path d="M10.3 3.8L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
   chatb:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>',
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   copy:'<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  share:'<path d="M12 15V3M7.5 7.5 12 3l4.5 4.5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>',
   chev:'<path d="M6 9l6 6 6-6"/>',
   attach:'<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/>',
   folder:'<path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2-2Z"/>',
@@ -318,7 +320,7 @@ const fresh = () => ({
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
   userProfile:null, agentContext:null,
-  // library (Settings → Library) — only real agent artifacts and user uploads.
+  // Library — only real agent artifacts and user uploads.
   libraryCat:'all', librarySearch:'', librarySelect:false, librarySelected:[], libraryLayout:'grid',
   libraryUploads:[], systemPath:'root', systemFile:null, systemManifest:null,
   // goals — user-created life goals with sub-goals, tracked per account.
@@ -341,6 +343,14 @@ delete state.walletTab;
 if (!state.mailTab) state.mailTab = 'inbox';
 if (!state.settingsTab) state.settingsTab = 'profiles';
 if (state.settingsTab === 'theme') state.settingsTab = 'profiles';
+if (state.settingsTab === 'library') {
+  state.settingsTab = 'profiles';
+  if (state.view === 'settings') state.view = 'library';
+}
+if (state.settingsTab === 'memory') {
+  state.settingsTab = 'profiles';
+  if (state.view === 'settings') { state.view = 'library'; state.libraryCat = 'memory'; }
+}
 if (!state.agentContext || typeof state.agentContext !== 'object') state.agentContext = null;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
@@ -351,7 +361,7 @@ if (state.memoryEditing !== null && typeof state.memoryEditing !== 'string') sta
   if (!state.appFilter || state.appFilter === 'available') state.appFilter = 'all';
   if (typeof state.appOpen !== 'string') state.appOpen = null;
   if (!state.appDetails || typeof state.appDetails !== 'object') state.appDetails = {};
-  // Library defaults (Settings → Library gallery)
+  // Library gallery defaults
   if (!state.libraryCat) state.libraryCat = 'all';
   if (typeof state.librarySearch !== 'string') state.librarySearch = '';
   if (typeof state.librarySelect !== 'boolean') state.librarySelect = false;
@@ -1199,14 +1209,15 @@ async function getBilling(){
   return request;
 }
 function fmtC(n){ return (Math.round(Number(n || 0) * 100) / 100).toString(); }
+function fmtTokens(n){ return Math.max(0, Math.floor(Number(n || 0))).toLocaleString('en-US'); }
 function creditView(b){
   const amount = n => Number.isFinite(Number(n)) ? Math.max(0, Number(n)) : 0;
-  const remaining = amount(b.credits), used = amount(b.creditsUsed), granted = amount(b.creditsGranted);
+  const remaining = amount(b.tokens), used = amount(b.tokensUsed), granted = amount(b.tokensGranted);
   return { remaining, used, granted, percent: granted ? Math.min(100, remaining / granted * 100) : 0,
-    tone: remaining <= 0 ? 'empty' : remaining <= 5 ? 'low' : 'ready' };
+    tone: remaining <= 0 ? 'empty' : remaining <= Math.max(1000000, granted * 0.1) ? 'low' : 'ready' };
 }
 function creditMeterHtml(v){
-  return `<div class="credit-meter" role="meter" aria-label="Credits remaining" aria-valuemin="0" aria-valuemax="${Math.max(v.granted, v.remaining, 1)}" aria-valuenow="${v.remaining}" aria-valuetext="${fmtC(v.remaining)} credits left; ${fmtC(v.used)} used"><span style="width:${v.percent}%"></span></div>`;
+  return `<div class="credit-meter" role="meter" aria-label="Tokens remaining" aria-valuemin="0" aria-valuemax="${Math.max(v.granted, v.remaining, 1)}" aria-valuenow="${v.remaining}" aria-valuetext="${fmtTokens(v.remaining)} tokens left; ${fmtTokens(v.used)} used"><span style="width:${v.percent}%"></span></div>`;
 }
 function billingPlanName(b){
   const plans = Array.isArray(b.plans) ? b.plans : Object.values(b.plans || {});
@@ -1219,45 +1230,36 @@ function pctOff(p){
   const pct = Math.round((was - price) / was * 100);
   return `<span class="pct-off">-${pct}%</span>`;
 }
-/* Extra-credit tiers for the "PURCHASED CREDITS" dropdown (credits → +$/mo). */
-const EXTRA_CREDIT_TIERS = [
-  { credits: 0, price: 0 },
-  { credits: 50, price: 15 },
-  { credits: 100, price: 30 },
-  { credits: 200, price: 45 },
-  { credits: 300, price: 60 },
-  { credits: 500, price: 75 },
-  { credits: 750, price: 100 },
-  { credits: 1000, price: 125 },
-];
-function extraTierLabel(t){
-  if (!t || !t.credits) return 'None';
-  return `${t.credits} credits — +$${t.price}`;
-}
 function giftCardHtml(p){
   const amt = Number(p.giftUsd || 0);
   if (!amt) return '';
   return `<div class="gift-strip"><span class="gift-thumb">$${amt}</span>`
     + `<span class="gift-strip-text">+ FREE $${amt} gift card</span></div>`;
 }
-function billingShopHtml(){
-  const packOpts = EXTRA_CREDIT_TIERS.filter((t) => t.credits).map((t) =>
-    `<option value="${t.credits}">${t.credits} credits — $${t.price}</option>`
+function billingShopHtml(b){
+  const packOpts = (Array.isArray(b?.tokenPacks) ? b.tokenPacks : []).map((t) =>
+    `<option value="${t.tokens}">${t.millions}M tokens — $${t.usd}</option>`
   ).join('');
+  const gifts = Array.isArray(b && b.purchasedGifts) ? b.purchasedGifts : [];
+  const giftList = gifts.length ? `<div class="billing-purchased-gifts"><h4>Your gift cards</h4>${gifts.map((g) =>
+    `<p><strong>$${fmtC(g.amount_usd)}</strong> · <code>${esc(g.code)}</code> · ${g.redeemed_by ? 'Redeemed' : 'Ready to share'}</p>`
+  ).join('')}</div>` : '';
   return `<div class="billing-shop">
     <section class="billing-extra" aria-labelledby="topup-title">
       <span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span>
       <h3 id="topup-title">A little extra goes a long way</h3>
-      <p>Have something bigger in mind? Add credits whenever you need them.</p>
-      <label class="billing-label" for="buypack">Choose your credit pack</label>
+      <p>Have something bigger in mind? Add tokens whenever you need them. Purchased tokens carry over until used. Daily image and transcription limits still follow your plan.</p>
+      <label class="billing-label" for="buypack">Choose your token pack</label>
       <select class="field" id="buypack">${packOpts}</select>
-      <button class="btn billing-primary" data-act="buycredits">Add credits ${icon('plus',14)}</button>
-      <span class="billing-fine">One-time purchase · your plan stays the same</span>
+      <button class="btn billing-primary" data-act="buycredits">Add tokens ${icon('plus',14)}</button>
+      <span class="billing-fine">One-time purchase · your plan stays the same · agent VM time also uses tokens</span>
     </section>
     <section class="billing-extra billing-gifts" aria-labelledby="gift-title">
       <span class="billing-extra-icon" aria-hidden="true">${icon('gift',20)}</span>
       <h3 id="gift-title">Good ideas are better shared</h3>
       <p>Give someone a little help with their next big idea.</p>
+      <div class="billing-gift-buy"><button class="btn ghost small" data-act="buygift" data-amt="50">$50 gift · 1M tokens</button> <button class="btn ghost small" data-act="buygift" data-amt="100">$100 gift · 2M tokens</button></div>
+      ${giftList}
       <div class="billing-redeem">
         <label class="billing-label" for="giftcode">Have a gift code? This one's for you.</label>
         <div class="billing-redeem-form"><input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
@@ -1266,105 +1268,14 @@ function billingShopHtml(){
     </section>
   </div>`;
 }
-function creditSliderHtml(p){
-  const id = String(p.id || '');
-  if (id !== 'pro' && id !== 'max') return '';
-  const basePrice = Number(p.price || 0), baseCredits = Number(p.credits || 0);
-  const opts = EXTRA_CREDIT_TIERS.map((t, i) =>
-    `<button type="button" class="credit-opt${i === 0 ? ' sel' : ''}" role="option" aria-selected="${i === 0 ? 'true' : 'false'}" data-credits="${t.credits}" data-price="${t.price}"><span>${extraTierLabel(t)}</span><span class="tick">✓</span></button>`
-  ).join('');
-  return `<div class="credit-add" data-base-price="${basePrice}" data-base-credits="${baseCredits}" data-plan="${esc(id)}">`
-    + `<label class="credit-select-label">PURCHASED CREDITS</label>`
-    + `<div class="credit-select" data-plan="${esc(id)}" data-extra-credits="0" data-extra-price="0">`
-    + `<button type="button" class="credit-select-btn" aria-haspopup="listbox" aria-expanded="false"><span class="credit-select-val">None</span><span class="chev"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button>`
-    + `<div class="credit-select-menu" role="listbox">${opts}</div>`
-    + `</div>`
-    + `<div class="credit-add-sub"><span class="credit-add-total">Total ${baseCredits} credits · $${basePrice}/mo</span></div></div>`;
-}
-function extraCreditsFor(plan){
-  const sel = plan && document.querySelector(`.credit-select[data-plan="${plan}"]`);
-  if (sel) return { credits: Math.max(0, parseFloat(sel.dataset.extraCredits || '0')), price: Math.max(0, parseFloat(sel.dataset.extraPrice || '0')) };
-  const slider = plan && document.querySelector(`.credit-slider[data-plan="${plan}"]`);
-  if (slider) { const c = Math.max(0, parseFloat(slider.value || '0')); return { credits: c, price: c * 0.5 }; }
-  return { credits: 0, price: 0 };
-}
-function wireBillingSliders(root){
-  if (!root || !root.querySelectorAll) return;
-  root.querySelectorAll('.credit-add').forEach((box) => {
-    const slider = box.querySelector('.credit-slider');
-    if (slider && !slider.dataset.wired) {
-      slider.dataset.wired = '1';
-      const val = box.querySelector('.credit-add-val');
-      const total = box.querySelector('.credit-add-total');
-      const basePrice = parseFloat(box.dataset.basePrice || '0');
-      const baseCredits = parseFloat(box.dataset.baseCredits || '0');
-      const paint = () => {
-        const extra = parseFloat(slider.value || '0');
-        const extraCost = extra * 0.5;
-        if (val) val.textContent = '+' + extra + ' credits' + (extra ? ' (+$' + extraCost.toFixed(extraCost % 1 ? 2 : 0) + '/mo)' : '');
-        if (total) total.textContent = 'Total ' + (baseCredits + extra) + ' credits · $' + (basePrice + extraCost).toFixed((basePrice + extraCost) % 1 ? 2 : 0) + '/mo';
-      };
-      slider.addEventListener('input', paint);
-      paint();
-    }
-    const sel = box.querySelector('.credit-select');
-    if (sel && !sel.dataset.wired) {
-      sel.dataset.wired = '1';
-      const btn = sel.querySelector('.credit-select-btn');
-      const val = sel.querySelector('.credit-select-val');
-      const total = box.querySelector('.credit-add-total');
-      const basePrice = parseFloat(box.dataset.basePrice || '0');
-      const baseCredits = parseFloat(box.dataset.baseCredits || '0');
-      const fmt = (n) => String(Math.round(Number(n || 0) * 100) / 100);
-      const paint = () => {
-        const extra = parseFloat(sel.dataset.extraCredits || '0');
-        const cost = parseFloat(sel.dataset.extraPrice || '0');
-        const opt = sel.querySelector(`.credit-opt[data-credits="${extra}"][data-price="${cost}"]`);
-        if (val) val.textContent = opt ? opt.querySelector('span').textContent : (extra ? `${fmt(extra)} credits — +$${fmt(cost)}` : 'None');
-        if (total) total.textContent = 'Total ' + fmt(baseCredits + extra) + ' credits · $' + fmt(basePrice + cost) + '/mo';
-        if (btn) btn.setAttribute('aria-expanded', sel.classList.contains('open') ? 'true' : 'false');
-      };
-      if (btn) btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        document.querySelectorAll('.credit-select.open').forEach((o) => { if (o !== sel) { o.classList.remove('open'); } });
-        sel.classList.toggle('open');
-        paint();
-      });
-      sel.querySelectorAll('.credit-opt').forEach((opt) => {
-        opt.addEventListener('click', (e) => {
-          e.stopPropagation();
-          sel.dataset.extraCredits = opt.dataset.credits || '0';
-          sel.dataset.extraPrice = opt.dataset.price || '0';
-          sel.querySelectorAll('.credit-opt').forEach((o) => { o.classList.remove('sel'); o.setAttribute('aria-selected', 'false'); });
-          opt.classList.add('sel');
-          opt.setAttribute('aria-selected', 'true');
-          sel.classList.remove('open');
-          paint();
-        });
-      });
-      paint();
-    }
-  });
-  if (!document.documentElement.dataset.creditSelectWired) {
-    document.documentElement.dataset.creditSelectWired = '1';
-    document.addEventListener('click', () => {
-      let changed = false;
-      document.querySelectorAll('.credit-select.open').forEach((o) => { o.classList.remove('open'); changed = true; });
-      if (changed) document.querySelectorAll('.credit-select-btn').forEach((b) => b.setAttribute('aria-expanded', 'false'));
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') document.querySelectorAll('.credit-select.open').forEach((o) => o.classList.remove('open'));
-    });
-  }
-}
 function planCards(b){
   const ids = ['free', 'pro', 'max'];
   const list = Array.isArray(b && b.plans) ? b.plans : Object.values((b && b.plans) || {});
   const byId = {};
   list.forEach((p) => { if (p && p.id) byId[p.id] = p; });
-  const pFree = byId.free || { id: 'free', name: 'Free', price: 0, was: null, credits: 20, giftUsd: 0 };
-  const pPro = byId.pro || { id: 'pro', name: 'Pro', price: 50, was: null, credits: 60, giftUsd: 0, interval: 'month' };
-  const pMax = byId.max || { id: 'max', name: 'Max', price: 100, was: null, credits: 100, giftUsd: 0, interval: 'month' };
+  const pFree = byId.free || { id: 'free', name: 'Free', price: 0, was: null, tokens: 50000000, imagesPerDay: 5, transcriptionsPerDay: 10, giftUsd: 0 };
+  const pPro = byId.pro || { id: 'pro', name: 'Pro', price: 50, was: null, tokens: 100000000, imagesPerDay: 10, transcriptionsPerDay: 15, giftUsd: 0, interval: 'month' };
+  const pMax = byId.max || { id: 'max', name: 'Max', price: 100, was: null, tokens: 200000000, imagesPerDay: 15, transcriptionsPerDay: 20, giftUsd: 0, interval: 'month' };
   const descriptions = { free:'A little space to get acquainted.', pro:'For your everyday ideas and ambitions.', max:'For the bigger things you have in mind.' };
   const features = { free:['Your own personal agent', 'Make yourself at home'], pro:['Everything in Free'], max:['Everything in Pro'] };
   return `<div class="pcards">${[pFree,pPro,pMax].map((p, i) => {
@@ -1376,9 +1287,9 @@ function planCards(b){
       <div class="billing-plan-heading"><h3 class="pname">${esc(p.name)}</h3>${current ? '<span class="billing-plan-tag">Your plan</span>' : id === 'pro' ? '<span class="billing-plan-tag">A little more room</span>' : ''}</div>
       <p class="pdesc">${descriptions[id]}</p>
       <div class="pprice">$${fmtC(p.price)}${p.was ? ` <s>$${fmtC(p.was)}</s>` : ''}<span>${id === 'free' ? '/ forever' : '/ month'}</span></div>${pctOff(p)}
-      <div class="billing-plan-credits">${icon('spark',16)} <b>${fmtC(p.credits)}</b> ${id === 'free' ? 'starter credits' : 'credits / month'}</div>
+      <div class="billing-plan-credits">${icon('spark',16)} <b>${fmtTokens(p.tokens)}</b> tokens / month</div>
+      <p class="billing-plan-limits">${p.imagesPerDay} images/day · ${p.transcriptionsPerDay} transcriptions/day</p>
       <ul>${features[id].map(text => `<li>${icon('check',13)} ${text}</li>`).join('')}</ul>
-      ${id !== 'free' && !current ? `<div class="billing-plan-extras">${creditSliderHtml(p)}</div>` : ''}
       ${action}${giftCardHtml(p)}
     </article>`;
   }).join('')}</div>`;
@@ -1390,35 +1301,35 @@ function billSummary(b){
     ? `<button class="billing-manage" data-act="portal">Manage subscription ${icon('aur',14)}</button>`
     : '';
   const note = v.tone === 'empty' ? 'A fresh start is a top-up away.' : v.tone === 'low' ? 'Running a little low. Top up whenever you’re ready.' : `Ready for your next idea${firstName && firstName !== 'Guest' ? ', ' + esc(firstName) : ''}.`;
-  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Credit balance">
+  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Token balance">
     <div class="billing-balance-top"><span class="billing-status">${esc(b.status || 'active')}</span>${manage}</div>
     <div class="billing-balance-main">
       <div class="billing-balance-copy">
-        <div class="billing-balance-number"><strong>${fmtC(v.remaining)}</strong><span>credits left</span></div>
+        <div class="billing-balance-number"><strong>${fmtTokens(v.remaining)}</strong><span>tokens left</span></div>
         <p class="billing-balance-note">${note}</p>
       </div>
       <div class="billing-companion" aria-hidden="true"><span class="billing-companion-orbit"></span>${Mascot.svg('lingon',v.tone === 'ready' ? 'happy' : 'idle',116)}</div>
     </div>
     <div class="billing-balance-bottom"><div class="billing-balance-meter">
-      <div class="billing-meter-label"><span><b>${fmtC(v.used)}</b> of ${fmtC(v.granted)} credits used</span><span>${Math.round(v.percent)}% left</span></div>${creditMeterHtml(v)}
-    </div><button class="btn billing-primary small" data-act="billing-topup">${icon('plus',14)} Add credits</button></div>
+      <div class="billing-meter-label"><span><b>${fmtTokens(v.used)}</b> of ${fmtTokens(v.granted)} tokens used</span><span>${Math.round(v.percent)}% left</span></div>${creditMeterHtml(v)}
+      <p>${Number(b.imagesToday || 0)}/${Number(b.imagesPerDay || 0)} images today · ${Number(b.transcriptionsToday || 0)}/${Number(b.transcriptionsPerDay || 0)} transcriptions today${b.resetAt ? ` · resets ${esc(new Date(b.resetAt).toLocaleDateString())}` : ''}</p>
+    </div><button class="btn billing-primary small" data-act="billing-topup">${icon('plus',14)} Add tokens</button></div>
   </section>`;
 }
 function billingLoadingHtml(){
-  return `<div class="billing-loading" role="status"><span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span><span>Getting your credits ready…</span></div>`;
+  return `<div class="billing-loading" role="status"><span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span><span>Getting your tokens ready…</span></div>`;
 }
 function billingBodyHtml(){
   const b = billingOwner === billingIdentity() ? billingCache : null;
   return `<div class="billing-content">
-    <header class="billing-intro"><span class="billing-eyebrow">Billing & credits</span><h2>A little fuel for big ideas.</h2><p>For everything you and ${esc((state.agent && state.agent.name) || 'your agent')} want to do next.</p></header>
+    <header class="billing-intro"><span class="billing-eyebrow">Billing & tokens</span><h2>A little fuel for big ideas.</h2><p>For everything you and ${esc((state.agent && state.agent.name) || 'your agent')} want to do next.</p></header>
     <div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div>
     <section class="billing-plans" aria-labelledby="billing-plans-title"><div class="billing-section-heading"><h3 id="billing-plans-title">Find your kind of room</h3><p>Start small. Grow when you’re ready.</p></div><div id="plancards">${b ? planCards(b) : ''}</div></section>
-    ${billingShopHtml()}
+    <div id="billshop">${billingShopHtml(b)}</div>
   </div>`;
 }
 function loadBillingContent(){
-  wireBillingSliders($('#plancards'));
-  const body = $('#billbody'), cards = $('#plancards');
+  const body = $('#billbody'), cards = $('#plancards'), shop = $('#billshop');
   getBilling().then(b => {
     if (!body || !body.isConnected) return;
     if (!b) {
@@ -1426,7 +1337,8 @@ function loadBillingContent(){
       return;
     }
     body.innerHTML = billSummary(b);
-    if (cards && cards.isConnected) { cards.innerHTML = planCards(b); wireBillingSliders(cards); }
+    if (cards && cards.isConnected) cards.innerHTML = planCards(b);
+    if (shop && shop.isConnected) shop.innerHTML = billingShopHtml(b);
   });
 }
 function paintBilling(M){
@@ -1437,11 +1349,10 @@ function paintBilling(M){
 /* ================================================================
    REFERRAL GIFT — "Free $50 gift card" (Stripe $50 face value, split)
    $25 you + $25 friend as credits. You are credited ONLY after your
-   friend redeems (one reward per unique friend). Scratch to reveal,
-   then copy code / share link. Friend redeems in this same popup.
+   friend redeems (one reward per unique friend). The code and invite
+   actions are visible immediately. Friend redeems in this same popup.
    ================================================================ */
 let giftCache = null; // {code, link, invited, earnedCredits, rewardEach, ...}
-let giftRevealed = false;
 async function getGift(prefillCode){
   if (giftCache && giftCache.code && !prefillCode) return giftCache;
   const j = await window.LingonAuth.api('/api/referrals/mine');
@@ -1456,20 +1367,26 @@ function closeGift(){
 function openGift(prefillCode){
   if (!signedIn()){ renderAuth(); toast('Sign in to claim your gift card.'); return; }
   closeGift();
-  giftRevealed = false;
   const overlay = el(`<div id="giftmodal" role="dialog" aria-modal="true" aria-labelledby="giftmodal-title">
     <div class="giftmodal-card">
       <button class="iconbtn giftmodal-x" data-act="closegift" aria-label="Close gift">${icon('x',16)}</button>
-      <div class="giftmodal-head"><span class="giftmodal-ico">${icon('gift',22)}</span>
-        <div><h2 id="giftmodal-title">Free $50 gift card</h2>
-        <p class="msub">$25 for you + $25 for each friend — as credits in the app. You get yours the moment your friend redeems. One reward per friend.</p></div>
+      <div class="giftmodal-head">
+        <div class="giftmodal-brand">${Mascot.logo(25)}<span>belna</span><span class="giftmodal-brand-divider"></span><span>For you & a friend</span></div>
+        <h2 id="giftmodal-title">A free $50 gift, together.</h2>
+        <p class="msub">Give a friend 500,000 Belna tokens. When they redeem your invite, you get 500,000 too.</p>
       </div>
-      <div class="giftmodal-body"><p class="mut" style="text-align:center">Scratch off your code…</p></div>
+      <div class="giftmodal-body"><p class="mut giftmodal-loading">Getting your gift ready…</p></div>
     </div>
   </div>`);
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeGift(); });
-  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape'){ e.stopPropagation(); closeGift(); } });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape'){ e.stopPropagation(); closeGift(); }
+    if (e.key === 'Enter' && e.target.id === 'giftfriendcode'){
+      e.preventDefault(); e.stopPropagation();
+      overlay.querySelector('[data-act="gift-redeem"]')?.click();
+    }
+  });
   setTimeout(() => { const x = overlay.querySelector('.giftmodal-x'); if (x) x.focus({ preventScroll: true }); }, 50);
   getGift(prefillCode).then((g) => {
     const body = overlay.querySelector('.giftmodal-body');
@@ -1478,98 +1395,30 @@ function openGift(prefillCode){
     const friendCode = String(g.prefill || '').toUpperCase();
     const showFriendBox = !!friendCode && friendCode !== String(g.code).toUpperCase();
     body.innerHTML = `
-      <div class="scratch" id="scratch">
-        <div class="scratch-code"><span class="scratch-label">Your gift code</span><b id="giftcode-text">${esc(g.code)}</b>
-          <span class="scratch-state" id="scratch-state">Scratch to reveal, then copy & share</span></div>
-        <canvas id="scratch-canvas" aria-label="Scratch off to reveal your gift code"></canvas>
+      <div class="referral-giftcard" aria-label="Belna $50 gift card, $25 for each friend">
+        <div class="referral-giftcard-top"><span class="referral-giftcard-brand">${Mascot.logo(35)}<b>belna</b></span><span class="referral-giftcard-type">GIFT CARD</span></div>
+        <div class="referral-giftcard-value"><strong>$50</strong><span>to share</span></div>
+        <div class="referral-giftcard-bottom"><span>Something good is better together.</span><b>500,000 tokens each</b></div>
       </div>
-      <div class="giftmodal-row">
-        <button class="btn" data-act="gift-copy-code">${icon('copy',14)} Copy code</button>
-        <button class="btn ghost" data-act="gift-copy-link">${icon('copy',14)} Copy invite link</button>
-        <button class="btn ghost" data-act="gift-share">${icon('chatb',14)} Share</button>
+      <div class="giftmodal-code">
+        <div class="giftmodal-code-text"><span>Your invite code</span><strong id="giftcode-text">${esc(g.code)}</strong></div>
+        <button class="giftmodal-copy" data-act="gift-copy-code" aria-label="Copy invite code">${icon('copy',16)}<span>Copy code</span></button>
       </div>
-      <div class="giftmodal-link"><span id="giftlink-text">${esc(g.link || '')}</span></div>
-      <div class="giftmodal-stats"><span>${icon('spark',13)} <b>${fmtC(g.rewardEach || 50)}</b> credits each ($${esc(String((g.eachUsd != null ? g.eachUsd : 25)))})</span><span>·</span><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span>·</span><span><b>${fmtC(g.earnedCredits || 0)}</b> credits earned</span></div>
+      <div class="giftmodal-actions">
+        <button class="giftmodal-action giftmodal-action-primary" data-act="gift-share">${icon('share',17)}<span>Share invite</span></button>
+        <button class="giftmodal-action" data-act="gift-copy-link">${icon('copy',17)}<span>Copy invite link</span></button>
+      </div>
+      <div class="giftmodal-stats"><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span class="giftmodal-stat-dot" aria-hidden="true"></span><span><b>${fmtTokens(Number(g.invited || 0) * 500000)}</b> tokens earned</span></div>
       <div class="giftmodal-redeem">
-        <label class="billing-label" for="giftfriendcode">Have a friend’s code? Redeem it here — you both get credits.</label>
-        <div class="billing-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
-        <button class="btn ghost small" data-act="gift-redeem">Redeem</button></div>
-        <span class="billing-fine">Same $50 Stripe gift card value. Credits land instantly and show in Billing + your credit meter.</span>
-      </div>
-      <button class="btn ghost small" data-act="gift-reveal" id="gift-reveal-btn">Can’t scratch? Tap to reveal</button>`;
-    wireScratch();
+        <div class="giftmodal-redeem-head"><span class="giftmodal-redeem-ico">${icon('gift',18)}</span><div><h3>Have a friend’s invite?</h3><p>Redeem their code and you’ll both get 500,000 tokens.</p></div></div>
+        <label class="giftmodal-redeem-label" for="giftfriendcode">Friend’s invite code</label>
+        <div class="giftmodal-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
+        <button class="btn" data-act="gift-redeem">Redeem code</button></div>
+      </div>`;
   }).catch(() => {
     const body = overlay.querySelector('.giftmodal-body');
     if (body) body.innerHTML = `<p class="mut">Couldn’t load your gift right now.</p><button class="btn" data-act="opengift">Try again</button>`;
   });
-}
-function giftRevealDone(){
-  if (giftRevealed) return;
-  giftRevealed = true;
-  const cv = $('#scratch-canvas'), st = $('#scratch-state'), box = $('#scratch');
-  if (cv) { cv.style.transition = 'opacity .35s'; cv.style.opacity = '0'; setTimeout(() => cv.remove(), 380); }
-  if (st) st.textContent = 'Revealed — copy your code & share the link';
-  if (box) box.classList.add('revealed');
-}
-function wireScratch(){
-  const cv = $('#scratch-canvas'), box = $('#scratch');
-  if (!cv || !box) return;
-  const fit = () => {
-    const r = box.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    cv.width = Math.max(1, Math.round(r.width * dpr));
-    cv.height = Math.max(1, Math.round(r.height * dpr));
-    const ctx = cv.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, cv.width, cv.height);
-    grad.addColorStop(0, '#c7ccd6'); grad.addColorStop(0.5, '#aeb5c2'); grad.addColorStop(1, '#d4d9e2');
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, cv.width, cv.height);
-    ctx.fillStyle = 'rgba(255,255,255,.85)';
-    ctx.font = `${Math.round(cv.height * 0.22)}px system-ui, sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('SCRATCH', cv.width / 2, cv.height / 2);
-    // faint coins for texture
-    ctx.fillStyle = 'rgba(255,255,255,.35)';
-    for (let i = 0; i < 40; i++) ctx.fillRect(Math.random() * cv.width, Math.random() * cv.height, 3 * dpr, 3 * dpr);
-  };
-  fit();
-  let drawing = false, moves = 0;
-  const pos = (e) => {
-    const r = cv.getBoundingClientRect();
-    const p = (e.touches && e.touches[0]) || e;
-    return { x: (p.clientX - r.left) / r.width * cv.width, y: (p.clientY - r.top) / r.height * cv.height };
-  };
-  const erase = (e) => {
-    if (!drawing) return;
-    if (e.cancelable) e.preventDefault();
-    const ctx = cv.getContext('2d');
-    const { x, y } = pos(e);
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.beginPath();
-    ctx.arc(x, y, Math.max(cv.width, cv.height) * 0.045, 0, Math.PI * 2);
-    ctx.fill();
-    if (++moves % 12 === 0) checkCleared();
-  };
-  const checkCleared = () => {
-    try {
-      const ctx = cv.getContext('2d');
-      const w = 24, h = Math.max(1, Math.round(cv.height / cv.width * 24));
-      const d = ctx.getImageData(0, 0, cv.width, cv.height);
-      let clear = 0, total = 0;
-      const step = 37; // sample every Nth alpha byte (cheap)
-      for (let i = 3; i < d.data.length; i += 4 * step){ total++; if (d.data[i] < 40) clear++; }
-      void w; void h;
-      if (total && clear / total > 0.45) giftRevealDone();
-    } catch {}
-  };
-  cv.addEventListener('pointerdown', (e) => { drawing = true; cv.setPointerCapture && cv.setPointerCapture(e.pointerId); erase(e); });
-  cv.addEventListener('pointermove', erase);
-  window.addEventListener('pointerup', () => { drawing = false; }, { once: false });
-  cv.addEventListener('touchstart', (e) => { drawing = true; erase(e); }, { passive: false });
-  cv.addEventListener('touchmove', erase, { passive: false });
-  cv.addEventListener('touchend', () => { drawing = false; checkCleared(); });
-  window.addEventListener('resize', fit);
 }
 function giftAutoOpenFromUrl(){
   try {
@@ -1996,7 +1845,7 @@ function renderPromo(){
           <textarea id="pprompt" rows="2" placeholder="Be Alva handla på ICA, betala fakturorna, planera barnens schema…"></textarea>
           <div class="attach-pills"></div>
           <div class="pb-row">
-            <span class="iconbtn" data-act="attach" title="Attach files">${icon('plus',17)}</span>
+            <button type="button" class="iconbtn" data-act="attach" title="Attach files" aria-label="Attach files">${icon('plus',17)}</button>
             <span style="display:flex;gap:10px;align-items:center">
               <button type="submit" class="micbtn" title="Send">${icon('up',17)}</button>
             </span>
@@ -2036,8 +1885,8 @@ function renderLanding(){
       <a class="abrand" href="/" data-act="top">${Mascot.logo(28)}belna</a>
       <div class="navlinks"><a href="/#agent" data-act="scroll" data-t="#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div class="anav-cta">
-        <a class="btn ghost small" href="/" data-act="signin-nav">Sign in</a>
-        <a class="btn small" href="/#cta" data-act="open-app">Get started</a>
+        <a class="btn ghost small" href="/app" data-act="signin-nav">Sign in</a>
+        <a class="btn small" href="/app" data-act="open-app">Get started</a>
       </div>
     </nav></div>
 
@@ -2051,7 +1900,7 @@ function renderLanding(){
           <textarea id="lprompt" rows="2" placeholder="Ask Belna to do my taxes..."></textarea>
           <div class="attach-pills"></div>
           <div class="pb-row">
-            <span class="iconbtn" data-act="attach" title="Attach files">${icon('plus',17)}</span>
+            <button type="button" class="iconbtn" data-act="attach" title="Attach files" aria-label="Attach files">${icon('plus',17)}</button>
             <span style="display:flex;gap:10px;align-items:center">
               <button type="submit" class="micbtn" title="Send">${icon('up',17)}</button>
             </span>
@@ -2141,10 +1990,10 @@ function renderLanding(){
             <span class="orbit-ring orbit-one"></span>
             <span class="orbit-ring orbit-two"></span>
             <span class="orbit-ring orbit-three"></span>
-            <span class="orbit-agent oa-one">${Mascot.svg('lingon','happy',64)}</span>
-            <span class="orbit-agent oa-two">${Mascot.svg('blueberry','think',58)}</span>
-             <span class="orbit-agent oa-three">${Mascot.svg('moss','happy',54)}</span>
-             <span class="orbit-agent oa-four">${Mascot.svg('rose','idle',50)}</span>
+            <span class="orbit-agent oa-one" title="Family schedule">${Mascot.svg('lingon','happy',64,'','schedule')}</span>
+            <span class="orbit-agent oa-two" title="School">${Mascot.svg('blueberry','think',58,'','school')}</span>
+             <span class="orbit-agent oa-three" title="Football practice">${Mascot.svg('moss','happy',54,'','football')}</span>
+             <span class="orbit-agent oa-four" title="Grocery shopping">${Mascot.svg('rose','happy',50,'','bag')}</span>
              <div class="compare-mascot">${Mascot.laptop()}</div>
            </div>
         </article>
@@ -2171,17 +2020,18 @@ function renderLanding(){
         </div>
         <div class="panel model-card">
           <div class="mc-title">Arche 1.0 vs frontier models</div>
+          <div class="mc-scroll-hint">Swipe table to compare models →</div>
           <div class="mc-table"><table class="btable">
-            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th></tr></thead>
+            <thead><tr><th>Benchmark</th><th class="star">Kimi K3<br><small>Arche foundation</small></th><th>GPT-6.0 Sol</th><th>Claude Opus 5.5</th><th>GPT-6.0 Astra</th></tr></thead>
             <tbody>
-              <tr><td>GPQA Diamond</td><td class="star">93.5</td><td>94.1</td><td>93.8</td><td>92.6</td></tr>
-              <tr><td>Terminal-Bench 2.1</td><td class="star">88.3</td><td>88.8</td><td>87.5</td><td>88.0</td></tr>
-              <tr><td>BrowseComp</td><td class="star">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td></tr>
-              <tr><td>OSWorld-Verified</td><td class="star">84.8</td><td>83.0</td><td>84.2</td><td>85.0</td></tr>
-              <tr><td>SWE-Marathon</td><td class="star">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td></tr>
+              <tr><td>GPQA Diamond</td><td class="star">93.5%</td><td>—</td><td>—</td><td>96.0%</td></tr>
+              <tr><td>BrowseComp</td><td class="star">91.2%</td><td>—</td><td>—</td><td>91.5%</td></tr>
+              <tr><td>DeepSWE v1.1</td><td class="star">67.5%</td><td>68.8%</td><td>—</td><td>74.1%</td></tr>
+              <tr><td>AutomationBench*</td><td class="star">30.8%</td><td>33.2%</td><td>40.0%</td><td>41.4%</td></tr>
+              <tr><td>Terminal-Bench 4.0</td><td class="star">—</td><td>—</td><td>66.4%</td><td>57.9%</td></tr>
             </tbody>
           </table></div>
-          <div class="fineprint mc-foot"><span>Full results and methodology in <a href="/research-arche-1-0">Research → Arche 1.0</a></span></div>
+          <div class="fineprint mc-foot"><span>Published vendor results; Kimi K3 scores are for Arche’s foundation model. *AutomationBench setups differ. Methods and sources in <a href="/research-arche-1-0#results">Research → Arche 1.0</a>.</span></div>
         </div>
       </div>
     </section>
@@ -2194,7 +2044,7 @@ function renderLanding(){
           <textarea id="lprompt2" rows="2" placeholder="Tell your agent… e.g. Plan my week, build me a page, research a topic"></textarea>
           <div class="attach-pills"></div>
           <div class="pb-row">
-            <span class="iconbtn" data-act="attach" title="Attach files">${icon('plus',17)}</span>
+            <button type="button" class="iconbtn" data-act="attach" title="Attach files" aria-label="Attach files">${icon('plus',17)}</button>
             <span style="display:flex;gap:10px;align-items:center">
               <button type="submit" class="micbtn" title="Send">${icon('up',17)}</button>
             </span>
@@ -2206,7 +2056,7 @@ function renderLanding(){
     <footer class="afooter"><div class="fin">
       <div><div class="abrand">${Mascot.logo(28)}belna</div></div>
       <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
-      <div><h4>Company</h4><a href="/#cta" data-act="open-app">Get started</a><a href="/" data-act="signin-nav">Sign in</a></div>
+      <div><h4>Company</h4><a href="/app" data-act="open-app">Get started</a><a href="/app" data-act="signin-nav">Sign in</a></div>
       <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div>
     </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
   </div>`;
@@ -2230,6 +2080,12 @@ function renderLanding(){
   wirePromptBox(document.getElementById('lform'), document.getElementById('lprompt'));
   wirePromptBox(document.getElementById('lform2'), document.getElementById('lprompt2'));
   belnaStartTypewriter();
+  // The landing sections are rendered after navigation, so a hash from a
+  // public page can resolve before its target exists in the document.
+  const landingTarget = window.location.hash.slice(1);
+  if (landingTarget === 'agent' || landingTarget === 'cta') {
+    requestAnimationFrame(() => document.getElementById(landingTarget)?.scrollIntoView({ block:'start' }));
+  }
 }
 
 async function landingRun(prompt){
@@ -2456,9 +2312,9 @@ const THEMES = [
   { id:'grey', name:'Standard Grey', c:'#5A5D63' },
   { id:'brick', name:'Classic Blue', c:'#3B6DD9' },
   { id:'blue', name:'Blue', c:'#4353C6' },
-  { id:'yellow', name:'Yellow', c:'#C6922A' },
-  { id:'green', name:'Green', c:'#5F8344' },
-  { id:'pink', name:'Pink', c:'#C96B94' },
+  { id:'yellow', name:'Yellow', c:'#8A6D1A' },
+  { id:'green', name:'Green', c:'#4E7A38' },
+  { id:'pink', name:'Pink', c:'#B14E85' },
 ];
 function applyTheme(){
   if (!THEMES.some(t => t.id === state.theme)) state.theme = 'grey';
@@ -2534,6 +2390,12 @@ function wireShellKeys(){
   shellKeysWired = true;
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (state.goalMenu && state.view === 'goals'){
+      const id = state.goalMenu;
+      state.goalMenu = null; paintGoals($('#main'));
+      $('#main [data-act="goal-menu"][data-id="' + id + '"]')?.focus();
+      e.preventDefault(); return;
+    }
     if (mobileNavOpen){ e.preventDefault(); setMobileNav(false, { refocus:true }); return; }
     if (canvasShouldShow() && window.matchMedia('(max-width: 1100px)').matches){ e.preventDefault(); setCanvasOpen(false); }
   });
@@ -2780,14 +2642,17 @@ function libCardHtml(item){
 }
 const FALLBACK_SYSTEM_TOOLS = [
   ['capability_search','function','Find the live agent capability that matches a request.'],
-  ['web_search','web','Search public sources and fetch allowlisted pages.'],
+  ['web_search','web','Search the web and read public pages.'],
   ['composio_apps','function','List the apps connected to this account.'],
   ['composio_tools','function','Discover enabled tools for one connected app.'],
   ['composio_execute','function','Run an enabled connected-app action after approval when required.'],
   ['shell','code','Run commands in the private workspace worker.'],
   ['code_run','code','Run JavaScript, Python, or Bash in the hardened workspace worker.'],
-  ['browser_open','browser','Open an allowlisted page in the isolated agent browser.'],
-  ['browser_action','browser','Interact with the current isolated browser page.'],
+  ['browser_open','browser','Open any public page in the isolated agent browser.'],
+  ['browser_action','browser','Click, type, scroll and navigate the current page like a person.'],
+  ['browser_submit','browser','Finish a purchase, booking, message or account change on a website with owner approval.'],
+  ['computer_action','computer','Use the virtual computer: click, type, scroll and open apps like a person.'],
+  ['computer_submit','computer','Finish a purchase, booking, message or account change on the computer with owner approval.'],
   ['computer_screenshot','browser','Display the current isolated browser page.'],
   ['build_page','code','Create a single-file HTML artifact from a brief.'],
   ['canvas_show','function','Show a real result or file in Canvas.'],
@@ -2832,7 +2697,7 @@ function systemDocumentItems(){
     { id:'system:agents', key:'agents', title:'AGENTS.md', folder:'agent', path:'/agent/AGENTS.md', content:docs.agents, editable:true, description:'Your working agreement for planning, verification, and approvals.', at:state.agentContext?.updatedAt || Date.now() },
     { id:'system:tools', key:'tools', title:'TOOLS.md', folder:'agent', path:'/agent/TOOLS.md', content:systemToolsDocument(), editable:false, description:'The live runtime capability manifest. Read-only; permissions stay enforced by Lingon.', at:Date.now() },
     { id:'system:user', key:'user', title:'USER.md', folder:'user', path:'/user/USER.md', content:docs.user, editable:true, description:'Stable preferences and background that you want the agent to remember.', at:state.agentContext?.updatedAt || Date.now() },
-    { id:'system:memory', key:'memory', title:'MEMORY.md', folder:'memory', path:'/memory/MEMORY.md', content:memoryDocumentContent(), editable:false, description:'A generated view of durable memory. Edit entries in Settings → Memory.', at:Date.now() },
+    { id:'system:memory', key:'memory', title:'MEMORY.md', folder:'memory', path:'/memory/MEMORY.md', content:memoryDocumentContent(), editable:false, description:'A generated view of durable memory. Manage entries in Library → Memory.', at:Date.now() },
   ];
 }
 function systemFolderItems(){
@@ -2913,7 +2778,7 @@ function refreshSystemFiles(force = false){
       state.agentContext = { ...(state.agentContext || {}), revision:Number(out.revision || state.agentContext?.revision || 0), documents:{ ...((state.agentContext || {}).documents || {}), ...out.documents } };
     }
     save();
-    if (state.view === 'settings' && state.settingsTab === 'library' && $('#main')) paintSettings($('#main'));
+    if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
   }).catch(() => {}).finally(() => { systemFilesCheckedAt = Date.now(); systemFilesPending = null; });
   systemFilesPending = request;
   return request;
@@ -2938,7 +2803,7 @@ function addLibraryUploads(fileList){
         toast('That file could not be kept in this browser. Try a smaller file.');
         return;
       }
-      if (state.view === 'settings' && state.settingsTab === 'library' && $('#main')) paintSettings($('#main'));
+      if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
       if (added === files.length) toast(`${added} file${added === 1 ? '' : 's'} uploaded to Library.`);
     };
     reader.onerror = () => toast(`Could not read ${file.name}.`);
@@ -3048,6 +2913,7 @@ function approvalHeadline(row){
   if (/gmail/.test(slug) && /read|fetch|list|get/.test(slug)) return 'Read email in Gmail';
   if (/mail_send|send.*email|email.*gmail/.test(slug + ' ' + String(row.title || '').toLowerCase())) return 'Send this email in Gmail';
   if (/mail_read/.test(slug)) return 'Read email in Gmail';
+  if (/browser_submit|computer_submit|fill_secret/.test(slug + ' ' + String(row.title || '').toLowerCase())) return args && args.summary ? String(args.summary).slice(0, 140) : 'Finish this step for you';
   if (host && !/web_fetch|browser/.test(slug)) return 'Share info with ' + host;
   if (/web_fetch|browser|http/.test(slug) || host) return 'Web access for this task';
   const raw = String(row.title || '').trim();
@@ -3126,7 +2992,7 @@ function paintSide(){
   let libCount = 0;
   try { libCount = artifactRows().length; } catch { libCount = 0; }
   const gc = goalCounts();
-  const libOn = state.view === 'settings' && state.settingsTab === 'library';
+  const libOn = state.view === 'library';
   const goalsOn = state.view === 'goals';
   $('#side').innerHTML = `
     <button class="sidebrand" data-act="nav" data-view="chat" title="Belna — back to chat">${Mascot.logo(28)}<span>belna</span></button>
@@ -3152,7 +3018,7 @@ function paintSide(){
       </div>
     </div>
     <div class="sidebottom">
-      <div class="usagecard" id="usagecard">${billingOwner === billingIdentity() && billingCache ? usageCardHtml(billingCache) : '<span class="usage-loading" role="status">Getting your credits ready…</span>'}</div>
+      <div class="usagecard" id="usagecard">${billingOwner === billingIdentity() && billingCache ? usageCardHtml(billingCache) : '<span class="usage-loading" role="status">Getting your tokens ready…</span>'}</div>
       <div class="userwrap">
         ${state.userMenuOpen ? `<div class="usermenu pop">
           <button class="sitem" data-act="nav" data-view="settings">${icon('gear',15)} Settings</button>
@@ -3179,17 +3045,14 @@ function paintSide(){
     }).catch(() => {});
   } catch {}
 }
-function themeMascotColor(){
-  return ({ grey:'charcoal', brick:'lingon', blue:'blueberry', yellow:'sun', green:'moss', pink:'rose' })[state.theme] || 'lingon';
-}
 function usageCardHtml(b){
   const v = creditView(b);
-  const note = v.tone === 'empty' ? 'Ready for a top-up' : v.tone === 'low' ? 'A little low on credits' : `${fmtC(v.used)} of ${fmtC(v.granted)} used`;
+  const note = v.tone === 'empty' ? 'Ready for a top-up' : v.tone === 'low' ? 'A little low on tokens' : `${fmtTokens(v.used)} of ${fmtTokens(v.granted)} used`;
   return `<div class="usage-content credit-tone-${v.tone}">
-    <div class="usage-balance"><strong>${fmtC(v.remaining)}</strong><span>credits left</span></div>
+    <div class="usage-balance"><strong>${fmtTokens(v.remaining)}</strong><span>tokens left</span></div>
     ${creditMeterHtml(v)}<div class="usage-caption">${note}</div>
-    <div class="usage-footer"><span class="usage-companion">${Mascot.svg(themeMascotColor(),'happy',28)}</span>${icon('aur',14)}</div>
-    <button class="usage-link" data-act="nav" data-view="billing" aria-label="View billing and credits" title="View billing and credits"></button>
+    <div class="usage-footer"><span class="usage-companion">${Mascot.svg('lingon','happy',28)}</span>${icon('aur',14)}</div>
+    <button class="usage-link" data-act="nav" data-view="billing" aria-label="View billing and tokens" title="View billing and tokens"></button>
   </div>`;
 }
 
@@ -3199,40 +3062,26 @@ function paintGoals(M){
   const filter = state.goalFilter || 'all';
   const catFilter = state.goalCat || 'all';
   const gc = goalCounts();
-  const subDone = goals.reduce((n, g) => n + (g.subgoals || []).filter(s => s.done).length, 0);
-  const subTotal = goals.reduce((n, g) => n + (g.subgoals || []).length, 0);
+  const completion = gc.total ? Math.round(gc.done / gc.total * 100) : 0;
   let list = goals.slice().sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
   if (filter === 'active') list = list.filter(g => g.active && !g.done);
   if (filter === 'done') list = list.filter(g => g.done);
   if (catFilter !== 'all') list = list.filter(g => (g.category || 'other') === catFilter);
   M.innerHTML = `<div class="page"><div class="pageinner goals-page">
-    <div class="phead"><h1>Goals</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip acc">${icon('target',12)} ${gc.active} active</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">Track health, family, finance, career, interests and anything else. Mark goals active, break them into sub-goals, and check them off when done.</p>
-    <div class="goal-stats">
-      <div class="goal-stat"><b>${gc.total}</b><small>Total goals</small></div>
-      <div class="goal-stat"><b>${gc.active}</b><small>Active</small></div>
-      <div class="goal-stat"><b>${gc.done}</b><small>Completed</small></div>
-      <div class="goal-stat"><b>${subDone}/${subTotal}</b><small>Sub-goals done</small></div>
-    </div>
-    <div class="goal-composer card">
-      <div class="goal-composer-row">
-        <input class="field" id="goal-title" placeholder="New goal — e.g. Run 5 km three times a week" maxlength="120">
-        <select class="field" id="goal-cat" aria-label="Goal category" style="max-width:170px">
-          ${GOAL_CATS.map(c => `<option value="${c.id}">${c.label}</option>`).join('')}
-        </select>
-        <button class="btn small" data-act="goal-add">${icon('plus',14)} Add goal</button>
-      </div>
-      <div class="goal-hint mut">Pick a category, add it, then break it into sub-goals below.</div>
-    </div>
-    <div class="seg goals-filter">
+    <section class="goals-hero">
+      <div class="goals-hero-copy"><span class="goals-eyebrow">Your direction</span><h1>Goals</h1><p>Make space for what matters. Your agent can help you turn an idea into a plan, one step at a time.</p><button class="btn goals-create" data-act="goal-start">${icon('plus',16)} Create goal</button></div>
+      <div class="goals-hero-art" aria-hidden="true"><span class="goals-orbit goals-orbit-one"></span><span class="goals-orbit goals-orbit-two"></span>${Mascot.svg(state.agent.color,'happy',116)}</div>
+    </section>
+    <section class="goals-overview" aria-label="Goal progress"><div><span class="goals-overview-label">Your progress</span><strong>${gc.done}<span> / ${gc.total}</span></strong><small>goals completed</small></div><div class="goals-overview-right"><span>${gc.active} in progress</span><b>${completion}%</b><div class="goals-overview-track"><i style="width:${completion}%"></i></div></div></section>
+    <section class="goals-categories" aria-label="Goal categories"><div class="goal-section-heading"><h2>Categories</h2><span>Find what matters to you</span></div><div class="goal-cats">
+      <button class="goal-category${catFilter === 'all' ? ' on' : ''}" data-act="goal-cat" data-c="all" aria-pressed="${catFilter === 'all'}"><span class="goal-category-icon">${icon('grid',17)}</span><span>All</span><small>${gc.total}</small></button>
+      ${GOAL_CATS.map(c => `<button class="goal-category${catFilter === c.id ? ' on' : ''}" data-act="goal-cat" data-c="${c.id}" aria-pressed="${catFilter === c.id}"><span class="goal-category-icon">${icon(c.ic,17)}</span><span>${c.label}</span><small>${goals.filter(g => (g.category || 'other') === c.id).length}</small></button>`).join('')}
+    </div></section>
+    <section class="goals-list-section"><div class="goal-section-heading"><h2>Your goals</h2><div class="seg goals-filter" aria-label="Filter goals">
       <button class="${filter === 'all' ? 'on' : ''}" data-act="goal-filter" data-f="all">All</button>
       <button class="${filter === 'active' ? 'on' : ''}" data-act="goal-filter" data-f="active">Active</button>
       <button class="${filter === 'done' ? 'on' : ''}" data-act="goal-filter" data-f="done">Done</button>
-    </div>
-    <div class="goal-cats">
-      <button class="chip${catFilter === 'all' ? ' acc' : ''}" data-act="goal-cat" data-c="all">All areas</button>
-      ${GOAL_CATS.map(c => `<button class="chip${catFilter === c.id ? ' acc' : ''}" data-act="goal-cat" data-c="${c.id}">${icon(c.ic,12)} ${c.label}</button>`).join('')}
-    </div>
+    </div></div>
     <div class="goal-list">
       ${list.map(g => {
         const c = goalCat(g.category);
@@ -3240,40 +3089,35 @@ function paintGoals(M){
         const subs = Array.isArray(g.subgoals) ? g.subgoals : [];
         return `<article class="goal-card card${g.done ? ' is-done' : ''}${g.active && !g.done ? ' is-active' : ''}">
           <div class="goal-head">
-            <button class="goal-check${g.done ? ' on' : ''}" data-act="goal-done" data-id="${g.id}" title="${g.done ? 'Mark as not done' : 'Mark as done'}" aria-pressed="${g.done ? 'true' : 'false'}">${icon('check',14)}</button>
+            <button class="goal-check${g.done ? ' on' : ''}" data-act="goal-done" data-id="${g.id}" title="${g.done ? 'Mark as not done' : 'Mark as done'}" aria-label="${g.done ? 'Mark as not done' : 'Mark as done'}: ${esc(g.title)}" aria-pressed="${g.done ? 'true' : 'false'}">${icon('check',16)}</button>
             <div class="goal-title-wrap">
               <b class="goal-title">${esc(g.title)}</b>
-              <div class="goal-meta"><span class="chip">${icon(c.ic,11)} ${c.label}</span>
-                ${g.active && !g.done ? '<span class="chip green">Active</span>' : ''}
-                ${g.done ? '<span class="chip green">Done</span>' : ''}
-                <span class="mut" style="font-size:11.5px">${subs.filter(s => s.done).length}/${subs.length} sub-goals · ${pct}%</span>
+              <div class="goal-meta"><span class="goal-category-label">${icon(c.ic,13)} ${c.label}</span>
+                <span class="goal-status${g.done ? ' done' : g.active ? ' active' : ''}">${g.done ? 'Done' : g.active ? 'In progress' : 'Paused'}</span>
+                ${subs.length ? `<span class="goal-sub-count">${subs.filter(s => s.done).length} of ${subs.length} steps</span>` : ''}
               </div>
             </div>
-            <div class="goal-actions">
-              ${g.done ? '' : `<button class="btn ${g.active ? 'ghost' : 'soft'} tiny" data-act="goal-active" data-id="${g.id}">${g.active ? 'Pause' : 'Set active'}</button>`}
-              <button class="iconbtn" data-act="goal-del" data-id="${g.id}" title="Delete goal">${icon('trash',14)}</button>
+            <div class="goal-menu-wrap">
+              <button class="goal-more" data-act="goal-menu" data-id="${g.id}" title="More options for ${esc(g.title)}" aria-label="More options for ${esc(g.title)}" aria-expanded="${state.goalMenu === g.id}">${icon('more',19)}</button>
+              ${state.goalMenu === g.id ? `<div class="goal-menu pop" role="menu">${g.done ? '' : `<button role="menuitem" data-act="goal-active" data-id="${g.id}">${icon(g.active ? 'clock' : 'up',15)} ${g.active ? 'Pause goal' : 'Resume goal'}</button>`}<button role="menuitem" data-act="goal-del" data-id="${g.id}">${icon('trash',15)} Delete goal</button></div>` : ''}
             </div>
           </div>
-          <div class="goal-bar"><i style="width:${pct}%"></i></div>
+          ${subs.length ? `<div class="goal-bar" role="progressbar" aria-label="${esc(g.title)} progress" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>` : ''}
           <div class="sub-list">
             ${subs.map(s => `<div class="sub-row${s.done ? ' is-done' : ''}">
-              <button class="goal-check small${s.done ? ' on' : ''}" data-act="sub-done" data-id="${g.id}" data-sub="${s.id}" title="Check off sub-goal">${icon('check',12)}</button>
+              <button class="goal-check small${s.done ? ' on' : ''}" data-act="sub-done" data-id="${g.id}" data-sub="${s.id}" title="${s.done ? 'Mark step as not done' : 'Mark step as done'}" aria-label="${s.done ? 'Mark step as not done' : 'Mark step as done'}: ${esc(s.title)}" aria-pressed="${s.done}">${icon('check',12)}</button>
               <span class="sub-title">${esc(s.title)}</span>
               <button class="ap-x" data-act="sub-del" data-id="${g.id}" data-sub="${s.id}" title="Remove sub-goal">${icon('x',11)}</button>
             </div>`).join('')}
           </div>
           ${g.done ? '' : `<div class="sub-add">
-            <input class="field" id="sub-${g.id}" placeholder="Add a sub-goal…" maxlength="120">
-            <button class="btn ghost small" data-act="sub-add" data-id="${g.id}">${icon('plus',13)} Add</button>
+            <input class="field" id="sub-${g.id}" placeholder="Add a step…" aria-label="Add a step to ${esc(g.title)}" maxlength="120">
+            <button class="btn ghost small" data-act="sub-add" data-id="${g.id}">${icon('plus',13)} Add step</button>
           </div>`}
         </article>`;
-      }).join('') || `<div class="goal-empty card"><span class="goal-empty-mark">${icon('target',22)}</span><div><b>No goals here yet</b><p class="mut">Create your first goal above — e.g. health, finance or career — then add sub-goals to track progress.</p></div></div>`}
-    </div>
+      }).join('') || `<div class="goal-empty card"><span class="goal-empty-mark">${icon('target',22)}</span><div><b>${goals.length ? 'No goals match these filters' : 'Start with one meaningful goal'}</b><p>${goals.length ? 'Try another category or status to find your goal.' : 'Tell your agent what you want to achieve. You can shape the details together in chat.'}</p></div>${goals.length ? '' : `<button class="btn small" data-act="goal-start">${icon('plus',14)} Create goal</button>`}</div>`}
+    </div></section>
   </div></div>`;
-  const title = $('#goal-title');
-  if (title) title.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="goal-add"]')?.click(); }
-  });
   M.querySelectorAll('.sub-add input').forEach(inp => {
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter'){ e.preventDefault(); inp.parentElement?.querySelector('[data-act="sub-add"]')?.click(); }
@@ -3286,11 +3130,12 @@ function paintMain(){
   if (state.view !== 'chat') stopVoice();
   if (state.view === 'chat') return paintChat(M);
   if (state.view === 'settings') return paintSettings(M);
+  if (state.view === 'library') return paintLibrary(M);
   if (state.view === 'apps') return paintApps(M);
   if (state.view === 'goals') return paintGoals(M);
-  // legacy views now live inside Settings tabs
+  // Legacy links continue to reach the current destinations.
   if (state.view === 'vault'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); return paintSettings(M); }
-  if (state.view === 'memory'){ state.view = 'settings'; state.settingsTab = 'memory'; save(); return paintSettings(M); }
+  if (state.view === 'memory'){ state.view = 'library'; state.libraryCat = 'memory'; save(); return paintLibrary(M); }
   if (state.view === 'profile'){ state.view = 'settings'; state.settingsTab = 'profiles'; save(); return paintSettings(M); }
   if (state.view === 'billing'){ state.view = 'settings'; state.settingsTab = 'billing'; save(); return paintSettings(M); }
   return paintChat(M);
@@ -3318,9 +3163,36 @@ function statusFor(c){
   if (runningTask(c)) return 'Sub-agent working · available';
   return c.coordinatorRuns ? 'Replying' : c.busy ? 'Working' : 'Available';
 }
+/* Header mascot: while the agent works it sits at its laptop with headphones
+   and the pill narrates the latest step from this chat (live progress label
+   or tool line). Free → just the name; waiting on you → what it needs. */
+const floatLive = new Map();   // chat id -> { t, at } latest activity
+const floatSince = new Map();  // chat id -> when the current work spell began
+const FLOAT_WAIT = { 'Needs approval':'Needs your approval', 'Connecting':'Waiting for a connection', 'Waiting for a secret':'Waiting for a secret', 'Asking you':'Waiting for your answer' };
+function noteActivity(c, t){
+  const text = String(t || '').replace(/\s*(…|\.\.\.)\s*$/, '').trim();
+  if (!c || !text) return;
+  floatLive.set(c.id, { t: text.length > 60 ? text.slice(0, 59) + '…' : text, at: Date.now() });
+  if (isActive(c)) updateFloat();
+}
+function floatView(c){
+  const status = statusFor(c);
+  if (!status || status === 'Available') { if (c) floatSince.delete(c.id); return { working:false, text:'' }; }
+  if (FLOAT_WAIT[status]) return { working:false, text:FLOAT_WAIT[status] };
+  if (!floatSince.has(c.id)) floatSince.set(c.id, Date.now() - 1000);
+  const live = floatLive.get(c.id);
+  const fresh = live && live.at >= floatSince.get(c.id);
+  return { working:true, text: fresh ? live.t : status.replace(/ · available$/, '') };
+}
 function updateFloat(){
   const s = $('#floatstatus');
-  if (s) s.textContent = statusFor(chat());
+  if (!s) return;
+  const view = floatView(chat());
+  s.closest('.floathead')?.classList.toggle('working', view.working);
+  if (s.textContent === view.text) return;
+  const had = s.textContent;
+  s.textContent = view.text;
+  if (had) { s.classList.remove('swap'); void s.offsetWidth; s.classList.add('swap'); }
 }
 function syncComposerActions(c){
   const input = $('#cprompt');
@@ -3346,17 +3218,19 @@ function paintChat(M){
   const focused = oldPrompt && document.activeElement === oldPrompt;
   const selectionStart = focused ? oldPrompt.selectionStart : 0;
   const selectionEnd = focused ? oldPrompt.selectionEnd : 0;
+  const fv = floatView(c);
   M.innerHTML = `
-    <div class="floathead"><div class="fav">${Mascot.svg(state.agent.color,'idle',40)}</div><div class="pill">${esc(state.agent.name)}<span class="st" id="floatstatus"></span></div></div>
+    <div class="floathead${fv.working ? ' working' : ''}"><div class="fav">${Mascot.head(state.agent.color,44)}</div><div class="pill" role="status" aria-live="polite">${esc(state.agent.name)}<span class="st" id="floatstatus">${esc(fv.text)}</span></div></div>
     <div class="chathead">
       <span class="ttl">${esc(c.title)}</span>
       ${c.source === 'automation' ? `<span class="chip">${icon('clock',12)} sub-agent</span>` : ''}
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
       ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
-      <button class="giftbtn" data-act="opengift" title="Free $50 gift card — scratch, copy & share">${icon('gift',16)}<span>Free $50 gift card</span></button>
+      <button class="giftbtn" data-act="opengift" title="Belna free $50 gift card" aria-label="Open Belna free $50 gift card">${Mascot.logo(18)}<span><b>belna</b> · Free $50 gift card</span></button>
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('easel',16)}</button>
     </div>
+    ${c.goalDraft ? `<div class="goal-chat-panel"><span class="goal-chat-icon">${icon('target',18)}</span><div class="goal-chat-copy"><b>${c.goalDraft.savedId ? 'Goal saved' : 'Create a goal with your agent'}</b><span>${c.goalDraft.savedId ? 'Keep planning here, or open your goals to track progress.' : 'Talk through your idea, then name it and save it here.'}</span></div>${c.goalDraft.savedId ? `<button class="btn small" data-act="goal-view">View goals ${icon('aur',13)}</button>` : `<div class="goal-chat-fields"><input class="field" id="goal-draft-title" value="${esc(c.goalDraft.title || '')}" maxlength="120" placeholder="Name your goal" aria-label="Goal name"><select class="field" id="goal-draft-cat" aria-label="Goal category">${GOAL_CATS.map(cat => `<option value="${cat.id}"${cat.id === c.goalDraft.category ? ' selected' : ''}>${cat.label}</option>`).join('')}</select><button class="btn small" data-act="goal-save">Save goal</button></div>`}</div>` : ''}
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
       ${c.messages.map(m => msgNode(c, m).outerHTML).join('')}
     </div></div>
@@ -3367,7 +3241,7 @@ function paintChat(M){
         <textarea id="cprompt" rows="1" placeholder="Ask ${esc(state.agent.name)} anything…"></textarea>
         <div class="attach-pills"></div>
         <div class="pb-row">
-          <span class="iconbtn" data-act="attach" title="Attach files">${icon('plus',16)}</span>
+          <button type="button" class="iconbtn" data-act="attach" title="Attach files" aria-label="Attach files">${icon('plus',16)}</button>
           <span style="display:flex;gap:10px;align-items:center">
             <button type="button" class="voicebtn" id="cvoice" data-act="voice" title="Speak prompt" aria-label="Speak your prompt" aria-pressed="false">${icon('mic',17)}</button>
             <button type="button" class="micbtn" id="cstop" data-act="managed-stop" title="Stop response" aria-label="Stop response">${icon('stop',17)}</button>
@@ -3390,6 +3264,10 @@ function paintChat(M){
   updateFloat();
   const prompt = $('#cprompt');
   prompt.value = draft;
+  const goalTitle = M.querySelector('#goal-draft-title');
+  if (goalTitle) goalTitle.addEventListener('input', (e) => { c.goalDraft.title = e.target.value; save(); });
+  const goalCategory = M.querySelector('#goal-draft-cat');
+  if (goalCategory) goalCategory.addEventListener('change', (e) => { c.goalDraft.category = e.target.value; save(); });
   if (focused) { prompt.focus({ preventScroll:true }); prompt.setSelectionRange(selectionStart, selectionEnd); }
   $('#cform').addEventListener('submit', e => { e.preventDefault(); const v = $('#cprompt').value.trim(); if (v || pendingFiles.length){ stopVoice(); $('#cprompt').value = ''; sendPrompt(v, pendingFiles.slice()); clearFiles(); } });
   $('#cprompt').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#cform').requestSubmit(); } });
@@ -3660,7 +3538,7 @@ function cardNode(c, m){
     </div>`).join('')}</div></div>`;
 
   if (cd.type === 'browser') return `<div class="acard">
-    ${hd(icon('globe',20),'var(--ink)','#fff','Browser', esc(cd.note || ''))}
+    ${hd(icon(cd.desktop ? 'term' : 'globe',20),'var(--ink)','#fff',cd.desktop ? 'Computer' : 'Browser', esc(cd.note || ''))}
     <div class="bd"><span class="rurl">${esc(cd.url || 'Browser session')}</span></div>
     <div class="stack"><button class="btn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${cd.liveId || cd.status === 'running' ? 'Open live view' : 'View in Canvas'}</button></div></div>`;
 
@@ -3771,8 +3649,10 @@ function makeRT(c){
       }
       if (!task && managedRunTokens.get(c) !== runToken && !(answerReady && ['card', 'artifact', 'trace'].includes(event.type))) return;
       if (event.type === 'progress' && typeof event.label === 'string') {
-        // Internal stages do not create user updates. Published cards stay in
-        // history; new task updates arrive as evidence-backed milestone cards.
+        // Internal stages do not create chat cards (published cards stay in
+        // history; task updates arrive as milestone cards) — they only
+        // narrate the header mascot's status line.
+        if (!task) noteActivity(c, event.label);
         return;
       }
       if (event.type === 'stopped') c.managedStatus = 'stopped';
@@ -3815,7 +3695,7 @@ function makeRT(c){
         if (!m) { m = { id:uid(), managedId:event.id, kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
         else { m.card = card; replaceNode(c,m); }
         if (card.type === 'memory') {
-          if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='settings'&&state.settingsTab==='memory'&&$('#main'))paintSettings($('#main'));}).catch(()=>{});
+          if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='library'&&state.libraryCat==='memory'&&$('#main'))paintLibrary($('#main'));}).catch(()=>{});
           else if (!state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
         }
         if (card.type === 'canvas' && active() && !task) {
@@ -3987,6 +3867,7 @@ function makeRT(c){
       const n = active() ? msgNode(c, m) : null; if (n) append(n);
       for (const it of list){
         m.items.push(it);
+        noteActivity(c, it.t);
         if (n){ n.querySelector('.tools').insertAdjacentHTML('beforeend', tlineHTML(it)); scroll(); }
         rt.trace(it.ic, it.t + (it.d ? ' · ' + it.d : ''));
       }
@@ -4145,7 +4026,7 @@ function runGreet(c){
   Engine.greet(makeRT(c)).finally(() => { c.busy = false; save(); });
 }
 
-function newChat(){
+function newChat(options = {}){
   if (!signedIn()){ renderAuth(); toast('Sign up or log in to start a chat.'); return; }
   ensureOwnerScope();
   if (!state.onboarded || !state.agent || state.agent.provisional){
@@ -4154,10 +4035,17 @@ function newChat(){
     else openOnboarding();
     return;
   }
-  const c = { id: uid(), title:'New chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
+  const c = { id: uid(), title:options.goal ? 'Create a goal' : 'New chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
+  if (options.goal) c.goalDraft = { title:'', category:GOAL_CATS.some(cat => cat.id === state.goalCat) ? state.goalCat : 'other' };
   state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat'; save();
   renderApp();
   runGreet(c);
+  if (options.goal) setTimeout(() => {
+    if ($('#cprompt') && state.activeChat === c.id) {
+      applyPromptText('Help me create a personal goal. Ask what I want to achieve, then help me make it specific and break it into small steps.');
+      $('#cprompt').focus();
+    }
+  }, 0);
 }
 
 /* ---------------- canvas + right-side agent slider ---------------- */
@@ -4199,7 +4087,7 @@ function libraryTabContent(){
   const gridCls = state.libraryLayout === 'list' ? 'lib-grid list' : 'lib-grid';
   return `<div class="lib-layout">
     <aside class="lib-side">
-      <label class="lib-search">${icon('search',15)}<input id="libsearch" class="field lib-search-in" placeholder="Search" value="${esc(state.librarySearch || '')}"></label>
+      ${cat === 'memory' || cat === 'system' ? '' : `<label class="lib-search">${icon('search',15)}<input id="libsearch" class="field lib-search-in" placeholder="Search" value="${esc(state.librarySearch || '')}"></label>`}
       <div class="lib-group">Artifacts</div>
       ${sideBtn('all','grid','All artifacts')}
       ${sideBtn('documents','doc','Documents')}
@@ -4208,10 +4096,10 @@ function libraryTabContent(){
       ${sideBtn('images','image','Images')}
       ${sideBtn('videos','video','Videos')}
        ${sideBtn('podcasts','podcast','Podcasts')}
-       <div class="lib-side-foot">${sideBtn('system','folder','System files')}<span class="lib-side-note">Live context, runtime files, and safe folders</span></div>
+       <div class="lib-side-foot">${sideBtn('memory','book','Memory')}${sideBtn('system','folder','System files')}<span class="lib-side-note">Live context, runtime files, and safe folders</span></div>
      </aside>
      <section class="lib-main">
-       ${cat === 'system' ? systemLibraryBody() : `<div class="lib-head"><div class="lib-title-lockup"><span class="lib-brand-mark">${Mascot.logo(28)}</span><div><span class="lib-eyebrow">Belna Library</span><h2>${esc(titles[cat] || 'All artifacts')}</h2></div></div>
+       ${cat === 'memory' ? libraryMemoryBody() : cat === 'system' ? systemLibraryBody() : `<div class="lib-head"><div class="lib-title-lockup"><span class="lib-brand-mark">${Mascot.logo(28)}</span><div><span class="lib-eyebrow">Belna Library</span><h2>${esc(titles[cat] || 'All artifacts')}</h2></div></div>
          <span class="lib-actions">
            ${state.librarySelect ? `<button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete">${icon('trash',13)} Delete (${(state.librarySelected || []).length})</button>` : `<button class="btn ghost small" data-act="lib-select">Select</button>`}
            <button class="iconbtn" data-act="lib-layout" title="Toggle grid / list">${icon('list',16)}</button>
@@ -4226,6 +4114,34 @@ function libraryTabContent(){
        `}
      </section>
    </div>`;
+}
+function paintLibrary(M){
+  const previousScroll = M.querySelector('.page')?.scrollTop || 0;
+  M.innerHTML = `<div class="page lib-page"><div class="pageinner lib-pageinner">
+    <div class="lib-page-heading"><div><span class="lib-eyebrow">Your workspace</span><h1>Library</h1><p>Everything you and your agent have made together, in one place.</p></div><span class="lib-page-mark" aria-hidden="true">${Mascot.logo(42)}</span></div>
+    ${libraryTabContent()}
+  </div></div>`;
+  M.querySelector('.page').scrollTop = previousScroll;
+  const libSearch = M.querySelector('#libsearch');
+  if (libSearch) libSearch.addEventListener('input', (e) => {
+    state.librarySearch = e.target.value; save();
+    const pos = e.target.selectionStart;
+    paintLibrary(M);
+    const again = M.querySelector('#libsearch');
+    if (again){ again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
+  });
+  const libUpload = M.querySelector('#libupload');
+  if (libUpload) libUpload.addEventListener('change', (e) => {
+    addLibraryUploads(e.target.files);
+    e.target.value = '';
+  });
+  M.querySelector('#memory-search')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="searchmem"]')?.click(); }
+  });
+  M.querySelector('#memory-new')?.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="addmem"]')?.click(); }
+  });
+  if (signedIn() && state.libraryCat === 'system') refreshSystemFiles();
 }
 function approvalsTabContent(){
   const ap = approvalRows();
@@ -4307,14 +4223,14 @@ function paymentsTabContent(){
              <button class="btn ghost small" data-act="shop-pay-limit">Save limit</button>`
           : shop.configured
             ? `<button class="btn small" data-act="shop-pay-connect">Connect Shop Pay</button>`
-            : `<button class="btn small" disabled>Connect Shop Pay</button><span class="payments-note">${state.shopPayLoading ? 'Checking Shop Pay…' : 'Add SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET from the Shopify Dev Dashboard Catalogs key.'}</span>`}
+            : `<button class="btn small" disabled>Connect Shop Pay</button><span class="payments-note">${state.shopPayLoading ? 'Checking Shop Pay…' : 'Add a Shop OAuth client ID and secret with this site’s callback URL registered in Shopify Dev Dashboard.'}</span>`}
         <button class="btn ghost small" data-act="shop-pay-refresh" aria-label="Refresh Shop Pay">${icon('refresh',14)} Refresh</button>
       </div>
       ${orders ? `<ul class="payments-orders">${orders}</ul>` : ''}
     </article>
     <article class="payments-option">
       <div class="payments-option-head">
-        <span class="payments-option-icon stripe-mark" title="Stripe" aria-label="Stripe">${stripeIconHtml(stripe)}</span>
+        <span class="payments-option-icon stripe-mark" title="Stripe" aria-label="Stripe">${stripeIconHtml()}</span>
         <div><h3>Stripe</h3><p>Connect Stripe for payment and revenue tasks.</p></div>
         <span class="chip ${connected ? 'green' : ''}">${status}</span>
       </div>
@@ -4344,19 +4260,8 @@ function subAgentsTabContent(){
     : kind === 'app'
       ? (apps.length ? `<label class="alabel">Connected app event (via Composio)</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} No connected apps yet. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
       : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${customAgents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
-  return `<div class="aslider-sec subagents-panel">
-    <div class="subagent-intro"><span class="trigger-mark">${icon('spark',18)}</span><div><b>Agent upkeep</b><p>Built-in routines maintain context and improve future work. They check for new signal first, so an idle check uses no model call.</p></div></div>
-    <div class="upkeep-list">${upkeep.map((agent) => `<article class="upkeep-card ${agent.enabled ? '' : 'paused'}">
-      <div class="upkeep-head"><span class="upkeep-mark">${icon(agent.systemKind === 'memory' ? 'book' : agent.systemKind === 'study' ? 'globe' : agent.systemKind === 'ideas' ? 'spark' : agent.systemKind === 'relationships' ? 'user' : agent.systemKind === 'skills' ? 'code' : 'clock',16)}</span><div><b>${esc(agent.name)}</b><small>${esc(agent.trigger?.label || subAgentTriggerLabel(agent))}</small></div><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus === 'idle' ? 'checked' : agent.lastStatus || 'ready') : 'paused'}</span></div>
-      <p>${esc(agent.description || '')}</p>
-      ${agent.lastResult ? `<div class="upkeep-result"><b>Latest</b><span>${esc(agent.lastResult)}</span></div>` : ''}
-      ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
-      <div class="subagent-meta">${agent.lastRunAt ? `<span>checked ${fmtAgo(new Date(agent.lastRunAt).getTime())}</span>` : '<span>Not checked yet</span>'}${agent.nextRunAt && agent.enabled ? `<span>next ${fmtNext(new Date(agent.nextRunAt).getTime())}</span>` : ''}</div>
-      <div class="subagent-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Check now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button></div>
-    </article>`).join('') || '<div class="trigger-empty">Agent upkeep is being prepared for this account…</div>'}</div>
-    <div class="automation-divider"><span>User automations</span></div>
-    <div class="subagent-intro"><span class="trigger-mark">${icon('clock',18)}</span><div><b>Automated chats</b><p>Create your own scheduled, connected-app, or chained automation. Each one keeps a separate chat history.</p></div></div>
-    <button class="btn small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close setup' : 'New sub-agent'}</button>
+  return `<div class="subagents-panel">
+    <div class="automation-toolbar"><h3 class="appr-heading">Automations</h3><button class="btn small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close setup' : 'New automation'}</button></div>
     ${state.subAgentComposer ? `<div class="trigger-form">
       <label class="alabel">Name</label><input class="field" id="subname" maxlength="60" placeholder="Daily brief" value="${esc(state.subAgentDraftName || '')}">
       <label class="alabel">Automation task</label><textarea class="field" id="subprompt" rows="4" placeholder="What should this sub-agent check, decide, or prepare?">${esc(state.subAgentDraft || '')}</textarea>
@@ -4365,12 +4270,16 @@ function subAgentsTabContent(){
       <div class="trigger-safety">${icon('shieldcheck',14)} Runs in an isolated, account-scoped sandbox. Chains stop after four handoffs.</div>
       <button class="btn small" data-act="create-subagent" ${kind === 'app' && !apps.length || kind === 'subagent' && !customAgents.length ? 'disabled' : ''}>Create automation</button>
     </div>` : ''}
-    <div class="subagent-list">${customAgents.map((agent) => `<article class="subagent-card ${agent.enabled ? '' : 'paused'}">
-      <button class="subagent-main" data-act="open-subagent" data-id="${agent.id}"><span class="subagent-orb">${Mascot.svg(state.agent.color,'idle',30)}</span><span><b>${esc(agent.name)}</b><small>${esc(subAgentTriggerLabel(agent))}</small></span></button>
-      <div class="subagent-meta"><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus || 'ready') : 'paused'}</span>${agent.nextRunAt ? `<span>next ${fmtNext(new Date(agent.nextRunAt).getTime())}</span>` : ''}</div>
+    <div class="automation-list">${customAgents.map((agent) => `<article class="automation-item${agent.enabled ? '' : ' paused'}">
+      <div class="automation-row"><span class="appr-ico">${icon('clock',18)}</span><button class="automation-copy" data-act="open-subagent" data-id="${agent.id}"><b>${esc(agent.name)}</b><span>${esc(subAgentTriggerLabel(agent))}</span><small>Last ran: ${agent.lastRunAt ? fmtAgo(new Date(agent.lastRunAt).getTime()) : 'Never'}</small></button><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus || 'ready') : 'paused'}</span></div>
       ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
-      <div class="subagent-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button><button class="iconbtn" data-act="delete-subagent" data-id="${agent.id}" title="Delete">${icon('trash',13)}</button></div>
-    </article>`).join('') || '<div class="trigger-empty">No user automations yet. Create one to watch a schedule, app event, or another automation.</div>'}</div>
+      <div class="automation-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button><button class="btn ghost tiny" data-act="delete-subagent" data-id="${agent.id}">${icon('trash',12)} Delete</button></div>
+    </article>`).join('') || '<div class="appr-empty">No automations yet. Create one to watch a schedule, app event, or another automation.</div>'}</div>
+    ${upkeep.length ? `<details class="automation-builtins" ${state.builtInAutomationsOpen ? 'open' : ''}><summary>Built-in routines <span>${upkeep.length}</span></summary><div class="automation-list">${upkeep.map((agent) => `<article class="automation-item${agent.enabled ? '' : ' paused'}">
+      <div class="automation-row"><span class="appr-ico">${icon(agent.systemKind === 'memory' ? 'book' : agent.systemKind === 'study' ? 'globe' : agent.systemKind === 'ideas' ? 'spark' : agent.systemKind === 'relationships' ? 'user' : agent.systemKind === 'skills' ? 'code' : 'clock',18)}</span><span class="automation-copy"><b>${esc(agent.name)}</b><span>${esc(agent.trigger?.label || subAgentTriggerLabel(agent))}</span><small>Last ran: ${agent.lastRunAt ? fmtAgo(new Date(agent.lastRunAt).getTime()) : 'Never'}</small></span><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus === 'idle' ? 'checked' : agent.lastStatus || 'ready') : 'paused'}</span></div>
+      ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
+      <div class="automation-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button></div>
+    </article>`).join('')}</div></details>` : ''}
   </div>`;
 }
 
@@ -4422,21 +4331,23 @@ function paintLive(body, c, selectedId){
   }
   const browserCards = [...(c.messages || []).filter(m => m.kind === 'card'), ...(c.canvasRuns || [])];
   const poster = browserCards.filter(m => !selectedId || m.card.liveId === selectedId).reduce((acc, m) => (m.card.type === 'browser' && m.card.screenshot) ? m.card.screenshot : acc, '');
+  const desktop = browserCards.some(m => m.card && m.card.liveId === id && m.card.desktop);
+  const surface = desktop ? 'computer' : 'browser';
   window.__liveFrames = 0;
   body.innerHTML = `
     <button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>
     <div class="livewrap" id="livewrap">
       <div class="livebar"><span class="url" id="liveurl">connecting…</span><span class="chip purple" id="livestate">connecting</span></div>
-      <div class="liveview" id="liveview" tabindex="0" aria-label="Live browser workspace">
-        <canvas id="livecanvas" width="1280" height="900" aria-label="Live browser stream"></canvas>
-        <img id="liveimg" alt="Browser preview" hidden${poster ? ` src="${poster}"` : ''}>
+      <div class="liveview" id="liveview" tabindex="0" aria-label="Live ${surface} workspace">
+        <canvas id="livecanvas" width="1280" height="900" aria-label="Live ${surface} stream"></canvas>
+        <img id="liveimg" alt="${desktop ? 'Computer' : 'Browser'} preview" hidden${poster ? ` src="${poster}"` : ''}>
         <div class="bigcursor" id="bigcursor"></div>
       </div>
       <div class="pctitle">${icon('term',13)} Read-only tool output</div>
       <div class="term mini" id="pcout" style="margin-top:6px">${terms.length ? terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('') : '<div class="mut">No runs yet in this chat.</div>'}</div>
       <div class="controlbar">
         <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
-        <div class="cinfo"><b id="livestatus">Agent browser</b><div class="sub" id="livesub">live interactive stream — the agent is connected to the VM</div></div>
+        <div class="cinfo"><b id="livestatus">Agent ${surface}</b><div class="sub" id="livesub">${desktop ? 'live virtual computer' : 'live interactive stream'} — the agent is connected to the VM</div></div>
         <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
         <button class="btn ghost small" data-act="canvas-back">Back</button>
       </div>
@@ -4500,7 +4411,7 @@ function liveConnect(id){
     if (m.frame) {
       try { const bytes = Uint8Array.from(atob(m.frame), (ch) => ch.charCodeAt(0)); drawLiveFrame(bytes); } catch {}
     }
-    if (m.hello && $('#liveurl')) $('#liveurl').textContent = m.url || m.hello;
+    if (m.hello && $('#liveurl')) $('#liveurl').textContent = (m.kind === 'desktop' ? m.title : m.url) || m.hello;
     if (m.state) liveState(m.state, m);
   };
   ws.onclose = () => { if (st()){ st().textContent = 'session ended'; } const b = $('#takebtn'); if (b){ b.disabled = true; } };
@@ -4557,9 +4468,12 @@ function pcConnect(selectedId){
 }
 function liveState(s, m){
   const wrap = $('#livewrap'), st = $('#livestate'), sub = $('#livesub'), btn = $('#takebtn');
-  if (m && m.url && $('#liveurl')) $('#liveurl').textContent = m.url;
+  // A desktop session has no URL; its bar shows the active window instead.
+  const desktop = m && (m.kind === 'desktop' || m.transport === 'x11-stream');
+  if (desktop && $('#livestatus')) $('#livestatus').textContent = 'Agent computer';
+  if (m && $('#liveurl') && (desktop ? m.title : m.url)) $('#liveurl').textContent = desktop ? m.title : m.url;
   if (m && m.title && $('#livesub') && !liveControl) sub.textContent = m.title;
-  if (m && m.transport && sub && !liveControl) sub.textContent = m.transport === 'cdp-screencast' ? 'live interactive stream — the agent is connected to the VM' : 'compatibility preview — live relay is not connected';
+  if (m && m.transport && sub && !liveControl) sub.textContent = m.transport === 'x11-stream' ? 'live virtual computer — the agent is connected to the VM' : m.transport === 'cdp-screencast' ? 'live interactive stream — the agent is connected to the VM' : 'compatibility preview — live relay is not connected';
   if (wrap) wrap.classList.toggle('working', s === 'working' && !liveControl);
   if (st) st.textContent = liveControl ? 'you drive' : s;
   if (btn) btn.textContent = liveControl ? 'Give back' : 'Take over';
@@ -4858,11 +4772,11 @@ function paintCanvas(){
       ${canvasHeroHTML()}
       <div class="canvas-head-row">
         <div class="seg canvas-seg">
-          <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('easel',14)} Canvas${liveId ? '<span class="livedot"></span>' : ''}</button>
-          <button class="${top === 'subagents' ? 'on' : ''}" data-act="ctab" data-t="subagents">${icon('clock',14)} Automations <span class="cnt">${(state.subAgents || []).length}</span></button>
-          <button class="${top === 'mail' ? 'on' : ''}" data-act="ctab" data-t="mail">${icon('mail',14)} Mail${mailCache && mailCache.unread ? ` <span class="cnt">${mailCache.unread}</span>` : ''}</button>
-          <button class="${top === 'payments' ? 'on' : ''}" data-act="ctab" data-t="payments">${icon('wallet',14)} Payments</button>
-          <button class="${top === 'approvals' ? 'on' : ''}" data-act="ctab" data-t="approvals">${icon('shieldcheck',14)} Approvals</button>
+          <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('easel',14)} <span>Canvas</span>${liveId ? '<span class="livedot"></span>' : ''}</button>
+          <button class="${top === 'subagents' ? 'on' : ''}" data-act="ctab" data-t="subagents">${icon('clock',14)} <span>Automations</span></button>
+          <button class="${top === 'mail' ? 'on' : ''}" data-act="ctab" data-t="mail">${icon('mail',14)} <span>Mail</span>${mailCache && mailCache.unread ? ` <span class="cnt">${mailCache.unread}</span>` : ''}</button>
+          <button class="${top === 'payments' ? 'on' : ''}" data-act="ctab" data-t="payments">${icon('wallet',14)} <span>Payments</span></button>
+          <button class="${top === 'approvals' ? 'on' : ''}" data-act="ctab" data-t="approvals">${icon('shieldcheck',14)} <span>Approvals</span></button>
         </div>
         <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
       </div>
@@ -4894,6 +4808,8 @@ function paintCanvas(){
   }
   if (state.canvasTab === 'subagents'){
     body.innerHTML = subAgentsTabContent();
+    const builtins = body.querySelector('.automation-builtins');
+    if (builtins) builtins.addEventListener('toggle', () => { state.builtInAutomationsOpen = builtins.open; save(); });
     refreshSubAgents();
     return;
   }
@@ -5061,14 +4977,6 @@ function memoryEntryHtml(m){
     ${editing ? '' : `<div class="memory-entry-actions"><button class="iconbtn" data-act="editmem" data-id="${esc(m.id)}" title="Correct memory" aria-label="Correct memory">${icon('edit',14)}</button><button class="iconbtn" data-act="delmem" data-id="${esc(m.id)}" title="Forget memory" aria-label="Forget memory">${icon('trash',14)}</button></div>`}
   </article>`;
 }
-function paintMemory(M){
-  M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Memory</h1><span class="chip">${icon('book',12)} ${state.memoryTotal || state.memory.length} active</span></div>
-    <p class="psub">What ${esc(state.agent.name)} remembers across chats. Relevant entries are recalled automatically; you can add, correct, search, or forget entries here. Deleting a memory removes its earlier versions; past chat messages remain in chat history.</p>
-    ${settingsMemoryBody()}
-  </div></div>`;
-}
-
 function paintProfile(M){
   const a = state.agent;
   M.innerHTML = `<div class="page"><div class="pageinner">
@@ -5098,7 +5006,7 @@ function paintProfile(M){
   });
 }
 
-/* ---------------- Settings (profiles / secrets / memory / browser / billing) ---------------- */
+/* ---------------- Settings (profiles / secrets / browser / billing) ---------------- */
 function settingsSecretsBody(v){
   return `
     <div class="warnband">${icon('shieldcheck',18)}<div><b>Your secrets remain protected.</b>Values are masked in chat and activity history. Reveal below is for your eyes alone, on this device.</div></div>
@@ -5118,7 +5026,7 @@ function settingsSecretsBody(v){
       </div>
     </div>`;
 }
-function settingsMemoryBody(){
+function libraryMemoryBody(){
   const memories = state.memory || [];
   const total = Number(state.memoryTotal || memories.length);
   const aboutCount = memories.filter(m => m.category === 'user').length;
@@ -5154,7 +5062,12 @@ function centerActiveSeg(container){
   const active = tabs && tabs.querySelector('.on');
   if (!tabs || !active) return;
   requestAnimationFrame(() => {
-    tabs.scrollLeft = Math.max(0, active.offsetLeft - (tabs.clientWidth - active.offsetWidth) / 2);
+    if (!tabs.isConnected) return;
+    const tabBox = tabs.getBoundingClientRect();
+    const activeBox = active.getBoundingClientRect();
+    if (activeBox.left < tabBox.left || activeBox.right > tabBox.right) {
+      tabs.scrollLeft += activeBox.left - tabBox.left - (tabBox.width - activeBox.width) / 2;
+    }
   });
 }
 function centerActiveSettingsTab(container){ centerActiveSeg(container); }
@@ -5224,7 +5137,7 @@ function paintSettings(M){
     </div>
     <div class="psec"><h3>${icon('star',15)} Theme</h3>
       <div class="kv"><div class="row" style="align-items:flex-start"><span style="color:var(--mut)">${icon('star',16)}</span>
-        <div style="flex:1"><b>Accent color</b><div class="sub">Current: ${esc(curTheme.name)} · applies instantly</div>
+        <div style="flex:1"><b>Chat color</b><div class="sub">Current: ${esc(curTheme.name)} · colors your messages and the send button</div>
           <div class="swatches" style="justify-content:flex-start;margin-top:12px">${THEMES.map(t => `<button class="swatch ${curTheme.id === t.id ? 'on' : ''}" data-act="theme" data-v="${t.id}" title="${t.name}"><span style="width:26px;height:26px;border-radius:50%;background:${t.c};display:block"></span></button>`).join('')}</div>
         </div></div></div>
     </div>
@@ -5234,10 +5147,6 @@ function paintSettings(M){
     </div>`;
   } else if (tab === 'secrets'){
     body = settingsSecretsBody(state.vault);
-  } else if (tab === 'memory'){
-    body = settingsMemoryBody();
-  } else if (tab === 'library'){
-    body = libraryTabContent();
   } else if (tab === 'browser'){
     const saved = workspacePresenceInfo?.persistence?.browserProfile;
     const browserStorage = saved === 'private-workspace-backup' ? 'Private account backup' : saved === 'vm-os-disk-only' ? 'On the dedicated VM only' : 'Available when the full-OS workspace is configured';
@@ -5253,36 +5162,20 @@ function paintSettings(M){
   } else if (tab === 'billing'){
     body = billingBodyHtml();
   }
-  M.innerHTML = `<div class="page${tab === 'library' ? ' lib-page' : ''}"><div class="pageinner${tab === 'library' ? ' lib-pageinner' : ''}">
+  const previousTabScroll = M.querySelector('.settings-tabs')?.scrollLeft || 0;
+  M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : tab === 'memory' ? 'Review, correct, and shape the private memory your agent carries across chats.' : tab === 'library' ? 'Artifacts live here. Media is jpg, png, mp4, mov, mp3 and friends — everything else is an artifact.' : tab === 'profiles' ? 'Your account, agent appearance, system files, and private settings — all scoped to you.' : 'Profiles, theme, secrets, memory, library, browser and billing — all scoped to your account, never shared.'}</p>
-    <div class="seg">
-      <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles">${icon('user',14)} Profiles</button>
-      <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets">${icon('key',14)} Secrets</button>
-      <button class="${tab === 'memory' ? 'on' : ''}" data-act="stab" data-t="memory">${icon('book',14)} Memory</button>
-      <button class="${tab === 'library' ? 'on' : ''}" data-act="stab" data-t="library">${icon('file',14)} Library</button>
-      <button class="${tab === 'browser' ? 'on' : ''}" data-act="stab" data-t="browser">${icon('globe',14)} Browser</button>
-      <button class="${tab === 'billing' ? 'on' : ''}" data-act="stab" data-t="billing">${icon('card',14)} Billing</button>
+    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : tab === 'profiles' ? 'Your account, agent appearance, system files, and private settings — all scoped to you.' : 'Profiles, theme, secrets, browser and billing — all scoped to your account, never shared.'}</p>
+    <div class="seg settings-tabs" aria-label="Settings sections">
+      <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles" aria-pressed="${tab === 'profiles'}">${icon('user',14)} Profiles</button>
+      <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets" aria-pressed="${tab === 'secrets'}">${icon('key',14)} Secrets</button>
+      <button class="${tab === 'browser' ? 'on' : ''}" data-act="stab" data-t="browser" aria-pressed="${tab === 'browser'}">${icon('globe',14)} Browser</button>
+      <button class="${tab === 'billing' ? 'on' : ''}" data-act="stab" data-t="billing" aria-pressed="${tab === 'billing'}">${icon('card',14)} Billing</button>
     </div>
     ${body}
   </div></div>`;
+  M.querySelector('.settings-tabs').scrollLeft = previousTabScroll;
   centerActiveSettingsTab(M);
-  const libSearch = $('#libsearch');
-  if (libSearch){
-    libSearch.addEventListener('input', (e) => {
-      state.librarySearch = e.target.value; save();
-      const pos = e.target.selectionStart;
-      paintSettings($('#main'));
-      const again = $('#libsearch');
-      if (again){ again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
-    });
-  }
-  const libUpload = $('#libupload');
-  if (libUpload) libUpload.addEventListener('change', (e) => {
-    addLibraryUploads(e.target.files);
-    e.target.value = '';
-  });
-  if (tab === 'library' && signedIn()) refreshSystemFiles();
   const pn = $('#pname');
   if (pn) pn.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
@@ -5296,14 +5189,6 @@ function paintSettings(M){
     const v = e.target.value.trim(); if (!v) return;
     state.userProfile = Object.assign({}, state.userProfile, { name: v }); save(); paintSide(); toast('Profile updated.');
   });
-  const memorySearch = $('#memory-search');
-  if (memorySearch) memorySearch.addEventListener('keydown', e => {
-    if (e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="searchmem"]')?.click(); }
-  });
-  const memoryNew = $('#memory-new');
-  if (memoryNew) memoryNew.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="addmem"]')?.click(); }
-  });
   if (tab === 'billing'){
     loadBillingContent();
   }
@@ -5315,17 +5200,15 @@ function appLogoHtml(a){
     ? `<img src="${esc(a.logo)}" alt="" loading="lazy" onerror="this.style.display='none'">`
     : `<span class="app-fallback">${esc(String((a && (a.name || a.toolkit)) || '?').slice(0, 1).toUpperCase())}</span>`;
 }
-/* Brand marks for Wallet (right-side menu → Wallet). Stripe and Shop Pay must
-   never share the same generic purple "S" — each uses its official white mark
-   on its official brand purple. */
+/* Payment marks in the chat side panel. Shop Pay's wordmark is embedded so it
+   renders consistently; Stripe never uses a connector-supplied image here. */
 function stripeBrandMark(){
   return `<svg class="brandmark" viewBox="54 36 360.02 149.84" width="34" height="15" fill="none" role="img" aria-label="Stripe"><g fill="#fff"><path fill-rule="evenodd" clip-rule="evenodd" d="M414 113.4c0-25.6-12.4-45.8-36.1-45.8-23.8 0-38.2 20.2-38.2 45.6 0 30.1 17 45.3 41.4 45.3 11.9 0 20.9-2.7 27.7-6.5v-20c-6.8 3.4-14.6 5.5-24.5 5.5-9.7 0-18.3-3.4-19.4-15.2h48.9c.2-1.1.2-6.3.2-8.9zm-49.4-9.5c0-11.3 6.9-16 13.2-16 6.1 0 12.6 4.7 12.6 16h-25.8z"/><path d="M301.1 67.6c-9.8 0-16.1 4.6-19.6 7.8l-1.3-6.2h-22v116.6l25-5.3.1-28.3c3.6 2.6 8.9 6.3 17.7 6.3 17.9 0 34.2-14.4 34.2-46.1 0-28.9-16.6-44.8-34.1-44.8zm-6 68.9c-5.9 0-9.4-2.1-11.8-4.7l-.1-37.1c2.6-2.9 6.2-4.9 11.9-4.9 9.1 0 15.4 10.2 15.4 23.3 0 13.9-6.2 23.4-15.4 23.4z"/><polygon points="223.8,61.7 248.9,56.3 248.9,36 223.8,41.3"/><rect x="223.8" y="69.3" width="25.1" height="87.5"/><path d="M196.9 76.7l-1.6-7.4h-21.6v87.5h25V97.5c5.9-7.7 15.9-6.3 19-5.2v-23c-2.6-1.2-14.3-3.4-20.8 7.4z"/><path d="M146.9 47.6l-24.4 5.2-.1 80.1c0 14.8 11.1 25.7 25.9 25.7 8.2 0 14.2-1.5 17.5-3.3V135c-3.2 1.3-19 5.9-19-8.9V90.6h19V69.3h-19l.1-21.7z"/><path d="M79.3 94.7c0-3.9 3.2-5.4 8.5-5.4 7.6 0 17.2 2.3 24.8 6.4V72.2c-8.3-3.3-16.5-4.6-24.8-4.6C67.5 67.6 54 78.2 54 95.9c0 27.6 38 23.2 38 35.1 0 4.6-4 6.1-9.6 6.1-8.3 0-18.9-3.4-27.3-8v23.8c9.3 4 18.7 5.7 27.3 5.7 20.8 0 35.1-10.3 35.1-28.2 0-29.8-38.1-24.5-38.2-35.7z"/></g></svg>`;
 }
 function shopPayBrandMark(){
-  return `<svg class="brandmark" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Shop Pay"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>`;
+  return `<svg class="brandmark" width="86" height="21" role="img" aria-label="Shop Pay" viewBox="0 0 683 164" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M454.942 0C441.175 0 430.015 11.1602 430.015 24.927V138.295C430.015 152.062 441.175 163.222 454.942 163.222H658.072C671.839 163.222 682.999 152.062 682.999 138.295V24.927C682.999 11.1602 671.839 0 658.072 0H454.942ZM490.023 113.902V85.1661H508.1C524.616 85.1661 533.399 75.9057 533.399 61.872C533.399 47.8383 524.616 39.4371 508.1 39.4371H478.376V113.902H490.023ZM490.023 50.5114H505.427C516.119 50.5114 521.37 54.9029 521.37 62.2539C521.37 69.6049 516.31 73.9964 505.904 73.9964H490.023V50.5114ZM553.933 115.429C562.811 115.429 568.635 111.515 571.308 104.832C572.071 112.279 576.558 116.098 586.296 113.52L586.391 105.596C582.477 105.978 581.714 104.546 581.714 100.441V80.9655C581.714 69.5094 574.172 62.7312 560.233 62.7312C546.486 62.7312 538.562 69.6049 538.562 81.2519H549.255C549.255 75.7148 553.169 72.3734 560.042 72.3734C567.298 72.3734 570.639 75.5239 570.544 80.9655V83.4477L558.229 84.7842C544.386 86.3117 536.748 91.5624 536.748 100.727C536.748 108.269 542.095 115.429 553.933 115.429ZM556.319 106.837C550.305 106.837 547.918 103.591 547.918 100.345C547.918 95.9539 552.882 93.9491 562.62 92.8035L570.257 91.9443C569.78 100.345 564.148 106.837 556.319 106.837ZM621.754 117.625C616.885 129.463 609.057 132.995 596.837 132.995H591.586V123.258H597.219C603.902 123.258 607.148 121.157 610.68 115.143L589.009 64.2587H601.038L616.504 101.396L630.251 64.2587H641.993L621.754 117.625Z" fill="#fff"/><path d="M57.3945 71.7445C41.4471 68.2852 34.3427 66.9315 34.3427 60.7862C34.3427 55.0063 39.1506 52.127 48.7662 52.127C57.2228 52.127 63.4043 55.8228 67.9545 63.0638C68.2979 63.6225 69.0062 63.8159 69.5857 63.5151L87.5292 54.4476C88.1731 54.1253 88.4092 53.3088 88.0443 52.6857C80.5965 39.7721 66.8384 32.7029 48.7233 32.7029C24.9203 32.7029 10.132 44.4347 10.132 63.0853C10.132 82.8962 28.1398 87.9027 44.1086 91.3621C60.0774 94.8215 67.2033 96.1751 67.2033 102.32C67.2033 108.466 62.0091 111.366 51.6423 111.366C42.0696 111.366 34.9652 106.983 30.6725 98.4742C30.3505 97.8511 29.5993 97.5933 28.9769 97.9156L11.0764 106.79C10.4539 107.112 10.1964 107.864 10.5183 108.509C17.6227 122.797 32.1964 130.833 51.6637 130.833C76.454 130.833 91.4355 119.295 91.4355 100.064C91.4355 80.8335 73.3418 75.2469 57.3945 71.7875V71.7445Z" fill="#fff"/><path d="M153.551 32.7032C143.377 32.7032 134.384 36.3129 127.924 42.7375C127.516 43.1243 126.85 42.845 126.85 42.2863V1.26785C126.85 0.558781 126.292 0.00012207 125.584 0.00012207H103.133C102.425 0.00012207 101.867 0.558781 101.867 1.26785V128.578C101.867 129.287 102.425 129.845 103.133 129.845H125.584C126.292 129.845 126.85 129.287 126.85 128.578V72.7332C126.85 61.9468 135.114 53.6743 146.253 53.6743C157.393 53.6743 165.463 61.7749 165.463 72.7332V128.578C165.463 129.287 166.021 129.845 166.729 129.845H189.18C189.889 129.845 190.447 129.287 190.447 128.578V72.7332C190.447 49.2695 175.079 32.7246 153.551 32.7246V32.7032Z" fill="#fff"/><path d="M235.991 29.0505C223.8 29.0505 212.381 32.7893 204.182 38.1825C203.624 38.5477 203.431 39.2998 203.774 39.8799L213.669 56.7901C214.034 57.3917 214.806 57.6066 215.407 57.2413C221.632 53.4811 228.758 51.5258 236.034 51.5688C255.63 51.5688 270.032 65.4063 270.032 83.6917C270.032 99.2697 258.506 110.808 243.889 110.808C231.977 110.808 223.714 103.868 223.714 94.0698C223.714 88.4618 226.096 83.8636 232.299 80.619C232.943 80.2753 233.179 79.4802 232.793 78.8571L223.456 63.0428C223.156 62.5271 222.512 62.2907 221.932 62.5056C209.419 67.1468 200.641 78.3199 200.641 93.3178C200.641 116.008 218.691 132.94 243.868 132.94C273.273 132.94 294.414 112.549 294.414 83.3049C294.414 51.9556 269.817 29.0505 235.991 29.0505Z" fill="#fff"/><path d="M360.069 32.5311C348.714 32.5311 338.584 36.7211 331.179 44.1126C330.771 44.5208 330.106 44.22 330.106 43.6613V34.7658C330.106 34.0567 329.548 33.498 328.839 33.498H306.968C306.26 33.498 305.702 34.0567 305.702 34.7658V161.882C305.702 162.591 306.26 163.15 306.968 163.15H329.419C330.127 163.15 330.685 162.591 330.685 161.882V120.198C330.685 119.639 331.351 119.36 331.758 119.725C339.142 126.601 348.908 130.619 360.09 130.619C386.426 130.619 406.966 109.282 406.966 81.5642C406.966 53.8461 386.404 32.5096 360.09 32.5096L360.069 32.5311ZM355.84 109.089C340.859 109.089 329.505 97.1637 329.505 81.3923C329.505 65.6209 340.837 53.6957 355.84 53.6957C370.843 53.6957 382.155 65.4275 382.155 81.3923C382.155 97.357 370.994 109.089 355.819 109.089H355.84Z" fill="#fff"/></svg>`;
 }
-function stripeIconHtml(stripe){
-  if (stripe && stripe.logo) return appLogoHtml(stripe);
+function stripeIconHtml(){
   return stripeBrandMark();
 }
 function appsStackList(apps){
@@ -5539,6 +5422,10 @@ document.addEventListener('change', (e) => {
 });
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-act]');
+  if (state.goalMenu && state.view === 'goals' && !e.target.closest('.goal-menu-wrap')){
+    state.goalMenu = null;
+    if (!b) paintGoals($('#main'));
+  }
   if (!b) return;
   const act = b.dataset.act;
   const c = state.chats.find(x => x.id === b.dataset.chat);
@@ -5579,29 +5466,21 @@ document.addEventListener('click', async e => {
   if (act === 'rmfile'){ removeFile(+b.dataset.idx); return; }
   if (act === 'scroll'){ e.preventDefault(); const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
   if (act === 'open-app'){
-    leavePromo();
-    if (!signedIn()){ renderAuth(); toast('Sign up or log in to meet your agent.'); return; }
-    ensureOwnerScope();
-    if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); }
-    else if (state.pendingPrompt){ await startPendingPromptFlow(); }
-    else { openOnboarding(); }
+    e.preventDefault();
+    window.location.assign('/app');
     return;
   }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
   if (act === 'back-home'){
     if (window.__promoLeft){ window.location.assign('/promo'); return; }
     if (isPromoRoute()){ renderPromo(); return; }
+    if (window.location.pathname.replace(/\/+$/, '') === '/app'){ window.location.assign('/'); return; }
     belnaStopLandingFx(); renderLanding(); return;
   }
   if (act === 'promo-cta'){ e.preventDefault(); const t = $('#promo-cta'); if (t) t.scrollIntoView({ behavior:'smooth', block:'start' }); return; }
   if (act === 'signin-nav'){
-    e.preventDefault(); leavePromo();
-    if (signedIn()){
-      ensureOwnerScope();
-      if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); }
-      else if (state.pendingPrompt){ await startPendingPromptFlow(); }
-      else { startPendingPromptFlow(); }
-    } else { renderAuth(); }
+    e.preventDefault();
+    window.location.assign('/app');
     return;
   }
   if (act === 'claim'){
@@ -5696,34 +5575,51 @@ document.addEventListener('click', async e => {
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
   if (act === 'open-system-files'){
-    state.settingsTab = 'library'; state.libraryCat = 'system'; state.systemPath = 'root'; state.systemFile = null; state.librarySelect = false; save();
-    paintSettings($('#main')); refreshSystemFiles(true); return;
+    state.view = 'library'; state.libraryCat = 'system'; state.systemPath = 'root'; state.systemFile = null; state.librarySelect = false; save();
+    renderApp(); refreshSystemFiles(true); return;
   }
   if (act === 'open-system-memory'){
-    state.settingsTab = 'library'; state.libraryCat = 'system'; state.systemPath = 'memory'; state.systemFile = 'system:memory'; state.librarySelect = false; save();
-    paintSettings($('#main')); refreshSystemFiles(true); return;
+    state.view = 'library'; state.libraryCat = 'system'; state.systemPath = 'memory'; state.systemFile = 'system:memory'; state.librarySelect = false; save();
+    renderApp(); refreshSystemFiles(true); return;
   }
-  if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); if(state.settingsTab==='memory'&&window.LingonAuth.signedIn())await syncFromBackend(true).catch(e=>toast(e.message)); paintSettings($('#main')); return; }
-  if (act === 'open-library'){ mobileNavOpen = false; state.view = 'settings'; state.settingsTab = 'library'; state.userMenuOpen = false; save(); renderApp(); return; }
+  if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
+  if (act === 'open-library'){ mobileNavOpen = false; state.view = 'library'; state.userMenuOpen = false; save(); renderApp(); return; }
   if (act === 'open-goals'){ mobileNavOpen = false; state.view = 'goals'; state.userMenuOpen = false; save(); renderApp(); return; }
   /* goals */
   const repaintGoals = () => {
     if (state.view === 'goals' && $('#main')) paintGoals($('#main'));
     if ($('#side')) paintSide();
   };
-  if (act === 'goal-add'){
-    const input = $('#goal-title');
-    const title = String((input && input.value) || '').trim();
-    const cat = String(($('#goal-cat') && $('#goal-cat').value) || 'other');
-    if (!title){ toast('Give your goal a title first.'); return; }
-    if (!Array.isArray(state.goals)) state.goals = [];
-    state.goals.unshift({ id: uid(), title: title.slice(0, 120), category: GOAL_CATS.some(c => c.id === cat) ? cat : 'other', active: true, done: false, createdAt: Date.now(), subgoals: [] });
-    save(); repaintGoals(); toast('Goal added — break it into sub-goals below.');
+  if (act === 'goal-start'){ mobileNavOpen = false; newChat({goal:true}); return; }
+  if (act === 'goal-save'){
+    const current = chat();
+    if (!current?.goalDraft || current.goalDraft.savedId) return;
+    const title = String($('#goal-draft-title')?.value || '').trim();
+    const cat = String($('#goal-draft-cat')?.value || 'other');
+    if (!title){ $('#goal-draft-title')?.focus(); toast('Name your goal before saving it.'); return; }
+    const goal = { id:uid(), title:title.slice(0,120), category:GOAL_CATS.some(c => c.id === cat) ? cat : 'other', active:true, done:false, createdAt:Date.now(), subgoals:[], chatId:current.id };
+    state.goals.unshift(goal);
+    current.goalDraft = { title:goal.title, category:goal.category, savedId:goal.id };
+    save(); paintChat($('#main')); paintSide(); toast('Goal saved. Add steps from your Goals page.');
+    return;
+  }
+  if (act === 'goal-view'){
+    state.view = 'goals'; state.goalFilter = 'all'; state.goalCat = 'all'; save(); renderApp();
+    return;
+  }
+  if (act === 'goal-menu'){
+    state.goalMenu = state.goalMenu === b.dataset.id ? null : b.dataset.id;
+    paintGoals($('#main'));
+    if (state.goalMenu) $('#main .goal-menu [role="menuitem"]')?.focus();
+    else $('#main [data-act="goal-menu"][data-id="' + b.dataset.id + '"]')?.focus();
     return;
   }
   if (act === 'goal-del'){
     const id = b.dataset.id;
+    const goal = (state.goals || []).find(g => g.id === id);
+    if (!goal || !window.confirm(`Delete “${goal.title}”?`)) return;
     state.goals = (state.goals || []).filter(g => g.id !== id);
+    state.goalMenu = null;
     save(); repaintGoals(); toast('Goal deleted.');
     return;
   }
@@ -5739,6 +5635,7 @@ document.addEventListener('click', async e => {
     const g = (state.goals || []).find(x => x.id === b.dataset.id);
     if (!g || g.done) return;
     g.active = !g.active;
+    state.goalMenu = null;
     save(); repaintGoals();
     return;
   }
@@ -5772,7 +5669,7 @@ document.addEventListener('click', async e => {
     save(); repaintGoals();
     return;
   }
-  if (act === 'theme'){ state.theme = b.dataset.v || 'grey'; save(); applyTheme(); paintSide(); if ($('#canvas')) paintCanvas(); if (state.view === 'settings' && $('#main')) paintSettings($('#main')); toast('Accent: ' + ((THEMES.find(t => t.id === state.theme) || THEMES[0]).name)); return; }
+  if (act === 'theme'){ state.theme = b.dataset.v || 'grey'; save(); applyTheme(); if (state.view === 'settings' && $('#main')) paintSettings($('#main')); toast('Chat color: ' + ((THEMES.find(t => t.id === state.theme) || THEMES[0]).name)); return; }
   if (act === 'goto-secrets'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); renderApp(); return; }
   if (act === 'agentpanel'){
     state.canvasTab = 'canvas';
@@ -5995,19 +5892,23 @@ document.addEventListener('click', async e => {
   if (act === 'libcat'){
     state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = [];
     if (state.libraryCat === 'system'){ state.systemPath = 'root'; state.systemFile = null; }
-    save(); paintSettings($('#main')); return;
+    save(); paintLibrary($('#main')); $('#main .page').scrollTop = 0;
+    if (state.libraryCat === 'memory' && signedIn()) syncFromBackend(true).then(() => {
+      if (state.view === 'library' && state.libraryCat === 'memory') paintLibrary($('#main'));
+    }).catch(e => toast(e.message));
+    return;
   }
-  if (act === 'system-folder'){ state.systemPath = b.dataset.path || 'root'; state.systemFile = null; save(); paintSettings($('#main')); return; }
-  if (act === 'system-open'){ state.systemFile = b.dataset.systemId || null; save(); paintSettings($('#main')); return; }
+  if (act === 'system-folder'){ state.systemPath = b.dataset.path || 'root'; state.systemFile = null; save(); paintLibrary($('#main')); return; }
+  if (act === 'system-open'){ state.systemFile = b.dataset.systemId || null; save(); paintLibrary($('#main')); return; }
   if (act === 'system-back'){
     if (state.systemFile){ state.systemFile = null; }
     else { state.systemPath = 'root'; }
-    save(); paintSettings($('#main')); return;
+    save(); paintLibrary($('#main')); return;
   }
   if (act === 'system-memory'){
-    state.settingsTab = 'memory'; state.systemFile = null; state.systemPath = 'root'; save();
+    state.view = 'library'; state.libraryCat = 'memory'; state.systemFile = null; state.systemPath = 'root'; save();
     if (signedIn()) await syncFromBackend(true).catch(() => {});
-    paintSettings($('#main')); return;
+    paintLibrary($('#main')); return;
   }
   if (act === 'system-save'){
     const field = $('#system-editor-text');
@@ -6017,22 +5918,22 @@ document.addEventListener('click', async e => {
     b.disabled = true;
     try {
       await persistAgentContext(documents);
-      state.systemFile = null; state.systemPath = 'root'; save(); paintSettings($('#main')); toast(`${key.toUpperCase()}.md saved.`);
+      state.systemFile = null; state.systemPath = 'root'; save(); paintLibrary($('#main')); toast(`${key.toUpperCase()}.md saved.`);
     } catch (error) { b.disabled = false; toast(error.message || 'Could not save that file.'); }
     return;
   }
-  if (act === 'lib-select'){ state.librarySelect = true; state.librarySelected = []; save(); paintSettings($('#main')); return; }
-  if (act === 'lib-clear'){ state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
-  if (act === 'lib-layout'){ state.libraryLayout = state.libraryLayout === 'list' ? 'grid' : 'list'; save(); paintSettings($('#main')); return; }
+  if (act === 'lib-select'){ state.librarySelect = true; state.librarySelected = []; save(); paintLibrary($('#main')); return; }
+  if (act === 'lib-clear'){ state.librarySelect = false; state.librarySelected = []; save(); paintLibrary($('#main')); return; }
+  if (act === 'lib-layout'){ state.libraryLayout = state.libraryLayout === 'list' ? 'grid' : 'list'; save(); paintLibrary($('#main')); return; }
   if (act === 'lib-pick'){
     const id = b.dataset.id;
     const sel = new Set(state.librarySelected || []);
     if (sel.has(id)) sel.delete(id); else sel.add(id);
-    state.librarySelected = [...sel]; save(); paintSettings($('#main')); return;
+    state.librarySelected = [...sel]; save(); paintLibrary($('#main')); return;
   }
   if (act === 'lib-delete'){
     const ids = new Set(state.librarySelected || []);
-    if (!ids.size){ toast('Select items first.'); state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); return; }
+    if (!ids.size){ toast('Select items first.'); state.librarySelect = false; state.librarySelected = []; save(); paintLibrary($('#main')); return; }
     if (!window.confirm(`Delete ${ids.size} selected item${ids.size > 1 ? 's' : ''}?`)) return;
     let removed = 0;
     ids.forEach(id => {
@@ -6065,7 +5966,7 @@ document.addEventListener('click', async e => {
         removed++;
       }
     });
-    state.librarySelect = false; state.librarySelected = []; save(); paintSettings($('#main')); paintSide();
+    state.librarySelect = false; state.librarySelected = []; save(); paintLibrary($('#main')); paintSide();
     toast(removed ? `Deleted ${removed} item${removed > 1 ? 's' : ''}.` : 'Nothing to delete.');
     return;
   }
@@ -6073,7 +5974,7 @@ document.addEventListener('click', async e => {
     const prompt = window.prompt('What should your agent create?', 'Create an artifact for me.');
     if (prompt === null) return;
     const c2 = { id: uid(), title:'Create an artifact', messages:[], trace:[], artifact:null, createdAt:Date.now() };
-    state.chats.unshift(c2); state.activeChat = c2.id; state.view = 'chat'; state.canvasOpen = false; state.settingsTab = 'library'; save(); renderApp();
+    state.chats.unshift(c2); state.activeChat = c2.id; state.view = 'chat'; state.canvasOpen = false; save(); renderApp();
     setTimeout(() => { if ($('#cprompt')) { applyPromptText(String(prompt || 'Create an artifact for me.')); $('#cprompt').focus(); } }, 0);
     toast('Your request is ready for the agent. Send it when you’re ready.');
     return;
@@ -6214,6 +6115,9 @@ document.addEventListener('click', async e => {
     else if ($('#main') && state.view === 'vault') paintVault($('#main'));
     if ($('#canvas')) paintCanvas();
   };
+  const repaintMemory = () => {
+    if (state.view === 'library' && state.libraryCat === 'memory' && $('#main')) paintLibrary($('#main'));
+  };
   if (act === 'reveal'){
     const s=state.vault.secrets.find(x=>x.id===b.dataset.id);if(!s)return;
     try{
@@ -6280,16 +6184,14 @@ document.addEventListener('click', async e => {
   }
   if (act === 'opengift'){ openGift(); return; }
   if (act === 'closegift'){ closeGift(); return; }
-  if (act === 'gift-reveal'){ giftRevealDone(); return; }
   if (act === 'gift-copy-code'){
     const code = (giftCache && giftCache.code) || (($('#giftcode-text') || {}).textContent || '').trim();
     if (!code){ toast('Your code isn’t ready yet.'); return; }
-    if (!giftRevealed) giftRevealDone();
     copyText(code).then(() => toast('Gift code copied — share it with a friend.')).catch(() => toast(code));
     return;
   }
   if (act === 'gift-copy-link'){
-    const link = (giftCache && giftCache.link) || (($('#giftlink-text') || {}).textContent || '').trim();
+    const link = giftCache && giftCache.link;
     if (!link){ toast('Invite link isn’t ready yet.'); return; }
     copyText(link).then(() => toast('Invite link copied.')).catch(() => toast(link));
     return;
@@ -6297,9 +6199,9 @@ document.addEventListener('click', async e => {
   if (act === 'gift-share'){
     const link = (giftCache && giftCache.link) || '';
     const code = (giftCache && giftCache.code) || '';
-    const text = `Here’s a free $50 Belna gift card ($25 each as credits): ${link || code}`;
-    if (navigator.share){ navigator.share({ title: 'Free $50 Belna gift card', text, url: link || undefined }).catch(() => {}); return; }
-    copyText(link || code).then(() => toast('Invite link copied — send it to a friend.')).catch(() => toast(text));
+    const text = 'Join me on Belna — we each get 500,000 tokens when you redeem my invite.';
+    if (navigator.share){ navigator.share({ title: 'A $50 Belna gift for us', text: link ? text : `${text} Code: ${code}`, url: link || undefined }).catch(() => {}); return; }
+    copyText(link || code).then(() => toast('Invite copied — send it to a friend.')).catch(() => toast(`${text} ${link || code}`));
     return;
   }
   if (act === 'gift-redeem'){
@@ -6312,7 +6214,7 @@ document.addEventListener('click', async e => {
       giftCache = null; invalidateBilling();
       setBillingCache(j.billing);
       paintSide();
-      toast(`+${fmtC(j.credits)} credits for you — your friend got +${fmtC(j.inviterCredits)} too.`);
+      toast(`+${fmtTokens(j.tokens || 500000)} tokens for you — your friend got +${fmtTokens(j.inviterTokens || 500000)} too.`);
       openGift();
     }).catch((e) => { b.disabled = false; toast(e.message); });
     return;
@@ -6325,7 +6227,7 @@ document.addEventListener('click', async e => {
       const j = await window.LingonAuth.api('/api/billing/redeem', { method: 'POST', body: JSON.stringify({ code }) });
       if (owner !== billingIdentity()) return;
       setBillingCache(j.billing);
-      toast(`Redeemed ${fmtC(j.credits)} credits ($${j.amount} gift).`);
+      toast(`Redeemed ${fmtTokens(j.tokens)} tokens ($${j.amount} gift).`);
       if (state.view === 'settings') paintSettings($('#main')); else paintBilling($('#main'));
       paintSide();
     } catch (e) { toast(e.message); }
@@ -6334,8 +6236,8 @@ document.addEventListener('click', async e => {
   if (act === 'buycredits'){
     try {
       const pack = Number((($('#buypack') || {}).value) || 0);
-      if (!pack){ toast('Pick a credit pack.'); return; }
-      const j = await window.LingonAuth.api('/api/billing/credits', { method: 'POST', body: JSON.stringify({ extraCredits: pack }) });
+      if (!pack){ toast('Pick a token pack.'); return; }
+      const j = await window.LingonAuth.api('/api/billing/tokens', { method: 'POST', body: JSON.stringify({ packTokens: pack }) });
       if (j.url) { window.location.href = j.url; return; }
       toast(j.note || 'Checkout started.');
     } catch (e) { toast(e.message); }
@@ -6352,8 +6254,7 @@ document.addEventListener('click', async e => {
   if (act === 'checkout'){
     try {
       const plan = b.dataset.p;
-      const ex = extraCreditsFor(plan);
-      const j = await window.LingonAuth.api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan, extraCredits: ex.credits, extraPrice: ex.price }) });
+      const j = await window.LingonAuth.api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan }) });
       if (j.url) { window.location.href = j.url; return; }
       toast(j.note || 'Checkout started.');
     } catch (e) { toast(e.message); }
@@ -6369,8 +6270,7 @@ document.addEventListener('click', async e => {
   if (act === 'upgrade'){
     try {
       const plan = b.dataset.p;
-      const ex = extraCreditsFor(plan);
-      const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: JSON.stringify({ plan, extraCredits: ex.credits, extraPrice: ex.price }) });
+      const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: JSON.stringify({ plan }) });
       if (j.url) { window.location.href = j.url; return; }
       toast(j.note || 'Request recorded.');
     } catch (e) { toast(e.message); }
@@ -6384,22 +6284,22 @@ document.addEventListener('click', async e => {
     try{
       if(window.LingonAuth.signedIn()){await window.LingonAuth.api('/api/memories',{method:'POST',body:JSON.stringify({text,category,importance:2,src:'user'})});const out=await window.LingonAuth.api('/api/memories');state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}
       else{state.memory.unshift({id:uid('mem'),text,category,importance:2,src:'user',at:Date.now()});state.memoryTotal=state.memory.length;}
-      state.memoryQuery=''; state.memoryEditing=null; save(); repaintSettings(); if($('#main')&&state.view==='memory')paintMemory($('#main')); paintSide(); toast('Memory saved.');
+      state.memoryQuery=''; state.memoryEditing=null; save(); repaintMemory(); paintSide(); toast('Memory saved.');
     }catch(e){toast(e.message);}return;
   }
   if(act==='searchmem' || act==='clearmemsearch'){
     const query=act==='clearmemsearch'?'':String(($('#memory-search') || {}).value || '').trim();
-    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories'+(query?'?q='+encodeURIComponent(query):''));state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}state.memoryQuery=query;state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}catch(e){toast(e.message);}return;
+    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories'+(query?'?q='+encodeURIComponent(query):''));state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}state.memoryQuery=query;state.memoryEditing=null;save();repaintMemory();}catch(e){toast(e.message);}return;
   }
   if(act==='moremem'){
-    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories?offset='+state.memory.length);const seen=new Set(state.memory.map(x=>x.id));state.memory.push(...(out.memories || []).filter(x=>!seen.has(x.id)));state.memoryTotal=Number(out.total ?? state.memory.length);state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));}}catch(e){toast(e.message);}return;
+    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories?offset='+state.memory.length);const seen=new Set(state.memory.map(x=>x.id));state.memory.push(...(out.memories || []).filter(x=>!seen.has(x.id)));state.memoryTotal=Number(out.total ?? state.memory.length);state.memoryEditing=null;save();repaintMemory();}}catch(e){toast(e.message);}return;
   }
   if(act==='editmem'){
     const current=state.memory.find(x=>x.id===b.dataset.id);if(!current)return;
-    state.memoryEditing = current.id; save(); repaintSettings(); if($('#main')&&state.view==='memory')paintMemory($('#main')); return;
+    state.memoryEditing = current.id; save(); repaintMemory(); return;
   }
   if(act==='cancel-editmem'){
-    state.memoryEditing = null; save(); repaintSettings(); if($('#main')&&state.view==='memory')paintMemory($('#main')); return;
+    state.memoryEditing = null; save(); repaintMemory(); return;
   }
   if(act==='save-editmem'){
     const current=state.memory.find(x=>x.id===b.dataset.id), field=$('#memory-edit');
@@ -6409,13 +6309,13 @@ document.addEventListener('click', async e => {
     try{
       if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories/'+encodeURIComponent(current.id),{method:'PATCH',body:JSON.stringify({text:cleaned,category:current.category,importance:current.importance})});state.memory=state.memory.map(x=>x.id===current.id?out.memory:x);}
       else Object.assign(current,{text:cleaned,src:'user_edit',at:Date.now(),updatedAt:Date.now()});
-      state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));toast('Memory corrected.');
+      state.memoryEditing=null;save();repaintMemory();toast('Memory corrected.');
     }catch(e){b.disabled=false;toast(e.message);}return;
   }
   if (act === 'delmem'){
     const id=b.dataset.id;
     if (!window.confirm('Forget this memory?')) return;
-    try{if(window.LingonAuth.signedIn())await window.LingonAuth.api('/api/memories/'+encodeURIComponent(id),{method:'DELETE'});state.memory=state.memory.filter(x=>x.id!==id);state.memoryTotal=Math.max(0,(state.memoryTotal || 1)-1);state.memoryEditing=null;save();repaintSettings();if($('#main')&&state.view==='memory')paintMemory($('#main'));paintSide();toast('Memory forgotten.');}catch(e){toast(e.message);}return;
+    try{if(window.LingonAuth.signedIn())await window.LingonAuth.api('/api/memories/'+encodeURIComponent(id),{method:'DELETE'});state.memory=state.memory.filter(x=>x.id!==id);state.memoryTotal=Math.max(0,(state.memoryTotal || 1)-1);state.memoryEditing=null;save();repaintMemory();paintSide();toast('Memory forgotten.');}catch(e){toast(e.message);}return;
   }
   if (act === 'dlfile'){ const f = window.__fileRows && window.__fileRows[+b.dataset.i]; if (f) dl(f.name, f.content); return; }
 
@@ -6442,18 +6342,20 @@ function handleBillingReturn(flag, q){
   const sid = q && q.get('session_id');
   if (flag === 'cancelled') { setTimeout(() => toast('Checkout cancelled — no charge made.'), 800); return; }
   if (flag === 'portal') { setTimeout(() => toast('Subscription updated.'), 800); return; }
-  if ((flag === 'gift' || flag === 'credits' || flag === 'success') && sid && window.LingonAuth.signedIn()) {
+  if ((flag === 'gift' || flag === 'credits' || flag === 'tokens' || flag === 'success') && sid && window.LingonAuth.signedIn()) {
     const owner = billingIdentity();
     window.LingonAuth.api('/api/billing/checkout-result?session_id=' + encodeURIComponent(sid)).then((j) => {
       if (owner !== billingIdentity()) return;
       if (j.billing) { setBillingCache(j.billing); if ($('#side')) paintSide(); }
       if (j.gift && j.gift.code) toast('Gift card ready: ' + j.gift.code + ' — redeem or share it.');
+      else if (j.kind === 'tokens') toast('Tokens added. See Billing.');
       else if (j.kind === 'credits') toast('Credits added. See Billing.');
-      else toast('Payment complete — your credits are on the way. See Billing.');
+      else if (j.ok) toast('Payment complete — your tokens are on the way. See Billing.');
+      else toast('Payment is still processing. Your tokens will appear once it clears.');
     }).catch((e) => toast(e.message || 'Payment complete. See Billing.'));
     return;
   }
-  if (flag === 'success') setTimeout(() => toast('Payment complete — your monthly credits are on the way. See Billing.'), 800);
+  if (flag === 'success') setTimeout(() => toast('Payment complete — your monthly tokens are on the way. See Billing.'), 800);
 }
 
 /* ---------------- boot (OAuth hash callback first) ---------------- */
@@ -6509,7 +6411,7 @@ const bootReady = bootHash().then((st) => {
   }
   render();
   try {
-    // Referral gift link (?ref= / ?gift=) auto-opens the scratch popup.
+    // Referral gift link (?ref= / ?gift=) auto-opens the gift popup.
     // A pre-sign-in visit stashes the code, then opens it after login.
     try {
       const pending = sessionStorage.getItem('belna.pendingGift');

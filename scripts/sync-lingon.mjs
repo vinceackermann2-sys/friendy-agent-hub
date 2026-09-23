@@ -5,7 +5,7 @@
 // The Node/Express backend in server/ is mirrored to src/lingon-server/
 // (ESM edge port) by hand; this script verifies the branding strings match
 // and warns when they drift so the API identity stays in sync.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,13 +29,16 @@ function copy(src, dest) {
 for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.managed.js', 'mascot.js', 'styles.css', 'task-routing.js']) {
   copy(join('app', f), join('public', 'lingon', f));
 }
+// Standalone public pages load /styles.css, while the app loads /lingon/styles.css.
+copy(join('app', 'styles.css'), join('public', 'styles.css'));
+// Mascot sprites rendered by design/mascot/build_mascot.py
+for (const f of readdirSync(join(root, 'app', 'mascot')).filter((name) => name.endsWith('.webp'))) {
+  copy(join('app', 'mascot', f), join('public', 'lingon', 'mascot', f));
+}
 // Static Belna pages served from the site root
 for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'robots.txt', 'sitemap.xml', 'llms.txt']) {
   copy(join('app', f), join('public', f));
 }
-copy(join('app', 'research-code', 'belna-100m.zip'), join('public', 'research-code', 'belna-100m.zip'));
-copy(join('app', 'research-code', 'belna-stlm-sla.zip'), join('public', 'research-code', 'belna-stlm-sla.zip'));
-
 // Lovable's live Vite server evaluates source files as ESM and cannot execute
 // the CommonJS provider directly. Generate an equivalent ESM copy for the
 // edge port while keeping server/ compatible with the Node/Express runtime.
@@ -85,6 +88,29 @@ function syncFoundryProvider() {
 }
 
 syncFoundryProvider();
+
+function syncStripeProvider() {
+  const src = readFileSync(join(root, 'server/stripe.js'), 'utf8');
+  const esm = src
+    .replace("const { PLANS, PRELANDER_OFFERS, creditPackFor, tokenPackFor, GIFT_AMOUNTS } = require('./plans');", "import { PLANS, PRELANDER_OFFERS, creditPackFor, tokenPackFor, GIFT_AMOUNTS } from './plans.js';\nimport Stripe from 'stripe';")
+    .replace("const store = require('./store');", "import * as store from './store.js';")
+    .replace("stripe = require('stripe')(key);", "stripe = new Stripe(key, { httpClient: Stripe.createFetchHttpClient() });")
+    .replace("require('stripe').createSubtleCryptoProvider()", "Stripe.createSubtleCryptoProvider()")
+    .replace(/module\.exports\s*=\s*\{/g, 'export {');
+  if (/require\(|module\.exports/.test(esm)) throw new Error('Unconverted Stripe provider');
+  writeFileSync(join(root, 'src/lingon-server/stripe.js'), esm, 'utf8');
+}
+
+syncStripeProvider();
+
+// The wallet uses injected persistence dependencies, so its implementation is
+// identical in the Express and edge runtimes.
+{
+  const src = readFileSync(join(root, 'server/token-wallet.js'), 'utf8');
+  const esm = src.replace('module.exports = { createTokenWallet };', 'export { createTokenWallet };');
+  if (/module\.exports/.test(esm)) throw new Error('Unconverted token wallet');
+  writeFileSync(join(root, 'src/lingon-server/token-wallet.js'), esm, 'utf8');
+}
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.

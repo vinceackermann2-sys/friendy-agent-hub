@@ -14,6 +14,7 @@ let releaseMemory = defer();
 let modelReplies = [];
 let modelCall = async () => modelReplies.shift();
 const fakeFoundry = { MODEL_DEFAULT: 'test-model', MODEL_FALLBACK: 'test-model',
+  stableTail: require('../server/foundry').stableTail,
   callFoundryWithTools: (options) => modelCall(options) };
 const fakeRunner = { ensureCredit: async () => {}, logModelUsage: async () => {} };
 const fakeTools = { TOOLS: { shell: { name: 'shell', approval: false, run: async (_, ctx) => {

@@ -8,6 +8,7 @@ const {PGlite}=require('@electric-sql/pglite');
   await db.exec("create role anon;create role authenticated;create role service_role;create table profiles(id text primary key);insert into profiles values('a'),('b');");
   const sql=fs.readFileSync(require.resolve('../supabase/migrations/20260919160000_chat_tasks.sql'),'utf8');
   await db.exec(sql.split('-- Hosted recovery pump.')[0]);
+  await db.exec(fs.readFileSync(require.resolve('../supabase/migrations/20260923160000_vm_tool_serialization.sql'),'utf8'));
   const query=async(sql,args=[]) => (await db.query(sql,args)).rows;
   const ids=[randomUUID(),randomUUID(),randomUUID()];
   const state={title:'Research',instructions:'Brief',status:'queued',version:1,events:[],summary:'',pending:[]};
@@ -39,6 +40,12 @@ const {PGlite}=require('@electric-sql/pglite');
   assert.equal((await query('select * from claim_chat_task($1,$2,$3)',[ids[1],'a',token2])).length,0,'VM commands serialize across task workers');
   await query("update agent_chat_tasks set state=jsonb_set(state,'{pending}','[]') where id=$1",[ids[1]]);
   assert.equal((await query('select * from claim_chat_task($1,$2,$3)',[ids[1],'a',token2])).length,1,'model work overlaps VM work');
+  // Browser and computer use tools also take turns on the VM.
+  await query('select release_chat_task($1,$2,$3)',[ids[1],'a',token2]);
+  for (const name of ['computer_action','browser_fill_secret','browser_submit']) {
+    await query("update agent_chat_tasks set state=jsonb_set(state,'{pending}',$1) where id=$2",[[{name}],ids[1]]);
+    assert.equal((await query('select * from claim_chat_task($1,$2,$3)',[ids[1],'a',randomUUID()])).length,0,`${name} waits for the other task's VM command`);
+  }
   await db.exec('set role authenticated');
   await assert.rejects(query('select * from agent_chat_tasks'),/permission denied/);
   await assert.rejects(query('select * from list_chat_tasks($1,$2,$3,$4)',['a','chat',{},true]),/permission denied/);

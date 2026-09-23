@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Research — Belna Swedish Safe AI Agents</title>
-<meta name="description" content="Belna research: Arche 1.0 on open Kimi K3 weights, plus TAM v3, Cortex-S, STLM and Mini-SLA. Model cards, results, and downloadable training code.">
+<meta name="description" content="Belna research: Arche 1.0 on open Kimi K3 weights, plus technical model cards and measured results for TAM v3, Cortex-S, STLM and Mini-SLA.">
 <meta name="keywords" content="Belna research, Arche 1.0, Kimi K3, TAM v3, Cortex-S, STLM, Mini-SLA, Transformer comparison, AI research Sweden">
 <link rel="canonical" href="https://belna.se/research">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="research.css">
 </head>
 <body class="rx">
-<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
 <main class="legal rx-page">
 <h1>Research</h1>
@@ -43,35 +43,39 @@
     <a class="rx-post" href="/research-100m#tam-v3">
       <span class="when">100M programme</span>
       <h2>TAM v3</h2>
-      <p class="ex">Attention plus a learned recurrent world-state, running in parallel. Beats a matched Transformer on loss at every scale we ran — and still loses the wall-clock race.</p>
+      <p class="ex">Reduced-width causal attention and a diagonal affine scan run in parallel through a learned gate. Lower pretrain loss than the matched Transformer, with longer wall-clock training.</p>
+      <span class="rx-result">Result · 2.6984 vs 2.7116 pretrain NLL</span>
       <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
 
     <a class="rx-post" href="/research-100m#cortex-s">
       <span class="when">100M programme</span>
       <h2>Cortex-S</h2>
-      <p class="ex">A second, independent design on the same frozen corpus: sparse experts, persistent state, full attention only every sixth layer. If TAM was a fluke, this would miss. It doesn’t.</p>
+      <p class="ex">Top-2 sparse experts and bounded recurrent state, with full attention every sixth layer. A second architecture on the frozen 2B-token corpus records a smaller loss improvement.</p>
+      <span class="rx-result">Result · 2.7091 vs 2.7116 final NLL</span>
       <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
 
     <a class="rx-post" href="/research-stlm-sla#stlm">
       <span class="when">Small-scale</span>
       <h2>STLM</h2>
-      <p class="ex">A 23M-parameter model that pins every word to meaning axes like hot–cold and true–false. Embeddings where opposites are actually opposite.</p>
+      <p class="ex">A Transformer with auxiliary topology and coordinate heads that align selected words to axes such as hot–cold and true–false.</p>
+      <span class="rx-result">Result · 80.89 vs 111.45 test perplexity</span>
       <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
 
     <a class="rx-post" href="/research-stlm-sla#sla">
       <span class="when">Small-scale</span>
       <h2>Mini-SLA</h2>
-      <p class="ex">One Transformer layer, looped four times around an explicit memory. Negation is a switch, not a hint — 35/35 with no help at inference.</p>
+      <p class="ex">One shared Transformer layer runs four passes around a ten-slot entity memory and a negation router. It solves the 35-item targeted probe without an inference constraint.</p>
+      <span class="rx-result">Result · 35/35 vs 0/35 negation probes</span>
       <span class="rx-more">Read article <span class="arr">→</span></span>
     </a>
   </div>
 </section>
 </main>
 
-<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 
 <script>
 (function(){

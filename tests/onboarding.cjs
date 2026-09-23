@@ -102,9 +102,12 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       });
       if (!await page.locator('[data-act="nav"][data-view="settings"]').count()) await page.click('[data-act="usermenu"]');
       await page.click('[data-act="nav"][data-view="settings"]');
-      await page.waitForSelector('[data-act="stab"][data-t="library"]');
+      assert.equal(await page.locator('[data-act="stab"][data-t="library"]').count(), 0);
       assert.equal(await page.locator('[data-act="stab"][data-t="theme"]').count(), 0);
       assert.match(await page.locator('.psec').allInnerTexts().then(items => items.join('\n')), /Theme[\s\S]*Accent color/);
+      await page.click('[data-act="open-library"]');
+      await page.waitForSelector('.lib-page-heading h1');
+      assert.equal(await page.locator('.lib-page-heading h1').innerText(), 'Library');
       await page.click('[data-act="nav"][data-view="chat"]');
       if (mode !== 'signin') {
         await page.waitForFunction(() => JSON.parse(localStorage.getItem('lingon.v1')).chats.some(c=>c.managedStatus === 'completed'));

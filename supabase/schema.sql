@@ -223,6 +223,7 @@ create table if not exists credit_grants (
   created_at timestamptz default now()
 );
 create index if not exists grants_user_idx on credit_grants(user_id, created_at desc);
+create unique index if not exists credit_grants_user_ref_unique on credit_grants(user_id, ref);
 
 -- Model usage log. credits_charged includes our margin (older rows without it
 -- are honored at face rate: credits = cost_usd * 2).
@@ -245,6 +246,7 @@ create table if not exists gift_cards (
   code text primary key,
   amount_usd double precision not null,
   from_user text,
+  purchased_by text,
   to_user text,
   redeemed_by text,
   redeemed_at timestamptz,

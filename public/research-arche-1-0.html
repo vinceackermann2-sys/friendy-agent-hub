@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="research.css">
 </head>
 <body class="rx">
-<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
+<div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 
 <main class="legal rx-page rx-article">
 <a class="rx-back" href="/research#active"><span class="arr">←</span> Research</a>
@@ -55,7 +55,7 @@
 
 <div class="rx-prose">
 <p>Most people think AI is text in, text out. You ask a question, you get an answer, then you go do the work yourself. A brilliant model with no hands is still a chatbot.</p>
-<p>Arche 1.0 is the other shape: open <b>Kimi K3</b> weights inside a Belna harness built for privacy and safety. It scores with the closed frontier on the benches that measure real doing — browse, code, programs, banking workflows — and it never sees your secrets in the clear.</p>
+<p>Arche 1.0 combines open <b>Kimi K3</b> weights with a Belna harness for approvals, sandboxed tools and secret handling. Moonshot AI reports benchmark results for the upstream Kimi K3 model across browsing, coding and agentic workflows; the figures below are not measurements of the full Arche harness.</p>
 </div>
 
 <blockquote class="rx-pull">The model never holds your keys. Secrets are masked to sec_•••• — even from the weights.</blockquote>
@@ -90,38 +90,27 @@
 
 <div class="rx-sec" id="results">
   <h2>Results</h2>
-  <p>Published technical results — Arche 1.0 (Kimi K3, max reasoning) against current frontier models. Four first-place agentic scores. Bold is best in row.</p>
+  <p>The Arche 1.0 foundation uses Kimi K3. The Kimi column below reports Moonshot AI’s published <em>upstream model</em> results at maximum reasoning effort; these are not an independent evaluation of the Belna harness. Current frontier results come from each vendor’s published evaluations.</p>
+  <h3>Kimi K3 upstream highlights</h3>
   <div class="stat-row">
     <div class="stat-pill win"><span class="val">91.2</span><span class="lab">BrowseComp</span></div>
     <div class="stat-pill win"><span class="val">42.0</span><span class="lab">SWE-Marathon</span></div>
     <div class="stat-pill win"><span class="val">77.8</span><span class="lab">ProgramBench</span></div>
     <div class="stat-pill win"><span class="val">33.4</span><span class="lab">τ³-Banking</span></div>
   </div>
-  <h3>Where Arche takes first</h3>
-  <div class="bars">
-    <div class="bar-row on"><span class="bar-lab">Arche 1.0</span><div class="bar-track"><i style="--w:100%"></i></div><span class="bar-val">91.2</span></div>
-    <div class="bar-row"><span class="bar-lab">GPT-5.6 Sol</span><div class="bar-track"><i style="--w:99%"></i></div><span class="bar-val">90.4</span></div>
-    <div class="bar-row"><span class="bar-lab">Claude Opus 5</span><div class="bar-track"><i style="--w:98%"></i></div><span class="bar-val">89.1</span></div>
-    <div class="bar-row"><span class="bar-lab">Claude Fable 5</span><div class="bar-track"><i style="--w:96%"></i></div><span class="bar-val">88.0</span></div>
-  </div>
-  <p class="fineprint">BrowseComp. Same pattern on SWE-Marathon, ProgramBench and τ³-Banking.</p>
+  <h3>Published frontier benchmarks</h3>
+  <p class="rx-scroll-hint">Swipe table to compare models →</p>
   <div class="rx-scroll"><table class="rtable">
-    <thead><tr><th>Benchmark</th><th class="hl">Arche 1.0</th><th>GPT-5.6 Sol</th><th>Claude Opus 5</th><th>Claude Fable 5</th><th>Claude Opus 4.8</th></tr></thead>
+    <thead><tr><th>Benchmark</th><th class="hl">Kimi K3<br><small>Arche foundation</small></th><th>GPT-6.0 Sol</th><th>Claude Opus 5.5</th><th>GPT-6.0 Astra</th></tr></thead>
     <tbody>
-      <tr><td>GPQA Diamond</td><td class="hl">93.5</td><td class="win">94.1</td><td>93.8</td><td>92.6</td><td>91.0</td></tr>
-      <tr><td>Terminal-Bench 2.1</td><td class="hl">88.3</td><td class="win">88.8</td><td>87.5</td><td>88.0</td><td>84.6</td></tr>
-      <tr><td>BrowseComp</td><td class="hl win">91.2</td><td>90.4</td><td>89.1</td><td>88.0</td><td>84.3</td></tr>
-      <tr><td>OSWorld-Verified</td><td class="hl">84.8</td><td>83.0</td><td>84.2</td><td class="win">85.0</td><td>83.4</td></tr>
-      <tr><td>SWE-Marathon</td><td class="hl win">42.0</td><td>39.0</td><td>41.0</td><td>35.0</td><td>40.0</td></tr>
-      <tr><td>FrontierSWE</td><td class="hl">81.2</td><td>71.3</td><td>82.4</td><td class="win">86.6</td><td>66.7</td></tr>
-      <tr><td>DeepSWE</td><td class="hl">67.5</td><td class="win">73.0</td><td>68.0</td><td>70.0</td><td>59.0</td></tr>
-      <tr><td>ProgramBench</td><td class="hl win">77.8</td><td>77.6</td><td>75.2</td><td>76.8</td><td>71.9</td></tr>
-      <tr><td>MCP-Atlas</td><td class="hl">84.2</td><td>83.6</td><td>84.0</td><td class="win">84.7</td><td>83.6</td></tr>
-      <tr><td>HLE (with tools)</td><td class="hl">56.0</td><td>58.0</td><td>60.5</td><td class="win">63.0</td><td>57.9</td></tr>
-      <tr><td>τ³-Banking</td><td class="hl win">33.4</td><td>33.0</td><td>30.2</td><td>26.8</td><td>27.6</td></tr>
+      <tr><td>GPQA Diamond ↑</td><td class="hl">93.5%</td><td>—</td><td>—</td><td>96.0%</td></tr>
+      <tr><td>BrowseComp ↑</td><td class="hl">91.2%</td><td>—</td><td>—</td><td>91.5%</td></tr>
+      <tr><td>DeepSWE v1.1 ↑</td><td class="hl">67.5%</td><td>68.8%</td><td>—</td><td>74.1%</td></tr>
+      <tr><td>AutomationBench* ↑</td><td class="hl">30.8%</td><td>33.2%</td><td>40.0%</td><td>41.4%</td></tr>
+      <tr><td>Terminal-Bench 4.0 ↑</td><td class="hl">—</td><td>—</td><td>66.4%</td><td>57.9%</td></tr>
     </tbody>
   </table></div>
-  <p class="fineprint">Source: Moonshot AI Kimi K3 technical results; competitor scores as reported in the same release (each in its own vendor harness). Arche 1.0 serves these weights through the Belna privacy-first harness.</p>
+  <p class="fineprint">Sources: <a href="https://github.com/MoonshotAI/Kimi-K3/blob/main/README.md">Moonshot AI Kimi K3 model card</a>, <a href="https://openai.com/index/introducing-gpt-6-sol-and-luna/">OpenAI GPT-6 Sol release</a>, <a href="https://openai.com/index/gpt-6-astra/">OpenAI GPT-6 Astra release</a>, and <a href="https://www.anthropic.com/claude-opus-5-5">Anthropic Claude Opus 5.5 release</a>. A dash means no score for that model on that benchmark in these sources. *AutomationBench versions and evaluation setups differ between the Kimi K3 and newer vendor reports. Vendors also use different harnesses, effort settings and dates; these are published reference points, not a controlled head-to-head test.</p>
 </div>
 
 <div class="rx-sec" id="take">
@@ -138,6 +127,6 @@
 </div>
 </main>
 
-<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 </body>
 </html>

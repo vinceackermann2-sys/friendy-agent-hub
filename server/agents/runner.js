@@ -39,10 +39,13 @@ function currentTimeAnswer(task, now = new Date()) {
 }
 
 async function ensureCredit(userId) {
-  await store.ensureFreeGrant(userId);
-  const { granted, used } = await store.billingTotals(userId);
-  if (used >= granted - 1e-9) {
-    const e = new Error(`You're out of credits (${used.toFixed(1)} of ${granted.toFixed(0)} used). Upgrade your plan or redeem a gift card under Billing.`);
+  const sub = await store.getSubscription(userId);
+  const paid = ['active', 'canceling', 'trialing'].includes(sub.status)
+    && (!sub.current_period_end || new Date(sub.current_period_end).getTime() > Date.now());
+  const plan = paid && PLANS[sub.plan] ? sub.plan : 'free';
+  const wallet = await store.getTokenWallet(userId, plan, sub.current_period_end);
+  if (wallet.remaining <= 0) {
+    const e = new Error(`You've used your available tokens. Your monthly allowance resets ${wallet.resetAt || 'at your next billing cycle'}. Upgrade or add a token pack under Billing.`);
     e.code = 'NO_CREDIT';
     e.upgrade_required = true;
     throw e;
@@ -65,7 +68,8 @@ async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, 
     return { text: direct, usage: null, model: 'server-clock', compacted: false, compactUsage: null, direct: true };
   }
   const { history: h2, compacted, costUsage } = await compactIfNeeded({ history, model });
-  const system = `${runtimeClock()}\n\n${agent.instructions || ''}${systemExtra || ''}`;
+  // The clock changes every second, so it goes last to keep the instructions a cacheable prefix.
+  const system = `${agent.instructions || ''}${systemExtra || ''}\n\n${runtimeClock()}`;
   const replyContext = replyTo && replyTo.text
     ? `[The user is replying to this ${replyTo.role === 'user' ? 'user' : 'assistant'} message: ${String(replyTo.text).slice(0, 500)}]\n\n`
     : '';
@@ -75,7 +79,7 @@ async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, 
 
 async function logModelUsage(userId, model, usages) {
   for (const u of usages.filter(Boolean)) {
-    await store.logUsage(userId, { model, usage: u, cost: costOf(u) });
+    await store.logUsage(userId, { model: u.model || model, usage: u, cost: costOf(u) });
   }
 }
 

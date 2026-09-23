@@ -26,7 +26,21 @@ async function main() {
   assert.equal(eventMatches({ type: "app", app: "github", event: "pull_request.changed" }, { type: "app", app: "github", event: "pull_request.changed" }), true);
   assert.equal(eventMatches({ type: "subagent", sourceAgentId: "a" }, { type: "subagent", sourceAgentId: "b", event: "completed" }), false);
   assert.throws(() => normalizeSubAgent({ name: "Too fast", prompt: "Check", trigger: { type: "schedule", intervalMinutes: 1 } }), /between 5/);
-  assert.deepEqual(pickTools("schedule a sub agent automation").map((tool) => tool.name).sort(), ["capability_search", "memory_write", "trigger_create", "trigger_list"]);
+  assert.deepEqual(pickTools("schedule a sub agent automation").map((tool) => tool.name).sort(), ["capability_search", "memory_write", "trigger_create", "trigger_list", "web_search"]);
+  const picked = (task) => pickTools(task).map((tool) => tool.name);
+  assert.ok(picked("build a landing page for our cafe").includes("web_search"), "every task can look things up");
+  assert.ok(picked("Boka ett bord på restaurangens hemsida").includes("browser_open"), "Swedish browser request");
+  assert.ok(picked("Søk på nettsiden og logg inn").includes("browser_open"), "Norwegian browser request");
+  assert.ok(picked("Bitte das Formular auf der Webseite ausfüllen").includes("browser_open"), "German browser request");
+  assert.ok(picked("Réserve une table et remplis le formulaire").includes("browser_open"), "French browser request");
+  assert.ok(picked("Rellena el formulario en el sitio web").includes("browser_open"), "Spanish browser request");
+  assert.ok(picked("Kör det här Python-skriptet").includes("code_run"), "Swedish code request");
+  assert.ok(picked("Läs min inkorg").includes("mail_list"), "Swedish mail request");
+  assert.ok(picked("Kom ihåg att jag föredrar te").includes("memory_search"), "Swedish memory request");
+  assert.ok(picked("Vad pratade vi om igår?").includes("history_search"), "Swedish history request");
+  assert.ok(picked("Påminn mig varje dag klockan åtta").includes("trigger_create"), "Swedish automation request");
+  assert.ok(picked("Skapa en bild av en älg i skogen").includes("image_generate"), "Swedish image request");
+  assert.ok(!picked("Förklara fotosyntes kort").includes("browser_open"), "plain questions stay small");
 
   const active = { status: "running", kind: "research" };
   assert.equal(routeMessage(active, "What sources are you checking?"), "respond");

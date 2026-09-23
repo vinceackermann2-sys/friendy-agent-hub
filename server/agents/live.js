@@ -10,9 +10,12 @@
  *
  * The old Run Command screenshot path remains as a compatibility fallback for
  * deployments that have not set LINGON_PUBLIC_ORIGIN yet.
+ *
+ * A desktop session (kind 'desktop') uses the same relay socket, viewers and
+ * takeover, but streams the VM's virtual screen and has no fallback path.
  */
 const crypto = require('crypto');
-const { hostAllowed } = require('./sandbox');
+const { publicUrlProblem } = require('./sandbox');
 const { entry } = require('./tracing');
 const azure = require('./azure-vm');
 
@@ -146,17 +149,27 @@ async function waitForFrame(s, since = 0, timeoutMs = 1200) {
   return !!s.lastFrame;
 }
 
+// Copies the page state fields a VM response carries onto the session.
+function applyPage(s, out) {
+  if (out.url) s.url = out.url;
+  if (typeof out.title === 'string') s.title = out.title;
+  if (typeof out.text === 'string') s.text = out.text;
+  if (Array.isArray(out.links)) s.links = out.links;
+  if (Array.isArray(out.elements)) s.elements = out.elements;
+  if (Number.isFinite(out.scrollY)) s.scrollY = out.scrollY;
+  if (Number.isFinite(out.pageHeight)) s.pageHeight = out.pageHeight;
+  if (out.url || Array.isArray(out.elements)) s.dialog = out.dialog || '';
+  if (Array.isArray(out.windows)) s.windows = out.windows;
+}
+
 function updateFromRelay(s, out, trace) {
   if (!out || out.ok === false) {
     throw Object.assign(new Error(out?.error || 'Browser relay action failed.'), { code: 'AZURE_BROWSER_RELAY' });
   }
-  s.url = out.url || s.url;
-  s.title = out.title || '';
-  s.text = out.text || '';
-  s.links = Array.isArray(out.links) ? out.links : [];
+  applyPage(s, out);
   s.lastActive = Date.now();
   broadcast(s, { state: out.state || (s.userControl ? 'user' : 'idle'), url: s.url, title: s.title });
-  trace && trace(entry('globe', `live VM page: ${(() => { try { return new URL(s.url).hostname; } catch { return 'browser'; } })()} · “${String(s.title).slice(0, 60)}”`));
+  trace && trace(entry(s.kind === 'desktop' ? 'term' : 'globe', s.kind === 'desktop' ? `live VM desktop: “${String(s.title).slice(0, 60)}”` : `live VM page: ${(() => { try { return new URL(s.url).hostname; } catch { return 'browser'; } })()} · “${String(s.title).slice(0, 60)}”`));
   return s;
 }
 
@@ -170,7 +183,7 @@ function onRelayMessage(s, ws, data, isBinary = false) {
   try { msg = JSON.parse(String(data)); } catch { return; }
   if (msg.type === 'ready') {
     s.relayReady = true;
-    broadcast(s, { state: s.userControl ? 'user' : 'idle', url: s.url, title: s.title, transport: 'cdp-screencast' });
+    broadcast(s, { state: s.userControl ? 'user' : 'idle', url: s.url, title: s.title, transport: s.transport, kind: s.kind });
   } else if (msg.type === 'meta' || msg.type === 'result') {
     if (msg.type === 'result' && msg.id && s.pending.has(msg.id)) {
       const pending = s.pending.get(msg.id);
@@ -179,12 +192,9 @@ function onRelayMessage(s, ws, data, isBinary = false) {
       if (msg.ok === false) pending.reject(Object.assign(new Error(msg.error || 'Browser relay action failed.'), { code: 'AZURE_BROWSER_RELAY' }));
       else pending.resolve(msg);
     }
-    if (msg.url) s.url = msg.url;
-    if (msg.title) s.title = msg.title;
-    if (typeof msg.text === 'string') s.text = msg.text;
-    if (Array.isArray(msg.links)) s.links = msg.links;
+    applyPage(s, msg);
     s.lastActive = Date.now();
-    broadcast(s, { state: msg.state || (s.userControl ? 'user' : 'idle'), url: s.url, title: s.title, transport: 'cdp-screencast' });
+    broadcast(s, { state: msg.state || (s.userControl ? 'user' : 'idle'), url: s.url, title: s.title, transport: s.transport, kind: s.kind });
   } else if (msg.type === 'error') {
     broadcast(s, { state: 'error', error: String(msg.error || 'Browser live relay error').slice(0, 300) });
   }
@@ -226,20 +236,36 @@ function ensureSweep() {
   if (!sweepTimer) sweepTimer = setInterval(() => { sweep().catch(() => {}); }, 15000);
 }
 
-async function start({ userId, trace }) {
-  if (process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
-  if (!azure.isAzureConfigured()) throw Object.assign(new Error('Live browser requires the user Azure VM.'), { code: 'DISABLED' });
+async function start({ userId, trace, kind = 'browser' }) {
+  const desktop = kind === 'desktop';
+  if (!desktop && process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
+  if (desktop && process.env.COMPUTER_TOOL === 'off') throw Object.assign(new Error('computer tool disabled'), { code: 'DISABLED' });
+  if (!azure.isAzureConfigured()) throw Object.assign(new Error(desktop ? 'Computer use requires the user Azure VM.' : 'Live browser requires the user Azure VM.'), { code: 'DISABLED' });
   const id = 'live_' + uid();
-  await azure.acquireLease(userId, { leaseId: id, kind: 'browser' });
+  await azure.acquireLease(userId, { leaseId: id, kind });
   const s = {
-    id, remote: true, userId, url: 'about:blank', title: '', text: '', links: [], screenshot: '', lastFrame: null,
+    id, remote: true, userId, url: desktop ? '' : 'about:blank', title: '', text: '', links: [], elements: [], screenshot: '', lastFrame: null,
     working: false, userControl: false, viewers: new Set(), lastActive: Date.now(), lastRenewedAt:Date.now(), fail: false,
     relayToken: crypto.randomBytes(32).toString('base64url'), relay: null, relayReady: false, relayConnectedAt: 0,
-    relayWaiters: [], pending: new Map(), transport: 'cdp-screencast',
+    relayWaiters: [], pending: new Map(), transport: desktop ? 'x11-stream' : 'cdp-screencast', kind, windows: [],
   };
   sessions.set(id, s);
   ensureSweep();
   const relayUrl = relayUrlFor(s);
+  if (desktop) {
+    // The desktop only works through the relay, so a failure ends the session.
+    try {
+      if (!relayUrl) throw Object.assign(new Error('Computer use needs LINGON_PUBLIC_ORIGIN for its live relay.'), { code: 'DISABLED' });
+      await azure.startDesktopRelay(userId, { sessionId: id, relayUrl, token: s.relayToken }, { alreadyRunning: true });
+      await waitForRelay(s, 20000);
+      if (!s.relay) throw Object.assign(new Error('The desktop did not connect.'), { code: 'AZURE_DESKTOP' });
+    } catch (error) {
+      await stop(s);
+      throw error;
+    }
+    trace && trace(entry('term', `desktop session ${id.slice(0, 12)} started on the user VM`));
+    return s;
+  }
   if (relayUrl && typeof azure.startBrowserRelay === 'function') {
     try {
       await azure.startBrowserRelay(userId, { sessionId: id, relayUrl, token: s.relayToken }, { alreadyRunning: true });
@@ -251,6 +277,18 @@ async function start({ userId, trace }) {
     trace && trace(entry('alert', 'live relay origin is not configured; using compatibility browser actions'));
   }
   trace && trace(entry('globe', `live session ${id.slice(0, 12)} started on the user VM`));
+  return s;
+}
+
+// The agent's desktop for one task or chat; created on first use.
+async function forDesktop(userId, sessionId, trace, create = true) {
+  const key = `desktop:${userId}:${sessionId || 'default'}`;
+  const existing = toolSessions.get(key);
+  if (existing && sessions.has(existing.id)) return existing;
+  if (!create) throw Object.assign(new Error('The computer is not running yet.'), { code: 'NO_DESKTOP_SESSION' });
+  const s = await start({ userId, trace, kind: 'desktop' });
+  s.toolKey = key;
+  toolSessions.set(key, s);
   return s;
 }
 
@@ -266,10 +304,7 @@ async function forTool(userId, sessionId, trace, create = true) {
 }
 
 async function updateFromVm(s, out, trace) {
-  s.url = out.url || s.url;
-  s.title = out.title || '';
-  s.text = out.text || '';
-  s.links = Array.isArray(out.links) ? out.links : [];
+  applyPage(s, out);
   s.screenshot = out.screenshot || s.screenshot;
   s.lastActive = Date.now();
   await azure.renewLease(s.userId, { leaseId:s.id }).catch(() => {});
@@ -281,7 +316,8 @@ async function updateFromVm(s, out, trace) {
 }
 
 async function navigate(s, url, trace) {
-  if (!hostAllowed(url)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
+  const problem = publicUrlProblem(url);
+  if (problem) throw Object.assign(new Error(`Cannot open this address: ${problem}.`), { code: 'HOST_BLOCKED' });
   if (s.userControl) throw Object.assign(new Error('The user is controlling this browser. Wait until they give it back.'), { code:'USER_CONTROL' });
   s.working = true;
   s.lastActive = Date.now();
@@ -307,14 +343,14 @@ async function content(s) {
     const out = await sendRelayCommand(s, 'inspect');
     if (out) {
       updateFromRelay(s, out);
-      return { url: s.url, title: s.title, text: s.text, links: s.links };
+      return { url: s.url, title: s.title, text: s.text, links: s.links, elements: s.elements };
     }
   }
   if (!s.text && s.url !== 'about:blank') {
     const out = await azure.execInSandbox(s.userId, 'browser_session', { sessionId: s.id, action: 'inspect' });
     await updateFromVm(s, out);
   }
-  return { url: s.url, title: s.title, text: s.text, links: s.links };
+  return { url: s.url, title: s.title, text: s.text, links: s.links, elements: s.elements };
 }
 
 async function screenshot(s) {
@@ -351,8 +387,10 @@ async function agentInput(s, ev, trace) {
     if (s.relay && s.relay.readyState === 1) {
       const frameAt = s.lastFrameAt || 0;
       const out = await sendRelayCommand(s, 'input', { event: ev || {} });
-      if (out) { await waitForFrame(s, frameAt); return updateFromRelay(s, out, trace); }
+      if (out) { await waitForFrame(s, frameAt, s.kind === 'desktop' ? 2000 : 1200); return updateFromRelay(s, out, trace); }
     }
+    if (s.kind === 'desktop') throw Object.assign(new Error('The computer lost its connection. Try the action again.'), { code: 'AZURE_DESKTOP' });
+    if (ev && ev.secret) throw Object.assign(new Error('The live browser relay is not connected, so the secret was not typed.'), { code: 'AZURE_BROWSER_RELAY' });
     const out = await azure.execInSandbox(s.userId, 'browser_session', { sessionId:s.id, action:'input', event:ev || {} });
     return await updateFromVm(s, out, trace);
   } finally {
@@ -384,11 +422,12 @@ async function stop(s) {
   rejectPending(s, Object.assign(new Error('Browser live session ended.'), { code: 'BROWSER_SESSION_ENDED' }));
   for (const ws of s.viewers) { try { ws.close(); } catch {} }
   s.viewers.clear();
-  if (typeof azure.stopBrowserRelay === 'function') await azure.stopBrowserRelay(s.userId, s.id).catch(() => {});
+  if (s.kind === 'desktop') await azure.stopDesktopRelay(s.userId, s.id).catch(() => {});
+  else if (typeof azure.stopBrowserRelay === 'function') await azure.stopBrowserRelay(s.userId, s.id).catch(() => {});
   await azure.releaseLease(s.userId, { leaseId: s.id });
 }
 
 module.exports = {
-  start, forTool, navigate, content, screenshot, input, agentInput, takeOver, get, owned, stop,
+  start, forTool, forDesktop, navigate, content, screenshot, input, agentInput, takeOver, get, owned, stop,
   relayUrlFor, relayAuthorized, attachRelay, relayClosed, onRelayMessage,
 };

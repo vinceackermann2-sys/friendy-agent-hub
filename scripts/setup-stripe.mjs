@@ -6,6 +6,9 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { TOKEN_PACKS: TOKEN_POLICY_PACKS } = require('../server/plans.js');
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 for (const f of ['.env']) {
@@ -27,17 +30,8 @@ const { default: Stripe } = await import('stripe');
 const stripe = new Stripe(key);
 
 const PLANS = [
-  { plan: 'pro', name: 'Belna Pro', amount: 5000, credits: 60, promoAmount: 3000 },
-  { plan: 'max', name: 'Belna Max', amount: 10000, credits: 100, promoAmount: 5000 },
-];
-const CREDIT_PACKS = [
-  { credits: 50, usd: 15 },
-  { credits: 100, usd: 30 },
-  { credits: 200, usd: 45 },
-  { credits: 300, usd: 60 },
-  { credits: 500, usd: 75 },
-  { credits: 750, usd: 100 },
-  { credits: 1000, usd: 125 },
+  { plan: 'pro', name: 'Belna Pro', amount: 5000, tokens: 100000000 },
+  { plan: 'max', name: 'Belna Max', amount: 10000, tokens: 200000000 },
 ];
 const GIFTS = [50, 100];
 
@@ -53,6 +47,7 @@ async function ensureProduct(name, description, metadata) {
     console.log(`created product ${name} (${product.id})`);
   } else {
     console.log(`reusing product ${name} (${product.id})`);
+    if (product.description !== description) product = await stripe.products.update(product.id, { description, metadata });
   }
   return product;
 }
@@ -85,8 +80,8 @@ const out = {};
 for (const w of PLANS) {
   const product = await ensureProduct(
     w.name,
-    `${w.credits} credits every month. 1 credit = $0.50 of AI usage.`,
-    { plan: w.plan, credits: String(w.credits) },
+    `${(w.tokens / 1000000)} million raw tokens every month.`,
+    { plan: w.plan, tokens: String(w.tokens) },
   );
   const live = await ensurePrice(product, {
     amount: w.amount,
@@ -94,34 +89,27 @@ for (const w of PLANS) {
     nickname: `${w.name} monthly`,
     metadata: { plan: w.plan },
   });
-  const promo = await ensurePrice(product, {
-    amount: w.promoAmount,
-    recurring: { interval: 'month' },
-    nickname: `${w.name} pre-lander`,
-    metadata: { plan: w.plan, promo: '1' },
-  });
   out[w.plan] = live.id;
-  out[`${w.plan}Promo`] = promo.id;
 }
 
-const creditsProduct = await ensureProduct(
-  'Belna Credits',
-  'One-time purchased credits. 1 credit = $0.50 of AI usage.',
-  { kind: 'credits' },
+const tokensProduct = await ensureProduct(
+  'Belna Token Packs',
+  'One-time raw token packs for AI usage. Daily image and transcription limits follow your plan.',
+  { kind: 'tokens' },
 );
-for (const pack of CREDIT_PACKS) {
-  const price = await ensurePrice(creditsProduct, {
+for (const pack of TOKEN_POLICY_PACKS) {
+  const price = await ensurePrice(tokensProduct, {
     amount: pack.usd * 100,
-    nickname: `${pack.credits} credits`,
-    metadata: { kind: 'credits', credits: String(pack.credits) },
+    nickname: `${pack.millions}M tokens`,
+    metadata: { kind: 'tokens', tokens: String(pack.tokens) },
   });
-  out[`credits${pack.credits}`] = price.id;
+  out[`tokens${pack.millions}`] = price.id;
 }
 
 for (const amount of GIFTS) {
   const product = await ensureProduct(
     `Belna Gift Card $${amount}`,
-    `$${amount} gift card. Redeems for ${amount * 2} credits.`,
+    `$${amount} gift card. Redeems for ${amount * 20000} raw tokens.`,
     { kind: 'gift', amount_usd: String(amount) },
   );
   const price = await ensurePrice(product, {
@@ -135,10 +123,8 @@ for (const amount of GIFTS) {
 console.log('\n---- paste into .env ----');
 console.log(`STRIPE_PRO_PRICE_ID=${out.pro}`);
 console.log(`STRIPE_MAX_PRICE_ID=${out.max}`);
-console.log(`STRIPE_PRO_PROMO_PRICE_ID=${out.proPromo}`);
-console.log(`STRIPE_MAX_PROMO_PRICE_ID=${out.maxPromo}`);
-for (const pack of CREDIT_PACKS) {
-  console.log(`STRIPE_CREDITS_${pack.credits}_PRICE_ID=${out[`credits${pack.credits}`]}`);
+for (const pack of TOKEN_POLICY_PACKS) {
+  console.log(`STRIPE_TOKENS_${pack.millions}M_PRICE_ID=${out[`tokens${pack.millions}`]}`);
 }
 console.log(`STRIPE_GIFT_50_PRICE_ID=${out.gift50}`);
 console.log(`STRIPE_GIFT_100_PRICE_ID=${out.gift100}`);

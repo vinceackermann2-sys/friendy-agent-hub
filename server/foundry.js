@@ -5,6 +5,9 @@
 const MODEL_DEFAULT = process.env.AZURE_FOUNDRY_MODEL || 'gpt-6-luna';
 const MODEL_FALLBACK = process.env.AZURE_FOUNDRY_FALLBACK_MODEL || MODEL_DEFAULT;
 const REASONING_EFFORT = process.env.AZURE_FOUNDRY_REASONING_EFFORT || 'xhigh';
+// Interactive chat turns and memory extraction are latency- and cost-sensitive;
+// substantial work is delegated to tasks, which keep REASONING_EFFORT.
+const CHAT_REASONING_EFFORT = process.env.AZURE_FOUNDRY_CHAT_REASONING_EFFORT || 'low';
 const TRANSCRIPTION_MODEL = process.env.AZURE_FOUNDRY_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe';
 const IMAGE_MODEL = process.env.AZURE_FOUNDRY_IMAGE_MODEL || 'gpt-image-2';
 
@@ -12,6 +15,24 @@ const AZURE_HOST = /\.(?:services\.ai\.azure\.com|openai\.azure\.com|ai\.azure\.
 const AUDIO_MIME = /^(audio\/(webm|wav|wave|mp3|mpeg|mp4|ogg|flac|aac|x-m4a|m4a|x-wav)|video\/webm)$/i;
 const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+// Every turn streams. The timer resets whenever the stream delivers bytes, so a
+// long answer is bounded by inactivity; STREAM_MAX_MS still caps the whole turn.
+// High reasoning can think silently for minutes before its first byte.
+const RESPONSE_TIMEOUT_MS = positiveInt(process.env.AZURE_FOUNDRY_TIMEOUT_MS, 180000);
+const DEEP_TIMEOUT_MS = Math.max(RESPONSE_TIMEOUT_MS, positiveInt(process.env.AZURE_FOUNDRY_DEEP_TIMEOUT_MS, 600000));
+const STREAM_MAX_MS = Math.max(DEEP_TIMEOUT_MS, positiveInt(process.env.AZURE_FOUNDRY_STREAM_MAX_MS, 1200000));
+const MAX_RETRIES = 1;
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+// Usage estimates must never bill base64 bytes as text tokens.
+const IMAGE_TOKEN_ESTIMATE = 1500;
+// Explicit prompt-cache breakpoints need GPT-5.6 or later. An older deployment
+// rejects them with a 400, after which this process stops sending them.
+const promptCache = { enabled: String(process.env.AZURE_FOUNDRY_PROMPT_CACHE || 'true').toLowerCase() !== 'false' };
+
+function positiveInt(value, fallback) {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 function key() {
   return String(process.env.AZURE_FOUNDRY_API_KEY || '').trim();
@@ -62,19 +83,60 @@ function requireConfig() {
   return { apiKey, project, openai };
 }
 
-function timeoutSignal(signal, timeoutMs) {
+function timeoutSignal(signal, timeoutMs, maxMs = timeoutMs) {
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) abort();
   else signal?.addEventListener?.('abort', abort, { once: true });
-  const timer = setTimeout(abort, timeoutMs);
+  const deadline = Date.now() + maxMs;
+  let timer = setTimeout(abort, timeoutMs);
   return {
     signal: controller.signal,
+    // Restart the inactivity timer without extending past the overall deadline.
+    touch() {
+      clearTimeout(timer);
+      timer = setTimeout(abort, Math.max(0, Math.min(timeoutMs, deadline - Date.now())));
+    },
     cleanup() {
       clearTimeout(timer);
       signal?.removeEventListener?.('abort', abort);
     },
   };
+}
+
+function transient(error, signal) {
+  if (signal?.aborted || error?.streamed || error?.name === 'AbortError') return false;
+  if (error?.code === 'FOUNDRY_HTTP') return RETRYABLE_STATUS.has(error.status);
+  return error?.name === 'TypeError'; // fetch network failure before a response
+}
+
+function retryDelay(error, attempt) {
+  if (Number.isFinite(error?.retryAfterMs)) return Math.min(8000, Math.max(0, error.retryAfterMs));
+  return Math.min(8000, 400 * 2 ** attempt + Math.floor(Math.random() * 250));
+}
+
+function pause(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const done = () => { signal?.removeEventListener?.('abort', stop); resolve(); };
+    const timer = setTimeout(done, ms);
+    function stop() {
+      clearTimeout(timer);
+      reject(Object.assign(new Error('Interrupted'), { name: 'AbortError' }));
+    }
+    if (signal?.aborted) stop();
+    else signal?.addEventListener?.('abort', stop, { once: true });
+  });
+}
+
+async function withRetry(run, signal, skip = () => false) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      if (attempt >= MAX_RETRIES || skip(error) || !transient(error, signal)) throw error;
+      await pause(retryDelay(error, attempt), signal);
+    }
+  }
 }
 
 function foundryError(data, status) {
@@ -93,7 +155,21 @@ async function errorFromResponse(response) {
   const raw = await response.text().catch(() => '');
   let data = {};
   try { data = JSON.parse(raw); } catch { data = { message: raw }; }
-  return foundryError(data, response.status);
+  const error = foundryError(data, response.status);
+  const retryMs = Number(response.headers?.get?.('retry-after-ms'));
+  const retrySeconds = Number(response.headers?.get?.('retry-after'));
+  if (Number.isFinite(retryMs) && retryMs >= 0) error.retryAfterMs = retryMs;
+  else if (Number.isFinite(retrySeconds) && retrySeconds >= 0) error.retryAfterMs = retrySeconds * 1000;
+  return error;
+}
+
+function estimateInputTokens(body) {
+  let images = 0;
+  const text = JSON.stringify([body?.instructions || '', body?.input || [], body?.tools || []], (field, value) => {
+    if (field === 'image_url' && typeof value === 'string' && value.startsWith('data:')) { images++; return ''; }
+    return value;
+  });
+  return Math.max(1, Math.ceil(text.length / 3) + images * IMAGE_TOKEN_ESTIMATE);
 }
 
 function normalizeUsage(usage) {
@@ -113,16 +189,46 @@ function normalizeUsage(usage) {
   };
 }
 
-function inputItems(prompt, history, attachments) {
-  const input = [];
-  for (const item of Array.isArray(history) ? history.slice(-20) : []) {
-    if (!item?.text) continue;
-    input.push({
-      role: item.role === 'agent' ? 'assistant' : 'user',
-      content: String(item.text).slice(0, 4000),
-    });
+function fnv1a(text) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
+  return hash;
+}
+
+// Trim a growing list to its recent tail at a content-defined boundary. Unlike
+// slice(-n), the start stays put while items are appended, so the cached
+// prompt prefix survives several turns before the window moves.
+function stableTail(list, min, max) {
+  const items = Array.isArray(list) ? list : [];
+  if (items.length <= max) return items.slice();
+  for (let start = items.length - max; start < items.length - min; start++) {
+    if (fnv1a(JSON.stringify(items[start] ?? null).slice(0, 400)) % 3 === 0) return items.slice(start);
   }
-  const content = [{ type: 'input_text', text: String(prompt || '').slice(0, 12000) }];
+  return items.slice(-min);
+}
+
+const breakpoint = () => ({ mode: 'explicit' });
+
+// Prompt layout for caching: tools, then the system message, then append-only
+// history, then this turn's volatile content. The cache is only read at
+// breakpoints present in the current request, so the system message and every
+// saved user message keep one; the service writes just the newest four and
+// reads up to fifty. The volatile tail gets none: writes cost more than input.
+function inputItems(prompt, history, attachments, system = '', cache = false) {
+  const input = [];
+  if (cache && system) {
+    input.push({ role: 'developer', content: [{ type: 'input_text', text: system, prompt_cache_breakpoint: breakpoint() }] });
+  }
+  for (const item of stableTail(history, 14, 20)) {
+    if (!item?.text) continue;
+    const text = String(item.text).slice(0, 4000);
+    if (item.role === 'agent') input.push({ role: 'assistant', content: text });
+    // Breakpoints are only accepted on input_text blocks, i.e. user content.
+    else if (cache) input.push({ role: 'user', content: [{ type: 'input_text', text, prompt_cache_breakpoint: breakpoint() }] });
+    else input.push({ role: 'user', content: text });
+  }
+  // Room for the message plus per-turn memory, task state and supplied context.
+  const content = [{ type: 'input_text', text: String(prompt || '').slice(0, 18000) }];
   for (const item of Array.isArray(attachments) ? attachments.slice(0, 4) : []) {
     const mime = String(item?.inlineData?.mimeType || '').toLowerCase();
     const data = String(item?.inlineData?.data || '');
@@ -134,7 +240,7 @@ function inputItems(prompt, history, attachments) {
   return input;
 }
 
-function responseBody({ prompt, system, history, model, json, tools, attachments, stream }) {
+function responseBody({ prompt, system, history, model, json, tools, attachments, stream, reasoningEffort, toolChoice, cacheKey }) {
   const declarations = (Array.isArray(tools) ? tools : [])
     .filter((tool) => tool?.name && tool?.parameters)
     .map((tool) => ({
@@ -144,18 +250,29 @@ function responseBody({ prompt, system, history, model, json, tools, attachments
       parameters: tool.parameters,
       strict: false,
     }));
+  // Builders budget their own prompts (e.g. buildSystem caps at 11,800); this
+  // limit only stops runaway input and must stay clear of the task rules they append.
+  const instructions = system ? String(system).slice(0, 24000) : '';
   const body = {
     model: model || MODEL_DEFAULT,
-    input: inputItems(prompt, history, attachments),
-    reasoning: { effort: REASONING_EFFORT },
+    input: inputItems(prompt, history, attachments, instructions, promptCache.enabled),
+    reasoning: { effort: reasoningEffort || REASONING_EFFORT },
+    max_output_tokens: 32768,
     store: false,
     stream: !!stream,
   };
-  if (system) body.instructions = String(system).slice(0, 12000);
+  if (promptCache.enabled) {
+    body.prompt_cache_options = { mode: 'explicit' };
+    // Routes one account's requests to the same cache; content still has to match.
+    if (cacheKey) body.prompt_cache_key = `lingon:${fnv1a(String(cacheKey)).toString(36)}`;
+  } else if (instructions) {
+    body.instructions = instructions;
+  }
   if (json) body.text = { format: { type: 'json_object' } };
   if (declarations.length) {
     body.tools = declarations;
-    body.tool_choice = 'auto';
+    // 'none' keeps the tool list (and so the cached prefix) while forbidding calls.
+    body.tool_choice = toolChoice === 'none' ? 'none' : 'auto';
   }
   return body;
 }
@@ -167,7 +284,7 @@ function functionCall(item) {
   return { name: String(item?.name || ''), args, callId: item?.call_id || item?.id || null };
 }
 
-function extractResponse(data, modelName, { allowEmptyText = false } = {}) {
+function extractResponse(data, modelName, { allowEmptyText = false, body = null } = {}) {
   let text = '';
   const functionCalls = [];
   for (const item of Array.isArray(data?.output) ? data.output : []) {
@@ -184,55 +301,72 @@ function extractResponse(data, modelName, { allowEmptyText = false } = {}) {
     const detail = data?.incomplete_details?.reason || data?.error?.message || 'Empty response from Microsoft Foundry';
     throw Object.assign(new Error(detail), { code: 'EMPTY' });
   }
+  const reported = data?.usage && Number(data.usage.total_tokens
+    ?? (Number(data.usage.input_tokens || 0) + Number(data.usage.output_tokens || 0))) > 0;
+  const estimatedInput = estimateInputTokens(body);
+  const estimatedOutput = Math.max(1, Math.ceil((text.length + JSON.stringify(functionCalls).length) / 3));
+  const usage = reported ? normalizeUsage(data.usage) : {
+    promptTokenCount: estimatedInput, candidatesTokenCount: estimatedOutput,
+    totalTokenCount: estimatedInput + estimatedOutput,
+    input_tokens: estimatedInput, output_tokens: estimatedOutput,
+    total_tokens: estimatedInput + estimatedOutput, estimated: true,
+  };
   return {
     text,
     functionCalls,
-    usage: normalizeUsage(data?.usage),
+    usage: { ...usage, model: data?.model || modelName },
     model: data?.model || modelName,
     raw: data,
   };
 }
 
-async function postResponse(body, signal) {
-  const config = requireConfig();
-  const timed = timeoutSignal(signal, 180000);
-  try {
-    const response = await fetch(`${config.project}/openai/v1/responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'api-key': config.apiKey },
-      body: JSON.stringify(body),
-      signal: timed.signal,
-    });
-    if (!response.ok) throw await errorFromResponse(response);
-    return response.json().catch(() => ({}));
-  } finally {
-    timed.cleanup();
-  }
+function estimatedUsage(body, outputText, modelName) {
+  const input = estimateInputTokens(body);
+  const output = Math.ceil(String(outputText || '').length / 3);
+  return { promptTokenCount: input, candidatesTokenCount: output, totalTokenCount: input + output,
+    input_tokens: input, output_tokens: output, total_tokens: input + output, estimated: true, model: modelName };
+}
+
+function addUsage(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const sum = (field) => (Number(a[field]) || 0) + (Number(b[field]) || 0);
+  const cached = (Number(a.input_tokens_details?.cached_tokens) || 0) + (Number(b.input_tokens_details?.cached_tokens) || 0);
+  return { ...b,
+    promptTokenCount: sum('promptTokenCount'), candidatesTokenCount: sum('candidatesTokenCount'), totalTokenCount: sum('totalTokenCount'),
+    input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), total_tokens: sum('total_tokens'),
+    input_tokens_details: { ...(b.input_tokens_details || {}), cached_tokens: cached },
+    estimated: !!(a.estimated || b.estimated) || undefined };
 }
 
 async function attemptResponse(options, modelName) {
-  const data = await postResponse(responseBody({ ...options, model: modelName, stream: false }), options.signal);
-  return extractResponse(data, modelName, { allowEmptyText: !!options.allowEmptyText });
-}
-
-async function attemptResponseStream(options, modelName) {
   const config = requireConfig();
-  const timed = timeoutSignal(options.signal, 180000);
-  let response;
+  const effort = options.reasoningEffort || REASONING_EFFORT;
+  const timed = timeoutSignal(options.signal, ['high', 'xhigh'].includes(effort) ? DEEP_TIMEOUT_MS : RESPONSE_TIMEOUT_MS, STREAM_MAX_MS);
+  const body = responseBody({ ...options, model: modelName, stream: true });
+  let accepted = false;
+  let completed = null;
+  let streamedText = '';
   try {
-    response = await fetch(`${config.project}/openai/v1/responses`, {
+    const response = await fetch(`${config.project}/openai/v1/responses`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'api-key': config.apiKey, Accept: 'text/event-stream' },
-      body: JSON.stringify(responseBody({ ...options, model: modelName, stream: true })),
+      body: JSON.stringify(body),
       signal: timed.signal,
     });
     if (!response.ok || !response.body) throw await errorFromResponse(response);
+    accepted = true;
+    // A proxy that ignores stream=true returns the whole response as JSON.
+    if (!/text\/event-stream/i.test(response.headers.get('content-type') || '')) {
+      completed = await response.json().catch(() => ({}));
+      const out = extractResponse(completed, modelName, { allowEmptyText: !!options.allowEmptyText, body });
+      if (out.text) try { options.onDelta?.(out.text, out.text); } catch {}
+      return out;
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const doneItems = [];
     let buffer = '';
-    let streamedText = '';
-    let completed = null;
     const consume = (frame) => {
       const payload = String(frame).split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
       if (!payload || payload === '[DONE]') return;
@@ -243,15 +377,20 @@ async function attemptResponseStream(options, modelName) {
         try { options.onDelta?.(event.delta, streamedText); } catch {}
       } else if (event.type === 'response.output_item.done' && event.item) {
         doneItems.push(event.item);
-      } else if (event.type === 'response.completed' && event.response) {
+      } else if ((event.type === 'response.completed' || event.type === 'response.incomplete') && event.response) {
+        // An incomplete response still carries its output and billable usage.
         completed = event.response;
       } else if (event.type === 'response.failed') {
+        if (event.response?.usage) completed = event.response;
         throw foundryError(event.response || event, 502);
+      } else if (event.type === 'error') {
+        throw foundryError(event, Number(event.status) || 502);
       }
     };
     try {
       while (true) {
         const next = await reader.read();
+        timed.touch();
         if (next.value) {
           buffer += decoder.decode(next.value, { stream: !next.done }).replace(/\r\n/g, '\n');
           let split;
@@ -267,11 +406,24 @@ async function attemptResponseStream(options, modelName) {
       try { reader.releaseLock(); } catch {}
     }
     const data = completed || { output: doneItems, usage: null, model: modelName };
-    const out = extractResponse(data, modelName, { allowEmptyText: !!options.allowEmptyText });
+    const out = extractResponse(data, modelName, { allowEmptyText: !!options.allowEmptyText, body });
     if (!streamedText && out.text) {
       try { options.onDelta?.(out.text, out.text); } catch {}
     }
     return out;
+  } catch (error) {
+    if (error && typeof error === 'object') {
+      // Text already reached the client; a retry would duplicate it.
+      if (streamedText) { error.streamed = true; error.partialText = streamedText; }
+      // Once the service accepted the request it has done billable work, even if
+      // the turn then failed, timed out or was cancelled.
+      if (accepted) {
+        const reported = completed?.usage && Number(completed.usage.total_tokens) > 0;
+        error.usage = reported ? { ...normalizeUsage(completed.usage), model: completed.model || modelName }
+          : estimatedUsage(body, streamedText, modelName);
+      }
+    }
+    throw error;
   } finally {
     timed.cleanup();
   }
@@ -280,14 +432,35 @@ async function attemptResponseStream(options, modelName) {
 async function runWithFallback(options, { tools = false } = {}) {
   requireConfig();
   const first = options.model || MODEL_DEFAULT;
-  const run = typeof options.onDelta === 'function' ? attemptResponseStream : attemptResponse;
-  try {
-    return await run({ ...options, allowEmptyText: tools }, first);
-  } catch (error) {
-    const pinned = options.model && options.model !== MODEL_DEFAULT;
-    if (error.quota && !pinned && MODEL_FALLBACK && MODEL_FALLBACK !== first) {
-      return run({ ...options, allowEmptyText: tools }, MODEL_FALLBACK);
+  const run = attemptResponse;
+  const pinned = options.model && options.model !== MODEL_DEFAULT;
+  const canFallBack = !pinned && MODEL_FALLBACK && MODEL_FALLBACK !== first;
+  // Transient failures retry once; a quota error moves straight to a distinct fallback.
+  const once = async (model) => {
+    try {
+      return await run({ ...options, allowEmptyText: tools }, model);
+    } catch (error) {
+      if (!promptCache.enabled || error.status !== 400 || !/prompt_cache/i.test(error.message)) throw error;
+      promptCache.enabled = false;
+      console.warn('[foundry] deployment rejected prompt cache options; continuing without them');
+      return run({ ...options, allowEmptyText: tools }, model);
     }
+  };
+  let spent = null;
+  const attempt = (model, skip) => withRetry(async () => {
+    try {
+      return await once(model);
+    } catch (error) {
+      spent = addUsage(spent, error.usage);
+      if (spent) error.usage = spent;
+      throw error;
+    }
+  }, options.signal, skip);
+  const finish = (out) => (spent ? { ...out, usage: addUsage(spent, out.usage) } : out);
+  try {
+    return finish(await attempt(first, (error) => canFallBack && error.quota));
+  } catch (error) {
+    if (error.quota && !error.streamed && canFallBack) return finish(await attempt(MODEL_FALLBACK));
     throw error;
   }
 }
@@ -335,7 +508,26 @@ async function transcribeAudio({ audio, mime, signal, model } = {}) {
     });
     if (!response.ok) throw await errorFromResponse(response);
     const data = await response.json().catch(() => ({}));
-    return { text: String(data?.text || '').trim(), model: deployment };
+    const seconds = Number(data?.duration ?? data?.usage?.seconds ?? 0);
+    const rawUsage = data?.usage;
+    const providerUsage = rawUsage && Number(rawUsage.total_tokens
+      ?? (Number(rawUsage.input_tokens || 0) + Number(rawUsage.output_tokens || 0))) > 0
+      ? normalizeUsage(rawUsage) : null;
+    // Some Azure transcription responses report duration instead of tokens.
+    // Keep that case explicit so the billing layer can identify an estimate.
+    const estimatedInput = Math.max(1, Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 50) : 0,
+      Math.ceil(prepared.data.length * 0.75 / 32));
+    const estimatedOutput = Math.ceil(String(data?.text || '').length / 4);
+    const usage = providerUsage || {
+      promptTokenCount: estimatedInput, candidatesTokenCount: estimatedOutput,
+      totalTokenCount: estimatedInput + estimatedOutput, input_tokens: estimatedInput,
+      output_tokens: estimatedOutput, total_tokens: estimatedInput + estimatedOutput,
+    };
+    return { text: String(data?.text || '').trim(), model: deployment,
+      usage, usageEstimated: !providerUsage,
+      costUsd: providerUsage
+        ? (usage.promptTokenCount * 2.5 + usage.candidatesTokenCount * 10) / 1e6
+        : Math.max(0.02, Number.isFinite(seconds) ? seconds / 60 * 0.006 : 0) };
   } finally {
     timed.cleanup();
   }
@@ -363,6 +555,18 @@ async function generateImage({ prompt, size = '1024x1024', quality = 'high', bac
     if (!base64) throw Object.assign(new Error('Image generation returned no image.'), { code: 'EMPTY' });
     const bytes = Math.floor(base64.length * 3 / 4);
     if (bytes > MAX_IMAGE_BYTES) throw Object.assign(new Error('Generated image exceeded the 20 MB limit.'), { code: 'TOO_LARGE' });
+    const providerUsage = data?.usage && Number(data.usage.total_tokens
+      ?? (Number(data.usage.input_tokens || 0) + Number(data.usage.output_tokens || 0))) > 0
+      ? normalizeUsage(data.usage) : null;
+    const fallbackOutput = quality === 'low' ? 500 : quality === 'medium' ? 4000 : 15000;
+    const usage = providerUsage || {
+      promptTokenCount: Math.ceil(text.length / 3), candidatesTokenCount: fallbackOutput,
+      totalTokenCount: Math.ceil(text.length / 3) + fallbackOutput,
+    };
+    const cached = Number(data?.usage?.input_tokens_details?.cached_tokens || 0);
+    const costUsd = providerUsage
+      ? (Math.max(0, usage.promptTokenCount - cached) * 4 + cached + usage.candidatesTokenCount * 15) / 1e6
+      : Math.max(0.25, (usage.promptTokenCount * 4 + usage.candidatesTokenCount * 15) / 1e6);
     return {
       ok: true,
       name: `generated-${Date.now()}.png`,
@@ -370,6 +574,7 @@ async function generateImage({ prompt, size = '1024x1024', quality = 'high', bac
       size: bytes,
       prompt: text.slice(0, 1000),
       model: model || IMAGE_MODEL,
+      usage, usageEstimated: !providerUsage, costUsd,
       dataUrl: `data:image/png;base64,${base64}`,
     };
   } finally {
@@ -380,7 +585,7 @@ async function generateImage({ prompt, size = '1024x1024', quality = 'high', bac
 module.exports = {
   callFoundry, streamFoundry, callFoundryWithTools,
   transcribeAudio, generateImage, prepareAudio,
-  isConfigured, projectEndpoint, openAIBaseUrl,
-  MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT,
+  isConfigured, projectEndpoint, openAIBaseUrl, stableTail,
+  MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT, CHAT_REASONING_EFFORT,
   TRANSCRIPTION_MODEL, IMAGE_MODEL,
 };

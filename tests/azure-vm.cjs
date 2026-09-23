@@ -56,7 +56,17 @@ assert.match(browserRunner, /browser\.process\(\)\?\.unref/);
 assert.match(browserRunner, /request\.abort/);
 assert.match(sessionBrowser, /install -d -m 700 -o lingon-browser/);
 assert.match(sessionBrowser, /runuser -u lingon-browser -- env .* node \/tmp\/lingon-browser-session\.js/);
-assert.throws(() => azure.buildBrowserSessionScript('navigate', { sessionId:'chat-a', url:'http://insecure.example', uploadUrl:'https://abc.blob.core.windows.net/shots/a.jpg?sig=test' }), /HTTPS/);
+// Any public web page may load; the firewall for the browser user is set up before it starts.
+assert.match(browserRunner, /const kit = \(function browserKit/);
+assert.ok(sessionBrowser.indexOf('iptables -C OUTPUT -m owner --uid-owner lingon-browser') < sessionBrowser.indexOf('runuser -u lingon-browser'));
+assert.match(sessionBrowser, /169\.254\.0\.0\/16/);
+assert.doesNotThrow(() => azure.buildBrowserSessionScript('navigate', { sessionId:'chat-a', url:'http://plain.example', uploadUrl:'https://abc.blob.core.windows.net/shots/a.jpg?sig=test' }));
+for (const url of ['file:///etc/passwd', 'javascript:alert(1)']) {
+  assert.throws(() => azure.buildBrowserSessionScript('navigate', { sessionId:'chat-a', url, uploadUrl:'https://abc.blob.core.windows.net/shots/a.jpg?sig=test' }), /http or https/);
+}
+const kit = azure.browserKit();
+for (const url of ['https://www.ikea.com/se/sv/', 'http://example.com/', 'data:text/html,hi']) assert.equal(kit.allowedRequest(url), true, url);
+for (const url of ['http://127.0.0.1:9300/json', 'http://169.254.169.254/latest', 'http://10.0.0.4/', 'http://172.20.1.1/', 'http://[::1]/', 'http://[fd00::1]/', 'http://printer.local/', 'https://db.internal/', 'file:///etc/passwd', 'https://u:p@example.com/']) assert.equal(kit.allowedRequest(url), false, url);
 
 (async () => {
   const sb = await azure.getSandbox('user-a');

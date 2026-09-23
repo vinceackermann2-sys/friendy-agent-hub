@@ -138,9 +138,11 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   failedEvidence.answers.push({functionCalls:[{name:'report_milestone',args:{summary:'False success',evidenceIds:[failedRef]}}]});await failedEvidence.runtime.step('a',fid);
   assert.equal(failedEvidence.rows.get(fid).state.events.length,0);
 
-  const budget=setup();const br=await budget.create();budget.rows.get(br.id).state.round=8;
+  // Only explicitly budgeted runs (automations) stop at a round limit.
+  const budget=setup();const br=await budget.create();budget.rows.get(br.id).state.context.maxRounds=8;budget.rows.get(br.id).state.round=8;
   await budget.runtime.step('a',br.id);assert.equal(budget.rows.get(br.id).state.status,'partial');
-  assert.equal(budget.calls.find(c=>c.model).model.tools.length,0,'budget stops further tool planning');
+  // Tools stay listed so the cached prompt prefix survives, but calls are disabled.
+  assert.equal(budget.calls.find(c=>c.model).model.toolChoice,'none','budget stops further tool planning');
   await budget.runtime.control('a',br.id,{action:'continue',version:1},'chat');
   assert.equal(budget.rows.get(br.id).state.round,0);assert.equal(budget.rows.get(br.id).state.status,'queued');
   const longChange='Full constraint '.repeat(390);
@@ -160,5 +162,116 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await stop.runtime.control('a',stopId,{action:'cancel',version:1},'chat');assert.equal(stop.rows.get(stopId).state.status,'stopping');
   toolRelease.resolve({stdout:'Done'});await action;
   assert.equal(stop.rows.get(stopId).state.status,'stopped');assert.equal(stop.rows.get(stopId).state.observations.length,1);
-  console.log('chat tasks: concurrent replies, steering, exact approvals, recovery, owner scoping, milestones, stop: ok');
+  // Cancelling stops the model mid-thought, and the work done so far is still billed.
+  const aborting=(began,usage)=>opts=>new Promise((_,reject)=>{began.resolve();
+    opts.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError',usage})));});
+  const c=setup(),began=gate();c.answers.push(aborting(began,{total_tokens:40}));
+  const cr=await c.create();const stepping=c.runtime.step('a',cr.id);await began.promise;
+  await c.runtime.control('a',cr.id,{action:'cancel',version:1},'chat');
+  await stepping;
+  assert.equal(c.rows.get(cr.id).state.status,'stopped');
+  assert.equal(c.rows.get(cr.id).state.inflight,null);
+  assert.ok(c.calls.includes('usage'),'cancelled model work is billed');
+  // A cancel handled by another server instance is noticed by polling.
+  const x=setup(),remote=createTaskRuntime({...x.d,watchMs:10}),remoteBegan=gate();x.answers.push(aborting(remoteBegan));
+  const xr=await x.create();const remoteStep=remote.step('a',xr.id);await remoteBegan.promise;
+  await x.runtime.control('a',xr.id,{action:'cancel',version:1},'chat');
+  const keepAlive=setInterval(()=>{},1000); // the runtime's poll timer is unref'd
+  await remoteStep;clearInterval(keepAlive);
+  assert.equal(x.rows.get(xr.id).state.status,'stopped');
+
+  const chat=(model,extra={})=>createCoordinator({tasks:{summaries:async()=>[]},model,schemas:[],tools:{},azure:{getSandbox:async()=>({mode:'azure'})},
+    store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},
+    checkPrompt:c.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],...extra});
+  // A turn cut off after text reached the user keeps that text, and its work is billed.
+  const cutEvents=[],cutBilled=[];
+  await chat(async opts=>{opts.onDelta('Half an ');throw Object.assign(new Error('reset'),{partialText:'Half an answer',usage:{total_tokens:9}});},
+    {logUsage:async(_,usages)=>cutBilled.push(...usages)}).run({userId:'a',chatId:'chat',requestId:'cut',prompt:'Explain',onEvent:e=>cutEvents.push(e)});
+  assert.equal(cutEvents.find(e=>e.type==='message').text,'Half an answer');
+  assert.equal(cutBilled[0].total_tokens,9);
+  // Quick lookups are capped: the final round keeps its tools but has to answer.
+  const choices=[],lookupEvents=[];
+  await chat(async opts=>{choices.push(opts.toolChoice);return opts.toolChoice==='none'?{text:'Answer from lookups.'}:{functionCalls:[{name:'history_search',args:{query:'x'}}]};},
+    {schemas:[{name:'history_search',description:'Search history',parameters:{type:'object',properties:{}}}],tools:{history_search:{run:async()=>({hits:[]})}}})
+    .run({userId:'a',chatId:'chat',requestId:'lookup',prompt:'What did we decide?',onEvent:e=>lookupEvents.push(e)});
+  assert.deepEqual(choices,['auto','auto','none']);
+  assert.equal(lookupEvents.find(e=>e.type==='message').text,'Answer from lookups.');
+  // The chat turn may run one quick web search itself, then answers without a task.
+  const searchSchema={name:'web_search',description:'Search the web',parameters:{type:'object',properties:{}}};
+  const searched=[],searchEvents=[],searchModels=[];
+  await chat(async opts=>{searchModels.push(opts);return searchModels.length===1?{functionCalls:[{name:'web_search',args:{query:'Nobel prize 2026'}}]}:{text:'Answer from the search.'};},
+    {schemas:[searchSchema],tools:{web_search:{run:async a=>{searched.push(a.query);return [{ok:true,text:'{"abstract":"..."}'}];}}}})
+    .run({userId:'a',chatId:'chat',requestId:'search',prompt:'Who won the Nobel prize this year?',onEvent:e=>searchEvents.push(e)});
+  assert.ok(searchModels[0].tools.some(t=>t.name==='web_search'),'the coordinator can search');
+  assert.match(searchModels[0].system,/Speed matters most/);
+  assert.deepEqual(searched,['Nobel prize 2026']);
+  assert.ok(searchEvents.some(e=>e.type==='progress' && e.label==='Checking live sources'));
+  assert.equal(searchEvents.find(e=>e.type==='message').text,'Answer from the search.');
+  assert.ok(!searchEvents.some(e=>e.type==='task'),'a quick lookup does not start a task');
+  // A failing search is reported to the model instead of failing the turn.
+  const failedModels=[];
+  await chat(async opts=>{failedModels.push(opts);return failedModels.length===1?{functionCalls:[{name:'web_search',args:{}}]}:{text:'Answered without the search.'};},
+    {schemas:[searchSchema],tools:{web_search:{run:async()=>{throw new Error('A search query or URL is required.');}}}})
+    .run({userId:'a',chatId:'chat',requestId:'search-fail',prompt:'Latest news?',onEvent:()=>{}});
+  assert.match(failedModels[1].history.at(-1).text,/web_search result \(untrusted\).*required/);
+  // Tasks have no fixed round limit, and workers always see the core tools.
+  const schemaFor=name=>({name,description:name,parameters:{type:'object',properties:{}}});
+  const runToEnd=async(h,id)=>{for(let i=0;i<60 && !['completed','partial','failed','needs_review','waiting_approval'].includes(h.rows.get(id).state.status);i++) await h.runtime.step('a',id);return h.rows.get(id).state;};
+  const long=setup();
+  long.d.schemas=['web_search','browser_open','browser_action','shell','mail_send'].map(schemaFor);long.d.selectSchemas=()=>[];
+  long.d.tools.web_search={run:async a=>[{ok:true,text:`result for ${a.query}`}]};
+  for(let i=0;i<12;i++) long.answers.push({functionCalls:[{name:'web_search',args:{query:`q${i}`}}]});
+  long.answers.push({text:'Finished after 12 searches.'});
+  const longState=await runToEnd(long,(await long.create()).id);
+  assert.equal(longState.status,'completed');
+  assert.equal(longState.result,'Finished after 12 searches.');
+  const workerTools=long.calls.find(c=>c.model).model.tools.map(t=>t.name);
+  for(const name of ['web_search','browser_open','browser_action','shell']) assert.ok(workerTools.includes(name),`core tool ${name} is always loaded`);
+  assert.ok(!workerTools.includes('mail_send'),'specialised tools still need a keyword or capability_search');
+  // A worker repeating one call with identical results is stopped and returns what it has.
+  const loop=setup();
+  loop.d.schemas=[schemaFor('web_search')];loop.d.selectSchemas=()=>[];
+  let loopRuns=0;loop.d.tools.web_search={run:async()=>{loopRuns++;return [{ok:true,text:'same page'}];}};
+  for(let i=0;i<20;i++) loop.answers.push(opts=>opts.toolChoice==='none'?{text:'Best effort result.'}:{functionCalls:[{name:'web_search',args:{query:'same'}}]});
+  const loopState=await runToEnd(loop,(await loop.create()).id);
+  assert.equal(loopRuns,3,'identical calls stop running after three identical results');
+  assert.equal(loopState.status,'partial');
+  assert.equal(loopState.result,'Best effort result.');
+  // After a browser step the model sees the page as an image; the base64 stays
+  // out of the observation text and the task state.
+  const seer=setup();seer.d.schemas=[schemaFor('browser_open'),schemaFor('web_search')];seer.d.selectSchemas=()=>[];
+  seer.d.tools.browser_open={run:async a=>({url:a.url,title:'Shop',elements:['[1] button "Buy" @640,450'],screenshot:'data:image/jpeg;base64,SU1BR0U='})};
+  seer.d.tools.web_search={run:async()=>[{ok:true,text:'results'}]};
+  seer.answers.push({functionCalls:[{name:'browser_open',args:{url:'https://shop.example/'}}]},{functionCalls:[{name:'web_search',args:{query:'reviews'}}]},{text:'Done.'});
+  const seerState=await runToEnd(seer,(await seer.create()).id);
+  const seerModels=seer.calls.filter(c=>c.model).map(c=>c.model);
+  assert.equal(seerModels[0].attachments,undefined,'no image before the browser was used');
+  assert.deepEqual(seerModels[1].attachments,[{inlineData:{mimeType:'image/jpeg',data:'SU1BR0U='}}]);
+  assert.match(seerModels[1].prompt,/current screen/);
+  assert.equal(seerModels[2].attachments,undefined,'the image is only sent right after a browser step');
+  assert.ok(!JSON.stringify(seerState).includes('SU1BR0U='),'screenshots are not stored in task state');
+  assert.match(seerState.observations[0].text,/\[1\] button \\"Buy\\"/);
+  // Only the newest screen card keeps its screenshot in the stored task history.
+  const cards=setup();cards.d.schemas=[schemaFor('browser_action')];cards.d.selectSchemas=()=>[];
+  cards.d.emitResultCard=(emit,name,id,out)=>emit({type:'card',id,card:{type:'browser',url:out.url,screenshot:out.screenshot,status:'done'}});
+  let shotNo=0;cards.d.tools.browser_action={run:async()=>({url:'https://shop.example/',screenshot:`data:image/jpeg;base64,U0hPVC${++shotNo}`})};
+  cards.answers.push({functionCalls:[{name:'browser_action',args:{type:'scroll',dy:1}}]},{functionCalls:[{name:'browser_action',args:{type:'scroll',dy:2}}]},{text:'Done.'});
+  const cardState=await runToEnd(cards,(await cards.create()).id);
+  const shots=cardState.events.filter(e=>e.card?.type==='browser' && e.card.status==='done').map(e=>e.card.screenshot);
+  assert.deepEqual(shots,[undefined,'data:image/jpeg;base64,U0hPVC2']);
+  // Approval cards can describe the action instead of showing raw arguments.
+  const vault=setup();vault.d.schemas=[schemaFor('browser_fill_secret')];vault.d.selectSchemas=()=>[];
+  vault.d.tools.browser_fill_secret={approval:true,approvalDetail:async(args,{userId})=>JSON.stringify({...args,summary:`Type your saved “GitHub password” on ${args.host} for ${userId}`}),run:async()=>({url:'https://github.com/'})};
+  vault.answers.push({functionCalls:[{name:'browser_fill_secret',args:{secret:'sec_gh12',ref:2,host:'github.com'}}]});
+  const vaultState=await runToEnd(vault,(await vault.create()).id);
+  assert.equal(vaultState.status,'waiting_approval');
+  assert.equal(JSON.parse(vaultState.events.find(e=>e.card?.type==='approval').card.detail).summary,'Type your saved “GitHub password” on github.com for a');
+  // Automations keep their explicit round budget.
+  const capped=setup();capped.d.schemas=[schemaFor('web_search')];capped.d.selectSchemas=()=>[];
+  capped.d.tools.web_search={run:async a=>[{ok:true,text:String(Math.random())}]};
+  for(let i=0;i<10;i++) capped.answers.push(opts=>opts.toolChoice==='none'?{text:'Automation summary.'}:{functionCalls:[{name:'web_search',args:{query:`a${i}`}}]});
+  const autoRow=await capped.runtime.create({userId:'a',chatId:'chat',requestKey:'auto',instructions:'Check news',context:{automation:true,maxRounds:3}});
+  const cappedState=await runToEnd(capped,autoRow.id);
+  assert.equal(cappedState.status,'partial');assert.equal(cappedState.result,'Automation summary.');
+  console.log('chat tasks: concurrent replies, steering, exact approvals, recovery, owner scoping, milestones, stop, no round cap, stall guard: ok');
 })().catch(e=>{console.error(e);process.exitCode=1;});

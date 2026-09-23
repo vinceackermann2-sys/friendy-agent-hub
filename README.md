@@ -65,25 +65,25 @@ from `supabase/templates/magic_link.html` as described in
 2. API settings → URL + publishable + secret into `.env` (already done here).
 3. Restart `npm start` → `/api/health` shows `"supabase": true`.
 
-## Plans (real credits, no fake charges)
+## Plans and raw-token wallet
 
-For production billing performance, apply the tracked Supabase migrations with
-`npx supabase db push`, including
-`supabase/migrations/20260919120000_billing_totals.sql`. The billing API then
-reads one database summary per account instead of downloading every usage and
-credit row. Before the migration is applied, the API paginates ledger rows for
-correctness, but that path will get slower as history grows. Use the Supabase
-secret/service role key on the server and a durable database for multi-user
-traffic; the local JSON fallback is for development. Watch billing response
-latency and database load under concurrent signed-in users before increasing
-capacity.
+Apply the tracked migrations with `npx supabase db push --linked --skip-vault`,
+including `20260923095000_monthly_token_wallet.sql`, together with the matching
+server and client release. The Supabase RPCs charge usage and enforce daily
+limits atomically across workers. Use the Supabase service key on the server;
+the local JSON fallback is for development. Run `node scripts/setup-stripe.mjs`
+to create the token pack prices, then configure the printed IDs in production.
+See `docs/token-rollout-2026-09-23.md` before a live rollout.
 
-- Free $0 → 20 starter credits
-- Pro $50/mo → 60 credits monthly
-- Max $100/mo → 100 credits monthly
-Usage is metered from real Foundry token counts. Caps return 402 with upgrade
-prompt. Gift redeem adds real credit. Upgrades are recorded requests until
-payments connect — no charge is made. See Billing in the app.
+- Free $0 → 50M tokens monthly, 5 images and 10 transcriptions daily.
+- Pro $50/month → 100M tokens monthly, 10 images and 15 transcriptions daily.
+- Max $100/month → 200M tokens monthly, 15 images and 20 transcriptions daily.
+- One-time token packs add 10M, 20M, 30M, 50M, 75M, 100M, or 500M tokens without raising daily limits. Purchased tokens carry over until used.
+
+Input, output, cached, image, transcription, and VM usage draw from the token
+wallet. Depleted accounts receive a 402 response. Gift codes grant tokens when
+redeemed. See Billing in the app and `docs/token-economics-2026-09-23.md` for
+the pricing and margin assumptions.
 
 ## Harness (honest)
 
@@ -112,8 +112,8 @@ Until Azure is configured, the fallback is an isolated per-user workspace and
 npm run smoke:real
 ```
 
-Signs up a fresh test user, checks landing pricing + honest harness wording,
-onboards, real chat, live research, vault masking, Apps empty, Billing Free $10.
+Signs up a fresh test user, checks landing pricing and harness wording,
+onboards, real chat, live research, vault masking, Apps, and Billing.
 
 ## GitHub repo
 

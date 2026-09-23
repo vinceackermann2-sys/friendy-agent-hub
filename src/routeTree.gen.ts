@@ -23,7 +23,6 @@ import { Route as ResearchStlmSlaRouteImport } from './routes/research-stlm-sla'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
-import { Route as ResearchCodeSplatRouteImport } from './routes/research-code/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -95,11 +94,6 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ResearchCodeSplatRoute = ResearchCodeSplatRouteImport.update({
-  id: '/research-code/$',
-  path: '/research-code/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -116,7 +110,6 @@ export interface FileRoutesByFullPath {
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
   '/api/$': typeof ApiSplatRoute
-  '/research-code/$': typeof ResearchCodeSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -133,7 +126,6 @@ export interface FileRoutesByTo {
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
   '/api/$': typeof ApiSplatRoute
-  '/research-code/$': typeof ResearchCodeSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -151,7 +143,6 @@ export interface FileRoutesById {
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
   '/api/$': typeof ApiSplatRoute
-  '/research-code/$': typeof ResearchCodeSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -170,7 +161,6 @@ export interface FileRouteTypes {
     | '/security'
     | '/terms'
     | '/api/$'
-    | '/research-code/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -187,7 +177,6 @@ export interface FileRouteTypes {
     | '/security'
     | '/terms'
     | '/api/$'
-    | '/research-code/$'
   id:
     | '__root__'
     | '/'
@@ -204,7 +193,6 @@ export interface FileRouteTypes {
     | '/security'
     | '/terms'
     | '/api/$'
-    | '/research-code/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -222,7 +210,6 @@ export interface RootRouteChildren {
   SecurityRoute: typeof SecurityRoute
   TermsRoute: typeof TermsRoute
   ApiSplatRoute: typeof ApiSplatRoute
-  ResearchCodeSplatRoute: typeof ResearchCodeSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -325,13 +312,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/research-code/$': {
-      id: '/research-code/$'
-      path: '/research-code/$'
-      fullPath: '/research-code/$'
-      preLoaderRoute: typeof ResearchCodeSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -350,7 +330,6 @@ const rootRouteChildren: RootRouteChildren = {
   SecurityRoute: SecurityRoute,
   TermsRoute: TermsRoute,
   ApiSplatRoute: ApiSplatRoute,
-  ResearchCodeSplatRoute: ResearchCodeSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

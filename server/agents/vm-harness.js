@@ -6,7 +6,7 @@
      enforces approvals + account isolation, executes inside the user sandbox,
      and feeds results back. No frontend keyword router decides.
 */
-const { callFoundryWithTools, MODEL_DEFAULT, MODEL_FALLBACK } = require('../foundry');
+const { callFoundryWithTools, stableTail, MODEL_DEFAULT, MODEL_FALLBACK } = require('../foundry');
 const { ensureCredit, logModelUsage } = require('./runner');
 const { TOOLS, pickTools } = require('./tools');
 const { entry } = require('./tracing');
@@ -18,9 +18,9 @@ const workspace = require('./workspace-runtime');
 const { prepareAttachments } = require('./attachments');
 
 const MAX_TOOL_ROUNDS = 6;
-const VM_TOOLS = new Set(['shell', 'code_run', 'browser_open', 'browser_action', 'computer_screenshot']);
+const VM_TOOLS = new Set(['shell', 'code_run', 'browser_open', 'browser_action', 'browser_submit', 'browser_fill_secret', 'computer_screenshot', 'computer_action', 'computer_submit', 'computer_fill_secret']);
 const TOOL_PROGRESS = {
-  web_search: 'Checking live sources', browser_open: 'Opening the browser', browser_action: 'Using the browser',
+  web_search: 'Checking live sources', browser_open: 'Opening the browser', browser_action: 'Using the browser', browser_submit: 'Finishing on the website', computer_action: 'Using the computer', computer_submit: 'Finishing on the computer', vault_list: 'Checking your saved credentials', browser_fill_secret: 'Filling in a saved credential', computer_fill_secret: 'Filling in a saved credential',
   computer_screenshot: 'Capturing the browser', shell: 'Working in your sandbox', code_run: 'Running code in your sandbox',
   composio_apps: 'Checking connected apps', composio_execute: 'Using a connected app',
   image_generate: 'Creating your image',
@@ -31,11 +31,17 @@ const TOOL_PROGRESS = {
 // JSON Schemas for Responses API function tools (kept tight on purpose).
 const TOOL_SCHEMAS = [
   { name:'capability_search', description:'Find relevant agent capabilities when the needed tool is not currently visible. Use a short description of the action the user wants.', parameters:{type:'object',properties:{query:{type:'string',maxLength:200}},required:['query']} },
-  { name: 'web_search', description: 'Search the public web by query, or fetch up to 4 allowlisted public URLs.', parameters: { type: 'object', properties: { query:{type:'string',maxLength:300}, urls: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4 } } } },
-  { name: 'browser_open', description: 'Open one allowlisted URL in the user Azure VM browser and attach its live interactive Canvas view. Returns title and text.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
-  { name: 'browser_action', description: 'Click, type, press a key, or scroll the current page in the user Azure VM browser. Canvas shows the live stream.', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['click', 'click_text', 'scroll', 'type', 'key'] }, x: { type: 'number' }, y: { type: 'number' }, dy: { type: 'number' }, text: { type: 'string' }, key:{type:'string'} }, required: ['type'] } },
+  { name: 'web_search', description: 'Search the public web by query; results include text extracted from the top pages with their URLs. Set country for local results. Alternatively read up to 4 public URLs as text.', parameters: { type: 'object', properties: { query:{type:'string',maxLength:400}, country:{type:'string',description:'ISO 3166 alpha-2 country for local results, e.g. SE, US'}, urls: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4 } } } },
+  { name: 'browser_open', description: 'Open any public http or https page in the user Azure VM browser and attach its live Canvas view. Returns the page text, numbered interactive elements and a screenshot.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
+  { name: 'browser_action', description: 'Use the current page like a person. Target an element by ref from the latest page state (preferred) or by x,y from the screenshot. Returns the new page state.', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['click', 'double_click', 'right_click', 'hover', 'type', 'key', 'scroll', 'select', 'drag', 'back', 'forward', 'reload', 'wait', 'click_text'] }, ref: { type: 'integer', description: 'Element number from the latest page state' }, x: { type: 'number' }, y: { type: 'number' }, text: { type: 'string', description: 'Text to type, visible text for click_text, or text to wait for' }, clear: { type: 'boolean', description: 'Clear the field before typing' }, submit: { type: 'boolean', description: 'Press Enter after typing' }, key: { type: 'string', description: 'Key or combination, e.g. Enter, Escape, Tab, Control+A' }, dy: { type: 'number' }, dx: { type: 'number' }, value: { type: 'string', description: 'Option value or label for select' }, to_ref: { type: 'integer' }, to_x: { type: 'number' }, to_y: { type: 'number' }, ms: { type: 'number' } }, required: ['type'] } },
+  { name: 'browser_submit', description: 'The final action that buys, pays, books, sends, posts, deletes or changes account settings on a website. Same arguments as browser_action plus summary. REQUIRES owner approval.', parameters: { type: 'object', properties: { summary: { type: 'string', description: 'What this action will do, for the owner to approve' }, ...{ type: { type: 'string', enum: ['click', 'double_click', 'right_click', 'hover', 'type', 'key', 'scroll', 'select', 'drag', 'back', 'forward', 'reload', 'wait', 'click_text'] }, ref: { type: 'integer', description: 'Element number from the latest page state' }, x: { type: 'number' }, y: { type: 'number' }, text: { type: 'string', description: 'Text to type, visible text for click_text, or text to wait for' }, clear: { type: 'boolean', description: 'Clear the field before typing' }, submit: { type: 'boolean', description: 'Press Enter after typing' }, key: { type: 'string', description: 'Key or combination, e.g. Enter, Escape, Tab, Control+A' }, dy: { type: 'number' }, dx: { type: 'number' }, value: { type: 'string', description: 'Option value or label for select' }, to_ref: { type: 'integer' }, to_x: { type: 'number' }, to_y: { type: 'number' }, ms: { type: 'number' } } }, required: ['type', 'summary'] } },
   { name: 'shell', description: 'Run a bash command in the user worker container inside the private Azure VM. Files persist through the durable workspace backup.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
-  { name: 'computer_screenshot', description: 'Screenshot a page with Chromium on the user Azure VM.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
+  { name: 'vault_list', description: 'List the names and refs of credentials and payment details the user saved in the vault. Values are never shown.', parameters: { type: 'object', properties: {} } },
+  { name: 'browser_fill_secret', description: 'Type a saved vault secret (password, username, card number, expiry, CVC) into a field of the current page. REQUIRES owner approval; only types while the page is on host.', parameters: { type: 'object', properties: { secret: { type: 'string', description: 'Vault ref from vault_list, e.g. sec_ab12' }, ref: { type: 'integer', description: 'Field element number from the latest page state' }, x: { type: 'number' }, y: { type: 'number' }, host: { type: 'string', description: 'The site this secret is for, e.g. github.com' }, submit: { type: 'boolean', description: 'Press Enter after typing' } }, required: ['secret', 'host'] } },
+  { name: 'computer_fill_secret', description: 'Type a saved vault secret into the field at x,y on the virtual computer. REQUIRES owner approval; only types while the named window is active.', parameters: { type: 'object', properties: { secret: { type: 'string', description: 'Vault ref from vault_list' }, x: { type: 'number' }, y: { type: 'number' }, window: { type: 'string', description: 'Text from the title of the window to type into' }, submit: { type: 'boolean' } }, required: ['secret', 'x', 'y', 'window'] } },
+  { name: 'computer_action', description: 'Use the virtual computer, a Linux desktop on the user Azure VM, like a person. Start with a screenshot, then click, type, press keys, scroll, drag or open an app (browser, files, editor) using pixel coordinates on the 1280x900 screen. Returns a fresh screenshot and the open windows. The desktop is live in Canvas.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['screenshot', 'click', 'double_click', 'right_click', 'move', 'drag', 'type', 'key', 'scroll', 'open_app', 'wait'] }, x: { type: 'number' }, y: { type: 'number' }, to_x: { type: 'number' }, to_y: { type: 'number' }, text: { type: 'string', description: 'Text to type' }, clear: { type: 'boolean' }, submit: { type: 'boolean', description: 'Press Enter after typing' }, key: { type: 'string', description: 'Key or combination, e.g. Enter, Escape, ctrl+s, alt+Tab' }, dy: { type: 'number' }, dx: { type: 'number' }, app: { type: 'string', enum: ['browser', 'files', 'editor'] }, url: { type: 'string', description: 'Public page for open_app browser' }, ms: { type: 'number' } }, required: ['action'] } },
+  { name: 'computer_submit', description: 'The final action on the virtual computer that buys, pays, books, sends, posts, deletes or changes account settings. Same arguments as computer_action plus summary. REQUIRES owner approval.', parameters: { type: 'object', properties: { summary: { type: 'string', description: 'What this action will do, for the owner to approve' }, ...{ action: { type: 'string', enum: ['screenshot', 'click', 'double_click', 'right_click', 'move', 'drag', 'type', 'key', 'scroll', 'open_app', 'wait'] }, x: { type: 'number' }, y: { type: 'number' }, to_x: { type: 'number' }, to_y: { type: 'number' }, text: { type: 'string', description: 'Text to type' }, clear: { type: 'boolean' }, submit: { type: 'boolean', description: 'Press Enter after typing' }, key: { type: 'string', description: 'Key or combination, e.g. Enter, Escape, ctrl+s, alt+Tab' }, dy: { type: 'number' }, dx: { type: 'number' }, app: { type: 'string', enum: ['browser', 'files', 'editor'] }, url: { type: 'string', description: 'Public page for open_app browser' }, ms: { type: 'number' } } }, required: ['action', 'summary'] } },
+  { name: 'computer_screenshot', description: 'Open a public page in the user Azure VM browser and show it live in Canvas.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'build_page', description: 'Publish a single-file HTML page to the canvas (sandboxed iframe).', parameters: { type: 'object', properties: { html: { type: 'string', maxLength: 60000 } }, required: ['html'] } },
   { name: 'image_generate', description: 'Create an image with the configured GPT Image 2 deployment and show it as a real PNG file in Canvas.', parameters: { type: 'object', properties: { prompt: { type: 'string', maxLength: 32000 }, size: { type: 'string', enum: ['auto', '1024x1024', '1536x1024', '1024x1536'] }, quality: { type: 'string', enum: ['auto', 'low', 'medium', 'high'] }, background: { type: 'string', enum: ['auto', 'opaque', 'transparent'] } }, required: ['prompt'] } },
   { name: 'canvas_show', description: 'Show a card or text file in the user canvas. Use for a report, code, table, JSON, CSV, Markdown, HTML, or SVG the user should inspect. HTML and SVG previews are sandboxed.', parameters: { type:'object', properties:{ title:{type:'string',maxLength:120}, format:{type:'string',enum:['text','md','json','csv','html','svg','code']}, content:{type:'string',maxLength:60000} }, required:['title','format','content'] } },
@@ -86,7 +92,7 @@ const nextCallId = () => `vm_${Date.now().toString(36)}_${(callSeq++).toString(3
 const CORE_SYSTEM = `You are the user's personal Lingon agent. `
   + `Decide tools yourself with function calls; never ask the user to pick a workflow. `
   + `If the needed capability is not visible, call capability_search once with the action the user wants, then use a returned tool. `
-  + `Use browser_open and browser_action for real page navigation and clicking; each browser action creates a chat card the user can open as a live view in Canvas. Use image_generate when the user asks to create an image. Use canvas_show when you want to display a card or text file in Canvas. Use web_search for text retrieval and shell/code_run for workspace commands. `
+  + `Browse like a person: open pages with browser_open, then read the numbered elements and the screenshot and act with browser_action (click, type, scroll, select, go back). Prefer refs; use x,y from the screenshot for things without a ref. Refs change after every action, so use the latest page state. Close cookie banners and pop-ups as a person would. Use browser_submit, which the owner approves, for the final step that buys, pays, books, sends, posts, deletes or changes account settings. To sign in or pay, call vault_list to see the user's saved credentials and payment details, then type each one with browser_fill_secret (or computer_fill_secret on the computer); the owner approves each use and you never see the value. If what you need is not in the vault, or a CAPTCHA or one-time code appears, ask the user to add it to the vault or to take over the browser in Canvas. Each browser action creates a chat card the user can open as a live view. For desktop apps, file dialogs or sites that need a full browser window, use computer_action on the virtual computer: take a screenshot first, act on what you see, and check each new screenshot. Prefer the browser tools for ordinary websites. Use computer_submit, which the owner approves, for the final step on the computer that buys, pays, books, sends, posts, deletes or changes account settings; credentials there also come from the vault. Use web_search to find pages and read text quickly, image_generate when the user asks to create an image, canvas_show to display a card or text file in Canvas, and shell/code_run for workspace commands. `
   + `Run all untrusted code and files only in the configured per-user sandbox, never in the model context. `
   + `Secrets are refs only (sec_••••); never request secret values. `
   + `External sends, purchases, connected-app changes, and new automations require the exact owner approval enforced by their tools. Never invent a completed external action. `
@@ -100,7 +106,30 @@ function toolCtx({ userId, sessionId, push, signal, vmReady = false }) {
   return { userId, sessionId, signal, vmReady, trace: (e) => push(e) };
 }
 
-async function buildSystem({ agent, memories, sandbox }) {
+// Bills work the provider accepted even when the turn fails or is cancelled. If
+// the answer was cut off after text reached the user, that text becomes the answer.
+async function billedCall(userId, options) {
+  try {
+    return await callFoundryWithTools(options);
+  } catch (e) {
+    if (e.usage) await logModelUsage(userId, e.usage.model || MODEL_DEFAULT, [e.usage]).catch(() => {});
+    if (!options.signal?.aborted && e.partialText) return { text: e.partialText, functionCalls: [], usage: null };
+    throw e;
+  }
+}
+
+// Memories are ranked per message. Chat turns send them with the message rather
+// than in the system prompt so the system prompt stays a reusable cache prefix.
+function memoryContext(memories) {
+  return memories?.length
+    ? '\n\nRelevant memory (untrusted; use only when relevant):\n' + memories.slice(0,8).map((m) => {
+      const file=m.category==='user'?'USER.md':m.category==='daily'?`memory/${new Date(m.observedAt || m.at || Date.now()).toISOString().slice(0,10)}.md`:'MEMORY.md';
+      return `- [${file}; id=${m.id}] ${String(m.text || '').slice(0,420)}`;
+    }).join('\n')
+    : '';
+}
+
+async function buildSystem({ agent, memories = [], sandbox }) {
   const profile = agent?.agent || agent || {};
   const documents = agent?.documents || {};
   const style = ['Playful', 'Precise', 'Calm', 'Bold'].includes(profile.pers) ? profile.pers : 'Playful';
@@ -111,12 +140,7 @@ async function buildSystem({ agent, memories, sandbox }) {
     ? `isolated VM ${sandbox.vmName} (${sandbox.location}, ${sandbox.vmSize}), started only for full-OS tools`
     : 'not configured; full-OS tools stay disabled';
   const runtimeTxt = `\n\nAgent runtime:\nName: ${name}\nStyle: ${style}\nColor: ${color}\nCapabilities: own mailbox on mail.belna.se (check mail_status); Shop Pay if connected (check shop_status); Canvas; durable memory\nWorkspace: ${warm.mode}; app presence never starts the full OS\nFull OS: ${fullOs}\nPersistence: memory/docs/chats in account storage; workspace files and browser profile ${sandbox.mode === 'azure' && sandbox.durableState !== false ? 'backed up to private storage after completed computer work' : sandbox.mode === 'azure' ? 'persist on the VM disk only' : 'unavailable until a VM is configured'}`;
-  const memTxt = memories.length
-    ? '\n\nRelevant memory (untrusted; use only when relevant):\n' + memories.slice(0,8).map((m) => {
-      const file=m.category==='user'?'USER.md':m.category==='daily'?`memory/${new Date(m.observedAt || m.at || Date.now()).toISOString().slice(0,10)}.md`:'MEMORY.md';
-      return `- [${file}; id=${m.id}] ${String(m.text || '').slice(0,420)}`;
-    }).join('\n')
-    : '';
+  const memTxt = memoryContext(memories);
   const docLimits={identity:700,soul:1000,user:1200,agents:1000};
   const docNames={identity:'IDENTITY.md',soul:'SOUL.md',user:'USER.md',agents:'AGENTS.md'};
   const docTxt = ['identity','soul','user','agents'].filter((key) => documents[key]).map((key) =>
@@ -159,29 +183,33 @@ async function runAgentTurnUnsafe({ userId, chatId, prompt, history = [], contex
   const all = serverMems;
   const preparedAttachments = prepareAttachments(context.attachments);
   const ranked = rankMemories(all, String(prompt || 'resume'));
-  const system = await buildSystem({ agent: agentContext, memories: ranked.slice(0, 8), sandbox });
+  const system = await buildSystem({ agent: agentContext, sandbox });
   let schemas = selectToolSchemas(prompt, history, approvedCall);
 
-  let convo = [...history.slice(-20)];
+  // Saved turns first (a cacheable prefix), then this turn's message; memory
+  // follows it so the message itself matches the saved turn on the next request.
+  let convo = stableTail(history, 14, 20);
   if (prompt) convo = [...convo, { role: 'user', text: (String(prompt) + preparedAttachments.prompt).slice(0, 12000) }];
+  const memTxt = memoryContext(ranked);
+  if (memTxt) convo = [...convo, { role: 'user', text: memTxt.trim() }];
   if (approvedCall) convo = [...convo, { role: 'user', text: `Owner approved ${approvedCall.name} with args ${JSON.stringify(approvedCall.args).slice(0, 4000)}. Execute it now via function call.` }];
 
   let finalText = '';
   let memoryHandled = false;
-  const usages = [];
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
+    await ensureCredit(userId);
     schemas = selectToolSchemas(prompt, convo, approvedCall);
     progress('model', round ? 'Putting the findings together' : 'Working on your answer');
     const lastUser = [...convo].reverse().find((m) => m.role === 'user');
     let streamed = false;
-    const r = await callFoundryWithTools({
-      prompt: lastUser ? lastUser.text : 'Continue the task.', system, history: convo.filter((m) => m !== lastUser), tools: schemas, signal,
+    const r = await billedCall(userId, {
+      prompt: lastUser ? lastUser.text : 'Continue the task.', system, history: convo.filter((m) => m !== lastUser), tools: schemas, signal, cacheKey: userId,
       attachments: round === 0 ? preparedAttachments.modelParts : [],
       onDelta: (delta) => { const piece = String(delta || ''); if (!piece) return; streamed = true; emit({ type: 'message_delta', id: 'm_final', delta: piece }); },
     });
     if (signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
-    if (r.usage) usages.push(r.usage);
+    if (r.usage) await logModelUsage(userId, r.model || MODEL_DEFAULT, [r.usage]);
     const calls = Array.isArray(r.functionCalls) ? r.functionCalls.slice(0, 3) : [];
     if (!calls.length) {
       finalText = protectAgentResponse(prompt || '', r.text || '');
@@ -209,10 +237,11 @@ async function runAgentTurnUnsafe({ userId, chatId, prompt, history = [], contex
       }
       if (approvedCall && approvedCall.name === fc.name) approvedCall = null;
       progress('tool', TOOL_PROGRESS[fc.name] || 'Using a tool');
-      const visual = ['browser_open', 'computer_screenshot', 'browser_action'].includes(fc.name);
+      const visual = ['browser_open', 'computer_screenshot', 'browser_action', 'browser_submit'].includes(fc.name);
       if (visual) emit({ type: 'card', id: callId, card: { type: 'browser', surface: 'canvas', url: String(args.url || ''), note: fc.name === 'browser_action' ? `Interacting: ${args.type || 'browser'}` : 'Opening page…', status: 'running' } });
       if (['shell','code_run'].includes(fc.name)) emit({ type:'card', id:callId, card:{ type:'computer', surface:'canvas', managed:true, lines:[], status:'running' } });
       try {
+        if (VM_TOOLS.has(fc.name) || fc.name === 'image_generate') await ensureCredit(userId);
         if (sandbox.mode === 'azure' && VM_TOOLS.has(fc.name)) await ensureVmReady?.();
         if (signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
         const out = await def.run(args, toolCtx({ userId, sessionId: chatId, push, signal, vmReady: sandbox.mode === 'azure' && VM_TOOLS.has(fc.name) }));
@@ -239,16 +268,16 @@ async function runAgentTurnUnsafe({ userId, chatId, prompt, history = [], contex
   }
   if (!finalText) {
     // Ran out of rounds: summarize honestly from collected tool context.
-    const r = await callFoundryWithTools({
+    await ensureCredit(userId);
+    const r = await billedCall(userId, {
       prompt: 'Summarize what the verified tool results support in 3 sentences. Do not invent anything beyond the tool results.',
-      system, history: convo.slice(-20), tools: [], signal,
+      system, history: convo, tools: schemas, toolChoice: 'none', signal, cacheKey: userId,
       onDelta: (delta) => { const piece = String(delta || ''); if (piece) emit({ type: 'message_delta', id: 'm_final', delta: piece }); },
     });
-    if (r.usage) usages.push(r.usage);
+    if (r.usage) await logModelUsage(userId, r.model || MODEL_DEFAULT, [r.usage]);
     finalText = protectAgentResponse(prompt || '', r.text || '');
   }
   progress('finalizing', 'Finishing your answer');
-  await logModelUsage(userId, MODEL_DEFAULT, usages);
   if (signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
   // The answer is ready. Send it before slower memory extraction and transcript writes.
   emit({ type: 'message', id: 'm_final', text: finalText, phase: 'final_answer' });
@@ -318,7 +347,9 @@ async function runTracked(options) {
 
 function emitResultCard(emit, name, callId, out) {
   try {
-    if (['browser_open', 'computer_screenshot', 'browser_action'].includes(name) && out && out.url) {
+    if (['computer_action', 'computer_submit', 'computer_fill_secret'].includes(name) && out && out.desktop) {
+      emit({ type: 'card', id: callId, card: { type: 'browser', desktop: true, surface: 'canvas', url: 'Virtual computer', note: out.title || 'Desktop', screenshot: out.screenshot, liveId: out.liveId, transport: out.transport, status: 'done' } });
+    } else if (['browser_open', 'computer_screenshot', 'browser_action', 'browser_submit', 'browser_fill_secret'].includes(name) && out && out.url) {
       emit({ type: 'card', id: callId, card: { type: 'browser', surface: 'canvas', url: out.url, note: out.title || 'Rendered page', screenshot: out.screenshot, liveId: out.liveId, transport: out.transport, status: 'done' } });
     } else if (['shell', 'code_run'].includes(name) && out && (out.stdout !== undefined || out.stderr !== undefined || out.pcId)) {
       const lines = [out.stdout, out.stderr].filter(Boolean).join('\n').slice(0,12000).split('\n').filter(Boolean).map(t => ({ t, cls:'g' }));
@@ -442,4 +473,4 @@ async function handle(req, res) {
   }
 }
 
-module.exports = { runAgentTurn, handle, pendingApprovals, TOOL_SCHEMAS, selectToolSchemas, emitResultCard, buildSystem };
+module.exports = { runAgentTurn, handle, pendingApprovals, TOOL_SCHEMAS, selectToolSchemas, emitResultCard, buildSystem, memoryContext };
