@@ -1463,9 +1463,10 @@ app.post('/api/pc/input', rateLimit(30, 60000), requireAuth(async (req, res) => 
 
 // ---------- static frontend ----------
 const APP_DIR = path.join(__dirname, '..', 'app');
+app.use('/lingon', express.static(APP_DIR));
 app.use(express.static(APP_DIR, { extensions: ['html'] }));
 // SEO pretty URLs for landing sub-pages (also served as *.html via static).
-for (const p of ['terms', 'privacy', 'security', 'cookies', 'models', 'pricing']) {
+for (const p of ['terms', 'privacy', 'security', 'cookies', 'models', 'pricing', 'promo']) {
   app.get('/' + p, (req, res) => res.sendFile(path.join(APP_DIR, p + '.html')));
 }
 app.get('*', (req, res, next) => {

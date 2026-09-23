@@ -30,7 +30,7 @@ for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.man
   copy(join('app', f), join('public', 'lingon', f));
 }
 // Static Belna pages served from the site root
-for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'sitemap.xml']) {
+for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'sitemap.xml']) {
   copy(join('app', f), join('public', f));
 }
 copy(join('app', 'research-code', 'belna-100m.zip'), join('public', 'research-code', 'belna-100m.zip'));

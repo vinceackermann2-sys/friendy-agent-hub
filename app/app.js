@@ -946,7 +946,14 @@ function isPromoRoute(){
   catch { return false; }
 }
 function leavePromo(){
-  try { window.__promoLeft = true; } catch {}
+  if (isPromoRoute()) {
+    // Auth and the agent live at /app. Keep the address bar and refresh target
+    // aligned with the screen reached from the standalone promo page.
+    try {
+      window.__promoLeft = true;
+      window.history.replaceState(null, '', '/app' + window.location.search);
+    } catch {}
+  }
   belnaStopLandingFx();
 }
 
@@ -1882,9 +1889,9 @@ function renderPromo(){
   <div class="fadeup promo-page">
     <div class="anav"><nav class="nav">
       <a class="abrand" href="/promo" data-act="top">${Mascot.logo(28)}belna</a>
-      <div class="navlinks"><a href="/" data-act="back-home">Hem</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
+      <div class="navlinks"><a href="/">Hem</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div class="anav-cta">
-        <a class="btn ghost small" href="/promo" data-act="signin-nav">Sign in</a>
+        <a class="btn ghost small" href="/app" data-act="signin-nav">Sign in</a>
         <a class="btn small" href="#promo-cta" data-act="promo-cta">Get started</a>
       </div>
     </nav></div>
@@ -2001,7 +2008,7 @@ function renderPromo(){
     <footer class="afooter"><div class="fin">
       <div><div class="abrand">${Mascot.logo(28)}belna</div></div>
       <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
-      <div><h4>Company</h4><a href="#promo-cta" data-act="promo-cta">Get started</a><a href="/promo" data-act="signin-nav">Sign in</a></div>
+      <div><h4>Company</h4><a href="#promo-cta" data-act="promo-cta">Get started</a><a href="/app" data-act="signin-nav">Sign in</a></div>
       <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div>
     </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
   </div>`;
@@ -2235,6 +2242,7 @@ async function landingRun(prompt){
   // Homepage prompt always requires a real account — no demo/sample agents.
   // Save first so sign-up / log-in can place it into the agent chat.
   state.pendingPrompt = prompt; save();
+  if (isPromoRoute()) leavePromo();
   if (!signedIn()){
     renderAuth();
     toast('Sign up or log in — your message is saved and will be sent in the agent chat.');
@@ -5581,11 +5589,8 @@ document.addEventListener('click', async e => {
   }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
   if (act === 'back-home'){
-    if (isPromoRoute() || window.__promoLeft){
-      try { window.__promoLeft = false; } catch {}
-      belnaStopLandingFx();
-      if (isPromoRoute()){ renderPromo(); return; }
-    }
+    if (window.__promoLeft){ window.location.assign('/promo'); return; }
+    if (isPromoRoute()){ renderPromo(); return; }
     belnaStopLandingFx(); renderLanding(); return;
   }
   if (act === 'promo-cta'){ e.preventDefault(); const t = $('#promo-cta'); if (t) t.scrollIntoView({ behavior:'smooth', block:'start' }); return; }
