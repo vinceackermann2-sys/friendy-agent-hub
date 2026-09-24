@@ -24,8 +24,22 @@ const foldText = (text) => String(text || '').toLowerCase().replace(/ø/g,'o').r
 // This copy has no direct page reader, so Firecrawl returns the text of the top
 // results (1 credit each) except in quick chat lookups, which use snippets.
 const FIRECRAWL_API = 'https://api.firecrawl.dev/v2';
+const FIRECRAWL_GATEWAY = 'https://connector-gateway.lovable.dev/firecrawl/v2';
 const SEARCH_COUNTRIES = new Set(['US','GB','SE','NO','DK','FI','DE','FR','ES','NL','IT','PT','PL','AT','CH','BE','IE','CA','AU','NZ']);
 const firecrawlKey = () => String(process.env.FIRECRAWL_API_KEY || '').trim();
+// Lovable-managed connections use a lovc_ connection key that only the gateway accepts.
+const firecrawlEndpoint = () => (firecrawlKey().startsWith('lovc_') ? FIRECRAWL_GATEWAY : FIRECRAWL_API);
+const firecrawlHeaders = () => {
+  const key = firecrawlKey();
+  const h = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (key.startsWith('lovc_')) {
+    h.Authorization = 'Bearer ' + String(process.env.LOVABLE_API_KEY || '').trim();
+    h['X-Connection-Api-Key'] = key;
+  } else {
+    h.Authorization = 'Bearer ' + key;
+  }
+  return h;
+};
 async function searchWeb(query, { country } = {}, ctx) {
   const q = String(query).slice(0, 400);
   if (!firecrawlKey()) {
