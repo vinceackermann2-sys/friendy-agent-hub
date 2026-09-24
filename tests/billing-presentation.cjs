@@ -12,6 +12,7 @@ function functionSource(name, next) {
 }
 const context = vm.createContext({
   fmtTokens: n => Number(n).toLocaleString('en-US'),
+  fmtPlanTokens: n => Number(n).toLocaleString('en-US'),
   currentUser: () => ({ name: 'Guest' }),
   esc: value => String(value),
   icon: () => '',
@@ -20,9 +21,11 @@ const context = vm.createContext({
 });
 vm.runInContext([
   functionSource('creditView', 'pctOff'),
+  functionSource('pctOff', 'billSummary'),
   functionSource('billSummary', 'billingLoadingHtml'),
+  functionSource('billingLoadingHtml', 'paintBilling'),
   functionSource('usageCardHtml', 'paintGoals'),
-  'this.view = { creditView, billSummary, usageCardHtml };',
+  'this.view = { creditView, billSummary, billingBodyHtml, usageCardHtml };',
 ].join('\n'), context);
 
 const billing = {
@@ -30,6 +33,9 @@ const billing = {
   packTokens: 50, packTokensUsed: 10, tokens: 115,
 };
 const view = context.view.creditView(billing);
+context.billingOwner = 'owner';
+context.billingIdentity = () => 'owner';
+context.billingCache = { ...billing, plans: [], tokenPacks: [] };
 assert.equal(view.percent, 25, 'extra grants do not change the monthly percentage');
 assert.equal(view.remaining, 75);
 assert.equal(view.extraRemaining, 40);
@@ -47,9 +53,19 @@ assert.match(monthly, /Monthly tokens used<\/dt><dd>25/);
 assert.match(monthly, /Monthly tokens left<\/dt><dd>75/);
 assert.match(monthly, /Monthly plan allowance<\/dt><dd>100/);
 assert.doesNotMatch(monthly, /Extra tokens added/);
-assert.match(extras, /Extra tokens added<\/dt><dd>50/);
-assert.match(extras, /Extra tokens used<\/dt><dd>10/);
-assert.match(extras, /Extra tokens left<\/dt><dd>40/);
+assert.match(extras, /Extra tokens added<\/dt><dd title="50 tokens">50/);
+assert.match(extras, /Extra tokens used<\/dt><dd title="10 tokens">10/);
+assert.match(extras, /billing-extra-total[^>]*><strong>40<\/strong>/);
+assert.match(extras, /billing-add-tokens/);
+
+const billingPage = context.view.billingBodyHtml('billing');
+const usagePage = context.view.billingBodyHtml('usage');
+assert.match(billingPage, /billing-plans|Plans/);
+assert.match(billingPage, /Open billing portal/);
+assert.doesNotMatch(billingPage, /billing-extra-balance|giftcode|buypack/);
+assert.match(usagePage, /billing-extra-balance|Extra tokens/);
+assert.match(usagePage, /giftcode/);
+assert.doesNotMatch(usagePage, /billing-plans|Open billing portal/);
 
 const depleted = context.view.creditView({ ...billing, planTokensUsed: 100, packTokensUsed: 10 });
 assert.equal(depleted.percent, 100);

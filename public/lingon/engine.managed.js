@@ -10,7 +10,7 @@
   const recovery = new Map();
   const api = (path, body) => window.LingonAuth.api(path, { method: 'POST', body: JSON.stringify(body) });
   const owner = () => window.LingonAuth.get?.()?.user?.id;
-  const unfinished = task => ['queued','running','waiting_approval','stopping'].includes(task.status);
+  const unfinished = task => ['queued','running','waiting_peers','waiting_approval','stopping'].includes(task.status);
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   function acceptTask(rt, task) {
     rt.managedTask(task);
@@ -26,7 +26,7 @@
     try {
       while(owner()===userId) {
         const task=rt.chat.managedTasks?.[taskId];
-        if(!task || !unfinished(task) || task.status==='waiting_approval') break;
+        if(!task || !unfinished(task) || ['waiting_approval','waiting_peers'].includes(task.status)) break;
         try {
           const out=await api('/api/agent/tasks/advance',{chatId:rt.chat.id,taskId,after:task.sequence});
           if(owner()!==userId) break;

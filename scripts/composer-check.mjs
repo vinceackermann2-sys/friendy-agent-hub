@@ -40,6 +40,13 @@ async function check(page, formId, textareaId, width){
   await form.locator('input[type="file"]').setInputFiles({ name:'a-long-attachment-name-that-needs-to-clip.txt', mimeType:'text/plain', buffer:Buffer.from('attachment') });
   await form.locator('.attach-pill:not(.loading)').waitFor();
   assert.equal(await form.locator('.attach-pill').count(), 1);
+  const card = await form.locator('.attach-card').first().evaluate(el => ({ width:el.getBoundingClientRect().width, height:el.getBoundingClientRect().height }));
+  assert.ok(Math.abs(card.width - card.height) <= 1, `attachment card should be square: ${JSON.stringify(card)}`);
+  const removePosition = await form.locator('.attach-card').first().evaluate(el => {
+    const card = el.getBoundingClientRect(), button = el.querySelector('.ap-x').getBoundingClientRect();
+    return { top:button.top - card.top, right:card.right - button.right };
+  });
+  assert.ok(removePosition.top < 12 && removePosition.right < 12, `remove button should sit at the top right: ${JSON.stringify(removePosition)}`);
   await form.evaluate(el => {
     const transfer = new DataTransfer();
     transfer.items.add(new File(['dropped'], 'dropped.txt', { type:'text/plain' }));
@@ -49,6 +56,21 @@ async function check(page, formId, textareaId, width){
   });
   await form.locator('.attach-pill:not(.loading)').nth(1).waitFor();
   assert.equal(await form.locator('.attach-pill').count(), 2);
+  await form.locator('input[type="file"]').setInputFiles({ name:'preview.svg', mimeType:'image/svg+xml', buffer:Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#71c7b5"/><circle cx="50" cy="50" r="28" fill="#f8c955"/></svg>') });
+  await form.locator('.attach-card.has-preview img').waitFor();
+  assert.ok(await form.locator('.attach-card.has-preview img').evaluate(el => el.complete && el.naturalWidth > 0), 'image thumbnail should load');
+  await form.locator('input[type="file"]').setInputFiles({ name:'budget.xlsx', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer:Buffer.from('spreadsheet') });
+  await form.locator('.attach-card .file-format-icon[aria-label="excel file"]').waitFor();
+  if (width === 1440 && formId === '#cform'){
+    await form.locator('input[type="file"]').setInputFiles({ name:'clip.mp4', mimeType:'video/mp4', buffer:Buffer.alloc(4 * 1024 * 1024 + 1) });
+    await form.locator('.attach-card:not(.loading) .file-format-icon[aria-label="video file"]').waitFor();
+    assert.equal(await form.locator('.attach-card.has-preview').count(), 1, 'large video should use its format icon');
+    await form.locator('.attach-card .ap-x').nth(4).click();
+  }
+  if (process.env.COMPOSER_SHOTS && width === 1440) await form.screenshot({ path:process.env.COMPOSER_SHOTS + '/' + formId.slice(1) + '-attachments.png' });
+  await form.locator('.attach-card .ap-x').nth(3).click();
+  await form.locator('.attach-card .ap-x').nth(2).click();
+  assert.equal(await form.locator('.attach-card').count(), 2);
   if (formId === '#lform') assert.equal(await page.locator('#lform2 .attach-pill').count(), 0, 'files should stay in the composer where they were added');
   size = await form.evaluate(el => ({ left:el.getBoundingClientRect().left, right:el.getBoundingClientRect().right, width:el.getBoundingClientRect().width }));
   assert.ok(size.left >= -1 && size.right <= width + 1, `${formId} escapes viewport: ${JSON.stringify(size)}`);

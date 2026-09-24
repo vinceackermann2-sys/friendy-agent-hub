@@ -46,7 +46,7 @@ async function ensureCredit(userId) {
   const plan = paid && PLANS[sub.plan] ? sub.plan : 'free';
   const wallet = await store.getTokenWallet(userId, plan, sub.current_period_end);
   if (wallet.remaining <= 0) {
-    const e = new Error(`You've used your available tokens. Your monthly allowance resets ${wallet.resetAt || 'at your next billing cycle'}. Upgrade or add a token pack under Billing.`);
+    const e = new Error(`You've used your available tokens. Your monthly allowance resets ${wallet.resetAt || 'at your next billing cycle'}. Upgrade under Billing or add a token pack under Usage.`);
     e.code = 'NO_CREDIT';
     e.upgrade_required = true;
     throw e;

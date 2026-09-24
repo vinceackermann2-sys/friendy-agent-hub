@@ -1,12 +1,23 @@
 /* Raw token wallet shared by the Node and edge stores. The Supabase RPCs keep
    charges and daily claims atomic across workers; local JSON is dev-only. */
-function createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, uid, plans }) {
+function createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, getSignupAt, uid, plans }) {
   const nowIso = () => new Date().toISOString();
   const todayUtc = () => nowIso().slice(0, 10);
-  function freePeriod(now = new Date()) {
-    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    return { start: start.toISOString(), end: end.toISOString(), ref: `free:${start.toISOString().slice(0, 7)}` };
+  function freePeriod(signupAt, now = new Date()) {
+    const signup = new Date(signupAt);
+    if (!Number.isFinite(signup.getTime())) throw new Error('Signup date is required for the free token cycle.');
+    const anchorDay = signup.getUTCDate();
+    const atMonth = (offset) => {
+      const first = new Date(Date.UTC(signup.getUTCFullYear(), signup.getUTCMonth() + offset, 1));
+      const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+      return new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(anchorDay, lastDay),
+        signup.getUTCHours(), signup.getUTCMinutes(), signup.getUTCSeconds(), signup.getUTCMilliseconds()));
+    };
+    let months = (now.getUTCFullYear() - signup.getUTCFullYear()) * 12 + now.getUTCMonth() - signup.getUTCMonth();
+    while (atMonth(months) > now) months--;
+    while (atMonth(months + 1) <= now) months++;
+    const start = atMonth(months), end = atMonth(months + 1);
+    return { start: start.toISOString(), end: end.toISOString(), ref: `free:${start.toISOString()}` };
   }
   async function addTokenGrant(userId, tokens, reason, ref, expiresAt = null) {
     const amount = Number(tokens);
@@ -26,13 +37,62 @@ function createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, uid, pla
     if (d.tokenGrants.some((g) => g.user_id === userId && g.ref === ref)) return false;
     d.tokenGrants.push(row); saveLocal(d); return true;
   }
-  async function ensureMonthlyTokens(userId, plan) {
-    if (plan !== 'free') return;
-    const period = freePeriod();
+  async function ensureMonthlyTokens(userId, plan, signupAt) {
+    if (plan !== 'free') return null;
+    const period = freePeriod(signupAt || await getSignupAt(userId));
+    const s = supa();
+    if (s) {
+      await ensureProfile(userId);
+      // Preserve spent tokens when moving an active calendar grant into the
+      // signup-based cycle. The unique ref also makes repeat calls harmless.
+      const { data: legacy, error } = await s.from('token_grants').select('id,ref')
+        .eq('user_id', userId).eq('reason', 'plan').like('ref', 'free:_______')
+        .gt('expires_at', nowIso()).order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if (error) throw error;
+      if (legacy) {
+        const { data: existing, error: existingError } = await s.from('token_grants').select('id')
+          .eq('user_id', userId).eq('ref', period.ref).maybeSingle();
+        if (existingError) throw existingError;
+        const fields = existing ? { expires_at: nowIso() } : { ref: period.ref, expires_at: period.end };
+        const { error: updateError } = await s.from('token_grants').update(fields)
+          .eq('id', legacy.id).eq('user_id', userId);
+        if (updateError) throw updateError;
+      }
+    } else {
+      const d = loadLocal();
+      const legacy = (d.tokenGrants || []).find(g => g.user_id === userId && g.reason === 'plan'
+        && /^free:\d{4}-\d{2}$/.test(g.ref) && new Date(g.expires_at).getTime() > Date.now());
+      if (legacy) {
+        if ((d.tokenGrants || []).some(g => g.user_id === userId && g.ref === period.ref)) legacy.expires_at = nowIso();
+        else { legacy.ref = period.ref; legacy.expires_at = period.end; }
+        saveLocal(d);
+      }
+    }
     await addTokenGrant(userId, plans.free.tokens, 'plan', period.ref, period.end);
+    return period;
+  }
+  async function retireFreeTokensOnUpgrade(userId) {
+    const s = supa();
+    const expiry = nowIso();
+    if (s) {
+      const { error } = await s.from('token_grants').update({ expires_at: expiry })
+        .eq('user_id', userId).eq('reason', 'plan').like('ref', 'free:%').gt('expires_at', expiry);
+      if (error) throw error;
+    } else {
+      const d = loadLocal();
+      let changed = false;
+      for (const grant of d.tokenGrants || []) {
+        if (grant.user_id === userId && grant.reason === 'plan' && grant.ref.startsWith('free:')
+          && new Date(grant.expires_at).getTime() > Date.now()) {
+          grant.expires_at = expiry; changed = true;
+        }
+      }
+      if (changed) saveLocal(d);
+    }
   }
   async function tokenWallet(userId, plan, periodEnd = null) {
-    await ensureMonthlyTokens(userId, plan);
+    const freeCycle = await ensureMonthlyTokens(userId, plan);
+    if (plan !== 'free') await retireFreeTokensOnUpgrade(userId);
     const s = supa();
     let totals;
     if (s) {
@@ -56,7 +116,6 @@ function createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, uid, pla
         transcriptions_today: claims.filter((r) => r.kind === 'transcription').length };
     }
     const tier = plans[plan] || plans.free;
-    const freeReset = freePeriod().end;
     return {
       granted: Number(totals?.granted || 0), used: Number(totals?.used || 0),
       remaining: Number(totals?.remaining || 0),
@@ -65,7 +124,7 @@ function createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, uid, pla
       debt: Number(totals?.debt || 0),
       imagesToday: Number(totals?.images_today || 0), transcriptionsToday: Number(totals?.transcriptions_today || 0),
       imagesPerDay: tier.imagesPerDay, transcriptionsPerDay: tier.transcriptionsPerDay,
-      resetAt: plan === 'free' ? freeReset : periodEnd || null,
+      resetAt: plan === 'free' ? freeCycle.end : periodEnd || null,
     };
   }
   async function claimTokenDaily(userId, kind, limit) {

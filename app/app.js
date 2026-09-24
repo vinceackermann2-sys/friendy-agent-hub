@@ -87,6 +87,8 @@ const IC = {
   menu:'<path d="M4 7h16M4 12h16M4 17h16"/>',
   more:'<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/>',
   alert:'<path d="M10.3 3.8L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
+  issue:'<circle cx="12" cy="12" r="9"/><path d="M12 7.5v6M12 17h.01"/>',
+  help:'<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-1.1.9-1.7 1.3-1.7 2.7M12 17h.01"/>',
   chatb:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>',
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   copy:'<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
@@ -121,6 +123,63 @@ const pendingFilesByForm = new Map();
 const MAX_ATTACH = 5;
 const MAX_FILE_MB = 8;
 const MAX_ATTACH_TOTAL_MB = 8;
+const MAX_PREVIEW_MB = 4;
+function attachmentKind(file){
+  const name = String(file.name || '').toLowerCase();
+  const type = String(file.type || '').toLowerCase();
+  const ext = name.split('.').pop();
+  if (ext === 'gsheet' || type === 'application/vnd.google-apps.spreadsheet') return 'sheets';
+  if (['xls','xlsx','xlsm','xlsb'].includes(ext) || type.includes('spreadsheetml.sheet') || type === 'application/vnd.ms-excel') return 'excel';
+  if (ext === 'gdoc' || type === 'application/vnd.google-apps.document') return 'docs';
+  if (['doc','docx'].includes(ext) || type.includes('wordprocessingml.document') || type === 'application/msword') return 'word';
+  if (ext === 'gslides' || type === 'application/vnd.google-apps.presentation') return 'slides';
+  if (['ppt','pptx'].includes(ext) || type.includes('presentationml.presentation') || type === 'application/vnd.ms-powerpoint') return 'powerpoint';
+  if (ext === 'pdf' || type === 'application/pdf') return 'pdf';
+  if (type.startsWith('image/') || ['png','jpg','jpeg','gif','webp','heic','svg'].includes(ext)) return 'image';
+  if (type.startsWith('video/') || ['mp4','mov','webm','mkv','avi'].includes(ext)) return 'video';
+  if (type.startsWith('audio/') || ['mp3','wav','m4a','ogg','flac'].includes(ext)) return 'audio';
+  if (['zip','rar','7z','tar','gz'].includes(ext)) return 'archive';
+  if (['csv','tsv'].includes(ext)) return 'spreadsheet';
+  if (type.startsWith('text/') || ['txt','md','rtf'].includes(ext)) return 'text';
+  return 'file';
+}
+function attachmentIcon(file){
+  const kind = attachmentKind(file);
+  const extension = String(file.name || '').split('.').pop().toUpperCase();
+  const label = kind === 'video' ? (extension.length <= 5 ? extension : 'VIDEO') :
+    kind === 'image' ? (extension.length <= 5 ? extension : 'IMAGE') :
+    ({ excel:'X', sheets:'', word:'W', docs:'', powerpoint:'P', slides:'', pdf:'PDF', audio:'AUDIO', archive:'ZIP', spreadsheet:'CSV', text:'TXT', file:'FILE' })[kind];
+  const colors = { excel:'#107c41', sheets:'#0f9d58', word:'#185abd', docs:'#4285f4', powerpoint:'#c43e1c', slides:'#f4b400', pdf:'#e53736', image:'#2e8fa3', video:'#6650b8', audio:'#8a58ad', archive:'#bd8723', spreadsheet:'#168469', text:'#5c7188', file:'#687487' };
+  const color = colors[kind];
+  const glyph = kind === 'sheets' || kind === 'spreadsheet' || kind === 'excel'
+    ? '<path d="M28 29h28v26H28zM28 37h28M28 46h28M38 29v26M47 29v26" fill="none" stroke="white" stroke-width="3"/>'
+    : kind === 'docs' || kind === 'word' || kind === 'text'
+      ? '<path d="M29 31h25M29 39h25M29 47h19M29 55h15" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"/>'
+      : kind === 'slides' || kind === 'powerpoint'
+        ? '<rect x="28" y="30" width="28" height="22" rx="2" fill="none" stroke="white" stroke-width="3"/><path d="M42 52v7M35 59h14" fill="none" stroke="white" stroke-width="3"/>'
+        : kind === 'image'
+          ? '<rect x="27" y="30" width="30" height="24" rx="2" fill="none" stroke="white" stroke-width="3"/><circle cx="36" cy="37" r="3" fill="white"/><path d="m29 51 9-9 7 6 5-5 6 8" fill="none" stroke="white" stroke-width="3"/>'
+        : kind === 'video'
+          ? '<rect x="27" y="29" width="30" height="27" rx="3" fill="none" stroke="white" stroke-width="3"/><path d="m39 36 11 7-11 7z" fill="white"/>'
+          : kind === 'audio'
+            ? '<path d="M43 29v23a6 6 0 1 1-4-5.7V34l15-4v18a6 6 0 1 1-4-5.7V27z" fill="white"/>'
+            : kind === 'archive'
+              ? '<path d="M35 29h14v27H35zM42 29v16M38 33h8M38 39h8M38 45h8" fill="none" stroke="white" stroke-width="3"/>'
+              : kind === 'pdf'
+                ? '<path d="M32 52c11-14 14-26 11-26-5 0-2 20 3 25 4 4 12 3 12 0 0-4-13-3-29 3" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"/>'
+                : '<path d="M32 35h19M32 43h19M32 51h13" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"/>';
+  return `<svg class="file-format-icon" viewBox="0 0 84 84" role="img" aria-label="${esc(kind)} file"><path d="M20 11h31l13 13v47a5 5 0 0 1-5 5H20a5 5 0 0 1-5-5V16a5 5 0 0 1 5-5z" fill="${color}"/><path d="M51 11v13h13" fill="rgba(255,255,255,.3)"/><path d="M51 11v13h13" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="2"/>${glyph}${label ? `<rect x="8" y="49" width="${Math.max(30, Math.min(68, label.length * 9 + 14))}" height="19" rx="4" fill="white"/><text x="14" y="62" fill="${color}" font-size="${label.length > 4 ? 10 : 13}" font-weight="800" font-family="Arial, sans-serif">${esc(label)}</text>` : ''}</svg>`;
+}
+function attachmentPreview(file){
+  const kind = attachmentKind(file);
+  const iconHtml = `<span class="file-format">${attachmentIcon(file)}</span>`;
+  if (!file.previewUrl) return iconHtml;
+  const media = kind === 'video'
+    ? `<video src="${esc(file.previewUrl)}" muted playsinline preload="metadata" aria-label="Preview of ${esc(file.name)}"></video><span class="attach-play">${icon('play',19)}</span>`
+    : `<img src="${esc(file.previewUrl)}" alt="Preview of ${esc(file.name)}">`;
+  return `${media}${iconHtml}`;
+}
+function releasePreview(file){ if (file?.previewUrl) URL.revokeObjectURL(file.previewUrl); }
 function storedFile(mode, action){
   return new Promise((resolve, reject) => {
     if (!window.indexedDB){ reject(new Error('Browser file storage is unavailable.')); return; }
@@ -167,6 +226,9 @@ function addFiles(fileList, form){
     if (pendingFiles.reduce((total, file) => total + file.size, 0) + f.size > MAX_ATTACH_TOTAL_MB * 1024 * 1024){ toast(`Attachments can total up to ${MAX_ATTACH_TOTAL_MB} MB.`); continue; }
     if (pendingFiles.some(p => p.name === f.name && p.size === f.size)) continue;
     const item = { name:f.name, size:f.size, type:f.type, dataUrl:null, storageId:uid(), loading:true };
+    if (f.size <= MAX_PREVIEW_MB * 1024 * 1024 && ['image','video'].includes(attachmentKind(f))) {
+      try { item.previewUrl = URL.createObjectURL(f); } catch {}
+    }
     pendingFiles.push(item);
     paintAttachPills();
     const reader = new FileReader();
@@ -182,6 +244,7 @@ function addFiles(fileList, form){
       } catch {
         const index = pendingFiles.indexOf(item);
         if (index !== -1) pendingFiles.splice(index, 1);
+        releasePreview(item);
         paintAttachPills();
         toast(`Could not store ${f.name} in this browser.`);
       }
@@ -189,6 +252,7 @@ function addFiles(fileList, form){
     reader.onerror = () => {
       const index = pendingFiles.indexOf(item);
       if (index !== -1) pendingFiles.splice(index, 1);
+      releasePreview(item);
       paintAttachPills();
       toast(`Could not read ${f.name}.`);
     };
@@ -197,17 +261,19 @@ function addFiles(fileList, form){
 }
 function removeFile(idx, form){
   const [file] = filesFor(form).splice(idx, 1);
+  releasePreview(file);
   if (file?.storageId) void storedFile('readwrite', store => store.delete(file.storageId)).catch(() => {});
   paintAttachPills();
 }
-function clearFiles(form){ pendingFilesByForm.delete(fileBucketKey(form)); paintAttachPills(); }
+function clearFiles(form){ filesFor(form).forEach(releasePreview); pendingFilesByForm.delete(fileBucketKey(form)); paintAttachPills(); }
 function paintAttachPills(){
   document.querySelectorAll('.attach-pills').forEach(el => {
     const pendingFiles = filesFor(el.closest('form'));
     if (!pendingFiles.length){ el.innerHTML = ''; return; }
     el.innerHTML = pendingFiles.map((f, i) =>
-      `<span class="attach-pill${f.loading ? ' loading' : ''}" title="${esc(f.name)}">${icon('file',12)}<span class="ap-name">${esc(f.name)}</span><span class="ap-size">${f.loading ? 'Loading…' : fmtBytes(f.size)}</span><button type="button" class="ap-x" data-act="rmfile" data-idx="${i}" aria-label="Remove ${esc(f.name)}">${icon('x',10)}</button></span>`
+      `<span class="attach-pill attach-card${f.loading ? ' loading' : ''}${f.previewUrl ? ' has-preview' : ''}" title="${esc(f.name)} · ${fmtBytes(f.size)}"><span class="attach-visual">${attachmentPreview(f)}</span><span class="ap-name">${esc(f.name)}</span><button type="button" class="ap-x" data-act="rmfile" data-idx="${i}" aria-label="Remove ${esc(f.name)}">${icon('x',12)}</button></span>`
     ).join('');
+    el.querySelectorAll('.attach-card img,.attach-card video').forEach(media => media.addEventListener('error', () => media.closest('.attach-card')?.classList.add('preview-failed')));
   });
   syncComposerActions(chat());
 }
@@ -1390,7 +1456,7 @@ function billingShopHtml(b){
   return `<section class="billing-card billing-gifts" aria-labelledby="gift-title">
     <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('gift',16)}</span><div><h3 id="gift-title">Gift cards</h3><p>Redeem a code someone shared with you.</p></div></div>
     <div class="billing-redeem-form"><input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" aria-label="Gift code">
-    <button class="btn ghost" data-act="redeem">Redeem</button></div>
+    <button class="btn billing-redeem-button" data-act="redeem">${icon('gift',14)} Redeem gift card</button></div>
     ${giftList}
   </section>`;
 }
@@ -1423,9 +1489,6 @@ function planCards(b){
 function billSummary(b){
   const v = creditView(b);
   const firstName = currentUser().name.trim().split(/\s+/)[0];
-  const manage = b && b.plan !== 'free'
-    ? `<button class="btn ghost small billing-manage" data-act="portal">Manage ${icon('aur',13)}</button>`
-    : '';
   const note = v.tone === 'empty'
     ? v.extraRemaining > 0 ? 'Monthly tokens used. Your extra tokens are still available.' : 'Monthly tokens used. Add tokens whenever you need them.'
     : v.tone === 'low' ? 'Your monthly tokens are running low.'
@@ -1439,7 +1502,6 @@ function billSummary(b){
         <p class="billing-balance-note">${note}</p>
         <div class="billing-hero-chips"><span class="chip green billing-status">${esc(b.status || 'active')}</span>${resets ? `<span class="chip">${icon('clock',12)} ${resets}</span>` : ''}</div>
       </div>
-      ${manage}
     </div>
     <div class="billing-usage">
       <div class="billing-usage-top"><div class="billing-balance-number"><strong>${fmtShortTokens(v.remaining)}</strong><span>of ${fmtShortTokens(v.granted)} left this month</span></div><b>${Math.round(v.percent)}% used</b></div>
@@ -1457,11 +1519,14 @@ function billSummary(b){
   </div>
   <section class="billing-extra-balance" aria-labelledby="extra-token-balance-title">
     <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('plus',16)}</span><div><h3 id="extra-token-balance-title">Extra tokens</h3><p>Packs, gift cards and invite rewards. They carry over until used and don’t change your plan.</p></div></div>
-    <dl class="billing-token-breakdown">
-      <div><dt>Extra tokens added</dt><dd>${fmtTokens(v.extra)}</dd></div>
-      <div><dt>Extra tokens used</dt><dd>${fmtTokens(v.extraUsed)}</dd></div>
-      <div><dt>Extra tokens left</dt><dd>${fmtTokens(v.extraRemaining)}</dd></div>
+    <div class="billing-extra-total"><strong>${fmtShortTokens(v.extraRemaining)}</strong><span>available whenever your monthly tokens run out</span></div>
+    <dl class="billing-token-breakdown billing-extra-stats">
+      <div><dt>Extra tokens added</dt><dd title="${fmtTokens(v.extra)} tokens">${fmtShortTokens(v.extra)}</dd></div>
+      <div><dt>Extra tokens used</dt><dd title="${fmtTokens(v.extraUsed)} tokens">${fmtShortTokens(v.extraUsed)}</dd></div>
     </dl>
+  </section>
+  <section class="billing-card billing-add-tokens" aria-labelledby="add-tokens-title">
+    <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('spark',16)}</span><div><h3 id="add-tokens-title">Add tokens</h3><p>Choose a pack to keep creating after your monthly allowance runs out.</p></div></div>
     ${tokenPackPickerHtml(b)}
   </section>`;
 }
@@ -1473,10 +1538,10 @@ function tokenPackPickerHtml(b){
   const packs = Array.isArray(b && b.tokenPacks) ? b.tokenPacks : [];
   if (!packs.length) return '<p class="billing-fine">Token packs aren’t available right now.</p>';
   return `<div class="billing-topup">
-    <label class="billing-label" for="buypack">Add tokens</label>
+    <label class="billing-label" for="buypack">Token pack</label>
     <div class="billing-topup-row">
       <span class="billing-select"><select class="field" id="buypack">${packs.map((t, i) => `<option value="${esc(t.tokens)}" data-rate="${esc(tokenPackRate(t))}"${i === 0 ? ' selected' : ''}>${esc(t.millions)}M tokens — $${fmtC(t.usd)}</option>`).join('')}</select>${icon('chev',15)}</span>
-      <button class="btn" data-act="buycredits">${icon('card',14)} Buy tokens</button>
+      <button class="btn billing-primary" data-act="buycredits">${icon('card',14)} Continue to checkout</button>
     </div>
     <span class="billing-fine" id="buypack-rate">${esc(tokenPackRate(packs[0]))} · secure checkout</span>
   </div>`;
@@ -1501,18 +1566,31 @@ function billingDailyTile(ic, label, used, limit){
 function billingLoadingHtml(){
   return `<div class="billing-loading" role="status"><span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span><span>Getting your tokens ready…</span></div>`;
 }
-function billingBodyHtml(){
+function billingPlanOverview(b){
+  const paid = b && b.plan !== 'free';
+  const date = b?.resetAt ? new Date(b.resetAt).toLocaleDateString(undefined, { day:'numeric', month:'long', year:'numeric' }) : '';
+  return `<section class="billing-card billing-account" aria-labelledby="billing-account-title">
+    <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('card',16)}</span><div><h3 id="billing-account-title">Current plan</h3><p>${paid ? 'Manage payment details, invoices, and your subscription.' : 'Your free plan is active. Choose a plan below when you need more room.'}</p></div></div>
+    <div class="billing-account-row"><div><strong>${esc(billingPlanName(b))}</strong><span>${date ? `${paid ? 'Renews' : 'Monthly tokens reset'} ${esc(date)}` : 'Your monthly plan'}</span></div>
+      ${paid ? `<button class="btn billing-primary" data-act="portal">Open billing portal ${icon('aur',14)}</button>` : ''}
+    </div>
+  </section>`;
+}
+function billingBodyHtml(tab = 'billing'){
   const b = billingOwner === billingIdentity() ? billingCache : null;
-  return `<div class="billing-content">
+  if (tab === 'usage') return `<div class="billing-content usage-content">
     <div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div>
+    <div id="billshop">${b ? billingShopHtml(b) : ''}</div>
+  </div>`;
+  return `<div class="billing-content">
+    <div id="billbody">${b ? billingPlanOverview(b) : billingLoadingHtml()}</div>
     <section class="billing-card billing-plans" aria-labelledby="billing-plans-title">
       <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('star',16)}</span><div><h3 id="billing-plans-title">Plans</h3><p>Start small. Switch or cancel any time.</p></div></div>
       <div id="plancards">${b ? planCards(b) : ''}</div>
     </section>
-    <div id="billshop">${billingShopHtml(b)}</div>
   </div>`;
 }
-function loadBillingContent(){
+function loadBillingContent(tab = 'billing'){
   const body = $('#billbody'), cards = $('#plancards'), shop = $('#billshop');
   getBilling().then(b => {
     if (!body || !body.isConnected) return;
@@ -1520,14 +1598,14 @@ function loadBillingContent(){
       body.innerHTML = `<div class="billing-loading" role="status"><span>We couldn’t load your balance just now.</span><button class="btn ghost small" data-act="billing-refresh">Try again</button></div>`;
       return;
     }
-    body.innerHTML = billSummary(b);
+    body.innerHTML = tab === 'usage' ? billSummary(b) : billingPlanOverview(b);
     if (cards && cards.isConnected) cards.innerHTML = planCards(b);
     if (shop && shop.isConnected) shop.innerHTML = billingShopHtml(b);
   });
 }
 function paintBilling(M){
-  M.innerHTML = `<div class="page"><div class="pageinner">${billingBodyHtml()}</div></div>`;
-  loadBillingContent();
+  M.innerHTML = `<div class="page"><div class="pageinner">${billingBodyHtml('billing')}</div></div>`;
+  loadBillingContent('billing');
 }
 
 /* ================================================================
@@ -1590,37 +1668,14 @@ function openGift(prefillCode){
     const alreadyUsed = Number(g.invited || 0) > 0;
     body.innerHTML = `
       <div class="giftmodal-illustration" aria-hidden="true">
-        <svg viewBox="0 0 280 210" role="img">
-          <defs>
-            <linearGradient id="gift-lid" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#fffaf5"/><stop offset="1" stop-color="#e9dcd4"/></linearGradient>
-            <linearGradient id="gift-front" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#fcf5ef"/><stop offset="1" stop-color="#d8c9c2"/></linearGradient>
-            <linearGradient id="gift-ribbon" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#cf7480"/><stop offset="1" stop-color="#9d4157"/></linearGradient>
-            <filter id="gift-shadow" x="-30%" y="-50%" width="160%" height="210%"><feGaussianBlur stdDeviation="10"/></filter>
-          </defs>
-          <ellipse cx="140" cy="187" rx="98" ry="12" fill="#6f5050" opacity=".15" filter="url(#gift-shadow)"/>
-          <path d="M52 88 139 58 228 88 139 120Z" fill="#efe1d8"/>
-          <path d="M55 104 139 132 139 184 63 157Q55 154 55 145Z" fill="url(#gift-front)"/>
-          <path d="M139 132 225 104 225 145Q225 153 218 157L139 184Z" fill="#dfd0c8"/>
-          <path d="M118 125 139 132 139 184 118 176Z" fill="url(#gift-ribbon)"/>
-          <path d="M139 132 160 125 160 176 139 184Z" fill="#a9455a"/>
-          <path d="M45 83Q45 78 51 76L131 49Q139 46 146 49L229 76Q235 78 235 83V101Q235 105 231 107L145 137Q139 139 134 137L49 107Q45 105 45 101Z" fill="url(#gift-lid)"/>
-          <path d="M45 83 139 115V137Q136 138 133 137L49 107Q45 105 45 101Z" fill="#f7ebe4"/>
-          <path d="M139 115 235 83V101Q235 105 231 107L145 137Q142 138 139 137Z" fill="#e6d8d0"/>
-          <path d="M119 108 139 115V137Q136 138 133 137L119 132Z" fill="#b95668"/>
-          <path d="M139 115 159 108V132L145 137Q142 138 139 137Z" fill="#a9455a"/>
-          <path d="M51 76 131 49Q139 46 146 49L229 76 139 107Z" fill="#fff7f0"/>
-          <path d="M92 62 113 55 184 91 162 99Z" fill="url(#gift-ribbon)"/>
-          <path d="M119 101 139 107 168 53 147 49Z" fill="#b65366"/>
-          <path d="M138 55C115 46 102 31 107 25c8-10 34 3 39 21 7-18 30-30 38-20 6 8-12 25-35 31" fill="none" stroke="#a84358" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M139 59c-7-2-8-11-2-15 6-4 16 1 15 8-1 5-7 9-13 7Z" fill="#d27b86"/>
-        </svg>
+        <img src="/lingon/mascot/gift-invite-3d.webp" alt="" width="280" height="210" decoding="async">
       </div>
       <div class="giftmodal-code">
         <div class="giftmodal-code-text"><span>Your invite code</span><strong id="giftcode-text">${esc(g.code)}</strong></div>
         <button class="giftmodal-copy" data-act="gift-copy-code" aria-label="Copy invite code" title="Copy invite code">${icon('copy',23)}<span>Copy</span></button>
       </div>
       <p class="giftmodal-description">Invite a friend and you’ll each get <strong>10 million tokens</strong> when they redeem your code in Belna.</p>
-      <p class="giftmodal-once">${alreadyUsed ? 'Your invite has been redeemed. Each code works once.' : 'One friend can redeem your code once.'}</p>
+      ${alreadyUsed ? '<p class="giftmodal-once">Your invite has been redeemed. Each code works once.</p>' : ''}
       <div class="giftmodal-share" aria-label="Share your invite">
         <button class="giftmodal-share-option" data-act="gift-share"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon">${icon('share',25)}</span><span>Share</span></button>
         <button class="giftmodal-share-option" data-act="gift-share-sms"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon">${icon('chatb',25)}</span><span>Messages</span></button>
@@ -1629,7 +1684,7 @@ function openGift(prefillCode){
       </div>
       <div class="giftmodal-stats"><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span class="giftmodal-stat-dot" aria-hidden="true"></span><span><b>${fmtTokens(g.earnedTokens || 0)}</b> tokens earned</span></div>
       <div class="giftmodal-redeem">
-        <div class="giftmodal-redeem-head"><span class="giftmodal-redeem-ico">${icon('gift',20)}</span><div><h3>Have a friend’s invite?</h3><p>Redeem their code and you’ll both get 10 million tokens.</p></div></div>
+        <h3>Have a friend’s invite?</h3><p>Redeem their code and you’ll both get 10 million tokens.</p>
         <label class="giftmodal-redeem-label" for="giftfriendcode">Friend’s invite code</label>
         <div class="giftmodal-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
         <button class="btn" data-act="gift-redeem">Redeem code</button></div>
@@ -2077,7 +2132,7 @@ function renderPromo(){
       <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div><h4>Company</h4><a href="#promo-cta" data-act="promo-cta">Get started</a><a href="/app" data-act="signin-nav">Sign in</a></div>
       <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div>
-    </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+    </div><div class="base"><span>© 2026 Belna</span><a href="mailto:support@belna.se">support@belna.se</a></div></footer>
   </div>`;
   const f = document.getElementById('pform');
   const p = document.getElementById('pprompt');
@@ -2278,7 +2333,7 @@ function renderLanding(){
       <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div><h4>Company</h4><a href="/app" data-act="open-app">Get started</a><a href="/app" data-act="signin-nav">Sign in</a></div>
       <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div>
-    </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+    </div><div class="base"><span>© 2026 Belna</span><a href="mailto:support@belna.se">support@belna.se</a></div></footer>
   </div>`;
   const wire = (formId, inputId) => {
     const f = document.getElementById(formId);
@@ -3359,7 +3414,7 @@ function usageCardHtml(b){
   const v = creditView(b);
   const pct = Math.round(v.percent);
   return `<div class="usage-content credit-tone-${v.tone}" title="${fmtTokens(v.used)} of ${fmtTokens(v.granted)} monthly tokens used">
-    <div class="usage-balance"><span>${icon('spark',12)} Usage</span><strong>${pct}%</strong></div>
+    <div class="usage-balance"><span>Usage</span><strong>${pct}%</strong></div>
     ${creditMeterHtml(v)}
     <button class="usage-link" data-act="nav" data-view="billing" aria-label="${pct}% of monthly tokens used. View billing and tokens"></button>
   </div>`;
@@ -3459,7 +3514,7 @@ function paintMain(){
 /* floating agent status (chat only) */
 function statusFor(c){
   if (!c) return '';
-  if (Engine.managed && Object.values(c.managedTasks || {}).some(t=>['queued','running','waiting_approval','stopping'].includes(t.status))) return Engine.isRunning(c.id) ? 'Replying' : 'Working · available';
+  if (Engine.managed && Object.values(c.managedTasks || {}).some(t=>['queued','running','waiting_peers','waiting_approval','stopping'].includes(t.status))) return Engine.isRunning(c.id) ? 'Replying' : 'Working · available';
   if (Engine.managed && c.managedStatus === 'completed') return 'Available';
   for (let i = c.messages.length - 1; i >= 0; i--){
     const m = c.messages[i];
@@ -3541,6 +3596,10 @@ function paintChat(M){
   const focused = oldPrompt && document.activeElement === oldPrompt;
   const selectionStart = focused ? oldPrompt.selectionStart : 0;
   const selectionEnd = focused ? oldPrompt.selectionEnd : 0;
+  // Remember where the reader was in this chat; a different chat opens at the newest message.
+  const oldThread = M.dataset.chatId === c.id ? M.querySelector('#thread') : null;
+  const keepTop = oldThread && !threadStickNext && oldThread.scrollHeight - oldThread.scrollTop - oldThread.clientHeight >= 120 ? oldThread.scrollTop : null;
+  threadStickNext = false;
   const fv = floatView(c);
   M.innerHTML = `
     <div class="floathead${fv.working ? ' working' : ''}"><div class="fav">${Mascot.head(state.agent.color,44)}</div><div class="pill" role="status" aria-live="polite">${esc(state.agent.name)}<span class="st" id="floatstatus">${esc(fv.text)}</span></div></div>
@@ -3573,10 +3632,7 @@ function paintChat(M){
       </form>
     </div></div>`;
   M.dataset.chatId = c.id;
-  const th = $('#thread');
-  // Preserve scroll: only jump to bottom when the user was already near it.
-  const nearBottom = th ? (th.scrollHeight - th.scrollTop - th.clientHeight < 120) : true;
-  if (th && nearBottom) requestAnimationFrame(() => { th.scrollTop = th.scrollHeight; });
+  pinThread($('#thread'), keepTop);
   // Animate only the newest message — repainting all rows each time was jank.
   try {
     const rows = M.querySelectorAll('#tinner .msg');
@@ -3596,15 +3652,33 @@ function paintChat(M){
   if (Engine.managed && signedIn() && !needsOnboarding()) void Engine.recoverTasks?.(makeRT(c));
 }
 
+// Keeps the newest message in view: while the reader is at the bottom, any growth
+// (new rows, streaming text, images loading, lazily-rendered rows, composer resizing)
+// re-pins the thread. Scrolling up releases it until they return to the bottom.
+let threadStickNext = false;
+let threadObserver = null;
+function pinThread(th, keepTop = null){
+  threadObserver?.disconnect();
+  threadObserver = null;
+  if (!th) return;
+  let pinned = keepTop == null;
+  const toBottom = () => { th.scrollTop = th.scrollHeight; };
+  if (pinned) { toBottom(); requestAnimationFrame(toBottom); }
+  else th.scrollTop = keepTop;
+  th.addEventListener('scroll', () => { pinned = th.scrollHeight - th.scrollTop - th.clientHeight < 120; }, { passive:true });
+  if (typeof ResizeObserver !== 'function') return;
+  threadObserver = new ResizeObserver(() => { if (pinned && th.isConnected) toBottom(); });
+  threadObserver.observe(th);
+  const inner = th.querySelector('#tinner');
+  if (inner) threadObserver.observe(inner);
+}
+
 const APPLE_EMOJI_CDN = 'https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/';
 const REACTIONS = [
   { id:'up', emoji:'👍', code:'1f44d', label:'Thumbs up' },
   { id:'down', emoji:'👎', code:'1f44e', label:'Thumbs down' },
   { id:'heart', emoji:'❤️', code:'2764-fe0f', label:'Heart' },
   { id:'poop', emoji:'💩', code:'1f4a9', label:'Poop' },
-  { id:'laugh', emoji:'😂', code:'1f602', label:'Laugh' },
-  { id:'wow', emoji:'😮', code:'1f62e', label:'Wow' },
-  { id:'party', emoji:'🎉', code:'1f389', label:'Celebrate' },
 ];
 function normalizeReaction(value){
   return String(value || '').replace(/\uFE0F|\uFE0E/g, '');
@@ -4134,10 +4208,10 @@ function cardNode(c, m){
   if (cd.type === 'canvas') return canvasCardHTML(c, m);
 
   if (cd.type === 'task') {
-    const ongoing=['queued','running','waiting_approval','stopping'].includes(cd.status);
+    const ongoing=['queued','running','waiting_peers','waiting_approval','stopping'].includes(cd.status);
     const teamId=c.managedTasks?.[cd.taskId]?.teamId;
     const hasPeers=teamId && Object.values(c.managedTasks || {}).filter(t=>t.teamId===teamId).length>1;
-    const labels={queued:'Queued',running:'Working',waiting_approval:'Needs approval',stopping:'Stopping',stopped:'Stopped',completed:'Completed',partial:'Work limit reached · findings saved',failed:'Could not finish',needs_review:'Check outcome'};
+    const labels={queued:'Queued',running:'Working',waiting_peers:'Combining parallel work',waiting_approval:'Needs approval',stopping:'Stopping',stopped:'Stopped',completed:'Completed',partial:'Work limit reached · findings saved',failed:'Could not finish',needs_review:'Check outcome'};
     return `<div class="acard">${hd(icon('box',20),'var(--acc-soft)','var(--acc)',esc(cd.title),'You can keep chatting here')}
       <div class="bd"><b>${esc(labels[cd.status] || cd.status)}</b>${cd.connectionLost ? '<div class="mut">Reconnecting to your saved task…</div>' : ''}${cd.summary ? `<p>${esc(cd.summary)}</p>` : ''}</div>
       ${cd.status==='partial' ? `<div class="stack"><button class="btn ghost" data-act="task-continue" data-chat="${k}" data-msg="${mid}">Continue task</button></div>` : ''}
@@ -4692,6 +4766,7 @@ async function sendPrompt(text, files){
   c.replyingTo = null;
   save();
   if (state.view !== 'chat'){ state.view = 'chat'; }
+  threadStickNext = true; // your own message always lands in view
   paintSide(); paintMain();
   if (Engine.managed && taskReply) {
     try {await Engine.controlTask(makeRT(c),taskReply,c.taskReplyScope==='team'?'steer_team':'steer',{instruction:text});c.taskReply=null;c.taskReplyScope=null;save();paintMain();}
@@ -5714,10 +5789,9 @@ function paintProfile(M){
   });
 }
 
-/* ---------------- Settings (profiles / secrets / browser / billing) ---------------- */
-/* Each kind is a small form; saving turns it into one or more named vault
-   secrets (a login becomes "<site> username" + "<site> password") so the agent
-   can fill each field by ref. Fields marked secret are stored encrypted. */
+/* ---------------- Settings (profiles / secrets / browser / usage / billing) ---------------- */
+/* A login becomes "<site> username" + "<site> password" so the agent can
+   fill each field by ref. The settings list groups those refs for the owner. */
 const VAULT_KINDS = {
   login: { label:'Login', icon:'user', fields:[
     { k:'site', label:'Website', placeholder:'e.g. github.com' },
@@ -5727,12 +5801,6 @@ const VAULT_KINDS = {
   apikey: { label:'API key', icon:'key', fields:[
     { k:'name', label:'Name', placeholder:'e.g. OpenAI API key' },
     { k:'value', label:'Key', placeholder:'Paste the key', secret:true, masked:true },
-  ] },
-  card: { label:'Card', icon:'card', fields:[
-    { k:'name', label:'Card label', placeholder:'e.g. Personal Visa' },
-    { k:'number', label:'Card number', secret:true, masked:true, inputmode:'numeric' },
-    { k:'expiry', label:'Expiry', placeholder:'MM/YY', secret:true, optional:true, short:true },
-    { k:'cvc', label:'CVC', secret:true, masked:true, optional:true, short:true, inputmode:'numeric' },
   ] },
   other: { label:'Other', icon:'lock', fields:[
     { k:'name', label:'Name', placeholder:'e.g. Wi-Fi password' },
@@ -5746,23 +5814,28 @@ function vaultKindEntries(kind, f){
     if (!site || !f.password) return { error:'Add the website and the password.' };
     return { entries:[f.username && [`${site} username`, f.username], [`${site} password`, f.password]].filter(Boolean) };
   }
-  if (kind === 'card'){
-    const label = clean(f.name);
-    if (!label || !f.number) return { error:'Add a card label and the card number.' };
-    return { entries:[[`${label} card number`, f.number.replace(/[\s-]+/g, '')], f.expiry && [`${label} expiry`, f.expiry.trim()], f.cvc && [`${label} CVC`, f.cvc.trim()]].filter(Boolean) };
-  }
   const name = clean(f.name);
   if (!name || !f.value) return { error:'Add a name and a value.' };
   return { entries:[[name, f.value]] };
 }
-function vaultItemIcon(name){
-  if (/card number|expiry|cvc/i.test(name)) return 'card';
-  if (/username|password/i.test(name)) return 'user';
-  if (/key|token/i.test(name)) return 'key';
-  return 'lock';
+function vaultDisplayEntries(secrets){
+  const used = new Set();
+  return secrets.flatMap(s => {
+    if (used.has(s.id)) return [];
+    used.add(s.id);
+    const login = /^(.*) (username|password)$/i.exec(s.name);
+    const peer = login && secrets.find(x => !used.has(x.id) && x.name === `${login[1]} ${login[2].toLowerCase() === 'username' ? 'password' : 'username'}`);
+    if (login && (peer || /\.|^localhost$/i.test(login[1]))){
+      if (peer) used.add(peer.id);
+      return [{ name:login[1], kind:'Login', icon:'user', secrets:peer ? [s,peer].sort((a,b) => / username$/i.test(a.name) ? -1 : 1) : [s] }];
+    }
+    const apiKey = /api[ -]?key|token/i.test(s.name);
+    return [{ name:s.name, kind:apiKey ? 'API key' : 'Other', icon:apiKey ? 'key' : 'lock', secrets:[s] }];
+  });
 }
 function settingsSecretsBody(v){
   const secrets = v.secrets || [];
+  const entries = vaultDisplayEntries(secrets);
   const agentName = esc((state.agent && state.agent.name) || 'Your agent');
   const kind = VAULT_KINDS[state.vaultKind] ? state.vaultKind : 'login';
   const locked = v.encrypted === false;
@@ -5770,8 +5843,8 @@ function settingsSecretsBody(v){
     ${locked ? `<div class="warnband vault-warn">${icon('alert',18)}<div><b>The vault is locked on this server.</b>New secrets can’t be saved until ENCRYPTION_KEY is set on the backend, so nothing is ever stored unencrypted.</div></div>` : ''}
     <div class="vault-add">
       <div class="vault-section-head"><h3>Add to vault</h3><span>${locked ? 'Locked' : `${icon('shieldcheck',12)} Encrypted, only a ref is shared with ${agentName}`}</span></div>
-      <div class="vault-kinds" role="radiogroup" aria-label="What are you saving?">
-        ${Object.entries(VAULT_KINDS).map(([k, d]) => `<button type="button" class="vault-kind ${k === kind ? 'on' : ''}" role="radio" aria-checked="${k === kind}" data-act="vault-kind" data-k="${k}">${icon(d.icon,14)} ${d.label}</button>`).join('')}
+      <div class="vault-kinds" role="radiogroup" aria-label="Credential type">
+        ${Object.entries(VAULT_KINDS).map(([k, d]) => `<button type="button" class="vault-kind ${k === kind ? 'on' : ''}" role="radio" aria-checked="${k === kind}" data-act="vault-kind" data-k="${k}"><span class="vault-kind-icon">${icon(d.icon,16)}</span><span>${d.label}</span><span class="vault-kind-indicator" aria-hidden="true"></span></button>`).join('')}
       </div>
       <form class="vault-add-form" data-kind="${kind}" autocomplete="off" onsubmit="return false">
         ${VAULT_KINDS[kind].fields.map(fd => `<label class="${fd.short ? 'vault-add-short' : fd.secret ? 'vault-add-value' : ''}"><span>${fd.label}${fd.optional ? ' <i>optional</i>' : ''}</span><input class="field${fd.secret ? ' mono' : ''}" data-vf="${fd.k}" type="${fd.masked ? 'password' : 'text'}" placeholder="${esc(fd.placeholder || '')}" maxlength="${fd.secret ? 4000 : 80}" autocomplete="${fd.masked ? 'new-password' : 'off'}" spellcheck="false"${fd.inputmode ? ` inputmode="${fd.inputmode}"` : ''}${locked ? ' disabled' : ''}></label>`).join('')}
@@ -5779,20 +5852,19 @@ function settingsSecretsBody(v){
       </form>
     </div>
     <div class="vault-list">
-      <div class="vault-section-head"><h3>Saved</h3><span>${secrets.length} · reveal is only for you</span></div>
-      ${secrets.map(s => `<div class="vault-item">
-        <span class="vault-item-icon">${icon(vaultItemIcon(s.name),16)}</span>
+      <div class="vault-section-head"><h3>Saved credentials</h3><span>${entries.length} · reveal is only for you</span></div>
+      ${entries.map(entry => { const shown = entry.secrets.every(s => s.revealed); const ids = esc(JSON.stringify(entry.secrets.map(s => s.id))); return `<div class="vault-item">
+        <span class="vault-item-icon">${icon(entry.icon,16)}</span>
         <div class="vault-item-copy">
-          <b>${esc(s.name)}</b>
-          <div class="vault-item-meta"><code>${esc(s.ref)}</code><span>Added ${fmtAgo(s.at)}</span>${s.backend ? '' : '<span>Only on this device</span>'}</div>
-          ${s.revealed ? `<div class="vault-item-value mono" data-rev="${s.id}">${esc(s.value)}</div>` : ''}
+          <b>${esc(entry.name)}</b>
+          <div class="vault-item-meta"><span class="vault-item-type">${entry.kind}</span><span>Added ${fmtAgo(entry.secrets[0].at)}</span>${entry.secrets.some(s => !s.backend) ? '<span>Only on this device</span>' : ''}</div>
+          ${shown ? `<div class="vault-item-details">${entry.secrets.map(s => `<div class="vault-item-detail"><div><span>${entry.kind === 'Login' ? (/ username$/i.test(s.name) ? 'Username' : 'Password') : 'Value'}</span><code>${esc(s.ref)}</code></div><div class="vault-item-value mono" data-rev="${esc(s.id)}">${esc(s.value)}</div><button class="iconbtn" data-act="copysecret" data-id="${esc(s.id)}" title="Copy value" aria-label="Copy ${esc(s.name)}">${icon('copy',14)}</button></div>`).join('')}</div>` : ''}
         </div>
         <div class="vault-item-actions">
-          ${s.revealed ? `<button class="iconbtn" data-act="copysecret" data-id="${s.id}" title="Copy value" aria-label="Copy ${esc(s.name)}">${icon('copy',14)}</button>` : ''}
-          <button class="iconbtn" data-act="reveal" data-id="${s.id}" title="${s.revealed ? 'Hide' : 'Reveal (only you)'}" aria-label="${s.revealed ? 'Hide' : 'Reveal'} ${esc(s.name)}">${s.revealed ? icon('eyeoff',14) : icon('eye',14)}</button>
-          <button class="iconbtn" data-act="delsecret" data-id="${s.id}" title="Delete" aria-label="Delete ${esc(s.name)}">${icon('trash',14)}</button>
+          <button class="iconbtn" data-act="reveal-credential" data-ids="${ids}" title="${shown ? 'Hide' : 'Reveal (only you)'}" aria-label="${shown ? 'Hide' : 'Reveal'} ${esc(entry.name)}">${shown ? icon('eyeoff',16) : icon('eye',16)}</button>
+          <button class="iconbtn" data-act="delete-credential" data-ids="${ids}" data-name="${esc(entry.name)}" title="Delete" aria-label="Delete ${esc(entry.name)}">${icon('trash',14)}</button>
         </div>
-      </div>`).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Add a secret above, or ${agentName} will ask when a task needs a sign-in or payment detail.</p></div></div>`}
+      </div>`; }).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Add a credential above, or ${agentName} will ask when a task needs one.</p></div></div>`}
     </div>
   </section>`;
 }
@@ -5818,6 +5890,38 @@ function settingsBrowserBody(){
       <div class="browser-settings-heading"><span class="browser-card-icon">${icon('box',17)}</span><div><h2>Connected apps</h2><p>Choose when your agent asks before using a connection</p></div></div>
       ${modeOptions('connectors',permissions.connectors,[['ask_some','Ask for some actions','Ask before every write and sensitive read action.'],['always_ask','Always ask','Ask before every connected app action.']])}
     </article>
+  </section>`;
+}
+function settingsIssueBody(){
+  return `<section class="support-stack">
+    <article class="browser-settings-card">
+      <div class="browser-settings-heading"><span class="browser-card-icon support-circle">${icon('issue',20)}</span><div><h2>Report an issue</h2><p>Tell us what happened so we can investigate.</p></div></div>
+      <form class="support-form" data-support-kind="issue">
+        <label for="issue-description">What went wrong?</label>
+        <textarea class="field" id="issue-description" name="description" rows="6" maxlength="4000" placeholder="Describe what happened and what you expected instead" required></textarea>
+        <label for="issue-images">Attachments <span class="support-optional">optional</span></label>
+        <input class="field support-file" id="issue-images" name="images" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple aria-describedby="issue-images-note">
+        <p class="browser-settings-note" id="issue-images-note">Up to 3 images, 2 MB each. Screenshots can help us find the problem.</p>
+        <label for="issue-topic">What is the problem related to?</label>
+        <select class="field" id="issue-topic" name="topic" required><option value="">Select an area</option><option>Chat or agent</option><option>Account or sign in</option><option>Billing or payments</option><option>Apps or integrations</option><option>Files or attachments</option><option>Other</option></select>
+        <div class="support-actions"><button class="btn" type="submit">Submit report</button><span class="support-status" role="status" aria-live="polite"></span></div>
+      </form>
+    </article>
+  </section>`;
+}
+function settingsSupportBody(){
+  const u=currentUser();
+  return `<section class="support-stack">
+    <article class="browser-settings-card">
+      <div class="browser-settings-heading"><span class="browser-card-icon support-circle">${icon('help',20)}</span><div><h2>Submit feedback</h2><p>Share a question, suggestion or support request.</p></div></div>
+      <form class="support-form" data-support-kind="feedback">
+        <div class="support-two-col"><div><label for="feedback-name">Name</label><input class="field" id="feedback-name" name="name" value="${esc(u.name === 'Guest' ? '' : u.name)}" maxlength="120" autocomplete="name" required></div><div><label for="feedback-email">Email</label><input class="field" id="feedback-email" name="email" type="email" value="${esc(u.email === 'signed-out' ? '' : u.email)}" maxlength="254" autocomplete="email" required></div></div>
+        <label for="feedback-topic">Topic</label><input class="field" id="feedback-topic" name="topic" maxlength="120" placeholder="What is this about?" required>
+        <label for="feedback-description">Describe your issue</label><textarea class="field" id="feedback-description" name="description" rows="6" maxlength="4000" placeholder="How can we help?" required></textarea>
+        <div class="support-actions"><button class="btn" type="submit">Submit feedback</button><span class="support-status" role="status" aria-live="polite"></span></div>
+      </form>
+    </article>
+    <article class="browser-settings-card"><div class="browser-settings-heading"><span class="browser-card-icon">${icon('mail',18)}</span><div><h2>Contact</h2><p><a href="mailto:support@belna.se">support@belna.se</a></p></div></div></article>
   </section>`;
 }
 function centerActiveSeg(container){
@@ -5903,18 +6007,25 @@ function paintSettings(M){
     body = settingsSecretsBody(state.vault);
   } else if (tab === 'browser'){
     body = settingsBrowserBody();
-  } else if (tab === 'billing'){
-    body = billingBodyHtml();
+  } else if (tab === 'billing' || tab === 'usage'){
+    body = billingBodyHtml(tab);
+  } else if (tab === 'issue'){
+    body = settingsIssueBody();
+  } else if (tab === 'support'){
+    body = settingsSupportBody();
   }
   const previousTabScroll = M.querySelector('.settings-tabs')?.scrollLeft || 0;
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Settings</h1><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></div>
-    <p class="psub">${({ billing:'Your plan, tokens and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Credentials and payment details your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.' })[tab] || 'Scoped to your account, never shared.'}</p>
+    <p class="psub">${({ billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.'}</p>
     <div class="seg settings-tabs" aria-label="Settings sections">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles" aria-pressed="${tab === 'profiles'}">${icon('user',14)} Profiles</button>
       <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets" aria-pressed="${tab === 'secrets'}">${icon('key',14)} Secrets</button>
       <button class="${tab === 'browser' ? 'on' : ''}" data-act="stab" data-t="browser" aria-pressed="${tab === 'browser'}">${icon('globe',14)} Browser</button>
+      <button class="${tab === 'usage' ? 'on' : ''}" data-act="stab" data-t="usage" aria-pressed="${tab === 'usage'}">${icon('spark',14)} Usage</button>
       <button class="${tab === 'billing' ? 'on' : ''}" data-act="stab" data-t="billing" aria-pressed="${tab === 'billing'}">${icon('card',14)} Billing</button>
+      <button class="${tab === 'issue' ? 'on' : ''}" data-act="stab" data-t="issue" aria-pressed="${tab === 'issue'}">${icon('issue',14)} Report an issue</button>
+      <button class="${tab === 'support' ? 'on' : ''}" data-act="stab" data-t="support" aria-pressed="${tab === 'support'}">${icon('help',14)} Help &amp; support</button>
     </div>
     ${body}
   </div></div>`;
@@ -5957,8 +6068,8 @@ function paintSettings(M){
     }catch(err){toast(err.message || 'Could not import memory.');}
     e.target.value='';
   });
-  if (tab === 'billing'){
-    loadBillingContent();
+  if (tab === 'billing' || tab === 'usage'){
+    loadBillingContent(tab);
   }
   // One status check per user if presence has not reported yet; the reply repaints this tab.
   if (tab === 'browser' && !workspacePresenceInfo && signedIn() && browserPresenceChecked !== currentUserId()) {
@@ -6171,7 +6282,31 @@ document.addEventListener('visibilitychange', () => {
   else startWorkspacePresence();
 });
 window.addEventListener('pagehide', () => { stopVoice(); stopWorkspacePresence(); });
-document.addEventListener('submit', e => {
+document.addEventListener('submit', async e => {
+  const supportForm=e.target.closest('[data-support-kind]');
+  if(supportForm){
+    e.preventDefault();
+    const button=supportForm.querySelector('button[type="submit"]');
+    const status=supportForm.querySelector('.support-status');
+    if(button.disabled)return;
+    const kind=supportForm.dataset.supportKind;
+    const fields=new FormData(supportForm);
+    const images=kind==='issue' ? Array.from(supportForm.querySelector('[name="images"]')?.files || []) : [];
+    if(images.length>3 || images.some(file=>file.size>2*1024*1024 || !['image/png','image/jpeg','image/webp','image/gif'].includes(file.type))){
+      status.textContent='Choose up to 3 PNG, JPEG, WebP or GIF images, 2 MB each.';return;
+    }
+    button.disabled=true;status.textContent='Submitting…';
+    try{
+      const encoded=await Promise.all(images.map(file=>new Promise((resolve,reject)=>{
+        const reader=new FileReader();reader.onload=()=>resolve({mime:file.type,data:String(reader.result).split(',')[1] || ''});reader.onerror=()=>reject(new Error('Could not read an image.'));reader.readAsDataURL(file);
+      })));
+      await window.LingonAuth.api('/api/support/submissions',{method:'POST',body:JSON.stringify({kind,name:fields.get('name'),email:fields.get('email'),topic:fields.get('topic'),description:fields.get('description'),images:encoded})});
+      supportForm.reset();
+      status.textContent=kind==='issue' ? 'Report submitted. Thank you.' : 'Feedback submitted. Thank you.';
+    }catch(error){status.textContent=error.message || 'Could not submit. Please try again.';}
+    finally{button.disabled=false;}
+    return;
+  }
   const other = e.target.closest('[data-q-other]');
   if (other) {
     e.preventDefault();
@@ -6960,6 +7095,47 @@ document.addEventListener('click', async e => {
     else if ($('#main') && state.view === 'vault') paintVault($('#main'));
     if ($('#canvas')) paintCanvas();
   };
+  if (act === 'reveal-credential'){
+    const ids=JSON.parse(b.dataset.ids || '[]');
+    const secrets=ids.map(id=>state.vault.secrets.find(s=>s.id===id)).filter(Boolean);
+    if(!secrets.length)return;
+    b.disabled=true;
+    const initiallyRevealed=new Set(secrets.filter(s=>s.revealed).map(s=>s.id));
+    try{
+      if(secrets.every(s=>s.revealed)){
+        secrets.forEach(s=>{s.revealed=false;if(s.backend)delete s.value;});
+      }else{
+        for(const s of secrets){
+          if(s.revealed)continue;
+          if(s.backend && signedIn()){
+            const revealed=await window.LingonAuth.api('/api/secrets/'+encodeURIComponent(s.id)+'/reveal',{method:'POST'});
+            s.value=revealed.value;
+          }
+          s.revealed=true;
+        }
+      }
+      repaintSettings();
+    }catch(err){
+      secrets.filter(s=>!initiallyRevealed.has(s.id)).forEach(s=>{s.revealed=false;if(s.backend)delete s.value;});
+      b.disabled=false;
+      toast(err.message || 'Could not reveal that credential.');
+    }
+    return;
+  }
+  if (act === 'delete-credential'){
+    const ids=JSON.parse(b.dataset.ids || '[]');
+    const secrets=ids.map(id=>state.vault.secrets.find(s=>s.id===id)).filter(Boolean);
+    if(!secrets.length || !window.confirm(`Delete “${b.dataset.name}”? Your agent will no longer be able to use it.`))return;
+    b.disabled=true;
+    try{
+      for(const secret of secrets){
+        if(secret.backend && signedIn())await window.LingonAuth.api('/api/secrets/'+encodeURIComponent(secret.id),{method:'DELETE'});
+        state.vault.secrets=state.vault.secrets.filter(s=>s.id!==secret.id);
+      }
+      save();repaintSettings();paintSide();toast('Credential deleted');
+    }catch(err){save();repaintSettings();toast(err.message || 'Could not delete that credential.');}
+    return;
+  }
   if (act === 'reveal'){
     const s=state.vault.secrets.find(x=>x.id===b.dataset.id);if(!s)return;
     try{

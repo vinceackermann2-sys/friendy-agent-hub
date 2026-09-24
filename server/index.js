@@ -28,6 +28,7 @@ const Automations = require('./agents/automations');
 const composio = require('./composio');
 const mail = require('./mail');
 const shoppay = require('./shoppay');
+const { saveSupportSubmission } = require('./support');
 
 const app = express();
 const PORT = Number(process.env.PORT || 8000);
@@ -89,7 +90,7 @@ app.post('/api/composio/webhook', express.raw({ type: 'application/json', limit:
   }
 });
 app.use((req, res, next) => {
-  if (req.method === 'POST' && (req.path === '/api/voice/transcribe' || req.path === '/api/chat' || req.path === '/api/chat/stream' || req.path === '/api/agent/conversation' || req.path === '/api/library')) {
+  if (req.method === 'POST' && (req.path === '/api/voice/transcribe' || req.path === '/api/chat' || req.path === '/api/chat/stream' || req.path === '/api/agent/conversation' || req.path === '/api/library' || req.path === '/api/support/submissions')) {
     return express.json({ limit: '12mb' })(req, res, next);
   }
   next();
@@ -205,6 +206,18 @@ app.get('/api/auth/status', (req, res) => {
 app.get('/api/plans', (req, res) => {
   res.json({ plans: Object.values(PLANS), prelander: PRELANDER_OFFERS, creditPacks: CREDIT_PACKS, giftAmounts: GIFT_AMOUNTS, referral: { eachTokens: REFERRAL_TOKENS_EACH, maxRedemptions: 1 } });
 });
+
+app.post('/api/support/submissions', rateLimit(5, 60000), requireAuth(async (req, res) => {
+  const admin = adminClient();
+  if (!admin) return res.status(503).json({ error:'Support submissions are temporarily unavailable.' });
+  try {
+    res.status(201).json(await saveSupportSubmission(admin, req.user, req.body));
+  } catch (error) {
+    if (error.code === 'BAD_INPUT') return res.status(400).json({ error:error.message });
+    console.error('[support] submission failed:', error);
+    res.status(503).json({ error:'Could not save your submission. Please try again.' });
+  }
+}));
 
 // Public withdrawal function for eligible online purchases. A request is a notice,
 // not an automatic refund; staff can review eligibility from the saved record.

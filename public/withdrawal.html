@@ -12,7 +12,7 @@
 <div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/pricing">Pricing</a><a href="/terms">Terms</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a></div></nav></div>
 <main class="legal withdrawal-page">
 <h1>Withdraw from a purchase</h1>
-<p>If you have a legal right to withdraw from a Belna purchase, send your notice here. You can also email <a href="mailto:hej@belna.se">hej@belna.se</a>. Sending a notice records the date received; eligibility and any refund are reviewed under applicable law. See the <a href="/terms">Terms of Service</a> for withdrawal information.</p>
+<p>If you have a legal right to withdraw from a Belna purchase, send your notice here. You can also email <a href="mailto:support@belna.se">support@belna.se</a>. Sending a notice records the date received; eligibility and any refund are reviewed under applicable law. See the <a href="/terms">Terms of Service</a> for withdrawal information.</p>
 <form id="withdrawal-form">
   <label for="purchase-kind">Purchase type</label>
   <select class="field" id="purchase-kind" name="purchase_kind" required>
@@ -30,7 +30,7 @@
 </form>
 <div id="withdrawal-result" role="status" aria-live="polite"></div>
 </main>
-<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/pricing">Pricing</a><a href="/app">App</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/pricing">Pricing</a><a href="/app">App</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div></div><div class="base"><span>© 2026 Belna</span><a href="mailto:support@belna.se">support@belna.se</a></div></footer>
 <script>
 const form = document.getElementById('withdrawal-form');
 const result = document.getElementById('withdrawal-result');
@@ -65,7 +65,7 @@ form.addEventListener('submit', async (event) => {
     });
     result.append(title, details, download);
   } catch (error) {
-    result.textContent = error.message || 'Could not send your notice. Please email hej@belna.se.';
+    result.textContent = error.message || 'Could not send your notice. Please email support@belna.se.';
     button.disabled = false;
   }
 });

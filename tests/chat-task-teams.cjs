@@ -9,6 +9,7 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
   await db.exec("create role anon;create role authenticated;create role service_role;create table profiles(id text primary key);insert into profiles values('owner'),('other');");
   await db.exec(fs.readFileSync(require.resolve('../supabase/migrations/20260919160000_chat_tasks.sql'),'utf8').split('-- Hosted recovery pump.')[0]);
   await db.exec(fs.readFileSync(require.resolve('../supabase/migrations/20260919180000_chat_task_teams.sql'),'utf8'));
+  await db.exec(fs.readFileSync(require.resolve('../supabase/migrations/20260924120000_nested_chat_tasks.sql'),'utf8').split('-- Hosted recovery pump')[0]);
   const q=async(sql,params=[]) => (await db.query(sql,params)).rows;
   const first=async(sql,params)=>(await q(sql,params))[0] || null;
   const records={
@@ -32,7 +33,6 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
   const a=await create('Compare prices');const b=await create('Check quality');
   const outsider=await create('Unrelated task','different');
   const foreign=await create('Other account','objective','other');
-  await assert.rejects(create('Duplicate third worker'),/two active workers/);
   assert.equal((await rt.teamSnapshot('owner',a.id)).peers.length,1);
   await assert.rejects(rt.peerDetails('owner',a.id,outsider.id),/not in this task team/);
   await assert.rejects(rt.peerDetails('owner',a.id,foreign.id),/not found/);
@@ -106,6 +106,29 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
     store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[]});
   await main.run({userId:'owner',chatId:'chat',requestId:'review',prompt:'What is the combined result?',onEvent:e=>events.push(e)});
   assert.equal(mainInputs.length,2);assert.match(JSON.stringify(mainInputs[1].history),/Swedish/);assert.match(events.at(-1).text,/verification/);
+  // A worker can start one parallel child and waits without model calls to combine it.
+  const parent=await create('Research both markets','nested-objective');
+  replies.push({functionCalls:[{name:'spawn_subtask',args:{title:'Second market',instructions:'Research the second market independently.'}}]});
+  await rt.step('owner',parent.id);await rt.step('owner',parent.id);
+  const nested=(await records.team('owner',parent.id)).find(r=>r.state.parentTaskId===parent.id);
+  assert.ok(nested,'worker starts a child in the same task team');
+  const sibling=await rt.create({userId:'owner',chatId:'chat',requestKey:'second-child',title:'First market',instructions:'Research the first market independently.',relatedTaskId:parent.id,parentTaskId:parent.id});
+  await assert.rejects(rt.create({userId:'owner',chatId:'chat',requestKey:'third-child',instructions:'Duplicate work',relatedTaskId:parent.id,parentTaskId:parent.id}),/three active workers/);
+  await rt.step('owner',parent.id);
+  assert.equal((await records.get('owner',parent.id)).state.status,'waiting_peers');
+  assert.equal((await q('select * from due_chat_tasks()')).some(r=>r.id===parent.id),false,'waiting does not poll the model');
+  const childBeforeMessage=await records.get('owner',nested.id);
+  await q("update agent_chat_tasks set state=state || $1,lease_token=$2,lease_until=now()+interval '1 minute' where id=$3",[{status:'running',inflight:{id:'child-question'},pending:[{id:'child-question'}]},'11111111-1111-4111-8111-111111111111',nested.id]);
+  await records.messagePeer('owner',nested.id,parent.id,'child-question',1,{kind:'question',text:'Should I check a third source?',evidenceIds:[]});
+  assert.equal((await records.get('owner',parent.id)).state.status,'queued','a child question wakes its parent');
+  await q('update agent_chat_tasks set state=$1,lease_token=null,lease_until=null where id=$2',[childBeforeMessage.state,nested.id]);
+  await rt.step('owner',parent.id);
+  assert.equal((await records.get('owner',parent.id)).state.status,'waiting_peers','the parent resumes waiting after it handles the question');
+  await rt.step('owner',nested.id);
+  await rt.step('owner',sibling.id);
+  assert.equal((await q('select * from due_chat_tasks()')).some(r=>r.id===parent.id),true,'completed child wakes parent');
+  await rt.step('owner',parent.id);
+  assert.equal((await records.get('owner',parent.id)).state.status,'completed');
   await db.exec('set role authenticated');
   await assert.rejects(q('select * from chat_task_team($1,$2)',['owner',a.id]),/permission denied/);
   await db.close();
