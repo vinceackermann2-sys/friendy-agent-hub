@@ -24,8 +24,22 @@ const foldText = (text) => String(text || '').toLowerCase().replace(/ø/g,'o').r
 // This copy has no direct page reader, so Firecrawl returns the text of the top
 // results (1 credit each) except in quick chat lookups, which use snippets.
 const FIRECRAWL_API = 'https://api.firecrawl.dev/v2';
+const FIRECRAWL_GATEWAY = 'https://connector-gateway.lovable.dev/firecrawl/v2';
 const SEARCH_COUNTRIES = new Set(['US','GB','SE','NO','DK','FI','DE','FR','ES','NL','IT','PT','PL','AT','CH','BE','IE','CA','AU','NZ']);
 const firecrawlKey = () => String(process.env.FIRECRAWL_API_KEY || '').trim();
+// Lovable-managed connections use a lovc_ connection key that only the gateway accepts.
+const firecrawlEndpoint = () => (firecrawlKey().startsWith('lovc_') ? FIRECRAWL_GATEWAY : FIRECRAWL_API);
+const firecrawlHeaders = () => {
+  const key = firecrawlKey();
+  const h = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (key.startsWith('lovc_')) {
+    h.Authorization = 'Bearer ' + String(process.env.LOVABLE_API_KEY || '').trim();
+    h['X-Connection-Api-Key'] = key;
+  } else {
+    h.Authorization = 'Bearer ' + key;
+  }
+  return h;
+};
 async function searchWeb(query, { country } = {}, ctx) {
   const q = String(query).slice(0, 400);
   if (!firecrawlKey()) {
@@ -38,8 +52,8 @@ async function searchWeb(query, { country } = {}, ctx) {
   const cc = String(country || '').toUpperCase();
   if (SEARCH_COUNTRIES.has(cc)) body.country = cc;
   const timeout = AbortSignal.timeout(ctx.quick ? 15000 : 45000);
-  const r = await fetch(FIRECRAWL_API + '/search', { method: 'POST', redirect: 'error',
-    headers: { Authorization: 'Bearer ' + firecrawlKey(), 'Content-Type': 'application/json', Accept: 'application/json' },
+  const r = await fetch(firecrawlEndpoint() + '/search', { method: 'POST', redirect: 'error',
+    headers: firecrawlHeaders(),
     body: JSON.stringify(body), signal: ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout });
   const json = await r.json().catch(() => ({}));
   if (!r.ok || json.success === false) throw new Error('Firecrawl search failed: ' + String(json.error || 'HTTP ' + r.status).slice(0, 200));
