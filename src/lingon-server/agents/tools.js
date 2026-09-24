@@ -52,8 +52,8 @@ async function searchWeb(query, { country } = {}, ctx) {
   const cc = String(country || '').toUpperCase();
   if (SEARCH_COUNTRIES.has(cc)) body.country = cc;
   const timeout = AbortSignal.timeout(ctx.quick ? 15000 : 45000);
-  const r = await fetch(FIRECRAWL_API + '/search', { method: 'POST', redirect: 'error',
-    headers: { Authorization: 'Bearer ' + firecrawlKey(), 'Content-Type': 'application/json', Accept: 'application/json' },
+  const r = await fetch(firecrawlEndpoint() + '/search', { method: 'POST', redirect: 'error',
+    headers: firecrawlHeaders(),
     body: JSON.stringify(body), signal: ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout });
   const json = await r.json().catch(() => ({}));
   if (!r.ok || json.success === false) throw new Error('Firecrawl search failed: ' + String(json.error || 'HTTP ' + r.status).slice(0, 200));
