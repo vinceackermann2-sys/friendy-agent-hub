@@ -8,12 +8,11 @@
 */
 import { createApp } from './express-shim.js';
 import { transcribeAudio, isConfigured, MODEL_DEFAULT, MODEL_FALLBACK, REASONING_EFFORT, TRANSCRIPTION_MODEL, IMAGE_MODEL } from './foundry.js';
-import { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd, REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH } from './plans.js';
+import { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costOf, creditsForGiftUsd } from './plans.js';
 import * as store from './store.js';
 import * as stripeMod from './stripe.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
 import { rankMemories, maybeExtract } from './agents/memory.js';
-import { TOOLS } from './agents/tools.js';
 import crypto from 'node:crypto';
 // Microsoft Foundry tool harness + Azure VM sandbox + extras
 import * as Runner from './agents/runner.js';
@@ -24,7 +23,6 @@ import { fetchAllowlisted } from './agents/sandbox.js';
 import { normalizeSubAgent, nextRunAt } from './agents/triggers.js';
 import * as Automations from './agents/automations.js';
 import * as composio from './composio.js';
-import * as privy from './privy.js';
 import * as mail from './mail.js';
 import * as shoppay from './shoppay.js';
 import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases } from './agents/azure-vm.js';
@@ -183,7 +181,6 @@ app.get('/api/health', (req, res) => {
     supabase: store.supaConfigured(),
     google: googleConfigured(),
     composio: composio.configured(),
-    privy: privy.configured(),
     shopPay: shoppay.configured(),
     resend: mail.configured(),
     mailDomain: mail.mailDomain(),
@@ -444,8 +441,8 @@ app.get('/api/referrals/mine', requireAuth(async (req, res) => {
     const origin = (process.env.SITE_URL || 'https://belna.se').replace(/\/$/, '');
     res.json({
       ok:true, code:stats.code, link:origin + '/app?ref=' + encodeURIComponent(stats.code),
-      invited:stats.invited, earnedCredits:stats.earnedCredits, rewardEach:stats.rewardEach,
-      totalUsd:REFERRAL_TOTAL_USD, eachUsd:REFERRAL_GIFT_USD_EACH,
+      invited:stats.invited, earnedTokens:stats.earnedTokens, rewardEachTokens:stats.rewardEachTokens,
+      maxRedemptions:1,
     });
   } catch { res.status(503).json({ error:'Referral service is unavailable.' }); }
 }));
@@ -1084,57 +1081,6 @@ app.get('/api/github/diff', rateLimit(30, 60000), requireAuth(async (req, res) =
   }
 }));
 
-// ---------- agent wallet + attached card (Privy; keys stay in TEEs) ----------
-app.get('/api/wallet', requireAuth(async (req, res) => {
-  try {
-    res.json(await privy.snapshot(req.user.id, { ensure: privy.configured() }));
-  } catch (e) {
-    const code = e.code === 'NO_PRIVY' ? 503 : 502;
-    res.status(code).json({ error: e.message });
-  }
-}));
-app.post('/api/wallet/ensure', rateLimit(20, 60000), requireAuth(async (req, res) => {
-  try {
-    await privy.ensureWallet(req.user.id);
-    res.json(await privy.snapshot(req.user.id));
-  } catch (e) {
-    const code = e.code === 'NO_PRIVY' ? 503 : e.code === 'BAD_INPUT' ? 400 : 502;
-    res.status(code).json({ error: e.message });
-  }
-}));
-app.post('/api/wallet/transfer', rateLimit(20, 60000), requireAuth(async (req, res) => {
-  try {
-    // SECURITY: outbound transfers to arbitrary addresses are disabled. A
-    // client-set confirm flag is not proof of owner intent, so funds can only
-    // leave the wallet through the owner's own Privy wallet tools.
-    return res.status(403).json({ error: 'Sending funds from Belna is disabled. Withdraw from your wallet directly in Privy.' });
-    // eslint-disable-next-line no-unreachable
-    const { to, amount, asset, confirm } = req.body || {};
-    const result = await privy.transfer(req.user.id, { to, amount, asset, confirm: confirm === true });
-    res.json({ ok: true, transfer: result, wallet: await privy.snapshot(req.user.id) });
-  } catch (e) {
-    const code = e.code === 'BAD_INPUT' || e.code === 'NEED_CONFIRM' || e.code === 'LIMIT' || e.code === 'NO_WALLET' ? 400 : e.code === 'NO_PRIVY' ? 503 : 502;
-    res.status(code).json({ error: e.message });
-  }
-}));
-app.post('/api/wallet/card', rateLimit(10, 60000), requireAuth(async (req, res) => {
-  try {
-    const card = await privy.requestCard(req.user.id, { holderName: (req.body || {}).holderName });
-    res.json({ ok: true, card, wallet: await privy.snapshot(req.user.id) });
-  } catch (e) {
-    const code = e.code === 'NO_WALLET' || e.code === 'BAD_INPUT' ? 400 : e.code === 'NO_PRIVY' ? 503 : 502;
-    res.status(code).json({ error: e.message });
-  }
-}));
-app.post('/api/wallet/limit', rateLimit(20, 60000), requireAuth(async (req, res) => {
-  try {
-    res.json(await privy.setDailyLimit(req.user.id, (req.body || {}).dailyLimitUsd));
-  } catch (e) {
-    const code = e.code === 'BAD_INPUT' || e.code === 'NO_WALLET' ? 400 : 502;
-    res.status(code).json({ error: e.message });
-  }
-}));
-
 function shopPayErr(e) {
   return e.code === 'BAD_INPUT' || e.code === 'NEED_CONFIRM' || e.code === 'LIMIT' || e.code === 'NO_SHOP_LINK' ? 400
     : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
@@ -1201,7 +1147,7 @@ app.post('/api/mail/messages/:id/read', rateLimit(60, 60000), requireAuth(async 
 app.post('/api/mail/send', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try {
     const body = req.body || {};
-    const sent = await mail.send(req.user.id, Object.assign({}, body, { confirm: body.confirm === true, ownerEmail: req.user.email_confirmed_at ? req.user.email : null }));
+    const sent = await mail.send(req.user.id, Object.assign({}, body, { confirm: body.confirm === true }));
     res.json({ ok: true, message: sent, mailbox: await mail.snapshot(req.user.id, { folder: 'sent' }) });
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
@@ -1240,27 +1186,67 @@ app.put('/api/agent-context', rateLimit(20, 60000), requireAuth(async (req, res)
   } catch(e) { res.status(e.code==='CONFLICT'?409:e.code==='PERSISTENCE'?503:400).json({error:e.message}); }
 }));
 
-// ---------- safe system-file manifest for Settings → Library ----------
-function systemToolsMarkdown(){
-  const rows = Object.values(TOOLS).filter((tool) => tool && tool.name).map((tool) => {
-    const approval = tool.approval ? ' · owner approval required' : '';
-    return `- **${String(tool.name)}** · ${String(tool.type || 'function')}${approval} — ${String(tool.description || '').replace(/\s+/g, ' ').trim().slice(0, 320)}`;
-  });
-  return '# TOOLS.md\n\nThis file is generated from the live Lingon capability registry. It is read-only here: changing this description cannot grant permissions or bypass approvals.\n\n' + rows.join('\n');
-}
+// ---------- safe system files for Library → System files (no runtime registry) ----------
 app.get('/api/system-files', requireAuth(async (req, res) => {
   const context = await store.getAgentContext(req.user.id);
   res.json({
     revision: context.revision,
-    documents: { ...context.documents, tools: systemToolsMarkdown() },
+    documents: context.documents,
     folders: [
-      { id:'agent', path:'/agent', editable:true, files:['IDENTITY.md','SOUL.md','AGENTS.md','TOOLS.md'] },
+      { id:'agent', path:'/agent', editable:true, files:['IDENTITY.md','SOUL.md','AGENTS.md'] },
       { id:'user', path:'/user', editable:true, files:['USER.md'] },
       { id:'memory', path:'/memory', editable:false, files:['MEMORY.md'] },
-      { id:'workspace', path:'/workspace', editable:true, files:[] },
-      { id:'uploads', path:'/workspace/uploads', editable:true, files:[] },
     ],
   });
+}));
+
+// ---------- goals + library (shared with the agent's goal_* and library_* tools) ----------
+const personalStatus = (e) => e.code === 'NOT_FOUND' ? 404 : e.code === 'PERSISTENCE' ? 503 : 400;
+app.get('/api/goals', requireAuth(async (req, res) => {
+  try { res.json({ goals: await store.listGoals(req.user.id) }); }
+  catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.post('/api/goals', rateLimit(60, 60000), requireAuth(async (req, res) => {
+  const { title, category, steps, status, createdAt } = req.body || {};
+  try { res.json({ goal: await store.createGoal(req.user.id, { title, category, steps, status, createdAt }) }); }
+  catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.patch('/api/goals/:id', rateLimit(120, 60000), requireAuth(async (req, res) => {
+  const { title, category, status, steps, addSteps, completeSteps, reopenSteps, removeSteps } = req.body || {};
+  try { res.json({ goal: await store.updateGoal(req.user.id, req.params.id, { title, category, status, steps, addSteps, completeSteps, reopenSteps, removeSteps }) }); }
+  catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.delete('/api/goals/:id', requireAuth(async (req, res) => {
+  try {
+    if (!await store.deleteGoal(req.user.id, req.params.id)) return res.status(404).json({ error: 'Goal not found.' });
+    res.json({ ok: true });
+  } catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.get('/api/library', requireAuth(async (req, res) => {
+  try { res.json({ items: await store.listLibrary(req.user.id, { kind: req.query.kind, query: req.query.q, limit: req.query.limit }) }); }
+  catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.get('/api/library/:id', requireAuth(async (req, res) => {
+  try {
+    const item = await store.getLibraryItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: 'Library item not found.' });
+    res.json({ item });
+  } catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.post('/api/library', rateLimit(30, 60000), requireAuth(async (req, res) => {
+  const { title, mime, content } = req.body || {};
+  try { res.json({ item: await store.saveLibraryItem(req.user.id, { title, mime, content, source: 'upload' }) }); }
+  catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.patch('/api/library/:id', rateLimit(60, 60000), requireAuth(async (req, res) => {
+  try { res.json({ item: await store.renameLibraryItem(req.user.id, req.params.id, req.body?.title) }); }
+  catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
+}));
+app.delete('/api/library/:id', requireAuth(async (req, res) => {
+  try {
+    if (!await store.deleteLibraryItem(req.user.id, req.params.id)) return res.status(404).json({ error: 'Library item not found.' });
+    res.json({ ok: true });
+  } catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
 
 // ---------- memories (auth-derived user) ----------
@@ -1286,12 +1272,14 @@ app.delete('/api/memories/:id', requireAuth(async (req, res) => {
 
 // ---------- vault secrets ----------
 app.get('/api/secrets', requireAuth(async (req, res) => {
-  res.json({ secrets: await store.listSecrets(req.user.id) });
+  res.json({ secrets: await store.listSecrets(req.user.id), encrypted: store.secretsEncrypted() });
 }));
 app.post('/api/secrets', requireAuth(async (req, res) => {
   const { name, value } = req.body || {};
-  if (!name || !value) return res.status(400).json({ error: 'name + value required' });
-  res.json({ secret: await store.addSecret(req.user.id, String(name).slice(0, 80), String(value).slice(0, 4000)) });
+  // Collapse whitespace so an agent vault_request finds the name it asked for.
+  const label = String(name || '').replace(/s+/g, ' ').trim().slice(0, 80);
+  if (!label || typeof value !== 'string' || !value) return res.status(400).json({ error: 'name + value required' });
+  res.json({ secret: await store.addSecret(req.user.id, label, value.slice(0, 4000)) });
 }));
 app.post('/api/secrets/:id/reveal', requireAuth(async (req, res) => {
   const v = await store.revealSecret(req.user.id, req.params.id);

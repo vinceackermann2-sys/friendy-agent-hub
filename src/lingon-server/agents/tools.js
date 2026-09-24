@@ -10,12 +10,12 @@ import { hostAllowed } from './sandbox.js';
 import * as store from '../store.js';
 import { normalizeSubAgent, nextRunAt } from './triggers.js';
 import * as composio from '../composio.js';
-import * as privy from '../privy.js';
 import * as mail from '../mail.js';
 import * as shoppay from '../shoppay.js';
 import { execInSandbox, isAzureConfigured } from './azure-vm.js';
 import { generateImage } from '../foundry.js';
 import { PLANS } from '../plans.js';
+import { PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave } from './personal-tools.js';
 
 // Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
 const foldText = (text) => String(text || '').toLowerCase().replace(/ø/g,'o').replace(/æ/g,'ae').replace(/ß/g,'ss').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
@@ -369,21 +369,6 @@ const TOOLS = {
       return out;
     },
   },
-  wallet_status: {
-    name:'wallet_status', type:'function', approval:false,
-    description:'Read this account’s agent wallet address, balances, attached card status (last4 only), and remaining daily spend. Never invent numbers.',
-    run:async(_,ctx)=>{const snap=await privy.agentStatus(ctx.userId);ctx.trace(entry('wallet',`wallet_status: ${snap.address ? 'ready' : 'missing'}`));return snap;},
-  },
-  wallet_transfer: {
-    name:'wallet_transfer', type:'function', approval:true,
-    description:'Send USDC or ETH from the agent wallet. REQUIRES owner approval. Never send without an explicit destination and amount.',
-    run:async({to,amount,asset},ctx)=>{const out=await privy.transfer(ctx.userId,{to,amount,asset:asset || 'usdc',confirm:true});ctx.trace(entry('wallet',`wallet_transfer: ${out.asset} ${out.amount} sent`));return {status:out.status,asset:out.asset,amount:out.amount,to:String(out.to).slice(0,6)+'…'+String(out.to).slice(-4),hash:out.hash};},
-  },
-  wallet_purchase: {
-    name:'wallet_purchase', type:'function', approval:true,
-    description:'Ask the owner to approve a purchase. method=card authorizes a matching charge without revealing the card number. method=wallet sends USDC to to=. REQUIRES owner approval.',
-    run:async({amount,merchant,reason,method,to},ctx)=>{const out=await privy.purchase(ctx.userId,{amount,merchant,reason,method,to,confirm:true});ctx.trace(entry('wallet',`wallet_purchase: ${out.method} ${out.amount} ${out.merchant} ${out.status}`));return out;},
-  },
   shop_status: {
     name: 'shop_status', type: 'function', approval: false,
     description: 'Read whether Shop Pay is connected, remaining daily Shop Pay spend, and recent orders.',
@@ -425,8 +410,9 @@ const TOOLS = {
   shop_purchase: {
     name: 'shop_purchase', type: 'function', approval: true,
     description: 'Complete a Shop Pay UCP checkout after owner approval. Never collect card numbers.',
+    approvalDetail: async ({ merchant, checkoutId }, { userId }) => JSON.stringify(await shoppay.purchaseQuote(userId, { merchant, checkoutId })),
     run: async ({ merchant, checkoutId }, ctx) => {
-      const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true });
+      const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
     },
@@ -478,7 +464,7 @@ const TOOLS = {
   },
   mail_send: {
     name: 'mail_send', type: 'function', approval: true,
-    description: 'Send email from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body.',
+    description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body.',
     run: async ({ to, subject, body, in_reply_to, agent_name }, ctx) => {
       const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, agentName: agent_name, confirm: true });
       ctx.trace(entry('mail', `mail_send: ${out.subject} → ${(out.to || []).join(', ')}`));
@@ -533,12 +519,17 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.browser.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('browser_submit'); names.add('computer_screenshot'); }
   if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
+  for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
-  if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('wallet_status'); names.add('wallet_transfer'); names.add('wallet_purchase'); }
+  if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   return [...names].map((n) => TOOLS[n]);
 }
+
+// Goals and Library tools, plus Library copies of generated pages, Canvas files and images.
+Object.assign(TOOLS, PERSONAL_TOOLS);
+withLibraryAutosave(TOOLS);
 
 async function runParallel(calls, ctx) {
   return Promise.all(calls.map((c) => TOOLS[c.tool].run(c.args || {}, ctx)));

@@ -111,10 +111,17 @@ syncStripeProvider();
   if (/module\.exports/.test(esm)) throw new Error('Unconverted token wallet');
   writeFileSync(join(root, 'src/lingon-server/token-wallet.js'), esm, 'utf8');
 }
+// Goals and Library persistence use the same injected-dependency pattern.
+{
+  const src = readFileSync(join(root, 'server/personal-store.js'), 'utf8');
+  const esm = src.replace('module.exports = { createPersonalStore };', 'export { createPersonalStore };');
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted personal store');
+  writeFileSync(join(root, 'src/lingon-server/personal-store.js'), esm, 'utf8');
+}
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep']) {
+for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'personal-tools']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);

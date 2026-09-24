@@ -226,8 +226,7 @@ window.Engine = (() => {
 
   /* ---------------- greeting ---------------- */
   async function greet(rt) {
-    const mem = rt.recall().find((m) => m.src === 'you said so' || m.src === 'from our chat');
-    await rt.say(`Hej — I'm **${rt.agent.name}**, your Belna agent. I can research with live sources, act on your connected apps (Gmail, GitHub, Slack, Calendar and more), run sub-agent automations, and create pages and files. Connect apps under Apps and I'll use them with your permission. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood: 'happy' });
+    await rt.say('Hej! What would you like to work on?', { mood: 'happy' });
   }
 
   /* ---------------- REAL research ---------------- */

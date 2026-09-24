@@ -30,13 +30,14 @@ const { PGlite } = require('@electric-sql/pglite');
     create table public.agent_vm_instances(
       user_id text primary key references public.profiles(id),power_state text,last_metered_at timestamptz
     );
-    insert into public.profiles values('u1'),('u2'),('u3');
+    insert into public.profiles values('u1'),('u2'),('u3'),('u4');
     insert into public.gift_cards(code,amount_usd) values('GIFT50',50);
     insert into public.credit_grants(id,user_id,credits,reason,ref)
       values('legacy-gift','u3',100,'gift_redeem','backfill:legacy');
-    insert into public.referral_codes(user_id,code) values('u1','REF-U1');
+    insert into public.referral_codes(user_id,code) values('u1','REF-U1'),('u3','REF-U3');
   `);
   await db.exec(fs.readFileSync(require.resolve('../supabase/migrations/20260923095000_monthly_token_wallet.sql'), 'utf8'));
+  await db.exec(fs.readFileSync(require.resolve('../supabase/migrations/20260923120000_invite_tokens_once.sql'), 'utf8'));
   const q = async (sql, args = []) => (await db.query(sql, args)).rows;
   await q(`insert into public.token_grants(id,user_id,tokens,remaining,reason,ref,expires_at)
     values('plan1','u1',50000000,50000000,'plan','free:2026-09',now()+interval '1 day')`);
@@ -56,8 +57,18 @@ const { PGlite } = require('@electric-sql/pglite');
   assert.equal((await q("select remaining from public.token_wallet_status('u3')"))[0].remaining, 0);
   assert.equal((await q("select public.claim_token_daily('u3','image',5,'blocked') ok"))[0].ok, false,
     'a depleted account cannot start another image request');
-  assert.equal((await q("select public.redeem_referral('u2','REF-U1') result"))[0].result.ok, true);
-  assert.equal((await q("select remaining from public.token_wallet_status('u2')"))[0].remaining, 1500000);
+  const referral = (await q("select public.redeem_referral('u2','REF-U1') result"))[0].result;
+  assert.equal(referral.ok, true);
+  assert.equal(referral.tokens, 10000000);
+  assert.equal(referral.inviterTokens, 10000000);
+  assert.equal((await q("select remaining from public.token_wallet_status('u2')"))[0].remaining, 11000000);
+  assert.equal((await q("select tokens from public.token_grants where user_id='u1' and reason='referral'"))[0].tokens, 10000000);
+  assert.equal((await q("select count(*)::int n from public.credit_grants where reason like 'referral_%'"))[0].n, 0,
+    'new invites add tokens without legacy credits');
+  assert.match((await q("select public.redeem_referral('u4','REF-U1') result"))[0].result.error, /already been used/,
+    'one code can reward only one friend');
+  assert.match((await q("select public.redeem_referral('u2','REF-U3') result"))[0].result.error, /already redeemed/,
+    'one account cannot claim another invite');
   await q("insert into public.agent_vm_instances(user_id,power_state,last_metered_at) values('u1','running',now()-interval '1 hour')");
   const vmTokens = (await q("select public.meter_agent_vm_runtime('u1',0.06,false) tokens"))[0].tokens;
   assert.ok(vmTokens >= 300000 && vmTokens < 301000, 'one VM hour uses roughly 300k tokens');

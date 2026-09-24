@@ -90,27 +90,20 @@
 
 <div class="rx-sec" id="results">
   <h2>Results</h2>
-  <p>The Arche 1.0 foundation uses Kimi K3. The Kimi column below reports Moonshot AI’s published <em>upstream model</em> results at maximum reasoning effort; these are not an independent evaluation of the Belna harness. Current frontier results come from each vendor’s published evaluations.</p>
-  <h3>Kimi K3 upstream highlights</h3>
-  <div class="stat-row">
-    <div class="stat-pill win"><span class="val">91.2</span><span class="lab">BrowseComp</span></div>
-    <div class="stat-pill win"><span class="val">42.0</span><span class="lab">SWE-Marathon</span></div>
-    <div class="stat-pill win"><span class="val">77.8</span><span class="lab">ProgramBench</span></div>
-    <div class="stat-pill win"><span class="val">33.4</span><span class="lab">τ³-Banking</span></div>
-  </div>
-  <h3>Published frontier benchmarks</h3>
+  <p>The table uses independently measured results from Artificial Analysis, with every model scored on each listed benchmark. All four columns show the max-effort configuration. The Arche 1.0 column uses its Kimi K3 foundation as a proxy; these results were measured through a model API, not with the Belna harness, so they do not measure the full Arche 1.0 agent.</p>
+  <h3>Shared independent benchmarks</h3>
   <p class="rx-scroll-hint">Swipe table to compare models →</p>
   <div class="rx-scroll"><table class="rtable">
-    <thead><tr><th>Benchmark</th><th class="hl">Kimi K3<br><small>Arche foundation</small></th><th>GPT-6.0 Sol</th><th>Claude Opus 5.5</th><th>GPT-6.0 Astra</th></tr></thead>
+    <thead><tr><th>Benchmark</th><th class="hl">Arche 1.0<sup>†</sup></th><th>GPT-6 Sol</th><th>Claude Opus 5.5</th><th>GPT-6 Astra</th></tr></thead>
     <tbody>
-      <tr><td>GPQA Diamond ↑</td><td class="hl">93.5%</td><td>—</td><td>—</td><td>96.0%</td></tr>
-      <tr><td>BrowseComp ↑</td><td class="hl">91.2%</td><td>—</td><td>—</td><td>91.5%</td></tr>
-      <tr><td>DeepSWE v1.1 ↑</td><td class="hl">67.5%</td><td>68.8%</td><td>—</td><td>74.1%</td></tr>
-      <tr><td>AutomationBench* ↑</td><td class="hl">30.8%</td><td>33.2%</td><td>40.0%</td><td>41.4%</td></tr>
-      <tr><td>Terminal-Bench 4.0 ↑</td><td class="hl">—</td><td>—</td><td>66.4%</td><td>57.9%</td></tr>
+      <tr><td>GDPval-AA v2.1 (Elo) ↑</td><td class="hl">1,524</td><td>1,487</td><td>1,846</td><td>1,542</td></tr>
+      <tr><td>AA-Briefcase v1.1 (Elo) ↑</td><td class="hl">1,510</td><td>1,483</td><td>1,822</td><td>1,569</td></tr>
+      <tr><td>AA-LCR v1.1 ↑</td><td class="hl">89%</td><td>84%</td><td>85%</td><td>81%</td></tr>
+      <tr><td>SciCode ↑</td><td class="hl">59%</td><td>58%</td><td>67%</td><td>56%</td></tr>
+      <tr><td>Humanity's Last Exam ↑</td><td class="hl">47%</td><td>48%</td><td>61%</td><td>55%</td></tr>
     </tbody>
   </table></div>
-  <p class="fineprint">Sources: <a href="https://github.com/MoonshotAI/Kimi-K3/blob/main/README.md">Moonshot AI Kimi K3 model card</a>, <a href="https://openai.com/index/introducing-gpt-6-sol-and-luna/">OpenAI GPT-6 Sol release</a>, <a href="https://openai.com/index/gpt-6-astra/">OpenAI GPT-6 Astra release</a>, and <a href="https://www.anthropic.com/claude-opus-5-5">Anthropic Claude Opus 5.5 release</a>. A dash means no score for that model on that benchmark in these sources. *AutomationBench versions and evaluation setups differ between the Kimi K3 and newer vendor reports. Vendors also use different harnesses, effort settings and dates; these are published reference points, not a controlled head-to-head test.</p>
+  <p class="fineprint">† Arche 1.0 foundation proxy: Artificial Analysis evaluated Kimi K3 at max effort through a model API. It did not evaluate the Belna harness or end-to-end agent. Claude Opus 5.5 uses the evaluator's max-effort configuration with default fallback. Percentages are rounded as shown by the source. Scores and configurations: <a href="https://artificialanalysis.ai/models/comparisons/kimi-k3-vs-kimi-k2-6">Arche foundation</a>, <a href="https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-gpt-6-sol">GPT-6 Sol and Claude Opus 5.5</a>, <a href="https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-vs-gpt-6-astra">GPT-6 Astra</a>. See the <a href="https://artificialanalysis.ai/methodology">Artificial Analysis methodology</a> for evaluation details.</p>
 </div>
 
 <div class="rx-sec" id="take">

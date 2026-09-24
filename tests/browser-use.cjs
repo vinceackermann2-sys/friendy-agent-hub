@@ -89,6 +89,17 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
     await TOOLS.computer_fill_secret.run({ secret: 'sec_card', x: 400, y: 300, window: 'Bank' }, ctx);
     assert.equal(typed[2].expectTitle, 'Bank', 'the VM only types into the approved window');
     assert.equal(typed[2].text, '4111111111111111');
+
+    // A missing credential is requested through a secure chat card; the model
+    // only learns the ref of what the owner saved.
+    assert.equal(TOOLS.vault_request.approval, true, 'the owner types the value, the model never does');
+    assert.equal(TOOLS.vault_request.sideEffects, false, 'an unsaved request is not an unknown outcome');
+    assert.deepEqual(TOOLS.vault_request.approvalCard({ name: '  GitHub   password ', host: 'https://github.com/login', reason: 'To sign in' }),
+      { type: 'secret', suggest: 'GitHub password', host: 'github.com', note: 'To sign in' });
+    assert.throws(() => TOOLS.vault_request.approvalCard({ name: ' ' }), /short label/);
+    assert.deepEqual(await TOOLS.vault_request.run({ name: 'GitHub password' }, ctx), { ref: 'sec_gh12', name: 'GitHub password', saved: true });
+    await rejects('vault_request', { name: 'Bank PIN' }, /was not saved/);
+    assert.ok(require('../server/agents/tools').pickTools('log in to my bank').some((tool) => tool.name === 'vault_request'));
   } finally {
     Object.assign(store, { listSecrets: saved.listSecrets, revealSecret: saved.revealSecret });
     Object.assign(live, { forTool: saved.forTool, forDesktop: saved.forDesktop, agentInput: saved.agentInput });

@@ -37,9 +37,7 @@ const TOKEN_PACKS = [
 function tokenPackFor(tokens) {
   return TOKEN_PACKS.find((pack) => pack.tokens === Number(tokens)) || null;
 }
-const REFERRAL_TOTAL_USD = 50;
-const REFERRAL_GIFT_USD_EACH = 25;
-const REFERRAL_CREDITS_EACH = 50;
+const REFERRAL_TOKENS_EACH = 10_000_000;
 
 const PLANS = {
   free: { id: 'free', name: 'Free', price: 0, was: null, credits: 20, tokens: 50_000_000, imagesPerDay: 5, transcriptionsPerDay: 10, giftUsd: 0, interval: 'month', blurb: '50 million tokens monthly. No card.' },
@@ -90,5 +88,5 @@ export {
   PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, creditPackFor,
   TOKEN_PACKS, TOKENS_PER_MILLION, tokenPackFor,
   CREDIT_VALUE_USD, BILLING_MARKUP, CREDITS_PER_USD, costOf, creditsForCost, creditsForGiftUsd,
-  REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH, REFERRAL_CREDITS_EACH,
+  REFERRAL_TOKENS_EACH,
 };

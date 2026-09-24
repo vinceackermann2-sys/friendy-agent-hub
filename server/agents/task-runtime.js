@@ -16,7 +16,7 @@ const TEAM_TOOLS = [
 ];
 // Every worker can search, browse, use the virtual computer and its workspace;
 // keyword selection adds the rest.
-const CORE_TOOLS = new Set(['web_search','browser_open','browser_action','browser_submit','browser_fill_secret','computer_screenshot','computer_action','computer_submit','computer_fill_secret','vault_list','shell','code_run','canvas_show','capability_search','memory_write']);
+const CORE_TOOLS = new Set(['web_search','browser_open','browser_action','browser_submit','browser_fill_secret','computer_screenshot','computer_action','computer_submit','computer_fill_secret','vault_list','vault_request','shell','code_run','canvas_show','capability_search','memory_write']);
 // Tasks have no round limit. A worker that repeats one call without new results is
 // stalled: the call is skipped, and after STALL_LIMIT skips it must return what it has.
 const REPEAT_LIMIT = 3, STALL_LIMIT = 3;
@@ -133,7 +133,7 @@ function createTaskRuntime(d) {
       } else if(action==='decide') {
         if(typeof allow!=='boolean' || !s.approval || s.approval.id!==callId || s.approval.version!==s.version) throw fault('Approval is no longer pending.');
         event(s,{type:'decision',callId,status:allow?'approved':'denied'});
-        if(allow) s.pending[0].authorized=true;
+        if(allow) {s.pending[0].authorized=true;s.pending[0].approvedDetail=s.approval.detail;}
         else { s.pending.shift();s.observations.push({id:callId,name:s.approval.name,ok:false,text:'The user denied this action. Do not retry it.',version:s.version}); }
         s.approval=null;s.status='queued';
       } else throw fault('Unknown task action.',400);
@@ -191,11 +191,13 @@ function createTaskRuntime(d) {
         }}:d.tools[call.name]);
         if(!tool) return await update(s=>{if(s.version!==version)return;s.pending.shift();s.observations.push({id:call.id,name:call.name,ok:false,text:'Unknown tool.',version});});
         if(tool.approval && !call.authorized) {
-          const detail=tool.approvalDetail?await tool.approvalDetail(call.args,{userId}).catch(()=>JSON.stringify(call.args)):JSON.stringify(call.args);
+          let detail;
+          try {detail=tool.approvalDetail?await tool.approvalDetail(call.args,{userId}):JSON.stringify(call.args);}
+          catch(e) {return await update(s=>{if(s.version!==version)return;s.pending.shift();s.observations.push({id:call.id,name:call.name,ok:false,text:String(e.message).slice(0,600),version});});}
           return await update(s=>{
             if(s.version!==version || !LIVE.has(s.status)) return;
-            s.approval={...call,version};s.status='waiting_approval';
-            event(s,{type:'card',id:`approval_${call.id}`,callId:call.id,card:{type:'approval',status:'pending',title:call.name,detail,key:call.id}});
+            s.approval={...call,version,detail};s.status='waiting_approval';
+            event(s,{type:'card',id:`approval_${call.id}`,callId:call.id,card:tool.approvalCard?{...tool.approvalCard(call.args),status:'pending'}:{type:'approval',status:'pending',title:call.name,detail,key:call.id}});
           });
         }
         row=await update(s=>{
@@ -349,8 +351,8 @@ function createTaskRuntime(d) {
       // Read-only tools stop on cancel. Approved and VM actions run to completion,
       // since interrupting them would leave their outcome unknown.
       const interruptible=!tool.approval && !VM.has(call.name);
-      try { return await tool.run(call.args,{userId,sessionId:taskId,taskId,vmReady:lease,signal:interruptible?signal:undefined,trace:()=>{}}); }
-      catch(e) { if(tool.approval || VM.has(call.name)) e.outcomeUnknown=true;throw e; }
+      try { return await tool.run(call.args,{userId,sessionId:taskId,chatId:latest.chat_id,taskId,vmReady:lease,approvedDetail:call.approvedDetail,signal:interruptible?signal:undefined,trace:()=>{}}); }
+      catch(e) { if((tool.approval && tool.sideEffects!==false) || VM.has(call.name)) e.outcomeUnknown=true;throw e; }
     } finally {
       if(renew) clearInterval(renew);
       if(lease) await d.azure.releaseLease(userId,{leaseId});

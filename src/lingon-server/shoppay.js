@@ -1,12 +1,15 @@
 /* Shop Pay via Universal Commerce Protocol.
    User links Shop (accounts.shop.app). Tokens stay encrypted on the server.
    The agent never sees tokens, card numbers, or payment credentials.
-   complete_checkout only runs after owner approval; otherwise continue_url. */
+   complete_checkout only runs after owner approval of a live quote. */
 import crypto from 'node:crypto';
 import * as store from './store.js';
 
 const UCP_VERSION = '2026-08-25';
-const SHOP_SCOPES = 'openid dev.ucp.shopping.catalog.search:read dev.ucp.shopping.checkout:manage';
+const SHOP_SCOPES = 'openid email dev.ucp.shopping.catalog.search:read';
+function requestedScopes() {
+  return SHOP_SCOPES + (env('SHOP_PAY_NATIVE_CHECKOUT') === '1' ? ' dev.ucp.shopping.checkout:manage' : '');
+}
 const CATALOG_HOST = 'catalog.shopify.com';
 const DEFAULT_DAILY = 200;
 const MAX_USD = 2000;
@@ -92,11 +95,11 @@ function platformProfile(origin) {
         'dev.shopify.catalog.global': [{ version: v, extends: ['dev.ucp.shopping.catalog.lookup', 'dev.ucp.shopping.catalog.search'] }],
       },
       payment_handlers: {
-        'com.shopify.shop_pay': [{
+        'dev.shopify.shop_pay': [{
           id: 'shop_pay',
-          version: v,
-          spec: 'https://shopify.dev/docs/agents',
-          schema: 'https://shopify.dev/ucp/schemas/2026-08-25/shopify_catalog.json',
+          version: '2026-04-08',
+          spec: 'https://shopify.dev/ucp/shop-pay-handler/2026-04-08/spec.md',
+          schema: 'https://shopify.dev/ucp/shop-pay-handler/2026-04-08/schema.json',
         }],
       },
     },
@@ -250,10 +253,25 @@ async function buyerLinkedToken(userId, { resourceHost, scope } = {}) {
   const credentials = shopCredentials();
   if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured.');
   const row = await store.getShopPayAccount(userId);
-  const shopToken = shopTokenFromRow(row);
+  let shopToken = shopTokenFromRow(row);
   if (!shopToken) fail('NO_SHOP_LINK', 'Connect Shop Pay in Payments first.');
-  if (row.shopTokenExpiresAt && row.shopTokenExpiresAt < Date.now() + 15e3) fail('NO_SHOP_LINK', 'Shop Pay session expired — reconnect Shop Pay.');
   const shop = await shopAuthServer();
+  if (row.shopTokenExpiresAt && row.shopTokenExpiresAt < Date.now() + 15e3) {
+    const refreshToken = row.encryptedRefreshToken && store.openSecret(row.encryptedRefreshToken);
+    if (!refreshToken) fail('NO_SHOP_LINK', 'Shop Pay session expired — reconnect Shop Pay.');
+    const refreshed = await formPost(shop.token_endpoint, {
+      grant_type: 'refresh_token', refresh_token: refreshToken,
+      client_id: credentials.id, client_secret: credentials.secret,
+    });
+    shopToken = refreshed.access_token;
+    if (!shopToken) fail('NO_SHOP_LINK', 'Shop Pay session expired — reconnect Shop Pay.');
+    await store.upsertShopPayAccount(userId, {
+      encryptedShopToken: store.sealSecret(shopToken),
+      encryptedRefreshToken: refreshed.refresh_token ? store.sealSecret(refreshed.refresh_token) : row.encryptedRefreshToken,
+      shopTokenExpiresAt: Date.now() + Math.max(60, Number(refreshed.expires_in || 3600) - 30) * 1000,
+      scopes: refreshed.scope || row.scopes,
+    });
+  }
   const shopify = await shopifyTokenEndpoint(resourceHost || CATALOG_HOST);
   const grant = await formPost(shop.token_endpoint, {
     grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
@@ -308,21 +326,15 @@ async function mcpCall(url, name, args, token) {
 
 function money(amount, currency) {
   const n = Number(amount);
-  if (!Number.isFinite(n)) return null;
-  if (n >= 100 && Number.isInteger(n)) return { amount: n / 100, currency: currency || 'USD', minor: n };
-  return { amount: n, currency: currency || 'USD', minor: Math.round(n * 100) };
-}
-
-function totalUsd(payload) {
-  const totals = payload && payload.totals;
-  if (Array.isArray(totals)) {
-    const hit = totals.find((t) => t && t.type === 'total') || totals[totals.length - 1];
-    if (hit && hit.amount != null) {
-      const n = Number(hit.amount);
-      return n >= 50 && Number.isInteger(n) ? n / 100 : n;
-    }
+  if (!Number.isSafeInteger(n)) return null;
+  const code = String(currency || 'USD').toUpperCase();
+  let digits;
+  try {
+    digits = new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).resolvedOptions().maximumFractionDigits;
+  } catch {
+    return null;
   }
-  return null;
+  return { amount: n / (10 ** digits), currency: code, minor: n };
 }
 
 function publicProduct(p) {
@@ -373,7 +385,8 @@ function publicCheckout(chk, merchant) {
 }
 
 function publicAccount(row, extras) {
-  const connected = !!(row && shopTokenFromRow(row) && row.connectedAt);
+  const connected = !!(row && shopTokenFromRow(row) && row.connectedAt &&
+    (!row.shopTokenExpiresAt || row.shopTokenExpiresAt > Date.now() || row.encryptedRefreshToken));
   return {
     configured: configured(),
     connected,
@@ -382,7 +395,8 @@ function publicAccount(row, extras) {
     dailyLimitUsd: row && row.dailyLimitUsd != null ? Number(row.dailyLimitUsd) : DEFAULT_DAILY,
     remainingUsd: extras && extras.remainingUsd != null ? extras.remainingUsd : null,
     connectedAt: connected ? row.connectedAt : null,
-    handler: 'com.shopify.shop_pay',
+    handler: 'dev.shopify.shop_pay',
+    nativeCheckout: connected && String(row.scopes || '').split(/\s+/).includes('dev.ucp.shopping.checkout:manage'),
     protocol: 'ucp',
   };
 }
@@ -419,6 +433,7 @@ async function agentStatus(userId) {
     dailyLimitUsd: snap.shopPay.dailyLimitUsd,
     remainingUsd: snap.shopPay.remainingUsd,
     configured: snap.shopPay.configured,
+    nativeCheckout: snap.shopPay.nativeCheckout,
     recent: snap.orders.slice(0, 5),
   };
 }
@@ -447,7 +462,7 @@ async function startConnect(userId, { origin } = {}) {
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', credentials.id);
   url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('scope', SHOP_SCOPES);
+  url.searchParams.set('scope', requestedScopes());
   url.searchParams.set('state', state);
   url.searchParams.set('nonce', nonce);
   url.searchParams.set('code_challenge', pkceChallenge(verifier));
@@ -632,54 +647,139 @@ async function updateCheckout(userId, { merchant, checkoutId, items, email, firs
 }
 
 async function getCheckout(userId, { merchant, checkoutId } = {}) {
+  const host = merchantHost(merchant);
+  return publicCheckout(await getCheckoutRaw(userId, { merchant: host, checkoutId }), host);
+}
+
+async function getCheckoutRaw(userId, { merchant, checkoutId, buyerOnly = false } = {}) {
   requireUser(userId);
   const host = merchantHost(merchant);
   const id = String(checkoutId || '').trim();
   if (!id) fail('BAD_INPUT', 'Checkout id is required.');
-  const token = await bearerFor(userId, { resourceHost: host, allowApp: true });
-  const out = await mcpCall('https://' + host + '/api/ucp/mcp', 'get_checkout', {
+  const token = await bearerFor(userId, { resourceHost: host, scope: 'openid dev.ucp.shopping.checkout:manage', allowApp: !buyerOnly });
+  return mcpCall('https://' + host + '/api/ucp/mcp', 'get_checkout', {
     meta: mcpMeta(), id,
   }, token);
-  return publicCheckout(out, host);
 }
 
-async function completePurchase(userId, { merchant, checkoutId, confirm } = {}) {
+function quoteFromCheckout(checkout, merchant) {
+  const current = publicCheckout(checkout, merchant);
+  const total = current.totals.find((t) => t.type === 'total');
+  const amount = total && total.amount ? Number(total.amount.amount) : NaN;
+  if (!Number.isFinite(amount) || amount <= 0) fail('BAD_INPUT', 'Checkout total is missing.');
+  const destinations = (checkout.fulfillment?.methods || []).flatMap((method) => method.destinations || []);
+  const quote = {
+    merchant, checkoutId: current.id, status: current.status,
+    amount, currency: current.currency,
+    items: current.lineItems.map((item) => ({ id: item.id, title: item.title, quantity: item.quantity, price: item.price?.amount ?? null })),
+    buyerEmail: String(checkout.buyer?.email || '').slice(0, 120),
+    delivery: destinations.map((d) => [d.street_address, d.address_locality, d.address_region, d.postal_code, d.address_country].filter(Boolean).join(', ')).slice(0, 2),
+  };
+  quote.fingerprint = crypto.createHash('sha256').update(JSON.stringify(quote)).digest('hex');
+  return quote;
+}
+
+async function purchaseQuote(userId, { merchant, checkoutId } = {}) {
+  const host = merchantHost(merchant);
+  const checkout = await getCheckoutRaw(userId, { merchant: host, checkoutId });
+  if (checkout.status === 'completed' || checkout.status === 'canceled') fail('BAD_INPUT', 'This checkout is already closed.');
+  return quoteFromCheckout(checkout, host);
+}
+
+function approvedQuoteMatches(approved, current) {
+  let parsed;
+  try { parsed = typeof approved === 'string' ? JSON.parse(approved) : approved; } catch { return false; }
+  return parsed && parsed.merchant === current.merchant && parsed.checkoutId === current.checkoutId
+    && parsed.fingerprint === current.fingerprint;
+}
+
+function shopPayInstrument(checkout) {
+  const handlers = checkout.ucp?.payment_handlers?.['dev.shopify.shop_pay'] || checkout.payment_handlers?.['dev.shopify.shop_pay'] || [];
+  const ids = new Set(handlers.map((handler) => handler.id));
+  const instruments = checkout.payment?.instruments || [];
+  const found = instruments.find((instrument) => instrument.type === 'shop_pay'
+    && (ids.size ? ids.has(instrument.handler_id) : instrument.handler_id === 'shop_pay')
+    && instrument.credential?.type === 'shop_token' && typeof instrument.credential.token === 'string' && instrument.credential.token.length > 0);
+  if (!found) return null;
+  return { id: found.id, handler_id: found.handler_id, type: 'shop_pay', selected: true,
+    credential: { type: 'shop_token', token: found.credential.token } };
+}
+
+function buyerHandoff(current, quote, note) {
+  return {
+    status: 'needs_buyer', method: 'shop_pay', merchant: quote.merchant, amount: quote.amount,
+    currency: quote.currency, checkoutId: quote.checkoutId, continueUrl: current.continueUrl || null,
+    messages: current.messages || [], note,
+  };
+}
+
+function completionKey(userId, host, checkoutId) {
+  const hex = crypto.createHash('sha256').update(JSON.stringify([userId, host, checkoutId])).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+async function completePurchase(userId, { merchant, checkoutId, confirm, approvedQuote } = {}) {
   requireUser(userId);
   if (!confirm) fail('NEED_CONFIRM', 'Owner confirmation is required before any Shop Pay purchase.');
   const host = merchantHost(merchant);
   const id = String(checkoutId || '').trim();
   if (!id) fail('BAD_INPUT', 'Checkout id is required.');
+  if (!approvedQuote) fail('NEED_CONFIRM', 'A checkout approval card is required.');
   const row = await store.getShopPayAccount(userId);
-  const current = await getCheckout(userId, { merchant: host, checkoutId: id });
-  const totalLine = (current.totals || []).find((t) => t.type === 'total') || (current.totals || [])[0];
-  const amount = totalLine && totalLine.amount ? Number(totalLine.amount.amount) : 0;
-  if (!(amount > 0) || amount > MAX_USD) fail('BAD_INPUT', 'Checkout total is missing or too large.');
+  const checkout = await getCheckoutRaw(userId, { merchant: host, checkoutId: id });
+  if (checkout.status === 'completed' && checkout.order?.id) return {
+    status: 'completed', method: 'shop_pay', merchant: host, checkoutId: id,
+    orderId: checkout.order.id, orderUrl: checkout.order.permalink_url || null,
+  };
+  const current = publicCheckout(checkout, host);
+  const quote = quoteFromCheckout(checkout, host);
+  if (!approvedQuoteMatches(approvedQuote, quote)) fail('NEED_CONFIRM', 'Checkout details changed. Review and approve the new total before purchasing.');
+  if (current.status !== 'ready_for_complete') return buyerHandoff(current, quote, 'Finish this checkout in Shop Pay on the merchant site.');
+  if (quote.currency !== 'USD') return buyerHandoff(current, quote, 'This currency needs buyer checkout in Shop Pay.');
+  if (!row || !shopTokenFromRow(row) || !String(row.scopes || '').split(/\s+/).includes('dev.ucp.shopping.checkout:manage')) {
+    return buyerHandoff(current, quote, 'Shop Pay is not enabled for native completion. Finish on the merchant site.');
+  }
+  const instrument = shopPayInstrument(checkout);
+  if (!instrument) return buyerHandoff(current, quote, 'Shop Pay needs buyer payment review on the merchant site.');
+  if (quote.amount > MAX_USD) fail('LIMIT', 'Checkout exceeds the Shop Pay purchase limit.');
+  const token = await bearerFor(userId, { resourceHost: host, scope: 'openid dev.ucp.shopping.checkout:manage', allowApp: false });
   const limit = row && row.dailyLimitUsd != null ? row.dailyLimitUsd : DEFAULT_DAILY;
   const title = (current.lineItems || []).map((i) => i.title).filter(Boolean).slice(0, 3).join(', ') || host;
   const reserved = await store.reserveShopPaySpend(userId, {
-    merchant: host, checkoutId: id, amount, currency: current.currency || 'USD',
-    title, status: current.status === 'ready_for_complete' ? 'authorized' : 'pending',
+    merchant: host, checkoutId: id, amount: quote.amount, currency: quote.currency,
+    title, status: 'authorized',
   }, limit);
-
-  // SECURITY: the server never completes a charge on the buyer's behalf.
-  // The buyer always finishes payment in Shop Pay on the merchant checkout,
-  // where Shop Pay authenticates them directly.
+  if (reserved.status === 'completed') return { status: 'completed', merchant: host, amount: quote.amount,
+    currency: quote.currency, checkoutId: id, orderId: reserved.orderId || reserved.id, orderUrl: reserved.orderUrl || null };
+  let out;
+  try {
+    out = await mcpCall('https://' + host + '/api/ucp/mcp', 'complete_checkout', {
+      meta: { ...mcpMeta(), 'idempotency-key': completionKey(userId, host, id) },
+      id, checkout: { payment: { instruments: [instrument], selected_instrument_id: instrument.id } },
+    }, token);
+  } catch (e) {
+    if (!/checkout_completion_ineligible|redirect_to_checkout_required/.test(String(e.message || ''))) throw e;
+    await store.updateShopPayOrder(userId, reserved.id, { status: 'escalated', continueUrl: current.continueUrl || null });
+    return buyerHandoff(current, quote, 'Shop Pay requires buyer checkout on the merchant site.');
+  }
+  const result = publicCheckout(out, host);
+  const completed = result.status === 'completed' && !!result.orderId;
   await store.updateShopPayOrder(userId, reserved.id, {
-    status: 'escalated', continueUrl: current.continueUrl || null,
+    status: completed ? 'completed' : 'escalated', orderId: result.orderId || null,
+    continueUrl: result.continueUrl || current.continueUrl || null,
   });
   return {
-    status: 'needs_buyer',
+    status: completed ? 'completed' : 'needs_buyer',
     method: 'shop_pay',
     merchant: host,
-    amount,
-    currency: current.currency || 'USD',
+    amount: quote.amount,
+    currency: quote.currency,
     checkoutId: id,
-    continueUrl: current.continueUrl || null,
-    messages: current.messages || [],
-    orderId: reserved.id,
-    note: current.continueUrl
-      ? 'Open continueUrl to finish with Shop Pay on the merchant checkout. Card numbers stay in Shop Pay.'
-      : 'Merchant needs more buyer input before this can be completed.',
+    continueUrl: completed ? null : (result.continueUrl || current.continueUrl || null),
+    messages: result.messages || [],
+    orderId: result.orderId || reserved.id,
+    orderUrl: result.orderUrl || null,
+    note: completed ? 'Order placed with Shop Pay.' : 'Finish this checkout in Shop Pay on the merchant site.',
   };
 }
 
@@ -707,5 +807,5 @@ export {
   UCP_VERSION, configured, platformProfile, profileUrl, merchantHost, pkceChallenge, pkceVerifier,
   publicAccount, publicProduct, publicCheckout, decodeJwt,
   snapshot, agentStatus, startConnect, finishConnect, disconnect, setDailyLimit,
-  searchCatalog, getProduct, createCheckout, updateCheckout, getCheckout, completePurchase, getOrder,
+  searchCatalog, getProduct, createCheckout, updateCheckout, getCheckout, purchaseQuote, completePurchase, getOrder,
 };

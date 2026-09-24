@@ -91,7 +91,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await toolThen.run({userId:'a',chatId:'chat',requestId:'retract',prompt:'Research',onEvent:e=>retracted.push(e)});
   assert.ok(retracted.some(e=>e.type==='message_retract'));
   assert.ok(retracted.some(e=>e.type==='task'));
-  assert.deepEqual(degradedModels[0].tools.map(t=>t.name),['history_search']);
+  assert.deepEqual(degradedModels[0].tools.map(t=>t.name),['react_to_message','history_search']);
   assert.match(degradedModels[0].system,/Task storage is temporarily unavailable/);
   assert.equal(degradedReports[0].event,'task_storage_unavailable');
   assert.equal(degradedReports[0].details.status,503);
@@ -208,6 +208,20 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   assert.ok(searchEvents.some(e=>e.type==='progress' && e.label==='Checking live sources'));
   assert.equal(searchEvents.find(e=>e.type==='message').text,'Answer from the search.');
   assert.ok(!searchEvents.some(e=>e.type==='task'),'a quick lookup does not start a task');
+  // The agent may react to the current user message without consuming a task
+  // or allowing the model to pick a different message in the chat.
+  const reactionEvents=[],reactionCalls=[];
+  await chat(async opts=>{reactionCalls.push(opts);return reactionCalls.length===1
+    ? {functionCalls:[{name:'react_to_message',args:{emoji:'party'}}]}
+    : {text:'That is great news!'};})
+    .run({userId:'a',chatId:'chat',requestId:'reaction',prompt:'I finished my project!',context:{userMessageId:'user-42'},onEvent:e=>reactionEvents.push(e)});
+  assert.ok(reactionCalls[0].tools.some(t=>t.name==='react_to_message'));
+  assert.deepEqual(reactionEvents.filter(e=>e.type==='message_reaction'),[{type:'message_reaction',messageId:'user-42',emoji:'party'}]);
+  assert.equal(reactionEvents.find(e=>e.type==='message').text,'That is great news!');
+  const invalidReactionEvents=[];
+  await chat(async opts=>opts.toolChoice==='none'?{text:'Done.'}:{functionCalls:[{name:'react_to_message',args:{emoji:'unknown'}}]})
+    .run({userId:'a',chatId:'chat',requestId:'invalid-reaction',prompt:'Hello',context:{userMessageId:'user-42'},onEvent:e=>invalidReactionEvents.push(e)});
+  assert.equal(invalidReactionEvents.some(e=>e.type==='message_reaction'),false,'unsupported emoji is ignored');
   // A failing search is reported to the model instead of failing the turn.
   const failedModels=[];
   await chat(async opts=>{failedModels.push(opts);return failedModels.length===1?{functionCalls:[{name:'web_search',args:{}}]}:{text:'Answered without the search.'};},
@@ -261,11 +275,16 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   assert.deepEqual(shots,[undefined,'data:image/jpeg;base64,U0hPVC2']);
   // Approval cards can describe the action instead of showing raw arguments.
   const vault=setup();vault.d.schemas=[schemaFor('browser_fill_secret')];vault.d.selectSchemas=()=>[];
-  vault.d.tools.browser_fill_secret={approval:true,approvalDetail:async(args,{userId})=>JSON.stringify({...args,summary:`Type your saved “GitHub password” on ${args.host} for ${userId}`}),run:async()=>({url:'https://github.com/'})};
+  let approvedDetail;
+  vault.d.tools.browser_fill_secret={approval:true,approvalDetail:async(args,{userId})=>JSON.stringify({...args,summary:`Type your saved “GitHub password” on ${args.host} for ${userId}`}),run:async(_args,ctx)=>{approvedDetail=ctx.approvedDetail;return {url:'https://github.com/'};}};
   vault.answers.push({functionCalls:[{name:'browser_fill_secret',args:{secret:'sec_gh12',ref:2,host:'github.com'}}]});
-  const vaultState=await runToEnd(vault,(await vault.create()).id);
+  const vaultRow=await vault.create();
+  const vaultState=await runToEnd(vault,vaultRow.id);
   assert.equal(vaultState.status,'waiting_approval');
   assert.equal(JSON.parse(vaultState.events.find(e=>e.card?.type==='approval').card.detail).summary,'Type your saved “GitHub password” on github.com for a');
+  await vault.runtime.control('a',vaultRow.id,{action:'decide',version:1,callId:vaultState.approval.id,allow:true},'chat');
+  await vault.runtime.step('a',vaultRow.id);
+  assert.equal(JSON.parse(approvedDetail).host,'github.com');
   // Automations keep their explicit round budget.
   const capped=setup();capped.d.schemas=[schemaFor('web_search')];capped.d.selectSchemas=()=>[];
   capped.d.tools.web_search={run:async a=>[{ok:true,text:String(Math.random())}]};

@@ -8,6 +8,13 @@ async function main(){
   assert.equal(REASONING_EFFORT, 'xhigh');
   assert.ok(Array.isArray(TOOL_SCHEMAS));
   for(const name of ['capability_search','web_search','browser_open','browser_action','code_run','shell','computer_screenshot'])assert.ok(TOOL_SCHEMAS.some((t)=>t.name===name));
+  // header status: every tool can carry the model's note; labels come from real args
+  assert.ok(TOOL_SCHEMAS.every((t)=>t.parameters.properties.activity?.type==='string'));
+  const { describeTool, splitActivity } = require('../server/agents/activity');
+  assert.deepEqual(splitActivity({activity:'Verifying your leads',query:'acme'}),{args:{query:'acme'},note:'Verifying your leads'});
+  assert.equal(describeTool('web_search',{query:'dentists in Solna'}),'Searching the web for “dentists in Solna”');
+  assert.equal(describeTool('memory_search',{}),'Checking memory');
+  assert.equal(describeTool('browser_open',{url:'https://www.example.com/a'}),'Opening example.com');
   const simpleSchemas=selectToolSchemas('Explain this idea in two sentences.');
   assert.deepEqual(simpleSchemas.map((tool)=>tool.name).sort(),['capability_search','memory_write','web_search']);
   assert.ok(JSON.stringify(simpleSchemas).length<JSON.stringify(TOOL_SCHEMAS).length/3,'ordinary chat sends a much smaller tool schema payload');

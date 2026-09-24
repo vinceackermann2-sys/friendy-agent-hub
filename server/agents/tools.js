@@ -9,6 +9,7 @@ const { fetchAllowlisted, readPage, publicUrlProblem } = require('./sandbox');
 const { entry } = require('./tracing');
 const composio = require('../composio');
 const store = require('../store');
+const { PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave } = require('./personal-tools');
 const azure = require('./azure-vm');
 const live = require('./live');
 const pc = require('./pc');
@@ -139,7 +140,7 @@ const secretRef = (value) => {
 };
 async function vaultSecret(userId, ref) {
   const row = (await store.listSecrets(userId)).find((item) => item.ref === ref);
-  if (!row) throw badInput(`No vault secret ${ref}. Use vault_list, or ask the user to add it to the vault.`);
+  if (!row) throw badInput(`No vault secret ${ref}. Use vault_list, or ask the user to save it with vault_request.`);
   const value = await store.revealSecret(userId, row.id);
   if (!value) throw badInput(`Vault secret ${ref} is empty.`);
   return { name: row.name, value };
@@ -150,6 +151,16 @@ const hostMatches = (url, host) => {
     return !!want && (current === want || current.endsWith(`.${want}`) || current === `www.${want}`);
   } catch { return false; }
 };
+// vault_request asks the owner to type a missing credential into a secure chat
+// card. The client saves it straight to the encrypted vault; the model only
+// ever gets the resulting ref back.
+function vaultRequestArgs(args = {}) {
+  const name = String(args.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!name) throw badInput('name is a short label for the credential, such as “GitHub password”.');
+  const host = String(args.host || '').trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/?#].*$/, '').slice(0, 120);
+  const reason = String(args.reason || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return { name, host, reason };
+}
 async function secretApprovalDetail(args, { userId }) {
   let name = String(args.secret || '');
   try { name = (await store.listSecrets(userId)).find((item) => item.ref === args.secret)?.name || name; } catch {}
@@ -408,6 +419,26 @@ const TOOLS = {
       return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })) };
     },
   },
+  vault_request: {
+    name: 'vault_request', type: 'function', approval: true, sideEffects: false,
+    description: 'Ask the user to save a credential or payment detail that vault_list does not have yet (a password, username, API key, card number). The user types it into a secure card and it is encrypted in their vault; you get back only its ref for browser_fill_secret or computer_fill_secret. Never ask for secret values in chat.',
+    approvalDetail: async (args) => {
+      const { name, host, reason } = vaultRequestArgs(args);
+      return JSON.stringify({ name, host, reason, summary: `Save “${name}” to your vault` });
+    },
+    approvalCard: (args) => {
+      const { name, host, reason } = vaultRequestArgs(args);
+      return { type: 'secret', suggest: name, host, note: reason };
+    },
+    run: async (args, ctx) => {
+      const { name } = vaultRequestArgs(args);
+      // listSecrets is newest first, so a re-saved name resolves to the new value.
+      const row = (await store.listSecrets(ctx.userId)).find((item) => item.name === name);
+      if (!row) throw badInput(`“${name}” was not saved to the vault. Ask the user before requesting it again.`);
+      ctx.trace(entry('lock', `vault_request: saved as ${row.ref}`));
+      return { ref: row.ref, name: row.name, saved: true };
+    },
+  },
   browser_fill_secret: {
     name: 'browser_fill_secret', type: 'browser', approval: true,
     description: 'Type a saved vault secret (password, username, card number, expiry, CVC) into a field of the current browser page. Give the field by ref or x,y and host, the site it is for. REQUIRES owner approval; only types when the page is on that host.',
@@ -511,36 +542,6 @@ const TOOLS = {
       return out;
     },
   },
-  wallet_status: {
-    name: 'wallet_status', type: 'function', approval: false,
-    description: 'Read this account’s agent wallet address, balances, attached card status (last4 only), and remaining daily spend. Never invent numbers.',
-    run: async (_, ctx) => {
-      const privy = require('../privy');
-      const snap = await privy.agentStatus(ctx.userId);
-      ctx.trace(entry('wallet', `wallet_status: ${snap.address ? 'ready' : 'missing'}`));
-      return snap;
-    },
-  },
-  wallet_transfer: {
-    name: 'wallet_transfer', type: 'function', approval: true,
-    description: 'Send USDC or ETH from the agent wallet. REQUIRES owner approval. Never send without an explicit destination and amount.',
-    run: async ({ to, amount, asset }, ctx) => {
-      const privy = require('../privy');
-      const out = await privy.transfer(ctx.userId, { to, amount, asset: asset || 'usdc', confirm: true });
-      ctx.trace(entry('wallet', `wallet_transfer: ${out.asset} ${out.amount} sent`));
-      return { status: out.status, asset: out.asset, amount: out.amount, to: String(out.to).slice(0, 6) + '…' + String(out.to).slice(-4), hash: out.hash };
-    },
-  },
-  wallet_purchase: {
-    name: 'wallet_purchase', type: 'function', approval: true,
-    description: 'Ask the owner to approve a purchase. method=card authorizes a matching charge on the attached card without revealing the card number. method=wallet sends USDC to to=. REQUIRES owner approval. Never ask for or use full card numbers.',
-    run: async ({ amount, merchant, reason, method, to }, ctx) => {
-      const privy = require('../privy');
-      const out = await privy.purchase(ctx.userId, { amount, merchant, reason, method, to, confirm: true });
-      ctx.trace(entry('wallet', `wallet_purchase: ${out.method} ${out.amount} ${out.merchant} ${out.status}`));
-      return out;
-    },
-  },
   shop_status: {
     name: 'shop_status', type: 'function', approval: false,
     description: 'Read whether Shop Pay is connected, remaining daily Shop Pay spend, and recent orders. Never invent connection state or amounts. Never request tokens or card numbers.',
@@ -586,9 +587,13 @@ const TOOLS = {
   shop_purchase: {
     name: 'shop_purchase', type: 'function', approval: true,
     description: 'Complete a Shop Pay UCP checkout after owner approval of the exact merchant and checkoutId. Never collect card numbers. If the merchant requires buyer review, returns continueUrl for Shop Pay.',
+    approvalDetail: async ({ merchant, checkoutId }, { userId }) => {
+      const shoppay = require('../shoppay');
+      return JSON.stringify(await shoppay.purchaseQuote(userId, { merchant, checkoutId }));
+    },
     run: async ({ merchant, checkoutId }, ctx) => {
       const shoppay = require('../shoppay');
-      const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true });
+      const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
     },
@@ -645,7 +650,7 @@ const TOOLS = {
   },
   mail_send: {
     name: 'mail_send', type: 'function', approval: true,
-    description: 'Send email from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body.',
+    description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body.',
     run: async ({ to, subject, body, in_reply_to, agent_name }, ctx) => {
       const mail = require('../mail');
       const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, agentName: agent_name, confirm: true });
@@ -705,14 +710,19 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.browser.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('browser_submit'); names.add('computer_screenshot'); }
   if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
   if (TOOL_KEYWORDS.computer.test(t)) { names.add('computer_action'); names.add('computer_submit'); }
-  if (TOOL_KEYWORDS.vault.test(t)) { names.add('vault_list'); names.add('browser_fill_secret'); names.add('computer_fill_secret'); }
+  if (TOOL_KEYWORDS.vault.test(t)) { names.add('vault_list'); names.add('vault_request'); names.add('browser_fill_secret'); names.add('computer_fill_secret'); }
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
+  for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
-  if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('wallet_status'); names.add('wallet_transfer'); names.add('wallet_purchase'); }
+  if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   return [...names].map((n) => TOOLS[n]);
 }
+
+// Goals and Library tools, plus Library copies of generated pages, Canvas files and images.
+Object.assign(TOOLS, PERSONAL_TOOLS);
+withLibraryAutosave(TOOLS);
 
 async function runParallel(calls, ctx) {
   return Promise.all(calls.map((c) => TOOLS[c.tool].run(c.args || {}, ctx)));

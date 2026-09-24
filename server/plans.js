@@ -46,17 +46,8 @@ function tokenPackFor(tokens) {
   return TOKEN_PACKS.find((pack) => pack.tokens === Number(tokens)) || null;
 }
 
-/* Referral gift — the in-app "FREE $50 gift card" (same $50 face value as the
-   Stripe $50 gift card). Split dual-sided:
-   - inviter gets $25 face (50 credits) ONLY after the friend redeems
-   - friend gets $25 face (50 credits) on redeem
-   - one reward per unique friend (no double-claim, no self-redeem)
-   Credits hide raw model API costs: real cost deducts at
-   BILLING_MARKUP x CREDITS_PER_USD = 20 credits per $1 of provider cost,
-   while gifts grant at face value (2 credits per $1). */
-const REFERRAL_TOTAL_USD = 50;
-const REFERRAL_GIFT_USD_EACH = 25;
-const REFERRAL_CREDITS_EACH = 25 * CREDITS_PER_USD; // 50 credits each side
+/* One friend can redeem a code once; each account receives 10M raw tokens. */
+const REFERRAL_TOKENS_EACH = 10_000_000;
 
 const PLANS = {
   free: { id: 'free', name: 'Free', price: 0, was: null, credits: 20, tokens: 50_000_000, imagesPerDay: 5, transcriptionsPerDay: 10, giftUsd: 0, interval: 'month', blurb: '50 million tokens monthly. No card.' },
@@ -109,5 +100,5 @@ module.exports = {
   PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, creditPackFor,
   TOKEN_PACKS, TOKENS_PER_MILLION, tokenPackFor,
   CREDIT_VALUE_USD, BILLING_MARKUP, CREDITS_PER_USD, costOf, creditsForCost, creditsForGiftUsd,
-  REFERRAL_TOTAL_USD, REFERRAL_GIFT_USD_EACH, REFERRAL_CREDITS_EACH,
+  REFERRAL_TOKENS_EACH,
 };

@@ -48,6 +48,35 @@ async function main() {
 
   assert.equal(mail.verifyWebhook('{}', {}), false);
 
+  const store = require('../server/store');
+  const old = {
+    fetch: global.fetch,
+    key: process.env.RESEND_API_KEY,
+    getMailboxByUser: store.getMailboxByUser,
+    countOutboundMailToday: store.countOutboundMailToday,
+    insertMailMessage: store.insertMailMessage,
+  };
+  try {
+    process.env.RESEND_API_KEY = 'test-resend-key';
+    store.getMailboxByUser = async () => ({ address: 'alva@mail.belna.se', displayName: 'Alva' });
+    store.countOutboundMailToday = async () => 0;
+    store.insertMailMessage = async (_userId, row) => ({ id: 'msg_1', ...row, at: Date.now() });
+    let sentTo;
+    global.fetch = async (_url, init) => {
+      sentTo = JSON.parse(init.body).to;
+      return Response.json({ id: 'resend_1' });
+    };
+    const sent = await mail.send('user_test', { to: 'new.person@example.com', subject: 'Hello', body: 'Hello there', confirm: true });
+    assert.deepEqual(sentTo, ['new.person@example.com']);
+    assert.deepEqual(sent.to, ['new.person@example.com']);
+  } finally {
+    global.fetch = old.fetch;
+    old.key === undefined ? delete process.env.RESEND_API_KEY : process.env.RESEND_API_KEY = old.key;
+    store.getMailboxByUser = old.getMailboxByUser;
+    store.countOutboundMailToday = old.countOutboundMailToday;
+    store.insertMailMessage = old.insertMailMessage;
+  }
+
   console.log('agent mail: ok');
 }
 

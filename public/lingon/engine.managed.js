@@ -150,7 +150,7 @@
     }));
     return stream(rt, '/api/agent/conversation', { prompt, requestId: crypto.randomUUID(), history,
       context: { agent: { name: rt.agent.name, pers: rt.agent.pers }, replyTo: last?.replyTo,
-        artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, type:f.type, size:f.size, dataUrl:f.dataUrl })) } });
+        userMessageId: last?.id, artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, type:f.type, size:f.size, dataUrl:f.dataUrl })) } });
   }
   async function cancelCurrent(rt, replacing = false) {
     const current = active.get(rt.chat.id);

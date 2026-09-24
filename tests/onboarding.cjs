@@ -88,14 +88,14 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       assert.equal(runs.length, 0, 'request waits for the setup handoff');
       await page.reload();
       await page.click('[data-act="open-passport"]');
-      await page.waitForSelector('.canvas-seg [data-t="canvas"].on');
+      await page.waitForSelector('.canvas-tabs [data-t="canvas"].on');
       const final = await readState(page);
       assert.equal(final.onboarded, true);
       assert.equal(final.agent.name, mode === 'oauth' ? 'Rosa' : 'Sora');
       assert.equal(final.agent.color, 'rose');
       assert.equal(final.canvasTab, 'canvas');
-      assert.equal(await page.locator('.canvas-seg [data-t="passport"]').count(), 0);
-      assert.equal(await page.locator('.canvas-seg [data-t="library"]').count(), 0);
+      assert.equal(await page.locator('.canvas-tabs [data-t="passport"]').count(), 0);
+      assert.equal(await page.locator('.canvas-tabs [data-t="library"]').count(), 0);
       await page.waitForFunction(() => {
         const text = document.querySelector('.agent-hero-status')?.textContent || '';
         return /Available|Agent ready/.test(text) && !/Disconnected/.test(text);
@@ -106,8 +106,9 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       assert.equal(await page.locator('[data-act="stab"][data-t="theme"]').count(), 0);
       assert.match(await page.locator('.psec').allInnerTexts().then(items => items.join('\n')), /Theme[\s\S]*Accent color/);
       await page.click('[data-act="open-library"]');
-      await page.waitForSelector('.lib-page-heading h1');
-      assert.equal(await page.locator('.lib-page-heading h1').innerText(), 'Library');
+      await page.waitForSelector('.lib-head h1');
+      assert.equal(await page.locator('.lib-head h1').innerText(), 'All artifacts');
+      assert.equal(await page.locator('[data-act="libcat"][data-cat="memory"]').count(), 0, 'memory lives under System files only');
       await page.click('[data-act="nav"][data-view="chat"]');
       if (mode !== 'signin') {
         await page.waitForFunction(() => JSON.parse(localStorage.getItem('lingon.v1')).chats.some(c=>c.managedStatus === 'completed'));

@@ -7,12 +7,13 @@
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { upkeepRows } from './agents/upkeep.js';
-import { creditsForCost, PLANS } from './plans.js';
+import { creditsForCost, PLANS, REFERRAL_TOKENS_EACH } from './plans.js';
 import { createTokenWallet } from './token-wallet.js';
+import { createPersonalStore } from './personal-store.js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
-let LOCAL = { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], wallets: [], walletTx: [], mailboxes: [], mailMessages: [], mailDrafts: [], connectorPermissions: [], agentContexts: [], shopPayAccounts: [], shopPayOrders: [] };
+let LOCAL = { memories: [], secrets: [], apps: [], approvals: [], chats: [], subAgents: [], automationRuns: [], mailboxes: [], mailMessages: [], mailDrafts: [], connectorPermissions: [], agentContexts: [], shopPayAccounts: [], shopPayOrders: [] };
 
 function loadLocal() {
   return LOCAL;
@@ -28,6 +29,7 @@ function encKey() {
   if (h.length >= 16) return crypto.createHash('sha256').update(h).digest();
   return null; // no key -> obfuscation fallback
 }
+const secretsEncrypted = () => !!encKey();
 function encryptValue(plain) {
   const k = encKey();
   if (!k) return { alg: 'b64', data: Buffer.from(String(plain), 'utf8').toString('base64') };
@@ -214,7 +216,7 @@ async function delSecret(userId, id) {
     try { await s.from('vault_secrets').delete().eq('id', id).eq('user_id', userId); } catch {}
   }
   const d = loadLocal();
-  d.secrets = d.secrets.filter((x) => x.id !== id);
+  d.secrets = d.secrets.filter((x) => !(x.id === id && x.userId === userId));
   saveLocal(d);
 }
 
@@ -497,8 +499,7 @@ async function giftsCredit(userId) {
   const d = loadLocal();
   return (d.gifts || []).filter((g) => g.redeemed_by === userId).reduce((n, g) => n + Number(g.amount_usd || 0), 0);
 }
-// Referral codes and rewards are durable Supabase data. Edge workers cannot
-// safely fall back to process memory for a credit-bearing operation.
+// Referral codes and one-time token rewards are durable Supabase data.
 function referralCodeGen() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   return 'BELNA-' + Array.from(crypto.randomBytes(6), (byte) => alphabet[byte % alphabet.length]).join('');
@@ -526,8 +527,9 @@ async function referralStats(userId) {
   const code = await getReferralCode(userId);
   const { count, error } = await supa().from('referrals').select('id', { count:'exact', head:true }).eq('inviter_id', userId);
   if (error) throw error;
-  const invited = count || 0;
-  return { code, invited, earnedCredits:invited * 50, rewardEach:50 };
+  const { data: grants, error: grantsError } = await supa().from('token_grants').select('tokens').eq('user_id', userId).eq('reason', 'referral').like('ref', 'referral-inviter:%');
+  if (grantsError) throw grantsError;
+  return { code, invited: count || 0, earnedTokens: (grants || []).reduce((total, row) => total + Number(row.tokens || 0), 0), rewardEachTokens: REFERRAL_TOKENS_EACH };
 }
 async function redeemReferral(userId, code) {
   const s = supa();
@@ -904,194 +906,6 @@ async function grantsTotalByReason(userId, reason) {
   return (d.grants || [])
     .filter((r) => (r.user_id === userId || r.userId === userId) && r.reason === reason)
     .reduce((n, r) => n + Number(r.credits || 0), 0);
-}
-
-function mapWallet(r, userId) {
-  return {
-    userId: r.user_id || r.userId || userId,
-    privyWalletId: r.privy_wallet_id || r.privyWalletId || null,
-    address: r.address || null,
-    chain: r.chain || 'base',
-    externalId: r.external_id || r.externalId || null,
-    card: r.card && typeof r.card === 'object' ? r.card : { status: 'none' },
-    dailyLimitUsd: r.daily_limit_usd != null ? Number(r.daily_limit_usd) : (r.dailyLimitUsd != null ? Number(r.dailyLimitUsd) : 50),
-    envelopes: Array.isArray(r.envelopes) ? r.envelopes : [],
-    createdAt: r.created_at ? new Date(r.created_at).getTime() : (r.createdAt || Date.now()),
-  };
-}
-
-async function getAgentWallet(userId) {
-  const s = supa();
-  if (s) {
-    try {
-      const { data, error } = await s.from('agent_wallets').select('*').eq('user_id', userId).maybeSingle();
-      if (error) throw error;
-      if (data) return mapWallet(data, userId);
-    } catch (e) {
-      console.warn('[store] supabase wallet fallback:', e.message);
-    }
-  }
-  const d = loadLocal();
-  return (d.wallets || []).find((w) => w.userId === userId) || null;
-}
-
-async function upsertAgentWallet(userId, patch) {
-  const prev = await getAgentWallet(userId);
-  const next = Object.assign({
-    userId,
-    privyWalletId: null,
-    address: null,
-    chain: 'base',
-    externalId: null,
-    card: { status: 'none' },
-    dailyLimitUsd: 50,
-    envelopes: [],
-    createdAt: Date.now(),
-  }, prev || {}, patch || {}, { userId });
-  const s = supa();
-  if (s) {
-    try {
-      await ensureProfile(userId);
-      const { error } = await s.from('agent_wallets').upsert({
-        user_id: userId,
-        privy_wallet_id: next.privyWalletId,
-        address: next.address,
-        chain: next.chain,
-        external_id: next.externalId || null,
-        card: next.card,
-        daily_limit_usd: next.dailyLimitUsd,
-        envelopes: next.envelopes || [],
-      }, { onConflict: 'user_id' });
-      if (error) throw error;
-      return next;
-    } catch (e) {
-      console.warn('[store] supabase upsert wallet fallback:', e.message);
-    }
-  }
-  const d = loadLocal();
-  d.wallets = d.wallets || [];
-  const i = d.wallets.findIndex((w) => w.userId === userId);
-  if (i >= 0) d.wallets[i] = next; else d.wallets.unshift(next);
-  saveLocal(d);
-  return next;
-}
-
-function mapWalletTx(r, userId) {
-  return {
-    id: r.id,
-    userId: r.user_id || r.userId || userId,
-    kind: r.kind,
-    asset: r.asset,
-    amount: Number(r.amount || 0),
-    to: r.to_address || r.to || null,
-    status: r.status,
-    hash: r.tx_hash || r.hash || null,
-    error: r.error || null,
-    at: r.created_at ? new Date(r.created_at).getTime() : (r.at || Date.now()),
-  };
-}
-
-async function listWalletTx(userId, limit) {
-  const cap = Math.min(80, Number(limit) || 20);
-  const s = supa();
-  if (s) {
-    try {
-      const { data, error } = await s.from('agent_wallet_tx').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(cap);
-      if (error) throw error;
-      return (data || []).map((r) => mapWalletTx(r, userId));
-    } catch (e) {
-      console.warn('[store] supabase wallet tx fallback:', e.message);
-    }
-  }
-  const d = loadLocal();
-  return (d.walletTx || []).filter((t) => t.userId === userId).sort((a, b) => b.at - a.at).slice(0, cap);
-}
-
-async function addWalletTx(userId, tx) {
-  const row = {
-    id: 'wtx_' + uid(),
-    userId,
-    kind: tx.kind || 'transfer',
-    asset: tx.asset || 'usdc',
-    amount: Number(tx.amount || 0),
-    to: tx.to || null,
-    status: tx.status || 'pending',
-    hash: tx.hash || null,
-    error: tx.error || null,
-    at: Date.now(),
-  };
-  const s = supa();
-  if (s) {
-    try {
-      await ensureProfile(userId);
-      const { error } = await s.from('agent_wallet_tx').insert({
-        id: row.id,
-        user_id: userId,
-        kind: row.kind,
-        asset: row.asset,
-        amount: row.amount,
-        to_address: row.to,
-        status: row.status,
-        tx_hash: row.hash,
-        error: row.error,
-      });
-      if (error) throw error;
-      return row;
-    } catch (e) {
-      console.warn('[store] supabase insert wallet tx fallback:', e.message);
-    }
-  }
-  const d = loadLocal();
-  d.walletTx = d.walletTx || [];
-  d.walletTx.unshift(row);
-  saveLocal(d);
-  return row;
-}
-
-async function reserveWalletSpend(userId, tx, dailyLimitUsd) {
-  const id = 'wtx_' + uid();
-  const s = supa();
-  if (s) {
-    await ensureProfile(userId);
-    const { data, error } = await s.rpc('reserve_agent_wallet_spend', {
-      p_user_id: userId,
-      p_tx_id: id,
-      p_kind: tx.kind || 'transfer',
-      p_asset: tx.asset || 'usdc',
-      p_amount: Number(tx.amount || 0),
-      p_to_address: tx.to || null,
-      p_daily_limit: Number(dailyLimitUsd || 0),
-      p_status: tx.status || 'pending',
-    });
-    if (error) {
-      const e = new Error(String(error.message || '').includes('DAILY_LIMIT') ? 'Daily wallet spend limit exceeded.' : 'Could not reserve wallet spend.');
-      e.code = String(error.message || '').includes('DAILY_LIMIT') ? 'LIMIT' : 'WALLET_STORE';
-      throw e;
-    }
-    return mapWalletTx(data, userId);
-  }
-  if (supaConfigured()) throw Object.assign(new Error('Wallet database is unavailable.'), { code: 'WALLET_STORE' });
-  return addWalletTx(userId, { ...tx, id });
-}
-
-async function updateWalletTx(userId, id, patch) {
-  const s = supa();
-  if (s) {
-    try {
-      const upd = {};
-      if (patch.status) upd.status = patch.status;
-      if (patch.hash !== undefined) upd.tx_hash = patch.hash;
-      if (patch.error !== undefined) upd.error = patch.error;
-      const { error } = await s.from('agent_wallet_tx').update(upd).eq('id', id).eq('user_id', userId);
-      if (error) throw error;
-    } catch (e) {
-      console.warn('[store] supabase update wallet tx fallback:', e.message);
-    }
-  }
-  const d = loadLocal();
-  d.walletTx = (d.walletTx || []).map((t) => t.id === id && t.userId === userId ? Object.assign({}, t, patch) : t);
-  saveLocal(d);
-  return (d.walletTx || []).find((t) => t.id === id) || { id, userId, ...patch };
 }
 
 function mapMailbox(r, userId) {
@@ -1663,13 +1477,19 @@ async function reserveShopPaySpend(userId, order, dailyLimitUsd) {
       p_status: order.status || 'pending',
     });
     if (error) {
-      const e = new Error(String(error.message || '').includes('DAILY_LIMIT') ? 'Daily Shop Pay spend limit exceeded.' : 'Could not reserve Shop Pay spend.');
-      e.code = String(error.message || '').includes('DAILY_LIMIT') ? 'LIMIT' : 'SHOP_STORE';
+      const code = String(error.message || '');
+      const e = new Error(code.includes('DAILY_LIMIT') ? 'Daily Shop Pay spend limit exceeded.' : code.includes('CHECKOUT_CHANGED') ? 'Checkout changed after a previous purchase attempt.' : 'Could not reserve Shop Pay spend.');
+      e.code = code.includes('DAILY_LIMIT') ? 'LIMIT' : code.includes('CHECKOUT_CHANGED') ? 'NEED_CONFIRM' : 'SHOP_STORE';
       throw e;
     }
     return mapShopPayOrder(data, userId);
   }
   if (supaConfigured()) throw Object.assign(new Error('Shop Pay database is unavailable.'), { code: 'SHOP_STORE' });
+  const previous = (loadLocal().shopPayOrders || []).find((t) => t.userId === userId && t.merchant === order.merchant && t.checkoutId === order.checkoutId);
+  if (previous) {
+    if (Number(previous.amount) !== Number(order.amount) || previous.currency !== order.currency) throw Object.assign(new Error('Checkout changed after a previous purchase attempt.'), { code: 'NEED_CONFIRM' });
+    return previous;
+  }
   const start = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
   const spent = (loadLocal().shopPayOrders || [])
     .filter((t) => t.userId === userId && t.at >= start && ['pending', 'authorized', 'escalated', 'completed'].includes(t.status))
@@ -1705,7 +1525,7 @@ async function updateShopPayOrder(userId, id, patch) {
       const { error } = await s.from('shop_pay_orders').update(upd).eq('id', id).eq('user_id', userId);
       if (error) throw error;
     } catch (e) {
-      console.warn('[store] supabase update shop pay order fallback:', e.message);
+      throw Object.assign(new Error('Could not save Shop Pay order status.'), { code: 'SHOP_STORE', cause: e });
     }
   }
   const d = loadLocal();
@@ -1719,11 +1539,14 @@ function openSecret(obj) { return decryptValue(obj); }
 const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, uid, plans: PLANS });
 const { addTokenGrant, ensureMonthlyTokens, tokenWallet: getTokenWallet,
   claimTokenDaily, releaseTokenDaily, chargeRawTokens, freePeriod } = tokenWallet;
+const { GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal, LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem } = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
 export {
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
+  GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal,
+  LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,
   listMemories, memoryStats, searchMemories, getMemory, addMemory, updateMemory, delMemory,
-  listSecrets, addSecret, revealSecret, delSecret,
+  listSecrets, addSecret, revealSecret, delSecret, secretsEncrypted,
   supaConfigured,
   getSubscription, setSubscription, findUserByStripeCustomer,
   logUsage, usageTotal, creditsUsed, billingTotals, creditsForUsageUsd, creditsForGift,
@@ -1736,7 +1559,6 @@ export {
   saveTurn, searchTurns, listChatMessages, listAutomationChats,
   listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent, ensureSystemSubAgents,
   listDueSubAgents, markSubAgentRun, listUpkeepSignals, beginAutomationRun, finishAutomationRun, listAutomationRuns,
-  getAgentWallet, upsertAgentWallet, listWalletTx, addWalletTx, reserveWalletSpend, updateWalletTx,
   getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
   countUnreadMail, countOutboundMailToday,   listMailDrafts, upsertMailDraft, deleteMailDraft,

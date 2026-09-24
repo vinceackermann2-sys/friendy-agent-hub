@@ -195,8 +195,7 @@ await run(
     await menu();
     await page.locator('[data-act="open-goals"]').click();
     await check("goals");
-    await page.locator('[data-act="goal-cat"][data-c="health"]').click();
-    await page.locator('[data-act="goal-create"]').count();
+    if (!(await page.locator('[data-act="goal-start"][data-c="health"]').count())) throw Error('goal categories missing');
     await menu();
     await page.locator('[data-act="open-library"]').click();
     await check("library");

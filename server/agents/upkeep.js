@@ -19,8 +19,8 @@ const UPKEEP_DEFINITIONS = Object.freeze([
   },
   {
     kind:'study', name:'Goal studying', intervalMinutes:1440, scheduleLabel:'Daily · once for active goals',
-    description:'Researches one concrete question that can unblock an active goal and records a concise briefing.', allowedTools:['web_search'],
-    prompt:'Identify one concrete unanswered question in the supplied excerpts that would materially advance an active goal. If there is one, research it with web_search, prefer primary sources, and return a concise briefing with source URLs and a practical next step. Do not send, buy, book, or change connected apps. If no active goal or research question is supported, finish with exactly “No goal study needed.” Keep the final result under 250 words.',
+    description:'Researches one concrete question that can unblock an active goal and records a concise briefing.', allowedTools:['goal_list','web_search'],
+    prompt:'Call goal_list to see the owner active goals. Identify one concrete unanswered question in them or the supplied excerpts that would materially advance an active goal. If there is one, research it with web_search, prefer primary sources, and return a concise briefing with source URLs and a practical next step. Do not send, buy, book, or change connected apps. If no active goal or research question is supported, finish with exactly “No goal study needed.” Keep the final result under 250 words.',
     signalPattern:/\b(goal|plan|project|build|launch|deadline|working on|trying to|want to|need to|next step|milestone|business|study|learn|research)\b/i,
   },
   {

@@ -300,28 +300,6 @@ async function rfetch(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-/* SECURITY: the agent mailbox may only write to the owner's own verified
-   address or to people who have already emailed this mailbox (replies).
-   This prevents using the app's sending domain to email arbitrary people. */
-async function assertAllowedRecipients(userId, to, ownerEmail) {
-  const list = (Array.isArray(to) ? to : [to]).map((a) => {
-    const m = String(a || '').match(/<([^>]+)>/);
-    return String(m ? m[1] : a).trim().toLowerCase();
-  }).filter(Boolean);
-  const owner = String(ownerEmail || '').trim().toLowerCase();
-  const pending = list.filter((a) => a !== owner);
-  if (!pending.length) return;
-  const inbox = await store.listMailMessages(userId, { folder: 'inbox', limit: 80 }).catch(() => []);
-  const known = new Set((inbox || []).map((m) => String(m.fromAddress || m.from_address || '').toLowerCase())
-    .map((a) => { const m = a.match(/<([^>]+)>/); return (m ? m[1] : a).trim(); }).filter(Boolean));
-  const blocked = pending.filter((a) => !known.has(a));
-  if (blocked.length) {
-    const e = new Error('Your agent can only email you or people who have emailed it first.');
-    e.code = 'BAD_INPUT';
-    throw e;
-  }
-}
-
 async function send(userId, input) {
   if (input.confirm !== true) {
     const e = new Error('Sending mail needs an explicit confirm.');
@@ -329,7 +307,6 @@ async function send(userId, input) {
     throw e;
   }
   const to = parseRecipients(input.to);
-  await assertAllowedRecipients(userId, to, input.ownerEmail);
   const subject = String(input.subject || '').trim().slice(0, 200);
   const bodyText = String(input.body || input.bodyText || '').trim().slice(0, MAX_BODY);
   if (!subject) {

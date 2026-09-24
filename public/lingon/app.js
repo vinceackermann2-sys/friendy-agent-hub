@@ -109,39 +109,117 @@ const IC = {
   target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
   heart:'<path d="M19 14c1.5-1.5 3-3.2 3-5.5A4.5 4.5 0 0 0 17.5 4c-1.8 0-3 .5-4 2-.5 1-1 1.5-1.5 2-.5-.5-1-1-1.5-2-1-1.5-2.2-2-4-2A4.5 4.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7Z"/>',
   trophy:'<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4a1 1 0 0 0-1 1c0 2.5 2 4 4 4M17 6h3a1 1 0 0 1 1 1c0 2.5-2 4-4 4"/>',
+  users:'<path d="M16 21v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 19.5V21"/><circle cx="10" cy="8.5" r="3.5"/><path d="M20 21v-1.5a3.5 3.5 0 0 0-2.5-3.35M15.5 5.2a3.5 3.5 0 0 1 0 6.6"/>',
+  dollar:'<path d="M12 2v20M17 6.5C17 4.6 14.8 3.5 12 3.5S7 4.8 7 7s2 3 5 3.8 5 1.7 5 4.2-2.2 3.5-5 3.5-5-1.1-5-3"/>',
+  palette:'<path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-.6-.3-1-.6-1.4-.3-.4-.6-.8-.6-1.4 0-1.1.9-1.7 2-1.7h2.3A3.9 3.9 0 0 0 21 10.6C21 6.4 17 3 12 3Z"/><circle cx="7.5" cy="11" r="1" fill="currentColor"/><circle cx="10" cy="7" r="1" fill="currentColor"/><circle cx="15" cy="7" r="1" fill="currentColor"/>',
+  checksq:'<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12.5l2.8 2.8L16 10"/>',
 };
 const icon = (n, s = 16) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[n] || ''}</svg>`;
 
 /* ---------------- file attachments (pending per promptbox) ---------------- */
-let pendingFiles = []; // [{name, size, type, dataUrl}]
+const pendingFilesByForm = new Map();
 const MAX_ATTACH = 5;
-const MAX_FILE_MB = 10;
-function addFiles(fileList){
+const MAX_FILE_MB = 8;
+const MAX_ATTACH_TOTAL_MB = 8;
+function storedFile(mode, action){
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB){ reject(new Error('Browser file storage is unavailable.')); return; }
+    const open = indexedDB.open('belna-composer-files', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('files');
+    open.onerror = () => reject(open.error || new Error('Could not open browser file storage.'));
+    open.onsuccess = () => {
+      const db = open.result;
+      const transaction = db.transaction('files', mode);
+      const request = action(transaction.objectStore('files'));
+      let result;
+      request.onsuccess = () => { result = request.result; };
+      transaction.oncomplete = () => { db.close(); resolve(result); };
+      transaction.onerror = () => { db.close(); reject(transaction.error || new Error('Could not store the file.')); };
+      transaction.onabort = () => { db.close(); reject(transaction.error || new Error('File storage was interrupted.')); };
+    };
+  });
+}
+function hydrateStoredFiles(){
+  const files = [
+    ...(Array.isArray(state.pendingPromptFiles) ? state.pendingPromptFiles : []),
+    ...(state.chats || []).flatMap(c => (c.messages || []).flatMap(m => m.files || [])),
+  ];
+  return Promise.all(files.filter(f => f.storageId && !f.dataUrl).map(async f => {
+    try { f.dataUrl = await storedFile('readonly', store => store.get(f.storageId)) || ''; }
+    catch { f.dataUrl = ''; }
+  }));
+}
+function fileBucketKey(form){ return form?.id === 'cform' ? `cform:${state.activeChat || ''}` : form?.id || ''; }
+function filesFor(form){ return pendingFilesByForm.get(fileBucketKey(form)) || []; }
+function readyFiles(form){
+  const files = filesFor(form);
+  if (files.some(f => f.loading)) { toast('Wait for the files to finish loading.'); return null; }
+  return files.map(({ name, size, type, dataUrl, storageId }) => ({ name, size, type, dataUrl, storageId }));
+}
+function addFiles(fileList, form){
+  const key = fileBucketKey(form);
+  if (!key) return;
+  if (!pendingFilesByForm.has(key)) pendingFilesByForm.set(key, []);
+  const pendingFiles = pendingFilesByForm.get(key);
   for (const f of fileList){
     if (pendingFiles.length >= MAX_ATTACH){ toast(`Max ${MAX_ATTACH} files`); break; }
     if (f.size > MAX_FILE_MB * 1024 * 1024){ toast(`${f.name} exceeds ${MAX_FILE_MB} MB`); continue; }
+    if (pendingFiles.reduce((total, file) => total + file.size, 0) + f.size > MAX_ATTACH_TOTAL_MB * 1024 * 1024){ toast(`Attachments can total up to ${MAX_ATTACH_TOTAL_MB} MB.`); continue; }
     if (pendingFiles.some(p => p.name === f.name && p.size === f.size)) continue;
+    const item = { name:f.name, size:f.size, type:f.type, dataUrl:null, storageId:uid(), loading:true };
+    pendingFiles.push(item);
+    paintAttachPills();
     const reader = new FileReader();
-    reader.onload = () => {
-      pendingFiles.push({ name: f.name, size: f.size, type: f.type, dataUrl: reader.result });
+    reader.onload = async () => {
+      try {
+        if (!pendingFiles.includes(item)) return;
+        const dataUrl = String(reader.result || '');
+        await storedFile('readwrite', store => store.put(dataUrl, item.storageId));
+        if (!pendingFiles.includes(item)) { void storedFile('readwrite', store => store.delete(item.storageId)).catch(() => {}); return; }
+        item.dataUrl = dataUrl;
+        item.loading = false;
+        paintAttachPills();
+      } catch {
+        const index = pendingFiles.indexOf(item);
+        if (index !== -1) pendingFiles.splice(index, 1);
+        paintAttachPills();
+        toast(`Could not store ${f.name} in this browser.`);
+      }
+    };
+    reader.onerror = () => {
+      const index = pendingFiles.indexOf(item);
+      if (index !== -1) pendingFiles.splice(index, 1);
       paintAttachPills();
+      toast(`Could not read ${f.name}.`);
     };
     reader.readAsDataURL(f);
   }
 }
-function removeFile(idx){ pendingFiles.splice(idx, 1); paintAttachPills(); }
-function clearFiles(){ pendingFiles = []; paintAttachPills(); }
+function removeFile(idx, form){
+  const [file] = filesFor(form).splice(idx, 1);
+  if (file?.storageId) void storedFile('readwrite', store => store.delete(file.storageId)).catch(() => {});
+  paintAttachPills();
+}
+function clearFiles(form){ pendingFilesByForm.delete(fileBucketKey(form)); paintAttachPills(); }
 function paintAttachPills(){
   document.querySelectorAll('.attach-pills').forEach(el => {
+    const pendingFiles = filesFor(el.closest('form'));
     if (!pendingFiles.length){ el.innerHTML = ''; return; }
     el.innerHTML = pendingFiles.map((f, i) =>
-      `<span class="attach-pill">${icon('file',12)}<span class="ap-name">${esc(f.name.length > 20 ? f.name.slice(0,17)+'…' : f.name)}</span><span class="ap-size">${fmtBytes(f.size)}</span><button class="ap-x" data-act="rmfile" data-idx="${i}">${icon('x',10)}</button></span>`
+      `<span class="attach-pill${f.loading ? ' loading' : ''}" title="${esc(f.name)}">${icon('file',12)}<span class="ap-name">${esc(f.name)}</span><span class="ap-size">${f.loading ? 'Loading…' : fmtBytes(f.size)}</span><button type="button" class="ap-x" data-act="rmfile" data-idx="${i}" aria-label="Remove ${esc(f.name)}">${icon('x',10)}</button></span>`
     ).join('');
   });
   syncComposerActions(chat());
 }
-function wirePromptBox(form, textarea, opts){
+function resizePrompt(textarea){
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 180) + 'px';
+  textarea.style.overflowY = textarea.scrollHeight > 180 ? 'auto' : 'hidden';
+}
+function wirePromptBox(form, textarea){
   if (!form || !textarea) return;
+  textarea.addEventListener('input', () => resizePrompt(textarea));
+  resizePrompt(textarea);
   // Hidden file input
   let fileInput = form.querySelector('input[type="file"]');
   if (!fileInput){
@@ -150,22 +228,25 @@ function wirePromptBox(form, textarea, opts){
     fileInput.className = 'attach-input';
     form.appendChild(fileInput);
   }
-  fileInput.onchange = () => { if (fileInput.files.length) addFiles(fileInput.files); fileInput.value = ''; };
+  fileInput.onchange = () => { if (fileInput.files.length) addFiles(fileInput.files, form); fileInput.value = ''; };
   // Plus button triggers file picker
   const plus = form.querySelector('.iconbtn[data-act="attach"]');
   if (plus) plus.onclick = e => { e.preventDefault(); fileInput.click(); };
   // Drag & drop on the entire promptbox
   const box = form.closest('.promptbox') || form;
-  box.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); box.classList.add('dragover'); });
-  box.addEventListener('dragleave', e => { e.preventDefault(); box.classList.remove('dragover'); });
-  box.addEventListener('drop', e => { e.preventDefault(); box.classList.remove('dragover'); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+  const hasDraggedFiles = e => Array.from(e.dataTransfer?.types || []).includes('Files');
+  let dragDepth = 0;
+  box.addEventListener('dragenter', e => { if (!hasDraggedFiles(e)) return; e.preventDefault(); dragDepth++; box.classList.add('dragover'); });
+  box.addEventListener('dragover', e => { if (!hasDraggedFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  box.addEventListener('dragleave', e => { if (!hasDraggedFiles(e)) return; e.preventDefault(); dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) box.classList.remove('dragover'); });
+  box.addEventListener('drop', e => { if (!hasDraggedFiles(e)) return; e.preventDefault(); dragDepth = 0; box.classList.remove('dragover'); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files, form); });
   // Paste files from clipboard
   textarea.addEventListener('paste', e => {
     const items = e.clipboardData && e.clipboardData.items;
     if (!items) return;
     const files = [];
     for (const it of items){ if (it.kind === 'file'){ const f = it.getAsFile(); if (f) files.push(f); } }
-    if (files.length) addFiles(files);
+    if (files.length) addFiles(files, form);
   });
 }
 
@@ -181,8 +262,7 @@ function applyPromptText(text){
   const ta = $('#cprompt');
   if (!ta) return;
   ta.value = text;
-  ta.style.height = 'auto';
-  ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
+  resizePrompt(ta);
   ta.dispatchEvent(new Event('input', { bubbles:true }));
 }
 function syncVoiceButton(){
@@ -308,7 +388,7 @@ const fresh = () => ({
   onboarded:false, agent:null, view:'chat', activeChat:null,
   ownerId:null,
   canvasOpen:false, canvasTab:'canvas', model:'Smart', theme:'grey',
-  chats:[], pendingPrompt:null,
+  chats:[], pendingPrompt:null, pendingPromptFiles:[],
   vault:{ secrets:[], apps:[], approvals:[], mode:'default' },
   memory:[], memoryTotal:0, memoryQuery:'', memoryEditing:null,
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
@@ -322,7 +402,7 @@ const fresh = () => ({
   userProfile:null, agentContext:null,
   // Library — only real agent artifacts and user uploads.
   libraryCat:'all', librarySearch:'', librarySelect:false, librarySelected:[], libraryLayout:'grid',
-  libraryUploads:[], systemPath:'root', systemFile:null, systemManifest:null,
+  libraryUploads:[], libraryServer:[], systemFile:null, systemManifest:null,
   // goals — user-created life goals with sub-goals, tracked per account.
   goals:[], goalFilter:'all',
 });
@@ -353,6 +433,7 @@ if (state.settingsTab === 'memory') {
 }
 if (!state.agentContext || typeof state.agentContext !== 'object') state.agentContext = null;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
+delete state.builtInAutomationsOpen;
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
 if (!Array.isArray(state.composioApps)) state.composioApps = [];
 state.composioLoading = false;
@@ -368,6 +449,7 @@ if (state.memoryEditing !== null && typeof state.memoryEditing !== 'string') sta
   if (!Array.isArray(state.librarySelected)) state.librarySelected = [];
   if (!['grid','list'].includes(state.libraryLayout)) state.libraryLayout = 'grid';
   if (!Array.isArray(state.libraryUploads)) state.libraryUploads = [];
+  if (!Array.isArray(state.libraryServer)) state.libraryServer = [];
   if (!Array.isArray(state.goals)) state.goals = [];
   if (!state.goalFilter) state.goalFilter = 'all';
   // migrate legacy goals shape
@@ -379,12 +461,12 @@ if (state.memoryEditing !== null && typeof state.memoryEditing !== 'string') sta
     if (!g.createdAt) g.createdAt = Date.now();
     g.subgoals.forEach(s => { if (typeof s.done !== 'boolean') s.done = false; });
   });
-  if (!['root','agent','user','memory','workspace','uploads'].includes(state.systemPath)) state.systemPath = 'root';
+  delete state.systemPath; // System files is a single list now
   if (state.systemFile !== null && typeof state.systemFile !== 'string') state.systemFile = null;
   // Honest apps: no fake OAuth connections exist — always empty.
   state.vault.apps = [];
   const save = () => {
-    const persisted=JSON.parse(JSON.stringify(state));
+    const persisted=JSON.parse(JSON.stringify(state, function(key, value){ return key === 'dataUrl' && this?.storageId ? undefined : value; }));
     if(persisted.vault?.secrets)persisted.vault.secrets=persisted.vault.secrets.map((secret)=>secret.backend?{id:secret.id,ref:secret.ref,name:secret.name,at:secret.at,backend:true}:secret);
     localStorage.setItem(LS,JSON.stringify(persisted));
   };
@@ -478,6 +560,7 @@ async function syncFromBackend(force = false) {
       state.memoryQuery=String(m.query || '');
     }
     const s = value(secrets);
+    const vaultBefore = state.vault.secrets.map((item) => item.id).join() + '|' + state.vault.encrypted;
     if (s) {
       const remote=(s.secrets || []).map((r)=>({id:r.id,ref:r.ref,name:r.name,at:r.at,backend:true}));
       const localOnly=state.vault.secrets.filter((item)=>!item.backend && item.value);
@@ -489,6 +572,7 @@ async function syncFromBackend(force = false) {
         }catch{keptLocal.push(item);}
       }
       state.vault.secrets=[...remote,...keptLocal];
+      if(typeof s.encrypted==='boolean')state.vault.encrypted=s.encrypted;
     }
     const ac = value(agentContext);
     if (ac) {
@@ -520,6 +604,13 @@ async function syncFromBackend(force = false) {
     state.chats.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
     await ensureMailbox();
     if (owner === billingIdentity()) save();
+    // Settings pages that show the vault repaint once it arrives, unless the
+    // user is typing there (a repaint would drop their input).
+    const vaultAfter = state.vault.secrets.map((item) => item.id).join() + '|' + state.vault.encrypted;
+    if (owner === billingIdentity() && vaultAfter !== vaultBefore && state.view === 'settings' && ['secrets','browser'].includes(state.settingsTab)) {
+      const main = $('#main');
+      if (main && !(main.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))) paintSettings(main);
+    }
     return owner === billingIdentity();
   })().finally(() => {
     if (backendSyncPending === request) {
@@ -813,8 +904,9 @@ function subAgentTriggerLabel(subAgent) {
     const minutes = Number(trigger.intervalMinutes || 0);
     if (minutes === 1440) return 'Every day';
     if (minutes === 10080) return 'Every week';
-    if (minutes >= 60 && minutes % 60 === 0) return `Every ${minutes / 60}h`;
-    return `Every ${minutes}m`;
+    if (minutes === 60) return 'Every hour';
+    if (minutes > 60 && minutes % 60 === 0) return `Every ${minutes / 60} hours`;
+    return `Every ${minutes} minutes`;
   }
   if (trigger.type === 'app') {
     const opt = (state.triggerOptions?.apps || []).find((a) => a.id === trigger.app);
@@ -830,7 +922,10 @@ function subAgentTriggerLabel(subAgent) {
 
 function expirePending(){
   state.chats.forEach(c => (c.messages || []).forEach(m => {
-    if (m.kind === 'card' && m.card.status === 'pending' && !m.card.onboarding) m.card.status = 'expired';
+    // A background task keeps waiting on the server across reloads, so its
+    // approval or secret request stays answerable; the server expires it.
+    const waitingTask = m.card?.taskId && c.managedTasks?.[m.card.taskId]?.status === 'waiting_approval';
+    if (m.kind === 'card' && m.card.status === 'pending' && !m.card.onboarding && !waitingTask) m.card.status = 'expired';
   }));
 }
 
@@ -866,6 +961,7 @@ let workspacePresenceTimer = null;
 let workspacePresenceState = 'offline';
 let workspacePresenceInfo = null;
 let workspacePresenceOwner = null;
+let browserPresenceChecked = null;
 function workspaceConnectionView(){
   const work = statusFor(chat());
   if (work && work !== 'Available') return { label:work, tone:'busy' };
@@ -941,7 +1037,12 @@ function ensureOwnerScope(){
   if (state.ownerId !== uid){
     const theme = state.theme;
     const pending = state.pendingPrompt;
-    state = Object.assign(fresh(), { theme, pendingPrompt: pending || null, ownerId: uid });
+    const pendingFiles = state.pendingPromptFiles;
+    for (const c of state.chats || []) for (const m of c.messages || []) for (const file of m.files || []) {
+      if (file.storageId) void storedFile('readwrite', store => store.delete(file.storageId)).catch(() => {});
+    }
+    pendingFilesByForm.clear();
+    state = Object.assign(fresh(), { theme, pendingPrompt: pending || null, pendingPromptFiles: pendingFiles || [], ownerId: uid });
     save();
   }
 }
@@ -1127,7 +1228,6 @@ async function doAuth(kind){
     const r = await fetch('/api/auth/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Auth failed');
-    if (j.confirm_email || !j.access_token) { if (msg) msg.textContent = j.message || 'Check your inbox to confirm your email, then sign in.'; return; }
     window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
     try { window.LingonConfig.userId = j.user.id; } catch {}
     await afterSignIn(j.user);
@@ -1158,7 +1258,9 @@ async function afterSignIn(user){
       await startPendingPromptFlow(p);
       return;
     }
-    render();
+    if (state.pendingPrompt && state.onboarded && state.agent && !state.agent.provisional){
+      await landingRun(state.pendingPrompt, state.pendingPromptFiles || []);
+    } else render();
     toast('Signed in as ' + (user.email || 'you'));
   } catch (e){
     console.error(e);
@@ -1211,14 +1313,29 @@ async function getBilling(){
 }
 function fmtC(n){ return (Math.round(Number(n || 0) * 100) / 100).toString(); }
 function fmtTokens(n){ return Math.max(0, Math.floor(Number(n || 0))).toLocaleString('en-US'); }
+function fmtPlanTokens(n){
+  const tokens = Number(n || 0);
+  return tokens >= 1000000 && Number.isInteger(tokens / 1000000)
+    ? `${fmtTokens(tokens / 1000000)} million` : fmtTokens(tokens);
+}
 function creditView(b){
   const amount = n => Number.isFinite(Number(n)) ? Math.max(0, Number(n)) : 0;
-  const remaining = amount(b.tokens), used = amount(b.tokensUsed), granted = amount(b.tokensGranted);
-  return { remaining, used, granted, percent: granted ? Math.min(100, remaining / granted * 100) : 0,
-    tone: remaining <= 0 ? 'empty' : remaining <= Math.max(1000000, granted * 0.1) ? 'low' : 'ready' };
+  const plan = amount(b.planTokens), planUsed = Math.min(plan, amount(b.planTokensUsed));
+  const extra = amount(b.packTokens), packUsed = Math.min(extra, amount(b.packTokensUsed));
+  const planLeft = plan - planUsed, extraLeft = extra - packUsed;
+  // An overdrawn request can leave wallet debt. The next available plan tokens
+  // repay it first, so show the spendable balance rather than overstating "left".
+  const debt = b.tokens == null ? 0 : Math.max(0, planLeft + extraLeft - amount(b.tokens));
+  const used = planUsed + Math.min(planLeft, debt);
+  const remaining = Math.max(0, plan - used);
+  const extraUsed = packUsed + Math.min(extraLeft, Math.max(0, debt - planLeft));
+  return { remaining, used, granted: plan, extra, extraUsed,
+    extraRemaining: Math.max(0, extra - extraUsed),
+    percent: plan ? Math.min(100, used / plan * 100) : 0,
+    tone: remaining <= 0 ? 'empty' : remaining <= Math.max(1000000, plan * 0.1) ? 'low' : 'ready' };
 }
 function creditMeterHtml(v){
-  return `<div class="credit-meter" role="meter" aria-label="Tokens remaining" aria-valuemin="0" aria-valuemax="${Math.max(v.granted, v.remaining, 1)}" aria-valuenow="${v.remaining}" aria-valuetext="${fmtTokens(v.remaining)} tokens left; ${fmtTokens(v.used)} used"><span style="width:${v.percent}%"></span></div>`;
+  return `<div class="credit-meter" role="meter" aria-label="Monthly plan tokens used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${v.percent}" aria-valuetext="${Math.round(v.percent)}% of monthly plan tokens used"><span style="width:${v.percent}%"></span></div>`;
 }
 function billingPlanName(b){
   const plans = Array.isArray(b.plans) ? b.plans : Object.values(b.plans || {});
@@ -1238,34 +1355,38 @@ function giftCardHtml(p){
     + `<span class="gift-strip-text">+ FREE $${amt} gift card</span></div>`;
 }
 function billingShopHtml(b){
-  const packOpts = (Array.isArray(b?.tokenPacks) ? b.tokenPacks : []).map((t) =>
-    `<option value="${t.tokens}">${t.millions}M tokens — $${t.usd}</option>`
-  ).join('');
+  const packs = Array.isArray(b?.tokenPacks) ? b.tokenPacks : [];
+  const packTiles = packs.map((t, i) => {
+    const perMillion = Number(t.millions) ? Number(t.usd) / Number(t.millions) : 0;
+    return `<label class="billing-pack"><input type="radio" name="buypack" value="${t.tokens}" ${i === 0 ? 'checked' : ''}>
+      <span class="billing-pack-amount">${esc(t.millions)}M</span><span class="billing-pack-unit">tokens</span>
+      <span class="billing-pack-price">$${fmtC(t.usd)}</span>${perMillion ? `<span class="billing-pack-rate">$${perMillion.toFixed(2)} per million</span>` : ''}
+    </label>`;
+  }).join('');
   const gifts = Array.isArray(b && b.purchasedGifts) ? b.purchasedGifts : [];
-  const giftList = gifts.length ? `<div class="billing-purchased-gifts"><h4>Your gift cards</h4>${gifts.map((g) =>
-    `<p><strong>$${fmtC(g.amount_usd)}</strong> · <code>${esc(g.code)}</code> · ${g.redeemed_by ? 'Redeemed' : 'Ready to share'}</p>`
-  ).join('')}</div>` : '';
+  const giftList = gifts.length ? `<ul class="billing-gift-list" aria-label="Your gift cards">${gifts.map((g) => `<li>
+      <span class="billing-gift-amount">$${fmtC(g.amount_usd)}</span>
+      <code>${esc(g.code)}</code>
+      <span class="chip ${g.redeemed_by ? '' : 'green'}">${g.redeemed_by ? 'Redeemed' : 'Ready to share'}</span>
+      ${g.redeemed_by ? '' : `<button class="iconbtn" data-act="copy-gift" data-code="${esc(g.code)}" title="Copy code" aria-label="Copy gift code">${icon('copy',14)}</button>`}
+    </li>`).join('')}</ul>` : '';
   return `<div class="billing-shop">
     <section class="billing-extra" aria-labelledby="topup-title">
-      <span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span>
-      <h3 id="topup-title">A little extra goes a long way</h3>
-      <p>Have something bigger in mind? Add tokens whenever you need them. Purchased tokens carry over until used. Daily image and transcription limits still follow your plan.</p>
-      <label class="billing-label" for="buypack">Choose your token pack</label>
-      <select class="field" id="buypack">${packOpts}</select>
-      <button class="btn billing-primary" data-act="buycredits">Add tokens ${icon('plus',14)}</button>
-      <span class="billing-fine">One-time purchase · your plan stays the same · agent VM time also uses tokens</span>
+      <div class="billing-extra-head"><span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span><div><h3 id="topup-title">Add tokens</h3><p>One-time packs for bigger ideas. They carry over until used, and your plan stays the same.</p></div></div>
+      <fieldset class="billing-packs" id="buypack" tabindex="-1"><legend class="billing-label">Choose your token pack</legend>
+        ${packTiles || '<span class="billing-fine">Packs load with your balance…</span>'}
+      </fieldset>
+      <button class="btn billing-primary" data-act="buycredits" ${packs.length ? '' : 'disabled'}>${icon('card',14)} Continue to checkout</button>
+      <span class="billing-fine">Secure checkout · agent computer time also uses tokens · daily image and transcription limits follow your plan</span>
     </section>
     <section class="billing-extra billing-gifts" aria-labelledby="gift-title">
-      <span class="billing-extra-icon" aria-hidden="true">${icon('gift',20)}</span>
-      <h3 id="gift-title">Good ideas are better shared</h3>
-      <p>Give someone a little help with their next big idea.</p>
-      <div class="billing-gift-buy"><button class="btn ghost small" data-act="buygift" data-amt="50">$50 gift · 1M tokens</button> <button class="btn ghost small" data-act="buygift" data-amt="100">$100 gift · 2M tokens</button></div>
-      ${giftList}
+      <div class="billing-extra-head"><span class="billing-extra-icon" aria-hidden="true">${icon('gift',20)}</span><div><h3 id="gift-title">Gift cards</h3><p>Redeem a code someone shared with you, or share one you bought.</p></div></div>
       <div class="billing-redeem">
-        <label class="billing-label" for="giftcode">Have a gift code? This one's for you.</label>
+        <label class="billing-label" for="giftcode">Redeem a gift code</label>
         <div class="billing-redeem-form"><input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
         <button class="btn ghost small" data-act="redeem">Redeem</button></div>
       </div>
+      ${giftList}
     </section>
   </div>`;
 }
@@ -1278,9 +1399,10 @@ function planCards(b){
   const pPro = byId.pro || { id: 'pro', name: 'Pro', price: 50, was: null, tokens: 100000000, imagesPerDay: 10, transcriptionsPerDay: 15, giftUsd: 0, interval: 'month' };
   const pMax = byId.max || { id: 'max', name: 'Max', price: 100, was: null, tokens: 200000000, imagesPerDay: 15, transcriptionsPerDay: 20, giftUsd: 0, interval: 'month' };
   const descriptions = { free:'A little space to get acquainted.', pro:'For your everyday ideas and ambitions.', max:'For the bigger things you have in mind.' };
-  const features = { free:['Your own personal agent', 'Make yourself at home'], pro:['Everything in Free'], max:['Everything in Pro'] };
+  const lead = { free:'Your own agent, browser and vault', pro:'Everything in Free', max:'Everything in Pro' };
   return `<div class="pcards">${[pFree,pPro,pMax].map((p, i) => {
     const id = ids[i], current = b && b.plan === id;
+    const features = [lead[id], `${Number(p.imagesPerDay || 0)} images a day`, `${Number(p.transcriptionsPerDay || 0)} voice transcriptions a day`];
     const action = current ? `<span class="plan-state">${icon('check',14)} Your current plan</span>`
       : id === 'free' ? '<span class="plan-state plan-included">Your starting point</span>'
       : `<button class="btn ${id === 'pro' ? 'billing-primary' : 'ghost'}" data-act="checkout" data-p="${id}">Choose ${esc(p.name)} ${icon('aur',14)}</button>`;
@@ -1288,10 +1410,9 @@ function planCards(b){
       <div class="billing-plan-heading"><h3 class="pname">${esc(p.name)}</h3>${current ? '<span class="billing-plan-tag">Your plan</span>' : id === 'pro' ? '<span class="billing-plan-tag">A little more room</span>' : ''}</div>
       <p class="pdesc">${descriptions[id]}</p>
       <div class="pprice">$${fmtC(p.price)}${p.was ? ` <s>$${fmtC(p.was)}</s>` : ''}<span>${id === 'free' ? '/ forever' : '/ month'}</span></div>${pctOff(p)}
-      <div class="billing-plan-credits">${icon('spark',16)} <b>${fmtTokens(p.tokens)}</b> tokens / month</div>
-      <p class="billing-plan-limits">${p.imagesPerDay} images/day · ${p.transcriptionsPerDay} transcriptions/day</p>
-      <ul>${features[id].map(text => `<li>${icon('check',13)} ${text}</li>`).join('')}</ul>
-      ${action}${giftCardHtml(p)}
+      <div class="billing-plan-credits">${icon('spark',16)} <b>${fmtPlanTokens(p.tokens)}</b> tokens / month</div>
+      <ul>${features.map(text => `<li>${icon('check',13)} ${esc(text)}</li>`).join('')}</ul>
+      <div class="pcard-action">${action}${giftCardHtml(p)}</div>
     </article>`;
   }).join('')}</div>`;
 }
@@ -1301,21 +1422,63 @@ function billSummary(b){
   const manage = b && b.plan !== 'free'
     ? `<button class="billing-manage" data-act="portal">Manage subscription ${icon('aur',14)}</button>`
     : '';
-  const note = v.tone === 'empty' ? 'A fresh start is a top-up away.' : v.tone === 'low' ? 'Running a little low. Top up whenever you’re ready.' : `Ready for your next idea${firstName && firstName !== 'Guest' ? ', ' + esc(firstName) : ''}.`;
-  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Token balance">
-    <div class="billing-balance-top"><span class="billing-status">${esc(b.status || 'active')}</span>${manage}</div>
+  const note = v.tone === 'empty'
+    ? v.extraRemaining > 0 ? 'Monthly tokens used. Your extra tokens are still available.' : 'Monthly tokens used. Add tokens whenever you need them.'
+    : v.tone === 'low' ? 'Your monthly tokens are running low.'
+    : `Ready for your next idea${firstName && firstName !== 'Guest' ? ', ' + esc(firstName) : ''}.`;
+  const resets = b.resetAt ? `Resets ${esc(new Date(b.resetAt).toLocaleDateString(undefined, { day:'numeric', month:'short' }))}` : '';
+  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Monthly plan token usage">
+    <div class="billing-balance-top"><span class="billing-plan-pill">${icon('spark',13)} ${esc(billingPlanName(b))} plan</span><span class="billing-status">${esc(b.status || 'active')}</span>${manage}</div>
     <div class="billing-balance-main">
       <div class="billing-balance-copy">
-        <div class="billing-balance-number"><strong>${fmtTokens(v.remaining)}</strong><span>tokens left</span></div>
+        <span class="billing-label">Left this month</span>
+        <div class="billing-balance-number"><strong>${fmtShortTokens(v.remaining)}</strong><span>of ${fmtShortTokens(v.granted)} tokens</span></div>
         <p class="billing-balance-note">${note}</p>
       </div>
       <div class="billing-companion" aria-hidden="true"><span class="billing-companion-orbit"></span>${Mascot.svg('lingon',v.tone === 'ready' ? 'happy' : 'idle',116)}</div>
     </div>
     <div class="billing-balance-bottom"><div class="billing-balance-meter">
-      <div class="billing-meter-label"><span><b>${fmtTokens(v.used)}</b> of ${fmtTokens(v.granted)} tokens used</span><span>${Math.round(v.percent)}% left</span></div>${creditMeterHtml(v)}
-      <p>${Number(b.imagesToday || 0)}/${Number(b.imagesPerDay || 0)} images today · ${Number(b.transcriptionsToday || 0)}/${Number(b.transcriptionsPerDay || 0)} transcriptions today${b.resetAt ? ` · resets ${esc(new Date(b.resetAt).toLocaleDateString())}` : ''}</p>
-    </div><button class="btn billing-primary small" data-act="billing-topup">${icon('plus',14)} Add tokens</button></div>
+      <div class="billing-meter-label"><b>${Math.round(v.percent)}% of plan used</b><span>${resets}</span></div>
+      ${creditMeterHtml(v)}
+      <dl class="billing-token-breakdown">
+        <div><dt>Monthly tokens used</dt><dd>${fmtTokens(v.used)}</dd></div>
+        <div><dt>Monthly tokens left</dt><dd>${fmtTokens(v.remaining)}</dd></div>
+        <div><dt>Monthly plan allowance</dt><dd>${fmtTokens(v.granted)}</dd></div>
+      </dl>
+    </div></div>
+  </section>
+  <div class="billing-daily" aria-label="Daily limits">
+    ${billingDailyTile('image', 'Images today', b.imagesToday, b.imagesPerDay)}
+    ${billingDailyTile('mic', 'Transcriptions today', b.transcriptionsToday, b.transcriptionsPerDay)}
+  </div>
+  <section class="billing-extra-balance" aria-labelledby="extra-token-balance-title">
+    <div class="billing-extra-balance-copy"><span class="billing-extra-icon" aria-hidden="true">${icon('plus',20)}</span>
+      <div><h3 id="extra-token-balance-title">Extra tokens</h3><p>Packs, gift cards and invite rewards. They carry over until used and are separate from your monthly plan.</p></div>
+    </div>
+    <dl class="billing-token-breakdown">
+      <div><dt>Extra tokens added</dt><dd>${fmtTokens(v.extra)}</dd></div>
+      <div><dt>Extra tokens used</dt><dd>${fmtTokens(v.extraUsed)}</dd></div>
+      <div><dt>Extra tokens left</dt><dd>${fmtTokens(v.extraRemaining)}</dd></div>
+    </dl>
+    <button class="btn billing-primary small" data-act="billing-topup">${icon('plus',14)} Add tokens</button>
   </section>`;
+}
+function fmtShortTokens(n){
+  const x = Math.max(0, Number(n) || 0);
+  const short = (v, unit) => (v >= 100 || Number.isInteger(v) ? Math.round(v) : Math.round(v * 10) / 10) + unit;
+  if (x >= 1e9) return short(x / 1e9, 'B');
+  if (x >= 1e6) return short(x / 1e6, 'M');
+  if (x >= 1e4) return short(x / 1e3, 'k');
+  return fmtTokens(x);
+}
+function billingDailyTile(ic, label, used, limit){
+  const u = Math.max(0, Number(used) || 0), l = Math.max(0, Number(limit) || 0);
+  const pct = l ? Math.min(100, u / l * 100) : 0;
+  return `<div class="billing-daily-tile${l && u >= l ? ' is-full' : ''}">
+    <span class="billing-daily-icon">${icon(ic,15)}</span>
+    <div><span class="billing-label">${label}</span><b>${u}<small> / ${l}</small></b>
+    <span class="billing-daily-meter" aria-hidden="true"><i style="width:${pct}%"></i></span></div>
+  </div>`;
 }
 function billingLoadingHtml(){
   return `<div class="billing-loading" role="status"><span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span><span>Getting your tokens ready…</span></div>`;
@@ -1348,15 +1511,13 @@ function paintBilling(M){
 }
 
 /* ================================================================
-   REFERRAL GIFT — "Free $50 gift card" (Stripe $50 face value, split)
-   $25 you + $25 friend as credits. You are credited ONLY after your
-   friend redeems (one reward per unique friend). The code and invite
-   actions are visible immediately. Friend redeems in this same popup.
+   ONE-TIME INVITE — a friend redeems one code, then both get 10M tokens.
    ================================================================ */
-let giftCache = null; // {code, link, invited, earnedCredits, rewardEach, ...}
+let giftCache = null; // {code, link, invited, earnedTokens, rewardEachTokens}
 async function getGift(prefillCode){
-  if (giftCache && giftCache.code && !prefillCode) return giftCache;
+  const owner = billingIdentity();
   const j = await window.LingonAuth.api('/api/referrals/mine');
+  if (owner !== billingIdentity()) return null;
   giftCache = j || null;
   if (prefillCode && giftCache) giftCache.prefill = prefillCode;
   return giftCache;
@@ -1366,17 +1527,17 @@ function closeGift(){
   if (m) m.remove();
 }
 function openGift(prefillCode){
-  if (!signedIn()){ renderAuth(); toast('Sign in to claim your gift card.'); return; }
+  if (!signedIn()){ renderAuth(); toast('Sign in to use your invite code.'); return; }
   closeGift();
   const overlay = el(`<div id="giftmodal" role="dialog" aria-modal="true" aria-labelledby="giftmodal-title">
     <div class="giftmodal-card">
-      <button class="iconbtn giftmodal-x" data-act="closegift" aria-label="Close gift">${icon('x',16)}</button>
+      <button class="iconbtn giftmodal-x" data-act="closegift" aria-label="Close invite">${icon('x',16)}</button>
       <div class="giftmodal-head">
-        <div class="giftmodal-brand">${Mascot.logo(25)}<span>belna</span><span class="giftmodal-brand-divider"></span><span>For you & a friend</span></div>
-        <h2 id="giftmodal-title">A free $50 gift, together.</h2>
-        <p class="msub">Give a friend 500,000 Belna tokens. When they redeem your invite, you get 500,000 too.</p>
+        <div class="giftmodal-brand">${Mascot.logo(25)}<span>belna</span><span class="giftmodal-brand-divider"></span><span>Invite a friend</span></div>
+        <h2 id="giftmodal-title">10 million tokens each</h2>
+        <p class="msub">Share your invite with one friend. Once they redeem it, you both get 10 million tokens.</p>
       </div>
-      <div class="giftmodal-body"><p class="mut giftmodal-loading">Getting your gift ready…</p></div>
+      <div class="giftmodal-body"><p class="mut giftmodal-loading">Getting your invite code…</p></div>
     </div>
   </div>`);
   document.body.appendChild(overlay);
@@ -1392,33 +1553,29 @@ function openGift(prefillCode){
   getGift(prefillCode).then((g) => {
     const body = overlay.querySelector('.giftmodal-body');
     if (!body || !body.isConnected) return;
-    if (!g || !g.code){ body.innerHTML = `<p class="mut">Couldn’t load your gift right now.</p><button class="btn" data-act="opengift">Try again</button>`; return; }
+    if (!g || !g.code){ body.innerHTML = `<p class="mut">Couldn’t load your invite right now.</p><button class="btn" data-act="opengift">Try again</button>`; return; }
     const friendCode = String(g.prefill || '').toUpperCase();
     const showFriendBox = !!friendCode && friendCode !== String(g.code).toUpperCase();
     body.innerHTML = `
-      <div class="referral-giftcard" aria-label="Belna $50 gift card, $25 for each friend">
-        <div class="referral-giftcard-top"><span class="referral-giftcard-brand">${Mascot.logo(35)}<b>belna</b></span><span class="referral-giftcard-type">GIFT CARD</span></div>
-        <div class="referral-giftcard-value"><strong>$50</strong><span>to share</span></div>
-        <div class="referral-giftcard-bottom"><span>Something good is better together.</span><b>500,000 tokens each</b></div>
-      </div>
       <div class="giftmodal-code">
-        <div class="giftmodal-code-text"><span>Your invite code</span><strong id="giftcode-text">${esc(g.code)}</strong></div>
-        <button class="giftmodal-copy" data-act="gift-copy-code" aria-label="Copy invite code">${icon('copy',16)}<span>Copy code</span></button>
+        <div class="giftmodal-code-text"><span>Your invite code</span><strong id="giftcode-text" aria-live="polite">BELNA-••••••</strong></div>
+        <button class="giftmodal-copy" data-act="gift-reveal" aria-label="Reveal invite code">${icon('eye',16)}<span>Reveal code</span></button>
       </div>
+      <p class="giftmodal-once">${Number(g.invited || 0) ? 'This invite has been redeemed. Each code works once.' : 'Free invite: one friend can redeem this code once.'}</p>
       <div class="giftmodal-actions">
-        <button class="giftmodal-action giftmodal-action-primary" data-act="gift-share">${icon('share',17)}<span>Share invite</span></button>
-        <button class="giftmodal-action" data-act="gift-copy-link">${icon('copy',17)}<span>Copy invite link</span></button>
+        <button class="giftmodal-action giftmodal-action-primary" data-act="gift-share"${Number(g.invited || 0) ? ' disabled title="Invite already redeemed"' : ''}>${icon('share',17)}<span>Share invite</span></button>
+        <button class="giftmodal-action" data-act="gift-copy-link"${Number(g.invited || 0) ? ' disabled title="Invite already redeemed"' : ''}>${icon('copy',17)}<span>Copy invite link</span></button>
       </div>
-      <div class="giftmodal-stats"><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span class="giftmodal-stat-dot" aria-hidden="true"></span><span><b>${fmtTokens(Number(g.invited || 0) * 500000)}</b> tokens earned</span></div>
+      <div class="giftmodal-stats"><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span class="giftmodal-stat-dot" aria-hidden="true"></span><span><b>${fmtTokens(g.earnedTokens || 0)}</b> tokens earned</span></div>
       <div class="giftmodal-redeem">
-        <div class="giftmodal-redeem-head"><span class="giftmodal-redeem-ico">${icon('gift',18)}</span><div><h3>Have a friend’s invite?</h3><p>Redeem their code and you’ll both get 500,000 tokens.</p></div></div>
+        <div class="giftmodal-redeem-head"><span class="giftmodal-redeem-ico">${icon('share',18)}</span><div><h3>Have a friend’s invite?</h3><p>Redeem their code once and you’ll both get 10 million tokens.</p></div></div>
         <label class="giftmodal-redeem-label" for="giftfriendcode">Friend’s invite code</label>
         <div class="giftmodal-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
         <button class="btn" data-act="gift-redeem">Redeem code</button></div>
       </div>`;
   }).catch(() => {
     const body = overlay.querySelector('.giftmodal-body');
-    if (body) body.innerHTML = `<p class="mut">Couldn’t load your gift right now.</p><button class="btn" data-act="opengift">Try again</button>`;
+    if (body) body.innerHTML = `<p class="mut">Couldn’t load your invite right now.</p><button class="btn" data-act="opengift">Try again</button>`;
   });
 }
 function giftAutoOpenFromUrl(){
@@ -1427,7 +1584,7 @@ function giftAutoOpenFromUrl(){
     const ref = (q.get('ref') || q.get('gift') || '').trim();
     if (!ref) return;
     window.history.replaceState(null, '', window.location.pathname);
-    if (!signedIn()){ try { sessionStorage.setItem('belna.pendingGift', ref); } catch {} renderAuth(); setTimeout(() => toast('Sign in — your friend’s gift code is waiting.'), 400); return; }
+    if (!signedIn()){ try { sessionStorage.setItem('belna.pendingGift', ref); } catch {} renderAuth(); setTimeout(() => toast('Sign in — your friend’s invite code is waiting.'), 400); return; }
     setTimeout(() => openGift(ref), 600);
   } catch {}
 }
@@ -1670,7 +1827,7 @@ function landingAgentPassport(){
         <div class="landing-passport-tabs" role="tablist" aria-label="Agent passport details">
           <button class="on" type="button" role="tab" aria-selected="true" aria-controls="landing-passport-name" data-act="landing-passport-tab" data-passport-tab="name">Name</button>
           <button type="button" role="tab" aria-selected="false" aria-controls="landing-passport-mail" data-act="landing-passport-tab" data-passport-tab="mail">Mail</button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="landing-passport-wallet" data-act="landing-passport-tab" data-passport-tab="wallet">Wallet</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="landing-passport-wallet" data-act="landing-passport-tab" data-passport-tab="wallet">Payments</button>
           <button type="button" role="tab" aria-selected="false" aria-controls="landing-passport-computer" data-act="landing-passport-tab" data-passport-tab="computer">Computer</button>
         </div>
         <div class="landing-passport-slider">
@@ -1686,11 +1843,10 @@ function landingAgentPassport(){
             <div class="landing-passport-mail-row"><i></i><div><strong>Welcome to your inbox</strong><small>Belna team</small><small>Your agent’s mailbox is ready.</small></div><time>now</time></div>
           </section>
           <section class="landing-passport-panel" id="landing-passport-wallet" role="tabpanel" data-passport-panel="wallet" hidden>
-            <div class="landing-passport-payment-card" aria-label="Sample agent wallet card">
-              <div class="landing-passport-card-top"><span>belna</span><small>AGENT WALLET</small></div>
-              <span class="landing-passport-card-chip" aria-hidden="true"></span>
-              <div class="landing-passport-card-number" aria-hidden="true">•••• &nbsp;•••• &nbsp;•••• &nbsp;2048</div>
-              <div class="landing-passport-card-bottom"><span>ALVA</span><span>PREVIEW</span></div>
+            <div class="landing-passport-payment-card" aria-label="Shop Pay checkout preview">
+              <div class="landing-passport-card-top"><span>belna</span><small>SHOP PAY</small></div>
+              <div class="landing-passport-card-number">Shop with approval</div>
+              <div class="landing-passport-card-bottom"><span>ALVA</span><span>SHOP PAY</span></div>
             </div>
           </section>
           <section class="landing-passport-panel" id="landing-passport-computer" role="tabpanel" data-passport-panel="computer" hidden>
@@ -1868,10 +2024,12 @@ function renderPromo(){
     f.addEventListener('submit', e => {
       e.preventDefault();
       const v = p.value.trim();
-      if (!v && !pendingFiles.length) return;
+      if (!v && !filesFor(f).length) return;
+      const files = readyFiles(f);
+      if (!files) return;
       p.value = '';
-      clearFiles();
-      landingRun(v);
+      clearFiles(f);
+      landingRun(v || 'Please review the attached files.', files);
     });
     p.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); f.requestSubmit(); } });
   }
@@ -2005,7 +2163,7 @@ function renderLanding(){
       <div class="secure-agent-layout">
         <div class="secure-agent-copy">
           <h2>Your own secure agent</h2>
-          <p>Your agent gets a personal identity, private mailbox, secure wallet and its own computer — all in one place, always under your control.</p>
+          <p>Your agent gets a personal identity, private mailbox, Shop Pay checkout and its own computer — all in one place, always under your control.</p>
         </div>
         ${landingAgentPassport()}
       </div>
@@ -2023,16 +2181,16 @@ function renderLanding(){
           <div class="mc-title">Arche 1.0 vs frontier models</div>
           <div class="mc-scroll-hint">Swipe table to compare models →</div>
           <div class="mc-table"><table class="btable">
-            <thead><tr><th>Benchmark</th><th class="star">Kimi K3<br><small>Arche foundation</small></th><th>GPT-6.0 Sol</th><th>Claude Opus 5.5</th><th>GPT-6.0 Astra</th></tr></thead>
+            <thead><tr><th>Benchmark</th><th class="star">Arche 1.0<sup>†</sup></th><th>GPT-6 Sol</th><th>Claude Opus 5.5</th><th>GPT-6 Astra</th></tr></thead>
             <tbody>
-              <tr><td>GPQA Diamond</td><td class="star">93.5%</td><td>—</td><td>—</td><td>96.0%</td></tr>
-              <tr><td>BrowseComp</td><td class="star">91.2%</td><td>—</td><td>—</td><td>91.5%</td></tr>
-              <tr><td>DeepSWE v1.1</td><td class="star">67.5%</td><td>68.8%</td><td>—</td><td>74.1%</td></tr>
-              <tr><td>AutomationBench*</td><td class="star">30.8%</td><td>33.2%</td><td>40.0%</td><td>41.4%</td></tr>
-              <tr><td>Terminal-Bench 4.0</td><td class="star">—</td><td>—</td><td>66.4%</td><td>57.9%</td></tr>
+              <tr><td>GDPval-AA v2.1 (Elo)</td><td class="star">1,524</td><td>1,487</td><td>1,846</td><td>1,542</td></tr>
+              <tr><td>AA-Briefcase v1.1 (Elo)</td><td class="star">1,510</td><td>1,483</td><td>1,822</td><td>1,569</td></tr>
+              <tr><td>AA-LCR v1.1</td><td class="star">89%</td><td>84%</td><td>85%</td><td>81%</td></tr>
+              <tr><td>SciCode</td><td class="star">59%</td><td>58%</td><td>67%</td><td>56%</td></tr>
+              <tr><td>Humanity's Last Exam</td><td class="star">47%</td><td>48%</td><td>61%</td><td>55%</td></tr>
             </tbody>
           </table></div>
-          <div class="fineprint mc-foot"><span>Published vendor results; Kimi K3 scores are for Arche’s foundation model. *AutomationBench setups differ. Methods and sources in <a href="/research-arche-1-0#results">Research → Arche 1.0</a>.</span></div>
+          <div class="fineprint mc-foot"><span>Independent Artificial Analysis results at max effort. † Arche 1.0 scores reflect its foundation model, not the full agent. <a href="/research-arche-1-0#results">Methods and sources</a>.</span></div>
         </div>
       </div>
     </section>
@@ -2068,10 +2226,12 @@ function renderLanding(){
       f.addEventListener('submit', e => {
         e.preventDefault();
         const v = p.value.trim();
-        if (!v && !pendingFiles.length) return;
+        if (!v && !filesFor(f).length) return;
+        const files = readyFiles(f);
+        if (!files) return;
         p.value = '';
-        clearFiles();
-        landingRun(v);
+        clearFiles(f);
+        landingRun(v || 'Please review the attached files.', files);
       });
       p.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); f.requestSubmit(); } });
     }
@@ -2089,7 +2249,7 @@ function renderLanding(){
   }
 }
 
-async function landingRun(prompt){
+async function landingRun(prompt, files = []){
   // Homepage prompt never starts a chat on the homepage itself.
   // It is saved and handed off: signed-out → sign up / log in screen,
   // signed-in → agent chat (with in-chat onboarding first when needed).
@@ -2098,7 +2258,9 @@ async function landingRun(prompt){
   if (!prompt) return;
   // Homepage prompt always requires a real account — no demo/sample agents.
   // Save first so sign-up / log-in can place it into the agent chat.
-  state.pendingPrompt = prompt; save();
+  state.pendingPrompt = prompt;
+  state.pendingPromptFiles = files;
+  save();
   if (isPromoRoute()) leavePromo();
   if (!signedIn()){
     renderAuth();
@@ -2114,9 +2276,9 @@ async function landingRun(prompt){
   // Already onboarded: open a chat and run for real.
   const c = { id: uid(), title: prompt.length > 42 ? prompt.slice(0, 42) + '…' : prompt, messages:[], trace:[], artifact:null, createdAt:Date.now() };
   state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat';
-  state.pendingPrompt = null; save();
+  state.pendingPrompt = null; state.pendingPromptFiles = []; save();
   renderApp();
-  await sendPromptDirect(c, prompt);
+  await sendPromptDirect(c, prompt, files);
 }
 
 /* One persisted onboarding chat for every new account, with or without a request. */
@@ -2132,7 +2294,7 @@ function startPendingPromptFlow(pendingOverride){
     state.chats.unshift(c);
   }
   if (state.pendingPrompt && !c.messages.some(m => m.role === 'user' && m.text === state.pendingPrompt)) {
-    c.messages.push({ id:uid(), role:'user', kind:'text', text:state.pendingPrompt });
+    c.messages.push({ id:uid(), role:'user', kind:'text', text:state.pendingPrompt, files:state.pendingPromptFiles?.length ? state.pendingPromptFiles : undefined });
   }
   state.activeChat = c.id; state.view = 'chat'; state.canvasOpen = false;
   mobileNavOpen = false;
@@ -2200,6 +2362,7 @@ async function openOnboardingPassport(c, m){
   state.onboarded = true; c.onboarding = false; c.busy = false; m.card.status = 'done';
   const pending = state.pendingPrompt;
   state.pendingPrompt = null;
+  state.pendingPromptFiles = [];
   state.canvasOpen = true; state.canvasTab = 'canvas';
   save(); renderApp();
   ensureMailbox(answers.name).catch(() => {});
@@ -2289,6 +2452,7 @@ async function runAgentOn(c, text){
     return;
   }
   c.coordinatorRuns = Number(c.coordinatorRuns || 0) + 1; save();
+  floatLive.delete(c.id);
   paintSide(); paintMain();
   const rt = makeRT(c);
   try { await Engine.run(rt, text); }
@@ -2296,10 +2460,10 @@ async function runAgentOn(c, text){
   c.coordinatorRuns = Math.max(0, Number(c.coordinatorRuns || 1) - 1); save(); paintMain(); paintSide();
 }
 /* Direct send for an already-created chat (message not yet in thread). */
-async function sendPromptDirect(c, text){
+async function sendPromptDirect(c, text, files = []){
   if (!c || !text) return;
   if (!signedIn()){ state.pendingPrompt = text; save(); renderAuth(); return; }
-  c.messages.push({ id: uid(), role: 'user', kind: 'text', text });
+  c.messages.push({ id: uid(), role: 'user', kind: 'text', text, files:files.length ? files : undefined });
   if (c.title === 'New chat' || !c.title) c.title = text.length > 42 ? text.slice(0, 42) + '…' : text;
   save(); paintSide(); paintMain();
   await runAgentOn(c, text);
@@ -2429,6 +2593,8 @@ function renderApp(){
   wireShellKeys();
   paintSide(); paintMain(); paintCanvas();
   syncShellClasses();
+  // Goals and Library are account data the agent can change; refresh at most every 30s.
+  refreshGoals(false); refreshLibrary(false);
 }
 
 function currentUser(){
@@ -2535,14 +2701,23 @@ function libCatFor(item){
   if (t === 'web') return 'web';
   return 'artifact';
 }
+// Account Library items (agent artifacts and uploads) plus older chat-only files.
+const LIB_KIND_TYPE = { document:'document', web:'web', image:'image', video:'video', audio:'audio' };
 function libraryItems(){
-  const real = artifactRows().map((r, i) => {
+  const account = (state.libraryServer || []).map(item => ({
+    id:'lib:' + item.id, libraryId:item.id, title:item.title, kind:item.kind, mime:item.mime, size:item.size, preview:item.preview,
+    chat:item.source === 'upload' ? 'Library upload' : 'Made by agent', chatId:item.chatId, source:item.source, at:item.createdAt,
+    card:{ type:'file', name:item.title, mime:item.mime, libraryId:item.id },
+    _type:LIB_KIND_TYPE[item.kind] || 'artifact', _source:item.source === 'upload' ? 'upload' : 'agent', sub:null,
+  }));
+  const onAccount = new Set(account.map(item => item.libraryId));
+  const real = artifactRows().filter(r => !(r.card?.libraryId && onAccount.has(r.card.libraryId))).map((r, i) => {
     const type = libItemType(r);
     const fid = r.fileIndex !== undefined ? ':f' + r.fileIndex : '';
     const id = r.libraryUpload ? 'upload:' + r.uploadId : (r.chatId || 'c') + ':' + (r.messageId || 'a') + ':' + i + fid;
     return { id, ...r, _type: type, _source: r.source === 'upload' ? 'upload' : 'agent', sub: null };
   });
-  return real;
+  return [...account, ...real].sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
 }
 function libraryFiltered(){
   const cat = state.libraryCat || 'all';
@@ -2596,6 +2771,13 @@ function libUnavailablePreview(item, label){
 }
 function libPreviewHtml(item){
   const t = item._type;
+  if (item.libraryId) {
+    if (t === 'document' && item.preview) return `<div class="lib-prev lib-prev-doc"><pre>${esc(item.preview)}</pre><span class="lib-prev-fname">${esc(item.title)}</span></div>`;
+    const loaded = libraryItemContent(item.libraryId);
+    if (!loaded.content) return `<div class="lib-prev lib-prev-unavailable"><span class="lib-prev-unavailable-icon">${icon(libIconFor(t), 26)}</span><b>${loaded.error ? 'Preview unavailable' : 'Loading preview…'}</b></div>`;
+    const media = loaded.content.startsWith('data:');
+    item = { ...item, card:{ ...item.card, dataUrl:media ? loaded.content : undefined, content:media ? undefined : loaded.content, html:t === 'web' && !media ? loaded.content : undefined } };
+  }
   const dataUrl = item.card && item.card.dataUrl;
   const isImgUrl = dataUrl && /^data:image\//.test(String(dataUrl));
   const isVidUrl = dataUrl && /^data:video\//.test(String(dataUrl));
@@ -2628,8 +2810,8 @@ function libCardHtml(item){
   const sel = state.librarySelect && (state.librarySelected || []).includes(item.id);
   const source = item._source === 'upload' ? 'Your upload' : 'Made by agent';
   const sub = esc(libTypeLabel(item._type)) + ' · ' + source + ' · ' + esc(fmtAgo(item.at));
-  const action = item.libraryUpload ? 'library-upload-open' : 'library-open';
-  const attrs = item.libraryUpload
+  const action = item.libraryId ? 'library-item-open' : item.libraryUpload ? 'library-upload-open' : 'library-open';
+  const attrs = item.libraryId ? ` data-lib-id="${esc(item.libraryId)}"` : item.libraryUpload
     ? ` data-upload="${esc(item.uploadId || '')}"`
     : ` data-chat="${esc(item.chatId || '')}"${item.messageId ? ` data-msg="${esc(item.messageId)}"` : ''}${item.fileIndex !== undefined ? ` data-file="${item.fileIndex}"` : ''}`;
   return `<article class="lib-card${sel ? ' sel' : ''}" data-lib="${esc(item.id)}">
@@ -2641,129 +2823,51 @@ function libCardHtml(item){
     ${state.librarySelect ? `<button class="lib-check${sel ? ' on' : ''}" data-act="lib-pick" data-id="${esc(item.id)}" aria-pressed="${sel ? 'true' : 'false'}">${icon('check',12)}</button>` : ''}
   </article>`;
 }
-const FALLBACK_SYSTEM_TOOLS = [
-  ['capability_search','function','Find the live agent capability that matches a request.'],
-  ['web_search','web','Search the web and read public pages.'],
-  ['composio_apps','function','List the apps connected to this account.'],
-  ['composio_tools','function','Discover enabled tools for one connected app.'],
-  ['composio_execute','function','Run an enabled connected-app action after approval when required.'],
-  ['shell','code','Run commands in the private workspace worker.'],
-  ['code_run','code','Run JavaScript, Python, or Bash in the hardened workspace worker.'],
-  ['browser_open','browser','Open any public page in the isolated agent browser.'],
-  ['browser_action','browser','Click, type, scroll and navigate the current page like a person.'],
-  ['browser_submit','browser','Finish a purchase, booking, message or account change on a website with owner approval.'],
-  ['computer_action','computer','Use the virtual computer: click, type, scroll and open apps like a person.'],
-  ['computer_submit','computer','Finish a purchase, booking, message or account change on the computer with owner approval.'],
-  ['computer_screenshot','browser','Display the current isolated browser page.'],
-  ['build_page','code','Create a single-file HTML artifact from a brief.'],
-  ['canvas_show','function','Show a real result or file in Canvas.'],
-  ['memory_search','memory','Search account memory.'],
-  ['memory_get','memory','Read selected account memories.'],
-  ['memory_write','memory','Save a durable memory when appropriate.'],
-  ['memory_update','memory','Correct a durable memory.'],
-  ['memory_delete','memory','Forget a durable memory.'],
-  ['history_search','memory','Search the user’s earlier chats.'],
-  ['mail_status','mail','Check the agent mailbox.'],
-  ['mail_list','mail','List mailbox messages.'],
-  ['mail_read','mail','Read one mailbox message.'],
-  ['mail_draft','mail','Save an email draft without sending it.'],
-  ['mail_send','mail','Send mail from the agent mailbox with owner approval.'],
-  ['trigger_list','automation','List isolated automations.'],
-  ['trigger_create','automation','Create an isolated automation with a trigger.'],
-  ['wallet_status','payments','Read the agent wallet status.'],
-  ['wallet_transfer','payments','Transfer funds with owner approval.'],
-  ['wallet_purchase','payments','Make a wallet purchase with owner approval.'],
-  ['shop_status','payments','Check Shop Pay connection and limits.'],
-  ['shop_search','payments','Search the connected Shop Pay catalog.'],
-  ['shop_product','payments','Read one Shop Pay product.'],
-  ['shop_checkout','payments','Prepare a Shop Pay checkout.'],
-  ['shop_purchase','payments','Complete a Shop Pay purchase with owner approval.'],
-  ['shop_order','payments','Read a Shop Pay order.'],
-];
-function fallbackToolsDocument(){
-  return '# TOOLS.md\n\nLive capabilities are supplied by the Lingon runtime. Tool availability and approvals are enforced separately from editable agent context.\n\n' + FALLBACK_SYSTEM_TOOLS.map(([name, type, description]) => `- **${name}** · ${type} — ${description}`).join('\n');
-}
-function systemToolsDocument(){
-  return String(state.systemManifest?.documents?.tools || fallbackToolsDocument());
-}
 function memoryDocumentContent(){
   const rows = (state.memory || []).filter(m => !m.category || m.category === 'long_term');
   return `# MEMORY.md\n\n${rows.map(m => `- ${m.text} <!-- ${memorySource(m)} -->`).join('\n') || 'No long-term memories yet.'}`;
 }
+// Only files the owner can safely read: their editable agent context and the
+// generated memory view. The runtime capability registry is not a user file.
+const SYSTEM_FILE_GROUPS = [['agent', 'Agent'], ['user', 'You'], ['memory', 'Memory']];
 function systemDocumentItems(){
   const docs = editableAgentDocuments();
+  const at = state.agentContext?.updatedAt || Date.now();
   return [
-    { id:'system:identity', key:'identity', title:'IDENTITY.md', folder:'agent', path:'/agent/IDENTITY.md', content:docs.identity, editable:true, description:'The agent name, style, and identity you chose.', at:state.agentContext?.updatedAt || Date.now() },
-    { id:'system:soul', key:'soul', title:'SOUL.md', folder:'agent', path:'/agent/SOUL.md', content:docs.soul, editable:true, description:'The tone and values that guide the agent’s replies.', at:state.agentContext?.updatedAt || Date.now() },
-    { id:'system:agents', key:'agents', title:'AGENTS.md', folder:'agent', path:'/agent/AGENTS.md', content:docs.agents, editable:true, description:'Your working agreement for planning, verification, and approvals.', at:state.agentContext?.updatedAt || Date.now() },
-    { id:'system:tools', key:'tools', title:'TOOLS.md', folder:'agent', path:'/agent/TOOLS.md', content:systemToolsDocument(), editable:false, description:'The live runtime capability manifest. Read-only; permissions stay enforced by Lingon.', at:Date.now() },
-    { id:'system:user', key:'user', title:'USER.md', folder:'user', path:'/user/USER.md', content:docs.user, editable:true, description:'Stable preferences and background that you want the agent to remember.', at:state.agentContext?.updatedAt || Date.now() },
-    { id:'system:memory', key:'memory', title:'MEMORY.md', folder:'memory', path:'/memory/MEMORY.md', content:memoryDocumentContent(), editable:false, description:'A generated view of durable memory. Manage entries in Library → Memory.', at:Date.now() },
+    { id:'system:identity', key:'identity', title:'IDENTITY.md', folder:'agent', path:'/agent/IDENTITY.md', content:docs.identity, editable:true, description:'Your agent’s name and style.', at },
+    { id:'system:soul', key:'soul', title:'SOUL.md', folder:'agent', path:'/agent/SOUL.md', content:docs.soul, editable:true, description:'The tone and values behind every reply.', at },
+    { id:'system:agents', key:'agents', title:'AGENTS.md', folder:'agent', path:'/agent/AGENTS.md', content:docs.agents, editable:true, description:'How your agent plans, checks its work and asks for approval.', at },
+    { id:'system:user', key:'user', title:'USER.md', folder:'user', path:'/user/USER.md', content:docs.user, editable:true, description:'Preferences and background you want your agent to know.', at },
+    { id:'system:memory', key:'memory', title:'MEMORY.md', folder:'memory', path:'/memory/MEMORY.md', content:memoryDocumentContent(), editable:false, description:'Everything your agent remembers long term. Generated from your memories.', at:Date.now() },
   ];
-}
-function systemFolderItems(){
-  const all = libraryItems();
-  const uploads = all.filter(item => item._source === 'upload');
-  return [
-    { id:'agent', title:'agent', path:'/agent', icon:'spark', description:'Editable agent context and the live runtime manifest.', count:systemDocumentItems().filter(item => item.folder === 'agent').length },
-    { id:'user', title:'user', path:'/user', icon:'user', description:'Your editable USER.md context.', count:1 },
-    { id:'memory', title:'memory', path:'/memory', icon:'book', description:'Durable memory and dated notes.', count:1 + (state.memory || []).filter(m => m.category === 'daily').length },
-    { id:'workspace', title:'workspace', path:'/workspace', icon:'folder', description:'Real artifacts created by the agent and files you uploaded.', count:all.length },
-    { id:'uploads', title:'uploads', path:'/workspace/uploads', icon:'attach', description:'Files uploaded by you, kept separate from agent output.', count:uploads.length },
-  ];
-}
-function systemPathLabel(path){
-  const item = systemFolderItems().find(folder => folder.id === path);
-  return item ? item.title : 'System files';
 }
 function systemFileRowHtml(item){
-  const stateLabel = item.editable ? 'Editable' : 'Read-only';
-  return `<article class="system-file-row">
-    <button class="system-file-main" data-act="system-open" data-system-id="${esc(item.id)}">
-      <span class="system-file-icon ${item.editable ? 'editable' : 'readonly'}">${icon(item.editable ? 'pencil' : 'lock',16)}</span>
-      <span class="system-file-copy"><b>${esc(item.title)}</b><span>${esc(item.path)} · ${esc(item.description)}</span></span>
-      <span class="chip ${item.editable ? 'acc' : ''}">${stateLabel}</span>
-      <span class="system-file-chev">${icon('chev',15)}</span>
-    </button>
-  </article>`;
+  return `<button class="system-file-row" data-act="system-open" data-system-id="${esc(item.id)}">
+    <span class="system-file-icon">${icon(item.editable ? 'doc' : 'book',18)}</span>
+    <span class="system-file-copy"><b>${esc(item.title)}</b><span>${esc(item.description)}</span></span>
+    <span class="system-file-state">${item.editable ? 'Editable' : 'Read-only'}</span>
+    <span class="system-file-chev">${icon('chev',15)}</span>
+  </button>`;
 }
 function systemEditorHtml(item){
   const readOnly = !item.editable;
   return `<div class="system-editor">
     <button class="system-back" data-act="system-back">${icon('left',14)} System files</button>
     <div class="system-editor-head">
-      <span class="system-file-icon ${readOnly ? 'readonly' : 'editable'}">${icon(readOnly ? 'lock' : 'pencil',18)}</span>
       <div><span class="system-eyebrow">${esc(item.path)}</span><h3>${esc(item.title)}</h3><p>${esc(item.description)}</p></div>
       <span class="chip ${readOnly ? '' : 'acc'}">${readOnly ? 'Read-only' : 'Editable'}</span>
     </div>
     ${readOnly
-      ? `<pre class="system-editor-code">${esc(item.content)}</pre>${item.key === 'memory' ? `<button class="btn soft small" data-act="system-memory">${icon('book',14)} Manage memory</button>` : `<p class="system-editor-note">This file is generated from the live runtime. It describes capabilities; it cannot grant permissions or change safety boundaries.</p>`}`
+      ? `<pre class="system-editor-code">${esc(item.content)}</pre><button class="btn soft small" data-act="system-memory">${icon('book',14)} Manage memories</button>`
       : `<textarea class="field system-editor-text" id="system-editor-text" data-system-key="${esc(item.key)}" maxlength="${item.key === 'user' ? '4000' : '8000'}">${esc(item.content)}</textarea><div class="system-editor-actions"><button class="btn dark small" data-act="system-save">Save changes</button><button class="btn ghost small" data-act="system-back">Cancel</button></div>`}
   </div>`;
 }
-function systemWorkspaceItems(path){
-  const items = libraryItems();
-  return path === 'uploads' ? items.filter(item => item._source === 'upload') : items;
-}
 function systemLibraryBody(){
-  const path = state.systemPath || 'root';
   const selected = state.systemFile ? systemDocumentItems().find(item => item.id === state.systemFile) : null;
   if (selected) return systemEditorHtml(selected);
-  if (path === 'workspace' || path === 'uploads') {
-    const items = systemWorkspaceItems(path);
-    return `<div class="system-browser"><button class="system-back" data-act="system-back">${icon('left',14)} System files</button><div class="lib-head"><div><span class="lib-eyebrow">/${path === 'uploads' ? 'workspace/uploads' : 'workspace'}</span><h2>${path === 'uploads' ? 'Uploads' : 'Workspace'}</h2></div><span class="chip">${items.length} real ${items.length === 1 ? 'file' : 'files'}</span></div>${items.length ? `<div class="lib-sec">${path === 'uploads' ? 'Your uploads' : 'Agent output and uploads'}</div><div class="lib-grid">${items.map(libCardHtml).join('')}</div>` : `<div class="lib-empty card">${icon(path === 'uploads' ? 'attach' : 'folder',22)}<b>No real files yet</b><span>${path === 'uploads' ? 'Upload a file from Library to put it here.' : 'Ask your agent to create an artifact or upload a file.'}</span></div>`}</div>`;
-  }
-  const docs = systemDocumentItems().filter(item => item.folder === path || path === 'root');
-  const folders = path === 'root' ? systemFolderItems() : [];
-  const pathTitle = path === 'root' ? 'System files' : systemPathLabel(path);
-  return `<div class="system-browser">
-    ${path === 'root' ? '' : `<button class="system-back" data-act="system-back">${icon('left',14)} System files</button>`}
-    <div class="system-intro"><span class="lib-brand-mark">${Mascot.logo(28)}</span><div><span class="lib-eyebrow">Lingon runtime</span><h2>${esc(pathTitle)}</h2><p>These are the safe files and folders that shape your agent. Editable context is saved to your account.</p></div><span class="chip green">live</span></div>
-    ${folders.length ? `<div class="system-folder-grid">${folders.map(folder => `<button class="system-folder" data-act="system-folder" data-path="${esc(folder.id)}"><span class="system-folder-icon">${icon(folder.icon,20)}</span><span><b>${esc(folder.title)}/</b><small>${esc(folder.description)}</small></span><em>${folder.count}</em></button>`).join('')}</div>` : ''}
-    <div class="lib-sec">${path === 'root' ? 'Safe system files' : esc(pathTitle)}</div>
-    <div class="system-file-list">${docs.map(systemFileRowHtml).join('')}</div>
-    ${path === 'memory' ? `<button class="btn soft small" data-act="system-memory" style="margin-top:12px">${icon('book',14)} Manage memories</button>` : ''}
-  </div>`;
+  const items = systemDocumentItems();
+  return `<div class="lib-head"><div><span class="lib-eyebrow">Library</span><h1>System files</h1></div></div>
+    ${SYSTEM_FILE_GROUPS.map(([folder, label]) => `<div class="lib-sec">${label}</div><div class="system-file-list">${items.filter(item => item.folder === folder).map(systemFileRowHtml).join('')}</div>`).join('')}`;
 }
 let systemFilesPending = null, systemFilesOwner = null, systemFilesCheckedAt = 0;
 function refreshSystemFiles(force = false){
@@ -2784,32 +2888,109 @@ function refreshSystemFiles(force = false){
   systemFilesPending = request;
   return request;
 }
-const MAX_LIBRARY_UPLOAD_MB = 8;
+/* The Library lives on the account so the agent's library tools see the same
+   files. The list carries names, sizes and a text preview; file content loads
+   on demand and is cached for this session. */
+const MAX_LIBRARY_UPLOAD_MB = 6;
+const libraryContent = new Map(); // item id -> { loading } | { content } | { error }
+let libraryPending = null, libraryContentOwner = null, libraryViewer = null, libraryCheckedAt = 0, libraryOwner = null;
+function refreshLibrary(force = true){
+  if (!signedIn() || !window.LingonAuth?.api) return Promise.resolve();
+  if (libraryPending) return libraryPending;
+  const owner = currentUserId();
+  if (!force && owner === libraryOwner && Date.now() - libraryCheckedAt < 30000) return Promise.resolve();
+  libraryOwner = owner; libraryCheckedAt = Date.now();
+  libraryPending = (async () => {
+    await moveDeviceUploads();
+    const { items = [] } = await window.LingonAuth.api('/api/library');
+    if (owner !== currentUserId()) return;
+    state.libraryServer = items;
+    save();
+    if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
+    if ($('#side')) paintSide();
+  })().catch(error => { if (state.view === 'library') toast(error.message || 'Could not load your Library.'); })
+    .finally(() => { libraryPending = null; });
+  return libraryPending;
+}
+// Files uploaded before the Library was kept on the account move over once;
+// anything the account refuses (for example over 6 MB) stays on this device.
+async function moveDeviceUploads(){
+  for (const f of (state.libraryUploads || []).slice()) {
+    try {
+      await window.LingonAuth.api('/api/library', { method:'POST', body:JSON.stringify({ title:f.name, mime:f.type, content:f.dataUrl }) });
+      state.libraryUploads = state.libraryUploads.filter(item => item.id !== f.id);
+      save();
+    } catch {}
+  }
+}
+function libraryItemContent(id){
+  const owner = currentUserId();
+  if (owner !== libraryContentOwner) { libraryContent.clear(); libraryContentOwner = owner; }
+  if (libraryContent.has(id)) return libraryContent.get(id);
+  libraryContent.set(id, { loading:true });
+  window.LingonAuth.api('/api/library/' + encodeURIComponent(id))
+    .then(out => { if (owner === currentUserId()) libraryContent.set(id, { content:String(out.item?.content || '') }); })
+    .catch(error => { if (owner === currentUserId()) libraryContent.set(id, { error:error.message || 'Could not load this file.' }); })
+    .finally(() => { if (state.view === 'library' && $('#main')) paintLibrary($('#main')); });
+  return libraryContent.get(id);
+}
 function addLibraryUploads(fileList){
   const files = Array.from(fileList || []);
   if (!files.length) return;
-  let added = 0;
+  if (!signedIn()){ renderAuth(); return; }
+  let added = 0, finished = 0;
+  const settle = () => {
+    if (++finished < files.length) return;
+    if (added) toast(`${added} file${added === 1 ? '' : 's'} added to your Library.`);
+  };
   files.forEach((file) => {
     if (!file || file.size > MAX_LIBRARY_UPLOAD_MB * 1024 * 1024){
-      toast(`${file?.name || 'That file'} exceeds ${MAX_LIBRARY_UPLOAD_MB} MB.`);
+      toast(`${file?.name || 'That file'} is over ${MAX_LIBRARY_UPLOAD_MB} MB.`);
+      settle();
       return;
     }
-    if ((state.libraryUploads || []).some(item => item.name === file.name && item.size === file.size)) return;
+    // Text files are stored as text so they preview here and the agent can read them.
+    const ext = (file.name.match(/\.([a-z0-9]{2,8})$/i) || [])[1]?.toLowerCase() || '';
+    const textMime = { md:'text/markdown', markdown:'text/markdown', txt:'text/plain', csv:'text/csv', json:'application/json', html:'text/html', htm:'text/html' }[ext];
+    const asText = !!textMime && file.size <= 500000;
     const reader = new FileReader();
     reader.onload = () => {
-      state.libraryUploads.unshift({ id:uid(), name:file.name, size:file.size, type:file.type, dataUrl:String(reader.result || ''), at:Date.now() });
-      added++;
-      try { save(); } catch {
-        state.libraryUploads.shift();
-        toast('That file could not be kept in this browser. Try a smaller file.');
-        return;
-      }
-      if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
-      if (added === files.length) toast(`${added} file${added === 1 ? '' : 's'} uploaded to Library.`);
+      window.LingonAuth.api('/api/library', { method:'POST', body:JSON.stringify({ title:file.name, mime:asText ? textMime : file.type, content:String(reader.result || '') }) })
+        .then(out => {
+          if (!out?.item) return;
+          state.libraryServer = [out.item, ...(state.libraryServer || []).filter(item => item.id !== out.item.id)];
+          libraryContent.set(out.item.id, { content:String(reader.result || '') });
+          added++; save();
+          if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
+          if ($('#side')) paintSide();
+        })
+        .catch(error => toast(`${file.name}: ${error.message || 'could not be uploaded.'}`))
+        .finally(settle);
     };
-    reader.onerror = () => toast(`Could not read ${file.name}.`);
-    reader.readAsDataURL(file);
+    reader.onerror = () => { toast(`Could not read ${file.name}.`); settle(); };
+    if (asText) reader.readAsText(file); else reader.readAsDataURL(file);
   });
+}
+// Viewer for account files. Content renders through the Canvas document view,
+// so HTML runs in a sandboxed frame, never with the app's origin.
+function libraryViewerHtml(){
+  const item = libraryViewer && (state.libraryServer || []).find(x => x.id === libraryViewer);
+  if (!item) return '';
+  const loaded = libraryItemContent(item.id);
+  const content = String(loaded.content || '');
+  const ext = (String(item.title).match(/\.([a-z0-9]{2,5})$/i) || [])[1] || '';
+  const body = /^data:video\//.test(content) ? `<video class="lib-viewer-media" src="${esc(content)}" controls playsinline></video>`
+    : /^data:audio\//.test(content) ? `<audio class="lib-viewer-audio" src="${esc(content)}" controls></audio>`
+    : canvasDocumentHTML({ name:item.title, format:item.kind === 'web' ? 'html' : ext || 'text' }, loaded);
+  return `<div class="lib-viewer" role="dialog" aria-modal="true" aria-label="${esc(item.title)}">
+    <button class="lib-viewer-scrim" data-act="lib-viewer-close" aria-label="Close" tabindex="-1"></button>
+    <div class="lib-viewer-panel">
+      <div class="lib-viewer-bar"><span>${item.source === 'upload' ? 'Your upload' : 'Made by agent'} · ${esc(fmtBytes(Number(item.size || 0)))} · ${esc(fmtAgo(item.createdAt))}</span>
+        <button class="iconbtn" data-act="lib-download" data-id="lib:${esc(item.id)}" title="Download" aria-label="Download ${esc(item.title)}">${icon('down',16)}</button>
+        <button class="iconbtn" data-act="lib-viewer-close" title="Close" aria-label="Close">${icon('x',16)}</button></div>
+      <div class="lib-viewer-body">${body}</div>
+    </div>
+  </div>`;
 }
 function libraryItemById(id){ return libraryItems().find(item => item.id === id) || null; }
 function downloadDataUrl(name, dataUrl){
@@ -2822,6 +3003,14 @@ function downloadDataUrl(name, dataUrl){
 async function downloadLibraryItem(item){
   if (!item) return;
   const card = item.card || {};
+  if (item.libraryId){
+    try {
+      const cached = libraryContent.get(item.libraryId)?.content;
+      const content = cached ?? String((await window.LingonAuth.api('/api/library/' + encodeURIComponent(item.libraryId))).item?.content || '');
+      if (content.startsWith('data:')) downloadDataUrl(item.title, content); else dl(item.title, content);
+    } catch (error) { toast(error.message || 'Could not download that file.'); }
+    return;
+  }
   if (card.managedArtifactId && item.chatId && window.Engine?.download){
     try { await window.Engine.download(item.chatId, card); toast('Downloading ' + item.title); }
     catch (error) { toast(error.message || 'Could not download that artifact.'); }
@@ -2891,7 +3080,8 @@ function approvalKind(row){
   const args = approvalArgs(row.detail);
   const slug = approvalSlug(row, args);
   const blob = [row.title, row.key, row.detail, slug].join(' ').toLowerCase();
-  if (/gmail|mail_send|mail_read|inbox|\bemail\b/.test(blob)) return 'gmail';
+  if (/mail_send|mail_read|mail_status|mail_draft/.test(blob)) return 'mail';
+  if (/gmail|inbox|\bemail\b/.test(blob)) return 'gmail';
   if (/shop_pay|shop_purchase|shop pay|shopify/.test(blob)) return 'wallet';
   if (/github|gh_|git_/.test(blob)) return 'github';
   if (approvalHost(args) || /web_fetch|browser|https?:\/\/|web access/.test(blob)) return 'web';
@@ -2912,7 +3102,8 @@ function approvalHeadline(row){
   if (/shop_purchase|shop pay|shopify/.test(slug + ' ' + String(row.title || '').toLowerCase())) return 'Complete this Shop Pay purchase';
   if (/gmail/.test(slug) && /send/.test(slug)) return 'Send this email in Gmail';
   if (/gmail/.test(slug) && /read|fetch|list|get/.test(slug)) return 'Read email in Gmail';
-  if (/mail_send|send.*email|email.*gmail/.test(slug + ' ' + String(row.title || '').toLowerCase())) return 'Send this email in Gmail';
+  if (/mail_send/.test(slug)) return 'Send this email from your agent mailbox';
+  if (/send.*email|email.*gmail/.test(slug + ' ' + String(row.title || '').toLowerCase())) return 'Send this email in Gmail';
   if (/mail_read/.test(slug)) return 'Read email in Gmail';
   if (/browser_submit|computer_submit|fill_secret/.test(slug + ' ' + String(row.title || '').toLowerCase())) return args && args.summary ? String(args.summary).slice(0, 140) : 'Finish this step for you';
   if (host && !/web_fetch|browser/.test(slug)) return 'Share info with ' + host;
@@ -2959,6 +3150,7 @@ function approvalIconHtml(row){
   const app = toolkit && (state.composioApps || []).find(a => a.toolkit === toolkit);
   if (app && app.logo) return `<span class="appr-ico brand">${appLogoHtml(app)}</span>`;
   if (kind === 'gmail') return `<span class="appr-ico brand">${GMAIL_MARK}</span>`;
+  if (kind === 'mail') return `<span class="appr-ico">${icon('mail',18)}</span>`;
   if (kind === 'github') return `<span class="appr-ico">${icon('git',18)}</span>`;
   if (kind === 'web') return `<span class="appr-ico">${icon('websearch',18)}</span>`;
   return `<span class="appr-ico">${icon('shieldcheck',18)}</span>`;
@@ -2966,15 +3158,17 @@ function approvalIconHtml(row){
 const GMAIL_MARK = '<svg class="appr-brand" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M1.5 6.8v10.5c0 .9.7 1.7 1.7 1.7h2.2V10l6.6 4.8L18.6 10v9h2.2c.9 0 1.7-.8 1.7-1.7V6.8L12 14.2Z"/><path fill="#34A853" d="M20.8 4H18L12 8.3 6 4H3.2L12 10.4Z"/><path fill="#EA4335" d="M1.5 4.1C1.5 3.2 2.3 2.5 3.2 2.5H6v1.6L1.5 7.2Z"/><path fill="#FBBC04" d="M20.8 2.5h-2.8v1.6l4.5 3.1V4.1c0-.9-.8-1.6-1.7-1.6Z"/></svg>';
 
 /* ---------------- Goals: categories + helpers ---------------- */
+// 'family' keeps its id so goals saved before the Relationships rename still match.
 const GOAL_CATS = [
   { id:'health', label:'Health', ic:'heart' },
-  { id:'family', label:'Family', ic:'user' },
-  { id:'finance', label:'Finance', ic:'wallet' },
+  { id:'family', label:'Relationships', ic:'users' },
+  { id:'finance', label:'Finance', ic:'dollar' },
   { id:'career', label:'Career', ic:'brief' },
-  { id:'interests', label:'Interests', ic:'star' },
-  { id:'other', label:'Something else', ic:'grid' },
+  { id:'interests', label:'Interests', ic:'palette' },
+  { id:'productivity', label:'Productivity', ic:'laptop' },
+  { id:'other', label:'Something else', ic:'checksq' },
 ];
-function goalCat(id){ return GOAL_CATS.find(c => c.id === id) || GOAL_CATS[5]; }
+function goalCat(id){ return GOAL_CATS.find(c => c.id === id) || GOAL_CATS.find(c => c.id === 'other'); }
 function goalProgress(g){
   const subs = Array.isArray(g.subgoals) ? g.subgoals : [];
   if (!subs.length) return g.done ? 100 : 0;
@@ -2984,6 +3178,55 @@ function goalCounts(){
   const goals = Array.isArray(state.goals) ? state.goals : [];
   return { total: goals.length, active: goals.filter(g => g.active && !g.done).length, done: goals.filter(g => g.done).length };
 }
+// Goals live on the account so this page and the agent's goal tools share them.
+function goalFromServer(g){
+  return { id:g.id, title:g.title, category:g.category, chatId:g.chatId || null, createdAt:g.createdAt,
+    active:g.status === 'active', done:g.status === 'done',
+    subgoals:(g.steps || []).map(s => ({ id:s.id, title:s.title, done:!!s.done })) };
+}
+function repaintGoalViews(){
+  if (state.view === 'goals' && $('#main')) paintGoals($('#main'));
+  if ($('#side')) paintSide();
+}
+let goalsPending = null, goalsCheckedAt = 0, goalsOwner = null;
+function refreshGoals(force = true){
+  if (!signedIn() || !window.LingonAuth?.api) return Promise.resolve();
+  if (goalsPending) return goalsPending;
+  const owner = currentUserId();
+  if (!force && owner === goalsOwner && Date.now() - goalsCheckedAt < 30000) return Promise.resolve();
+  goalsOwner = owner; goalsCheckedAt = Date.now();
+  goalsPending = (async () => {
+    let { goals = [] } = await window.LingonAuth.api('/api/goals');
+    // One-time move of goals that were only kept on this device.
+    const deviceGoals = (state.goals || []).filter(g => !String(g.id).startsWith('goal_'));
+    if (state.goalsImportedFor !== owner && deviceGoals.length) {
+      for (const g of deviceGoals.slice().reverse()) {
+        await window.LingonAuth.api('/api/goals', { method:'POST', body:JSON.stringify({ title:g.title, category:g.category,
+          status:g.done ? 'done' : g.active === false ? 'paused' : 'active', createdAt:g.createdAt,
+          steps:(g.subgoals || []).map(s => ({ title:s.title, done:!!s.done })) }) }).catch(() => {});
+      }
+      ({ goals = [] } = await window.LingonAuth.api('/api/goals'));
+    }
+    if (owner !== currentUserId()) return;
+    state.goalsImportedFor = owner;
+    state.goals = goals.map(goalFromServer);
+    save(); repaintGoalViews();
+  })().catch(error => { if (state.view === 'goals') toast(error.message || 'Could not load your goals.'); })
+    .finally(() => { goalsPending = null; });
+  return goalsPending;
+}
+// Local state changes first so the check feels instant; the server answer wins.
+function saveGoalChange(id, request){
+  if (!signedIn()) return;
+  const path = '/api/goals/' + encodeURIComponent(id);
+  (request ? window.LingonAuth.api(path, { method:'PATCH', body:JSON.stringify(request) }) : window.LingonAuth.api(path, { method:'DELETE' }))
+    .then(out => {
+      if (!out?.goal) return;
+      const i = (state.goals || []).findIndex(g => g.id === id);
+      if (i >= 0) { state.goals[i] = goalFromServer(out.goal); save(); repaintGoalViews(); }
+    })
+    .catch(error => { toast(error.message || 'Could not save that change.'); refreshGoals(); });
+}
 
 function paintSide(){
   const a = state.agent;
@@ -2991,7 +3234,7 @@ function paintSide(){
   const u = currentUser();
   const initials = esc((u.name || 'U').slice(0, 1).toUpperCase());
   let libCount = 0;
-  try { libCount = artifactRows().length; } catch { libCount = 0; }
+  try { libCount = libraryItems().length; } catch { libCount = 0; }
   const gc = goalCounts();
   const libOn = state.view === 'library';
   const goalsOn = state.view === 'goals';
@@ -3004,7 +3247,7 @@ function paintSide(){
         <span class="sicon sicon-lib">${icon('library',15)}</span><span>Library</span>
         ${libCount ? `<span class="cnt">${libCount}</span>` : ''}
       </button>
-      <button class="sitem navitem${goalsOn ? ' on' : ''}" data-act="open-goals" title="Track health, family, finance, career and interests">
+      <button class="sitem navitem${goalsOn ? ' on' : ''}" data-act="open-goals" title="Set goals and check them off as you go">
         <span class="sicon sicon-goal">${icon('target',15)}</span><span>Goals</span>
         ${gc.total ? `<span class="cnt">${gc.active}/${gc.total}</span>` : ''}
       </button>
@@ -3048,10 +3291,10 @@ function paintSide(){
 }
 function usageCardHtml(b){
   const v = creditView(b);
-  const note = v.tone === 'empty' ? 'Ready for a top-up' : v.tone === 'low' ? 'A little low on tokens' : `${fmtTokens(v.used)} of ${fmtTokens(v.granted)} used`;
+  const note = `${fmtTokens(v.used)} of ${fmtTokens(v.granted)} monthly tokens used`;
   return `<div class="usage-content credit-tone-${v.tone}">
-    <div class="usage-balance"><strong>${fmtTokens(v.remaining)}</strong><span>tokens left</span></div>
-    ${creditMeterHtml(v)}<div class="usage-caption">${note}</div>
+    <div class="usage-balance"><strong>${Math.round(v.percent)}%</strong><span>monthly plan used</span></div>
+    ${creditMeterHtml(v)}<div class="usage-meter-scale"><span>0%</span><span>100%</span></div><div class="usage-caption">${note}</div>
     <div class="usage-footer"><span class="usage-companion">${Mascot.svg('lingon','happy',28)}</span>${icon('aur',14)}</div>
     <button class="usage-link" data-act="nav" data-view="billing" aria-label="View billing and tokens" title="View billing and tokens"></button>
   </div>`;
@@ -3061,71 +3304,77 @@ function usageCardHtml(b){
 function paintGoals(M){
   const goals = Array.isArray(state.goals) ? state.goals : [];
   const filter = state.goalFilter || 'all';
-  const catFilter = state.goalCat || 'all';
   const gc = goalCounts();
-  const completion = gc.total ? Math.round(gc.done / gc.total * 100) : 0;
-  let list = goals.slice().sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  // Active goals first, then paused, finished last; newest first within each.
+  const rank = g => g.done ? 2 : g.active ? 0 : 1;
+  let list = goals.slice().sort((a, b) => rank(a) - rank(b) || Number(b.createdAt || 0) - Number(a.createdAt || 0));
   if (filter === 'active') list = list.filter(g => g.active && !g.done);
   if (filter === 'done') list = list.filter(g => g.done);
-  if (catFilter !== 'all') list = list.filter(g => (g.category || 'other') === catFilter);
+  const goalCard = g => {
+    const c = goalCat(g.category);
+    const pct = goalProgress(g);
+    const subs = Array.isArray(g.subgoals) ? g.subgoals : [];
+    const doneLabel = g.done ? 'Mark as not done' : 'Mark as done';
+    return `<article class="goal-card${g.done ? ' is-done' : ''}${!g.active && !g.done ? ' is-paused' : ''}">
+      <div class="goal-head">
+        <button class="goal-check${g.done ? ' on' : ''}" data-act="goal-done" data-id="${g.id}" title="${doneLabel}" aria-label="${doneLabel}: ${esc(g.title)}" aria-pressed="${g.done ? 'true' : 'false'}">${icon('check',14)}</button>
+        <div class="goal-title-wrap">
+          <b class="goal-title">${esc(g.title)}</b>
+          <div class="goal-meta"><span class="goal-category-label">${icon(c.ic,13)} ${c.label}</span>
+            <span class="goal-status${g.done ? ' done' : g.active ? ' active' : ''}">${g.done ? 'Done' : g.active ? 'In progress' : 'Paused'}</span>
+            ${subs.length ? `<span class="goal-sub-count">${subs.filter(s => s.done).length} of ${subs.length} steps</span>` : ''}
+          </div>
+        </div>
+        <div class="goal-menu-wrap">
+          <button class="goal-more" data-act="goal-menu" data-id="${g.id}" title="More options for ${esc(g.title)}" aria-label="More options for ${esc(g.title)}" aria-expanded="${state.goalMenu === g.id}">${icon('more',19)}</button>
+          ${state.goalMenu === g.id ? `<div class="goal-menu pop" role="menu">${g.done ? '' : `<button role="menuitem" data-act="goal-active" data-id="${g.id}">${icon(g.active ? 'clock' : 'up',15)} ${g.active ? 'Pause goal' : 'Resume goal'}</button>`}<button role="menuitem" data-act="goal-del" data-id="${g.id}">${icon('trash',15)} Delete goal</button></div>` : ''}
+        </div>
+      </div>
+      ${subs.length ? `<div class="goal-bar" role="progressbar" aria-label="${esc(g.title)} progress" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>` : ''}
+      <div class="sub-list">
+        ${subs.map(s => `<div class="sub-row${s.done ? ' is-done' : ''}">
+          <button class="goal-check small${s.done ? ' on' : ''}" data-act="sub-done" data-id="${g.id}" data-sub="${s.id}" title="${s.done ? 'Mark step as not done' : 'Mark step as done'}" aria-label="${s.done ? 'Mark step as not done' : 'Mark step as done'}: ${esc(s.title)}" aria-pressed="${s.done}">${icon('check',11)}</button>
+          <span class="sub-title">${esc(s.title)}</span>
+          <button class="ap-x" data-act="sub-del" data-id="${g.id}" data-sub="${s.id}" title="Remove step" aria-label="Remove step: ${esc(s.title)}">${icon('x',11)}</button>
+        </div>`).join('')}
+      </div>
+      ${g.done ? '' : `<div class="sub-add">
+        <span class="sub-add-icon">${icon('plus',14)}</span>
+        <input class="field" id="sub-${g.id}" placeholder="Add a step" aria-label="Add a step to ${esc(g.title)}" maxlength="120">
+        <button class="btn ghost tiny" data-act="sub-add" data-id="${g.id}">Add</button>
+      </div>`}
+    </article>`;
+  };
   M.innerHTML = `<div class="page"><div class="pageinner goals-page">
-    <section class="goals-hero">
-      <div class="goals-hero-copy"><span class="goals-eyebrow">Your direction</span><h1>Goals</h1><p>Make space for what matters. Your agent can help you turn an idea into a plan, one step at a time.</p><button class="btn goals-create" data-act="goal-start">${icon('plus',16)} Create goal</button></div>
-      <div class="goals-hero-art" aria-hidden="true"><span class="goals-orbit goals-orbit-one"></span><span class="goals-orbit goals-orbit-two"></span>${Mascot.svg(state.agent.color,'happy',116)}</div>
+    <header class="goals-head"><h1>Goals</h1><p>Pick a category and tell ${esc(state.agent?.name || 'your agent')} what you’re after. You’ll shape a plan together, then track it and check it off here.</p></header>
+    ${goals.length ? `<section class="goals-section" aria-labelledby="goals-yours">
+      <div class="goals-section-head">
+        <div><h2 id="goals-yours">Your goals</h2><span class="goals-summary">${gc.done} of ${gc.total} done${gc.active ? ` · ${gc.active} in progress` : ''}</span></div>
+        <div class="seg goals-filter" aria-label="Filter goals">
+          <button class="${filter === 'all' ? 'on' : ''}" data-act="goal-filter" data-f="all">All</button>
+          <button class="${filter === 'active' ? 'on' : ''}" data-act="goal-filter" data-f="active">Active</button>
+          <button class="${filter === 'done' ? 'on' : ''}" data-act="goal-filter" data-f="done">Done</button>
+        </div>
+      </div>
+      <div class="goal-list">${list.map(goalCard).join('') || `<p class="goal-empty">${filter === 'done' ? 'Nothing checked off yet. Tap the circle next to a goal when you reach it.' : 'No goals in progress. Resume a paused goal or create a new one below.'}</p>`}</div>
+    </section>` : ''}
+    <section class="goals-section" aria-labelledby="goals-create">
+      <h2 id="goals-create">Create a goal</h2>
+      <div class="goal-create-list">
+        ${GOAL_CATS.map(c => {
+          const n = goals.filter(g => (g.category || 'other') === c.id).length;
+          return `<button class="goal-create-row" data-act="goal-start" data-c="${c.id}"><span class="goal-create-icon">${icon(c.ic,20)}</span><span class="goal-create-label">${c.label}</span>${n ? `<small>${n} ${n === 1 ? 'goal' : 'goals'}</small>` : ''}<span class="goal-create-chev">${icon('chev',16)}</span></button>`;
+        }).join('')}
+      </div>
     </section>
-    <section class="goals-overview" aria-label="Goal progress"><div><span class="goals-overview-label">Your progress</span><strong>${gc.done}<span> / ${gc.total}</span></strong><small>goals completed</small></div><div class="goals-overview-right"><span>${gc.active} in progress</span><b>${completion}%</b><div class="goals-overview-track"><i style="width:${completion}%"></i></div></div></section>
-    <section class="goals-categories" aria-label="Goal categories"><div class="goal-section-heading"><h2>Categories</h2><span>Find what matters to you</span></div><div class="goal-cats">
-      <button class="goal-category${catFilter === 'all' ? ' on' : ''}" data-act="goal-cat" data-c="all" aria-pressed="${catFilter === 'all'}"><span class="goal-category-icon">${icon('grid',17)}</span><span>All</span><small>${gc.total}</small></button>
-      ${GOAL_CATS.map(c => `<button class="goal-category${catFilter === c.id ? ' on' : ''}" data-act="goal-cat" data-c="${c.id}" aria-pressed="${catFilter === c.id}"><span class="goal-category-icon">${icon(c.ic,17)}</span><span>${c.label}</span><small>${goals.filter(g => (g.category || 'other') === c.id).length}</small></button>`).join('')}
-    </div></section>
-    <section class="goals-list-section"><div class="goal-section-heading"><h2>Your goals</h2><div class="seg goals-filter" aria-label="Filter goals">
-      <button class="${filter === 'all' ? 'on' : ''}" data-act="goal-filter" data-f="all">All</button>
-      <button class="${filter === 'active' ? 'on' : ''}" data-act="goal-filter" data-f="active">Active</button>
-      <button class="${filter === 'done' ? 'on' : ''}" data-act="goal-filter" data-f="done">Done</button>
-    </div></div>
-    <div class="goal-list">
-      ${list.map(g => {
-        const c = goalCat(g.category);
-        const pct = goalProgress(g);
-        const subs = Array.isArray(g.subgoals) ? g.subgoals : [];
-        return `<article class="goal-card card${g.done ? ' is-done' : ''}${g.active && !g.done ? ' is-active' : ''}">
-          <div class="goal-head">
-            <button class="goal-check${g.done ? ' on' : ''}" data-act="goal-done" data-id="${g.id}" title="${g.done ? 'Mark as not done' : 'Mark as done'}" aria-label="${g.done ? 'Mark as not done' : 'Mark as done'}: ${esc(g.title)}" aria-pressed="${g.done ? 'true' : 'false'}">${icon('check',16)}</button>
-            <div class="goal-title-wrap">
-              <b class="goal-title">${esc(g.title)}</b>
-              <div class="goal-meta"><span class="goal-category-label">${icon(c.ic,13)} ${c.label}</span>
-                <span class="goal-status${g.done ? ' done' : g.active ? ' active' : ''}">${g.done ? 'Done' : g.active ? 'In progress' : 'Paused'}</span>
-                ${subs.length ? `<span class="goal-sub-count">${subs.filter(s => s.done).length} of ${subs.length} steps</span>` : ''}
-              </div>
-            </div>
-            <div class="goal-menu-wrap">
-              <button class="goal-more" data-act="goal-menu" data-id="${g.id}" title="More options for ${esc(g.title)}" aria-label="More options for ${esc(g.title)}" aria-expanded="${state.goalMenu === g.id}">${icon('more',19)}</button>
-              ${state.goalMenu === g.id ? `<div class="goal-menu pop" role="menu">${g.done ? '' : `<button role="menuitem" data-act="goal-active" data-id="${g.id}">${icon(g.active ? 'clock' : 'up',15)} ${g.active ? 'Pause goal' : 'Resume goal'}</button>`}<button role="menuitem" data-act="goal-del" data-id="${g.id}">${icon('trash',15)} Delete goal</button></div>` : ''}
-            </div>
-          </div>
-          ${subs.length ? `<div class="goal-bar" role="progressbar" aria-label="${esc(g.title)} progress" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>` : ''}
-          <div class="sub-list">
-            ${subs.map(s => `<div class="sub-row${s.done ? ' is-done' : ''}">
-              <button class="goal-check small${s.done ? ' on' : ''}" data-act="sub-done" data-id="${g.id}" data-sub="${s.id}" title="${s.done ? 'Mark step as not done' : 'Mark step as done'}" aria-label="${s.done ? 'Mark step as not done' : 'Mark step as done'}: ${esc(s.title)}" aria-pressed="${s.done}">${icon('check',12)}</button>
-              <span class="sub-title">${esc(s.title)}</span>
-              <button class="ap-x" data-act="sub-del" data-id="${g.id}" data-sub="${s.id}" title="Remove sub-goal">${icon('x',11)}</button>
-            </div>`).join('')}
-          </div>
-          ${g.done ? '' : `<div class="sub-add">
-            <input class="field" id="sub-${g.id}" placeholder="Add a step…" aria-label="Add a step to ${esc(g.title)}" maxlength="120">
-            <button class="btn ghost small" data-act="sub-add" data-id="${g.id}">${icon('plus',13)} Add step</button>
-          </div>`}
-        </article>`;
-      }).join('') || `<div class="goal-empty card"><span class="goal-empty-mark">${icon('target',22)}</span><div><b>${goals.length ? 'No goals match these filters' : 'Start with one meaningful goal'}</b><p>${goals.length ? 'Try another category or status to find your goal.' : 'Tell your agent what you want to achieve. You can shape the details together in chat.'}</p></div>${goals.length ? '' : `<button class="btn small" data-act="goal-start">${icon('plus',14)} Create goal</button>`}</div>`}
-    </div></section>
   </div></div>`;
+  refreshGoals(false);
   M.querySelectorAll('.sub-add input').forEach(inp => {
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter'){ e.preventDefault(); inp.parentElement?.querySelector('[data-act="sub-add"]')?.click(); }
     });
   });
 }
-
 function paintMain(){
   const M = $('#main');
   if (state.view !== 'chat') stopVoice();
@@ -3167,23 +3416,31 @@ function statusFor(c){
 /* Header mascot: while the agent works it sits at its laptop with headphones
    and the pill narrates the latest step from this chat (live progress label
    or tool line). Free → just the name; waiting on you → what it needs. */
-const floatLive = new Map();   // chat id -> { t, at } latest activity
-const floatSince = new Map();  // chat id -> when the current work spell began
+const floatLive = new Map();   // chat id -> latest real step of the current run
 const FLOAT_WAIT = { 'Needs approval':'Needs your approval', 'Connecting':'Waiting for a connection', 'Waiting for a secret':'Waiting for a secret', 'Asking you':'Waiting for your answer' };
 function noteActivity(c, t){
-  const text = String(t || '').replace(/\s*(…|\.\.\.)\s*$/, '').trim();
+  const text = String(t || '').replace(/\s*(\.\.\.|…)\s*$/, '').trim();
   if (!c || !text) return;
-  floatLive.set(c.id, { t: text.length > 60 ? text.slice(0, 59) + '…' : text, at: Date.now() });
+  floatLive.set(c.id, text.length > 60 ? text.slice(0, 59) + '…' : text);
   if (isActive(c)) updateFloat();
 }
+/* Working = an AI call is in flight for this chat: the chat's own model run,
+   or a delegated task of this chat that is actually running (not queued or
+   waiting for you). Pending cards alone never count. */
+function aiWorking(c){
+  if (!c) return false;
+  if (Engine.managed) return !!Engine.isRunning?.(c.id) || Object.values(c.managedTasks || {}).some(t => t.status === 'running');
+  return !!(c.coordinatorRuns || c.busy || runningTask(c));
+}
 function floatView(c){
-  const status = statusFor(c);
-  if (!status || status === 'Available') { if (c) floatSince.delete(c.id); return { working:false, text:'' }; }
-  if (FLOAT_WAIT[status]) return { working:false, text:FLOAT_WAIT[status] };
-  if (!floatSince.has(c.id)) floatSince.set(c.id, Date.now() - 1000);
-  const live = floatLive.get(c.id);
-  const fresh = live && live.at >= floatSince.get(c.id);
-  return { working:true, text: fresh ? live.t : status.replace(/ · available$/, '') };
+  if (!aiWorking(c)) {
+    if (c) floatLive.delete(c.id);
+    const wait = FLOAT_WAIT[statusFor(c)];
+    return { working:false, text:wait || '' };
+  }
+  const task = Object.values(c.managedTasks || {}).find(t => t.status === 'running');
+  const text = floatLive.get(c.id) || (task?.title ? `Working on “${task.title.length > 40 ? task.title.slice(0, 39) + '…' : task.title}”` : '');
+  return { working:true, text };
 }
 function updateFloat(){
   const s = $('#floatstatus');
@@ -3201,7 +3458,7 @@ function syncComposerActions(c){
   const stop = $('#cstop');
   if (!input || !send || !stop) return;
   const running = !!(Engine.managed && Engine.isRunning?.(c?.id));
-  const hasDraft = !!input.value.trim() || pendingFiles.length > 0;
+  const hasDraft = !!input.value.trim() || filesFor($('#cform')).length > 0;
   stop.hidden = !running || hasDraft;
   send.hidden = running && !hasDraft;
 }
@@ -3228,10 +3485,9 @@ function paintChat(M){
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
       ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
-      <button class="giftbtn" data-act="opengift" title="Belna free $50 gift card" aria-label="Open Belna free $50 gift card">${Mascot.logo(18)}<span><b>belna</b> · Free $50 gift card</span></button>
-      <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas">${icon('easel',16)}</button>
+      <button class="giftbtn" data-act="opengift" title="Invite a friend — 10 million tokens each" aria-label="Open invite code">${Mascot.logo(18)}<span>Invite a friend · 10M each</span></button>
+      <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas" aria-label="Toggle canvas">${icon('menu',16)}</button>
     </div>
-    ${c.goalDraft ? `<div class="goal-chat-panel"><span class="goal-chat-icon">${icon('target',18)}</span><div class="goal-chat-copy"><b>${c.goalDraft.savedId ? 'Goal saved' : 'Create a goal with your agent'}</b><span>${c.goalDraft.savedId ? 'Keep planning here, or open your goals to track progress.' : 'Talk through your idea, then name it and save it here.'}</span></div>${c.goalDraft.savedId ? `<button class="btn small" data-act="goal-view">View goals ${icon('aur',13)}</button>` : `<div class="goal-chat-fields"><input class="field" id="goal-draft-title" value="${esc(c.goalDraft.title || '')}" maxlength="120" placeholder="Name your goal" aria-label="Goal name"><select class="field" id="goal-draft-cat" aria-label="Goal category">${GOAL_CATS.map(cat => `<option value="${cat.id}"${cat.id === c.goalDraft.category ? ' selected' : ''}>${cat.label}</option>`).join('')}</select><button class="btn small" data-act="goal-save">Save goal</button></div>`}</div>` : ''}
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
       ${c.messages.map(m => msgNode(c, m).outerHTML).join('')}
     </div></div>
@@ -3265,12 +3521,8 @@ function paintChat(M){
   updateFloat();
   const prompt = $('#cprompt');
   prompt.value = draft;
-  const goalTitle = M.querySelector('#goal-draft-title');
-  if (goalTitle) goalTitle.addEventListener('input', (e) => { c.goalDraft.title = e.target.value; save(); });
-  const goalCategory = M.querySelector('#goal-draft-cat');
-  if (goalCategory) goalCategory.addEventListener('change', (e) => { c.goalDraft.category = e.target.value; save(); });
   if (focused) { prompt.focus({ preventScroll:true }); prompt.setSelectionRange(selectionStart, selectionEnd); }
-  $('#cform').addEventListener('submit', e => { e.preventDefault(); const v = $('#cprompt').value.trim(); if (v || pendingFiles.length){ stopVoice(); $('#cprompt').value = ''; sendPrompt(v, pendingFiles.slice()); clearFiles(); } });
+  $('#cform').addEventListener('submit', e => { e.preventDefault(); const form = $('#cform'); const v = $('#cprompt').value.trim(); if (v || filesFor(form).length){ const files = readyFiles(form); if (!files) return; stopVoice(); $('#cprompt').value = ''; sendPrompt(v || 'Please review the attached files.', files); clearFiles(form); } });
   $('#cprompt').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#cform').requestSubmit(); } });
   prompt.addEventListener('input', () => syncComposerActions(c));
   wirePromptBox($('#cform'), $('#cprompt'));
@@ -3285,6 +3537,9 @@ const REACTIONS = [
   { id:'down', emoji:'👎', code:'1f44e', label:'Thumbs down' },
   { id:'heart', emoji:'❤️', code:'2764-fe0f', label:'Heart' },
   { id:'poop', emoji:'💩', code:'1f4a9', label:'Poop' },
+  { id:'laugh', emoji:'😂', code:'1f602', label:'Laugh' },
+  { id:'wow', emoji:'😮', code:'1f62e', label:'Wow' },
+  { id:'party', emoji:'🎉', code:'1f389', label:'Celebrate' },
 ];
 function normalizeReaction(value){
   return String(value || '').replace(/\uFE0F|\uFE0E/g, '');
@@ -3309,11 +3564,13 @@ function replyPreviewHTML(m){
 }
 function messageChromeHTML(c, m){
   const active = new Set((Array.isArray(m.reactions) ? m.reactions : []).map((r) => findReaction(r)?.id).filter(Boolean));
+  const agentReaction = m.role === 'user' ? findReaction(m.agentReaction) : null;
   const attrs = `data-chat="${c.id}" data-msg="${m.id}"`;
   const chosen = REACTIONS.filter((r) => active.has(r.id)).map((r) => `<button type="button" class="reaction-pill on" data-act="reactmsg" ${attrs} data-reaction="${r.id}" title="Remove ${r.label}" aria-label="Remove ${r.label}">${appleEmojiHTML(r.emoji, r.code)}</button>`).join('');
+  const fromAgent = agentReaction ? `<span class="reaction-pill agent-reaction" title="${esc(state.agent.name)} reacted ${esc(agentReaction.label)}" aria-label="${esc(state.agent.name)} reacted ${esc(agentReaction.label)}">${appleEmojiHTML(agentReaction.emoji, agentReaction.code)}</span>` : '';
   return {
-    has: active.size > 0,
-    reactions: chosen ? `<div class="message-reactions">${chosen}</div>` : '',
+    has: active.size > 0 || !!agentReaction,
+    reactions: chosen || fromAgent ? `<div class="message-reactions">${chosen}${fromAgent}</div>` : '',
     actions: `<div class="message-actions" aria-label="Message actions">
     <button type="button" data-act="replymsg" ${attrs} title="Reply">${icon('chatb',13)}<span>Reply</span></button>
     <button type="button" data-act="copymsg" ${attrs} title="Copy">${icon('copy',13)}<span>Copy</span></button>
@@ -3334,7 +3591,7 @@ function msgNode(c, m){
   if (m.kind === 'chips')
     return el('<div style="display:none"></div>');
   if (m.kind === 'card')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${['progress','browser','computer','file','artifact','canvas'].includes(m.card.type) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${['progress','browser','computer','file','artifact','canvas','goal','library','secret'].includes(m.card.type) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
   return el('<div></div>');
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
@@ -3486,7 +3743,7 @@ function cardNode(c, m){
   </div>`;
 
   if (cd.type === 'approval' && cd.managedCallId) return `<div class="acard">
-    ${hd(icon('shieldcheck',20),'var(--acc-soft)','var(--acc)',esc(cd.title),'Approve this exact action')}
+    ${hd(icon('shieldcheck',20),'var(--acc-soft)','var(--acc)',esc(approvalHeadline({title:cd.title,detail:cd.detail})),'Approve this exact action')}
     <div class="bd"><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(cd.detail)}</pre></div>
     ${pending ? `<div class="stack"><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">Allow</button><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Deny</button></div>` : ''}</div>`;
 
@@ -3502,16 +3759,26 @@ function cardNode(c, m){
     ${pending ? `<div class="stack"><button class="btn" data-act="connect" data-chat="${k}" data-msg="${mid}">Connect</button><button class="btn ghost" data-act="deny-connect" data-chat="${k}" data-msg="${mid}">Not now</button></div>` : `<div class="ft"><span class="note">${icon('lock',12)} manage in Vault</span></div>`}</div>`;
   }
 
-  if (cd.type === 'secret') return `<div class="acard">
-    ${hd(icon('lock',20),'var(--acc-soft)','var(--acc)','Secure credentials store','encrypted at rest · scoped to your account')}
+  if (cd.type === 'secret') {
+    // Agent requests (vault_request) fix the name the agent will look up; the
+    // decision event reports them as approved/denied rather than saved/skipped.
+    const requested = !!cd.managedCallId;
+    const saved = cd.status === 'saved' || cd.status === 'approved';
+    const status = saved ? STCHIP.saved : cd.status === 'denied' ? STCHIP.skipped : stChip(cd);
+    const title = requested ? `${esc(state.agent.name)} needs “${esc(cd.suggest || 'a credential')}”` : 'Save a secret to your vault';
+    return `<div class="acard secret-card">
+    <div class="hd"><div class="tile" style="background:var(--acc-soft);color:var(--acc)">${icon('key',20)}</div><div><b>${title}</b><div class="sub">${cd.host ? `For ${esc(cd.host)} · ` : ''}encrypted in your vault</div></div><div class="st">${status}</div></div>
     <div class="bd">
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input class="field" style="flex:1;min-width:140px" data-f="name" placeholder="secret name" value="${esc(cd.nameVal || cd.suggest || '')}">
-        <input class="field mono" style="flex:1.4;min-width:180px" data-f="val" type="password" placeholder="paste value — masked immediately" autocomplete="off">
+      ${requested && cd.note ? `<p class="secret-card-reason">${esc(cd.note)}</p>` : ''}
+      ${pending ? `<div class="secret-card-fields">
+        ${requested ? `<span class="secret-card-name">${icon('lock',13)} ${esc(cd.suggest || '')}</span>` : `<input class="field" data-f="name" aria-label="Secret name" placeholder="Name, e.g. GitHub password" value="${esc(cd.nameVal || cd.suggest || '')}">`}
+        <input class="field mono" data-f="val" type="password" aria-label="Secret value" placeholder="Paste or type the value" autocomplete="off" spellcheck="false">
       </div>
-      <div class="secnote">${icon('shieldcheck',14)} Value is never displayed in chat, logs, or activity history.</div>
+      <div class="secnote">${icon('shieldcheck',14)} ${requested ? `${esc(state.agent.name)} only gets a reference, never the value. You approve each time it is typed into a site.` : 'The value is never shown in chat, logs or activity history.'}</div>` : ''}
     </div>
-    ${pending ? `<div class="stack"><button class="btn" data-act="save-secret" data-chat="${k}" data-msg="${mid}">${icon('lock',14)} Save to vault</button><button class="btn ghost" data-act="skip-secret" data-chat="${k}" data-msg="${mid}">Skip</button></div>` : (cd.status === 'saved' ? `<div class="ft"><span class="note mono">${esc(cd.ref)} · ••••••••</span></div>` : '')}</div>`;
+    ${pending ? `<div class="stack"><button class="btn" data-act="save-secret" data-chat="${k}" data-msg="${mid}">${icon('lock',14)} Save to vault</button><button class="btn ghost" data-act="skip-secret" data-chat="${k}" data-msg="${mid}">Not now</button></div>`
+      : saved ? `<div class="ft"><span class="note mono">${cd.ref ? esc(cd.ref) + ' · ' : ''}••••••••</span><button class="btn ghost small" data-act="nav" data-view="vault">Open vault</button></div>` : ''}</div>`;
+  }
 
   if (cd.type === 'passport') return `<div class="acard">
     ${hd(icon('user',20),'var(--acc-soft)','var(--acc)','Your agent is ready',state.agent.name)}
@@ -3565,6 +3832,18 @@ function cardNode(c, m){
       <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="View on canvas">${icon('easel',14)}</button><button class="dotmenu" data-act="artmenu" title="More">•••</button></div>
     </div></div>`;
 
+  if (cd.type === 'goal') {
+    const cat = goalCat(cd.category === 'relationships' ? 'family' : cd.category);
+    const heading = cd.action === 'created' ? 'Goal created' : cd.action === 'deleted' ? 'Goal removed' : cd.goalStatus === 'done' ? 'Goal completed' : 'Goal updated';
+    const sub = cd.action === 'deleted' ? 'No longer on your Goals page' : cat.label + (cd.stepsTotal ? ` · ${cd.stepsDone} of ${cd.stepsTotal} steps done` : '');
+    return `<div class="acard">${hd(icon(cd.goalStatus === 'done' ? 'check' : 'target',20),'var(--green-soft)','var(--green)',heading,esc(sub))}
+      <div class="bd">${esc(cd.title || '')}</div>${cd.action === 'deleted' ? '' : `<div class="ft"><button class="btn ghost small" data-act="goal-view">View goals ${icon('aur',13)}</button></div>`}</div>`;
+  }
+  if (cd.type === 'library') {
+    const heading = cd.action === 'deleted' ? 'Removed from your Library' : cd.action === 'renamed' ? 'Renamed in your Library' : 'Saved to your Library';
+    return `<div class="acard">${hd(icon('library',20),'var(--acc-soft)','var(--acc)',heading,esc(cd.kind ? libTypeLabel(cd.kind === 'file' ? 'artifact' : cd.kind) : 'File'))}
+      <div class="bd">${esc(cd.title || '')}</div>${cd.action === 'deleted' ? '' : `<div class="ft"><button class="btn ghost small" data-act="open-library">Open Library ${icon('aur',13)}</button></div>`}</div>`;
+  }
   if (cd.type === 'memory') return `<div class="acard">
     ${hd(icon('book',20),'var(--green-soft)','var(--green)','Saved to memory','I can recall this in any chat')}
     <div class="bd">${esc(cd.text)}</div></div>`;
@@ -3673,6 +3952,14 @@ function makeRT(c){
           if (active()) document.querySelector(`[data-mid="${gone.id}"]`)?.remove();
         }
       }
+      if (event.type === 'message_reaction') {
+        const target = c.messages.find(x => x.id === event.messageId && x.kind === 'text' && x.role === 'user');
+        const reaction = findReaction(event.emoji);
+        if (target && reaction) {
+          target.agentReaction = reaction.id;
+          if (active()) replaceNode(c, target);
+        }
+      }
       if (event.type === 'message' || event.type === 'message_delta') {
         if (!task && event.phase === 'final_answer') {
           answerReady = true;
@@ -3683,6 +3970,7 @@ function makeRT(c){
         let m = c.messages.find(x => x.managedId === event.id);
         if (!m) { m = { id:uid(), managedId:event.id, role:'agent', kind:'text', text:'' }; c.messages.push(m); if (active()) append(msgNode(c,m)); }
         if (event.type === 'message_delta') {
+          if (!task && !m.text) noteActivity(c, 'Writing the reply');
           m.text += event.delta || '';
           if (active()) streamPaint(c, m);
         } else {
@@ -3695,6 +3983,8 @@ function makeRT(c){
         const card = { ...event.card, managedCallId:event.callId, taskId:task?.id, taskVersion:task?.version };
         if (!m) { m = { id:uid(), managedId:event.id, kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
         else { m.card = card; replaceNode(c,m); }
+        if (card.type === 'goal') refreshGoals();
+        if (card.type === 'library' || card.libraryId) refreshLibrary();
         if (card.type === 'memory') {
           if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='library'&&state.libraryCat==='memory'&&$('#main'))paintLibrary($('#main'));}).catch(()=>{});
           else if (!state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
@@ -4021,12 +4311,6 @@ async function sendPrompt(text, files){
   await runAgentOn(c, text);
 }
 
-function runGreet(c){
-  if (!signedIn()){ renderAuth(); return; }
-  c.busy = true; save();
-  Engine.greet(makeRT(c)).finally(() => { c.busy = false; save(); });
-}
-
 function newChat(options = {}){
   if (!signedIn()){ renderAuth(); toast('Sign up or log in to start a chat.'); return; }
   ensureOwnerScope();
@@ -4036,17 +4320,18 @@ function newChat(options = {}){
     else openOnboarding();
     return;
   }
-  const c = { id: uid(), title:options.goal ? 'Create a goal' : 'New chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
-  if (options.goal) c.goalDraft = { title:'', category:GOAL_CATS.some(cat => cat.id === state.goalCat) ? state.goalCat : 'other' };
+  const c = { id: uid(), title:'New chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
   state.chats.unshift(c); state.activeChat = c.id; state.view = 'chat'; save();
   renderApp();
-  runGreet(c);
-  if (options.goal) setTimeout(() => {
-    if ($('#cprompt') && state.activeChat === c.id) {
-      applyPromptText('Help me create a personal goal. Ask what I want to achieve, then help me make it specific and break it into small steps.');
-      $('#cprompt').focus();
-    }
-  }, 0);
+  // Goal categories start the conversation right away; the agent saves the goal
+  // to the Goals page with its goal tools once the owner has said what they want.
+  if (options.goal) {
+    const category = GOAL_CATS.some(cat => cat.id === options.category) ? options.category : 'other';
+    const area = category === 'other' ? 'personal' : goalCat(category).label.toLowerCase();
+    c.title = category === 'other' ? 'New goal' : goalCat(category).label + ' goal';
+    sendPromptDirect(c, `Help me create a ${area} goal. Ask what I want to achieve, help me make it specific, then add it to my Goals with a few small steps.`);
+    return;
+  }
 }
 
 /* ---------------- canvas + right-side agent slider ---------------- */
@@ -4080,15 +4365,21 @@ function libraryTabContent(){
   const cat = state.libraryCat || 'all';
   const items = libraryFiltered();
   const all = libraryItems();
-  const count = (c) => c === 'all' ? all.length : c === 'images' ? all.filter(x => x._type === 'image').length : c === 'videos' ? all.filter(x => x._type === 'video').length : c === 'podcasts' ? all.filter(x => x._type === 'audio').length : c === 'documents' ? all.filter(x => x._type === 'document').length : c === 'web' ? all.filter(x => x._type === 'web').length : c === 'artifacts' ? all.filter(x => !['image','video','audio'].includes(x._type)).length : c === 'system' ? systemDocumentItems().length + systemFolderItems().length : 0;
+  const count = (c) => c === 'all' ? all.length : c === 'images' ? all.filter(x => x._type === 'image').length : c === 'videos' ? all.filter(x => x._type === 'video').length : c === 'podcasts' ? all.filter(x => x._type === 'audio').length : c === 'documents' ? all.filter(x => x._type === 'document').length : c === 'web' ? all.filter(x => x._type === 'web').length : c === 'artifacts' ? all.filter(x => !['image','video','audio'].includes(x._type)).length : 0;
   const titles = { all:'All artifacts', artifacts:'Artifacts', documents:'Documents', web:'Web artifacts', images:'Images', videos:'Videos', podcasts:'Podcasts', system:'System files' };
   const recent = items.slice(0, 4);
   const rest = items.slice(4);
-  const sideBtn = (id, ic, label) => `<button class="lib-nav${cat === id ? ' on' : ''}" data-act="libcat" data-cat="${id}">${icon(ic,15)}<span>${label}</span>${id === 'all' || id === 'system' ? '' : `<em>${count(id)}</em>`}</button>`;
+  // Memory is managed inside System files → memory/, so it has no separate nav entry.
+  const sideBtn = (id, ic, label) => {
+    const on = cat === id || (id === 'system' && cat === 'memory');
+    const n = id === 'system' ? 0 : count(id);
+    return `<button class="lib-nav${on ? ' on' : ''}" data-act="libcat" data-cat="${id}"${on ? ' aria-current="page"' : ''}>${icon(ic,16)}<span>${label}</span>${n ? `<em>${n}</em>` : ''}</button>`;
+  };
   const gridCls = state.libraryLayout === 'list' ? 'lib-grid list' : 'lib-grid';
+  const title = titles[cat] || 'All artifacts';
   return `<div class="lib-layout">
-    <aside class="lib-side">
-      ${cat === 'memory' || cat === 'system' ? '' : `<label class="lib-search">${icon('search',15)}<input id="libsearch" class="field lib-search-in" placeholder="Search" value="${esc(state.librarySearch || '')}"></label>`}
+    <aside class="lib-side" aria-label="Library sections">
+      <label class="lib-search">${icon('search',15)}<input id="libsearch" class="field lib-search-in" placeholder="Search" aria-label="Search the library" value="${esc(state.librarySearch || '')}"></label>
       <div class="lib-group">Artifacts</div>
       ${sideBtn('all','grid','All artifacts')}
       ${sideBtn('documents','doc','Documents')}
@@ -4096,36 +4387,43 @@ function libraryTabContent(){
       <div class="lib-group">Media</div>
       ${sideBtn('images','image','Images')}
       ${sideBtn('videos','video','Videos')}
-       ${sideBtn('podcasts','podcast','Podcasts')}
-       <div class="lib-side-foot">${sideBtn('memory','book','Memory')}${sideBtn('system','folder','System files')}<span class="lib-side-note">Live context, runtime files, and safe folders</span></div>
-     </aside>
-     <section class="lib-main">
-       ${cat === 'memory' ? libraryMemoryBody() : cat === 'system' ? systemLibraryBody() : `<div class="lib-head"><div class="lib-title-lockup"><span class="lib-brand-mark">${Mascot.logo(28)}</span><div><span class="lib-eyebrow">Belna Library</span><h2>${esc(titles[cat] || 'All artifacts')}</h2></div></div>
-         <span class="lib-actions">
-           ${state.librarySelect ? `<button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete">${icon('trash',13)} Delete (${(state.librarySelected || []).length})</button>` : `<button class="btn ghost small" data-act="lib-select">Select</button>`}
-           <button class="iconbtn" data-act="lib-layout" title="Toggle grid / list">${icon('list',16)}</button>
-           <button class="btn ghost small" data-act="lib-upload">${icon('attach',14)} Upload files</button><input id="libupload" type="file" multiple hidden>
-           <button class="btn lib-create small" data-act="lib-create">${icon('spark',14)} Ask agent to create</button>
-         </span>
-       </div>
-       ${!items.length ? `<div class="lib-empty card">${icon('folder',22)}<b>No real files yet</b><span>This Library only shows artifacts produced by your agent and files you upload. There are no samples or placeholders.</span><span class="lib-empty-actions"><button class="btn ghost small" data-act="lib-upload">${icon('attach',14)} Upload files</button><button class="btn small lib-create" data-act="lib-create">${icon('spark',14)} Ask agent to create</button></span></div>` : `
-       <div class="lib-sec">Recent</div>
-       <div class="${gridCls}">${recent.map(libCardHtml).join('')}</div>
-       ${rest.length ? `<div class="lib-sec">${esc(titles[cat] || 'All artifacts')}</div><div class="${gridCls}">${rest.map(libCardHtml).join('')}</div>` : ''}`}
-       `}
-     </section>
-   </div>`;
+      ${sideBtn('podcasts','podcast','Podcasts')}
+      <div class="lib-side-foot">${sideBtn('system','folder','System files')}</div>
+    </aside>
+    <section class="lib-main"><div class="lib-main-inner">
+      ${cat === 'memory' ? `<button class="system-back" data-act="libcat" data-cat="system">${icon('left',14)} System files</button>${libraryMemoryBody()}` : cat === 'system' ? systemLibraryBody() : `<div class="lib-head">
+        <div><span class="lib-eyebrow">Library</span><h1>${esc(title)}</h1></div>
+        <span class="lib-actions">
+          ${state.librarySelect ? `<button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete">${icon('trash',13)} Delete (${(state.librarySelected || []).length})</button>` : items.length ? `<button class="btn ghost small" data-act="lib-select">Select</button>` : ''}
+          ${items.length ? `<button class="iconbtn" data-act="lib-layout" title="${state.libraryLayout === 'list' ? 'Show as grid' : 'Show as list'}" aria-label="${state.libraryLayout === 'list' ? 'Show as grid' : 'Show as list'}">${icon(state.libraryLayout === 'list' ? 'grid' : 'list',16)}</button>` : ''}
+          <button class="iconbtn" data-act="lib-upload" title="Upload files" aria-label="Upload files">${icon('attach',16)}</button><input id="libupload" type="file" multiple hidden>
+          <button class="btn lib-create small" data-act="lib-create">${icon('plus',14)} Create an artifact</button>
+        </span>
+      </div>
+      ${!items.length ? `<div class="lib-empty">
+        <span class="lib-empty-icon">${icon(state.librarySearch ? 'search' : libIconFor(cat === 'images' ? 'image' : cat === 'videos' ? 'video' : cat === 'podcasts' ? 'audio' : cat === 'documents' ? 'document' : cat === 'web' ? 'web' : 'artifact'),22)}</span>
+        <b>${state.librarySearch ? 'No matches' : 'No ' + esc(cat === 'all' ? 'artifacts' : title.toLowerCase()) + ' yet'}</b>
+        <span>${state.librarySearch ? 'Try another search, or clear it to see everything.' : `Files ${esc(state.agent?.name || 'your agent')} makes and files you upload show up here.`}</span>
+      </div>` : `
+      <div class="lib-sec">Recent</div>
+      <div class="${gridCls}">${recent.map(libCardHtml).join('')}</div>
+      ${rest.length ? `<div class="lib-sec">${esc(title)}</div><div class="${gridCls}">${rest.map(libCardHtml).join('')}</div>` : ''}`}
+      `}
+    </div></section>
+  </div>`;
 }
 function paintLibrary(M){
-  const previousScroll = M.querySelector('.page')?.scrollTop || 0;
-  M.innerHTML = `<div class="page lib-page"><div class="pageinner lib-pageinner">
-    <div class="lib-page-heading"><div><span class="lib-eyebrow">Your workspace</span><h1>Library</h1><p>Everything you and your agent have made together, in one place.</p></div><span class="lib-page-mark" aria-hidden="true">${Mascot.logo(42)}</span></div>
-    ${libraryTabContent()}
-  </div></div>`;
-  M.querySelector('.page').scrollTop = previousScroll;
+  const scroller = () => M.querySelector('.lib-main');
+  const previousScroll = scroller()?.scrollTop || 0;
+  M.innerHTML = `<div class="page lib-page"><div class="pageinner lib-pageinner">${libraryTabContent()}</div></div>${libraryViewerHtml()}`;
+  M.querySelector('.lib-viewer')?.addEventListener('keydown', e => { if (e.key === 'Escape'){ libraryViewer = null; paintLibrary(M); } });
+  M.querySelector('.lib-viewer [data-act="lib-viewer-close"]:not(.lib-viewer-scrim)')?.focus();
+  if (scroller()) scroller().scrollTop = previousScroll;
   const libSearch = M.querySelector('#libsearch');
   if (libSearch) libSearch.addEventListener('input', (e) => {
-    state.librarySearch = e.target.value; save();
+    state.librarySearch = e.target.value;
+    if (state.libraryCat === 'system' || state.libraryCat === 'memory') state.libraryCat = 'all';
+    save();
     const pos = e.target.selectionStart;
     paintLibrary(M);
     const again = M.querySelector('#libsearch');
@@ -4143,6 +4441,7 @@ function paintLibrary(M){
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="addmem"]')?.click(); }
   });
   if (signedIn() && state.libraryCat === 'system') refreshSystemFiles();
+  refreshLibrary(false);
 }
 function approvalsTabContent(){
   const ap = approvalRows();
@@ -4160,7 +4459,7 @@ function approvalsTabContent(){
         <span class="appr-copy">
           <b>${esc(approvalHeadline(x))}</b>
           <span class="appr-desc">${esc(approvalBlurb(x))}</span>
-          <span class="appr-meta">${esc(approvalStatusLine(x))}</span>
+          <span class="appr-meta${x.status === 'pending' ? ' pending' : ''}">${esc(approvalStatusLine(x))}</span>
         </span>
         <span class="appr-chev">${icon('chev',16)}</span>
       </button>
@@ -4196,63 +4495,84 @@ function refreshShopPay(force = false){
 }
 function paymentsTabContent(){
   const stripe = composioAppByToolkit('stripe');
-  const connected = !!stripe?.connected;
-  const checking = state.composioLoading;
-  const status = checking ? 'Checking…' : connected ? 'Connected' : stripe ? 'Ready to connect' : 'Unavailable';
+  const stripeConnected = !!stripe?.connected;
   const shop = shopPaySnapshot();
-  const shopStatus = state.shopPayLoading ? 'Checking…' : !shop.configured ? 'Unavailable' : shop.connected ? 'Connected' : 'Ready to connect';
-  const orders = (state.shopPayOrders || []).slice(0, 5).map((o) => `<li><b>${esc(o.title || o.merchant || 'Order')}</b><span>${esc(o.status)} · ${o.amount != null ? '$' + Number(o.amount).toFixed(2) : ''}</span>${o.continueUrl ? `<a href="${esc(o.continueUrl)}" target="_blank" rel="noopener">Finish in Shop Pay</a>` : ''}</li>`).join('');
-  return `<div class="payments-panel">
-    <div class="payments-intro">
-      <span class="payments-intro-icon">${icon('wallet',24)}</span>
-      <h2>Let your agent pay and earn for you</h2>
-      <p>Connect Shop Pay so the agent can check out on Shopify stores through UCP. Card numbers stay in Shop Pay. Every purchase still pauses for your approval.</p>
-    </div>
-    <article class="payments-option">
-      <div class="payments-option-head">
-        <span class="payments-option-icon shop-pay-mark" title="Shop Pay" aria-label="Shop Pay">${shopPayBrandMark()}</span>
-        <div>
-          <h3>Shop Pay</h3>
-          <p>${shop.connected ? `Linked as ${esc(shop.email || 'your Shop account')}. Remaining today: $${Number(shop.remainingUsd != null ? shop.remainingUsd : shop.dailyLimitUsd).toFixed(2)}.` : 'Connect Shop so the agent can search Shopify catalogs and complete approved checkouts with Shop Pay.'}</p>
+  const limit = Number(shop.dailyLimitUsd || 200);
+  const remaining = Number(shop.remainingUsd != null ? shop.remainingUsd : limit);
+  const shopOpen = state.paymentOpenId === 'shop-pay';
+  const shopRow = shop.connected
+    ? `<article class="appr-item${shopOpen ? ' open' : ''}" data-id="shop-pay">
+        <button type="button" class="appr-row" data-act="appr-toggle" data-key="payment" data-id="shop-pay" aria-expanded="${shopOpen ? 'true' : 'false'}">
+          <span class="appr-ico wordmark shop-pay-mark">${shopPayBrandMark()}</span>
+          <span class="appr-copy"><b>Shop Pay</b><span class="appr-desc">Linked as ${esc(shop.email || 'your Shop account')}</span><span class="appr-meta ok">Connected · $${remaining.toFixed(2)} of $${limit.toFixed(0)} left today</span></span>
+          <span class="appr-chev">${icon('chev',16)}</span>
+        </button>
+        <div class="appr-more">
+          <div class="appr-more-line">${shop.nativeCheckout ? 'Eligible checkouts complete here after you approve.' : 'Checkouts finish on the merchant site after you approve.'}</div>
+          <label class="payments-limit">Daily limit $<input class="field tiny" id="shoppaylimit" type="number" min="1" max="2000" step="1" value="${esc(limit)}"></label>
+          <button class="btn ghost small" data-act="shop-pay-limit">Save limit</button>
+          <button class="btn ghost small" data-act="shop-pay-disconnect">Disconnect</button>
         </div>
-        <span class="chip ${shop.connected ? 'green' : ''}">${shopStatus}</span>
-      </div>
-      <div class="payments-option-actions">
-        ${shop.connected
-          ? `<button class="btn ghost small" data-act="shop-pay-disconnect">Disconnect</button>
-             <label class="payments-limit">Daily limit <input class="field tiny" id="shoppaylimit" type="number" min="1" max="2000" step="1" value="${esc(shop.dailyLimitUsd || 200)}"></label>
-             <button class="btn ghost small" data-act="shop-pay-limit">Save limit</button>`
-          : shop.configured
-            ? `<button class="btn small" data-act="shop-pay-connect">Connect Shop Pay</button>`
-            : `<button class="btn small" disabled>Connect Shop Pay</button><span class="payments-note">${state.shopPayLoading ? 'Checking Shop Pay…' : 'Add a Shop OAuth client ID and secret with this site’s callback URL registered in Shopify Dev Dashboard.'}</span>`}
-        <button class="btn ghost small" data-act="shop-pay-refresh" aria-label="Refresh Shop Pay">${icon('refresh',14)} Refresh</button>
-      </div>
-      ${orders ? `<ul class="payments-orders">${orders}</ul>` : ''}
-    </article>
-    <article class="payments-option">
-      <div class="payments-option-head">
-        <span class="payments-option-icon stripe-mark" title="Stripe" aria-label="Stripe">${stripeIconHtml()}</span>
-        <div><h3>Stripe</h3><p>Connect Stripe for payment and revenue tasks.</p></div>
-        <span class="chip ${connected ? 'green' : ''}">${status}</span>
-      </div>
-      <div class="payments-option-actions">
-        ${connected
-          ? `<button class="btn ghost small" data-act="payments-stripe-apps">Manage connection</button>`
-          : stripe
-            ? `<button class="btn small" data-act="connect-app" data-toolkit="stripe" data-auth="${esc(stripe.authConfigId || '')}">Connect Stripe</button>`
-            : `<button class="btn small" disabled>Connect Stripe</button><span class="payments-note">${checking ? 'Checking Stripe availability…' : 'Stripe connection is not available on this server yet.'}</span>`}
-        <button class="btn ghost small" data-act="refresh-apps" aria-label="Refresh Stripe connection">${icon('refresh',14)} Refresh</button>
-      </div>
-    </article>
+      </article>`
+    : `<article class="appr-item"><div class="appr-row static">
+        <span class="appr-ico wordmark shop-pay-mark">${shopPayBrandMark()}</span>
+        <span class="appr-copy"><b>Shop Pay</b><span class="appr-desc">Search Shopify stores and prepare checkouts you approve.</span><span class="appr-meta">${state.shopPayLoading ? 'Checking…' : shop.configured ? 'Not connected' : 'Not available on this server yet'}</span></span>
+        ${shop.configured ? `<button class="btn small" data-act="shop-pay-connect">Connect</button>` : ''}
+      </div></article>`;
+  const stripeRow = `<article class="appr-item"><div class="appr-row static">
+      <span class="appr-ico wordmark stripe-mark">${stripeIconHtml()}</span>
+      <span class="appr-copy"><b>Stripe</b><span class="appr-desc">Payment and revenue tasks in your Stripe account.</span><span class="appr-meta${stripeConnected ? ' ok' : ''}">${state.composioLoading ? 'Checking…' : stripeConnected ? 'Connected' : stripe ? 'Not connected' : 'Not available on this server yet'}</span></span>
+      ${stripeConnected
+        ? `<button class="btn ghost small" data-act="payments-stripe-apps">Manage</button>`
+        : stripe ? `<button class="btn small" data-act="connect-app" data-toolkit="stripe" data-auth="${esc(stripe.authConfigId || '')}">Connect</button>` : ''}
+    </div></article>`;
+  const orders = (state.shopPayOrders || []).slice(0, 5).map((o) => `<article class="appr-item"><div class="appr-row static">
+      <span class="appr-ico">${icon('card',18)}</span>
+      <span class="appr-copy"><b>${esc(o.title || o.merchant || 'Order')}</b><span class="appr-meta">${esc([o.amount != null ? '$' + Number(o.amount).toFixed(2) : '', o.status].filter(Boolean).join(' · '))}</span></span>
+      ${o.continueUrl ? `<a class="btn ghost small" href="${esc(o.continueUrl)}" target="_blank" rel="noopener">Finish</a>` : ''}
+    </div></article>`).join('');
+  return `<div class="appr-panel">
+    <div class="appr-toolbar"><h3 class="appr-heading">Payments</h3><button class="iconbtn" data-act="payments-refresh" title="Refresh payments" aria-label="Refresh payments">${icon('refresh',15)}</button></div>
+    <p class="appr-lede">${esc((state.agent && state.agent.name) || 'Your agent')} can prepare purchases for you. Every payment pauses in Approvals until you say yes.</p>
+    <h4 class="appr-group">Payment methods</h4>
+    ${shopRow}${stripeRow}
+    ${orders ? `<h4 class="appr-group">Recent orders</h4>${orders}` : ''}
   </div>`;
 }
 
-/* Sub Agents / Automations panel. */
+const UPKEEP_ICONS = { memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
+function automationItemHtml(agent){
+  const open = state.automationOpenId === agent.id;
+  const trigger = agent.trigger || {};
+  const ic = agent.systemKind ? (UPKEEP_ICONS[agent.systemKind] || 'clock') : trigger.type === 'app' ? 'box' : trigger.type === 'subagent' ? 'spark' : 'clock';
+  const status = !agent.enabled ? 'Paused' : agent.lastError ? 'Last run failed' : agent.lastStatus === 'running' ? 'Running now' : '';
+  const ran = agent.lastRunAt ? 'Last ran ' + fmtAgo(new Date(agent.lastRunAt).getTime()) : 'Not run yet';
+  return `<article class="appr-item${open ? ' open' : ''}${agent.enabled ? '' : ' paused'}" data-id="${esc(agent.id)}">
+    <button type="button" class="appr-row" data-act="appr-toggle" data-key="automation" data-id="${esc(agent.id)}" aria-expanded="${open ? 'true' : 'false'}">
+      <span class="appr-ico">${icon(ic,18)}</span>
+      <span class="appr-copy">
+        <b>${esc(agent.name)}</b>
+        <span class="appr-desc">${esc(trigger.label || subAgentTriggerLabel(agent))}</span>
+        <span class="appr-meta${agent.lastError && agent.enabled ? ' warn' : ''}">${esc([status, ran].filter(Boolean).join(' · '))}</span>
+      </span>
+      <span class="appr-chev">${icon('chev',16)}</span>
+    </button>
+    <div class="appr-more">
+      ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
+      <button class="btn ghost small" data-act="open-subagent" data-id="${agent.id}">Open chat</button>
+      <button class="btn ghost small" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',13)} Run now</button>
+      <button class="btn ghost small" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button>
+      ${agent.systemKind ? '' : `<button class="btn ghost small" data-act="delete-subagent" data-id="${agent.id}">${icon('trash',13)} Delete</button>`}
+    </div>
+  </article>`;
+}
+/* Sub Agents / Automations panel: the user's automations followed by the upkeep routines, in one list. */
 function subAgentsTabContent(){
   const agents = state.subAgents || [];
   const upkeepOrder = ['memory','relationships','ideas','study','reflection','skills','quiet'];
   const upkeep = agents.filter(agent => agent.systemKind).sort((a,b) => upkeepOrder.indexOf(a.systemKind)-upkeepOrder.indexOf(b.systemKind));
   const customAgents = agents.filter(agent => !agent.systemKind);
+  const displayAgents = [...customAgents, ...upkeep];
   const kind = state.subAgentTriggerType || 'schedule';
   const apps = state.triggerOptions?.apps || [];
   const scheduleOptions = state.triggerOptions?.schedules || [15,60,360,1440];
@@ -4261,8 +4581,8 @@ function subAgentsTabContent(){
     : kind === 'app'
       ? (apps.length ? `<label class="alabel">Connected app event (via Composio)</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} No connected apps yet. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
       : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${customAgents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
-  return `<div class="subagents-panel">
-    <div class="automation-toolbar"><h3 class="appr-heading">Automations</h3><button class="btn small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close setup' : 'New automation'}</button></div>
+  return `<div class="appr-panel">
+    <div class="appr-toolbar"><h3 class="appr-heading">Automations</h3><button class="btn ${state.subAgentComposer ? 'ghost ' : ''}small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close' : 'New'}</button></div>
     ${state.subAgentComposer ? `<div class="trigger-form">
       <label class="alabel">Name</label><input class="field" id="subname" maxlength="60" placeholder="Daily brief" value="${esc(state.subAgentDraftName || '')}">
       <label class="alabel">Automation task</label><textarea class="field" id="subprompt" rows="4" placeholder="What should this sub-agent check, decide, or prepare?">${esc(state.subAgentDraft || '')}</textarea>
@@ -4271,16 +4591,7 @@ function subAgentsTabContent(){
       <div class="trigger-safety">${icon('shieldcheck',14)} Runs in an isolated, account-scoped sandbox. Chains stop after four handoffs.</div>
       <button class="btn small" data-act="create-subagent" ${kind === 'app' && !apps.length || kind === 'subagent' && !customAgents.length ? 'disabled' : ''}>Create automation</button>
     </div>` : ''}
-    <div class="automation-list">${customAgents.map((agent) => `<article class="automation-item${agent.enabled ? '' : ' paused'}">
-      <div class="automation-row"><span class="appr-ico">${icon('clock',18)}</span><button class="automation-copy" data-act="open-subagent" data-id="${agent.id}"><b>${esc(agent.name)}</b><span>${esc(subAgentTriggerLabel(agent))}</span><small>Last ran: ${agent.lastRunAt ? fmtAgo(new Date(agent.lastRunAt).getTime()) : 'Never'}</small></button><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus || 'ready') : 'paused'}</span></div>
-      ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
-      <div class="automation-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button><button class="btn ghost tiny" data-act="delete-subagent" data-id="${agent.id}">${icon('trash',12)} Delete</button></div>
-    </article>`).join('') || '<div class="appr-empty">No automations yet. Create one to watch a schedule, app event, or another automation.</div>'}</div>
-    ${upkeep.length ? `<details class="automation-builtins" ${state.builtInAutomationsOpen ? 'open' : ''}><summary>Built-in routines <span>${upkeep.length}</span></summary><div class="automation-list">${upkeep.map((agent) => `<article class="automation-item${agent.enabled ? '' : ' paused'}">
-      <div class="automation-row"><span class="appr-ico">${icon(agent.systemKind === 'memory' ? 'book' : agent.systemKind === 'study' ? 'globe' : agent.systemKind === 'ideas' ? 'spark' : agent.systemKind === 'relationships' ? 'user' : agent.systemKind === 'skills' ? 'code' : 'clock',18)}</span><span class="automation-copy"><b>${esc(agent.name)}</b><span>${esc(agent.trigger?.label || subAgentTriggerLabel(agent))}</span><small>Last ran: ${agent.lastRunAt ? fmtAgo(new Date(agent.lastRunAt).getTime()) : 'Never'}</small></span><span class="chip ${agent.lastStatus === 'done' ? 'green' : ''}">${agent.enabled ? (agent.lastStatus === 'idle' ? 'checked' : agent.lastStatus || 'ready') : 'paused'}</span></div>
-      ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
-      <div class="automation-actions"><button class="btn ghost tiny" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',12)} Run now</button><button class="btn ghost tiny" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button></div>
-    </article>`).join('')}</div></details>` : ''}
+    ${displayAgents.map(automationItemHtml).join('') || '<div class="appr-empty">No automations yet. Create one to run on a schedule, after an app event, or after another automation.</div>'}
   </div>`;
 }
 
@@ -4589,16 +4900,22 @@ async function openMailMessage(id){
   return j.message;
 }
 function mailListRows(m){
-  const who = m.folder === 'sent' ? (m.to || []).join(', ') : (m.fromName ? m.fromName + ' · ' + m.from : m.from);
-  return `<button class="mail-row ${m.isRead ? '' : 'unread'}" data-act="m-open" data-id="${esc(m.id)}">
-    <span class="mail-dot"></span>
-    <span class="mail-meta"><b>${esc(m.subject || '(no subject)')}</b><small>${esc(who || '')}</small><small class="mail-preview">${esc(m.preview || '')}</small></span>
-    <span class="mail-when">${fmtWhen(m.at)}</span>
+  const sent = m.folder === 'sent';
+  const who = sent ? 'To ' + ((m.to || []).join(', ') || 'no recipient') : (m.fromName || m.from || 'Unknown sender');
+  const initial = String((sent ? (m.to || [])[0] : m.fromName || m.from) || '?').trim().charAt(0).toUpperCase() || '?';
+  return `<button class="appr-row mail-row${m.isRead || sent ? '' : ' unread'}" data-act="m-open" data-id="${esc(m.id)}">
+    <span class="appr-ico mail-avatar" aria-hidden="true">${esc(initial)}</span>
+    <span class="appr-copy">
+      <span class="mail-line"><b>${esc(who)}</b><span class="mail-when">${fmtWhen(m.at)}</span></span>
+      <span class="appr-desc mail-subject">${esc(m.subject || '(no subject)')}</span>
+      ${m.preview ? `<span class="appr-meta mail-preview">${esc(m.preview)}</span>` : ''}
+    </span>
   </button>`;
 }
 function mailComposeBody(prefill){
   const p = prefill || mailCache && mailCache.compose || {};
   return `<div class="mail-compose">
+    <h4 class="appr-group">${p.inReplyTo ? 'Reply' : p.draftId ? 'Edit draft' : 'New message'}</h4>
     <label class="alabel">To</label>
     <input class="field" id="m-to" type="email" placeholder="name@example.com" value="${esc(p.to || '')}">
     <label class="alabel">Subject</label>
@@ -4618,7 +4935,7 @@ function mailReader(msg){
   const who = msg.fromName ? esc(msg.fromName) + ' &lt;' + esc(msg.from) + '&gt;' : esc(msg.from || '');
   return `<div class="mail-read">
     <div class="mail-read-head">
-      <button class="btn ghost small" data-act="m-back">${icon('aur',14)} Back</button>
+      <button class="canvas-back" data-act="m-back">${icon('left',14)} Back</button>
       <button class="btn ghost small" data-act="m-reply" data-id="${esc(msg.id)}">${icon('mail',14)} Reply</button>
     </div>
     <h3>${esc(msg.subject || '(no subject)')}</h3>
@@ -4632,41 +4949,40 @@ function paintMail(body){
   const tab = state.mailTab || 'inbox';
   const m = mailCache;
   const unread = m && m.unread ? m.unread : 0;
-  let inner = `<div class="cempty">${icon('mail',28)}<div class="mut2">Loading mail…</div></div>`;
+  const empty = (ic, title, text) => `<div class="appr-empty-state"><span class="appr-ico">${icon(ic,18)}</span><b>${title}</b><span>${text}</span></div>`;
+  let inner = `<div class="appr-empty">Loading mail…</div>`;
   if (m) {
     if (m.selected && tab !== 'write') inner = mailReader(m.selected);
     else if (tab === 'write') inner = mailComposeBody(m.compose);
     else if (tab === 'drafts') {
       const drafts = m.drafts || [];
       inner = drafts.length
-        ? `<div class="mail-list">${drafts.map((d) => `<button class="mail-row" data-act="m-edit-draft" data-id="${esc(d.id)}"><span class="mail-meta"><b>${esc(d.subject || '(no subject)')}</b><small>${esc((d.to || []).join(', ') || 'No recipient')}</small></span></button>`).join('')}</div>`
-        : `<div class="cempty">${icon('file',28)}<div class="mut2">No drafts.</div></div>`;
+        ? drafts.map((d) => `<button class="appr-row mail-row" data-act="m-edit-draft" data-id="${esc(d.id)}"><span class="appr-ico">${icon('file',17)}</span><span class="appr-copy"><b>${esc(d.subject || '(no subject)')}</b><span class="appr-desc">${esc((d.to || []).join(', ') || 'No recipient')}</span></span></button>`).join('')
+        : empty('file', 'No drafts', 'Drafts your agent saves appear here for you to review before sending.');
     } else {
       const rows = m.messages || [];
       inner = rows.length
-        ? `<div class="mail-list">${rows.map(mailListRows).join('')}</div>`
-        : `<div class="cempty">${icon('mail',28)}<div style="font-weight:700;margin-top:12px">${tab === 'sent' ? 'Nothing sent yet' : 'Inbox is empty'}</div><div class="mut2">${m.address ? 'Anyone can write to ' + esc(m.address) : 'Claim the mailbox to start receiving.'}</div></div>`;
+        ? rows.map(mailListRows).join('')
+        : empty('mail', tab === 'sent' ? 'Nothing sent yet' : 'Inbox is empty', m.address ? 'Anyone can write to ' + esc(m.address) + '.' : 'Claim the mailbox to start receiving.');
     }
   }
   const banner = m && m.configured === false
     ? `<div class="warnband">${icon('mail',18)}<div><b>Mailbox is reserved. Sending needs RESEND_API_KEY.</b>${esc(m.receivingHint || 'Add the MX record Resend shows for mail.belna.se.')}</div></div>`
     : '';
-  body.innerHTML = `<div class="aslider fill mail-panel">
-    <div class="mail-address">
-      <span>${icon('mail',16)}</span>
-      <div><b>${esc((state.agent && state.agent.name) || 'Agent')}’s mail</b><div class="sub mono">${esc((m && m.address) || 'Allocating…')}</div></div>
-      <div class="rgt">${m && m.address ? `<button class="iconbtn" data-act="m-copy" title="Copy address">${icon('copy',14)}</button>` : ''}<button class="iconbtn" data-act="m-refresh" title="Refresh">${icon('refresh',14)}</button></div>
+  const filter = (t, label, count) => `<button class="appr-filter${tab === t ? ' on' : ''}" data-act="mtab" data-t="${t}" aria-pressed="${tab === t}">${label}${count ? ` <span class="cnt">${count}</span>` : ''}</button>`;
+  body.innerHTML = `<div class="appr-panel mail-panel">
+    <div class="appr-toolbar">
+      <h3 class="appr-heading">Mail</h3>
+      <span class="appr-toolbar-actions">
+        <button class="iconbtn" data-act="m-refresh" title="Refresh mail" aria-label="Refresh mail">${icon('refresh',15)}</button>
+        <button class="btn ${tab === 'write' ? 'ghost ' : ''}small" data-act="mtab" data-t="${tab === 'write' ? 'inbox' : 'write'}">${icon(tab === 'write' ? 'x' : 'plus',14)} ${tab === 'write' ? 'Close' : 'New'}</button>
+      </span>
     </div>
+    <div class="mail-address"><span class="mono">${esc((m && m.address) || 'Allocating…')}</span>${m && m.address ? `<button class="iconbtn" data-act="m-copy" title="Copy address" aria-label="Copy mail address">${icon('copy',14)}</button>` : ''}</div>
     ${banner}
-    <div class="seg canvas-seg">
-      <button class="${tab === 'inbox' ? 'on' : ''}" data-act="mtab" data-t="inbox">${icon('mail',14)} Inbox${unread ? ` <span class="cnt">${unread}</span>` : ''}</button>
-      <button class="${tab === 'sent' ? 'on' : ''}" data-act="mtab" data-t="sent">${icon('up',14)} Sent</button>
-      <button class="${tab === 'drafts' ? 'on' : ''}" data-act="mtab" data-t="drafts">${icon('file',14)} Drafts</button>
-      <button class="${tab === 'write' ? 'on' : ''}" data-act="mtab" data-t="write">${icon('plus',14)} Write</button>
-    </div>
+    ${tab === 'write' ? '' : `<div class="appr-filters" role="group" aria-label="Mail folders">${filter('inbox', 'Inbox', unread)}${filter('sent', 'Sent', 0)}${filter('drafts', 'Drafts', 0)}</div>`}
     ${inner}
   </div>`;
-  centerActiveSeg(body);
   if (!m) getMail(true, tab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
 }
 
@@ -4772,12 +5088,14 @@ function paintCanvas(){
     <div class="canvas-head">
       ${canvasHeroHTML()}
       <div class="canvas-head-row">
-        <div class="seg canvas-seg">
-          <button class="${top === 'canvas' ? 'on' : ''}" data-act="ctab" data-t="canvas">${icon('easel',14)} <span>Canvas</span>${liveId ? '<span class="livedot"></span>' : ''}</button>
-          <button class="${top === 'subagents' ? 'on' : ''}" data-act="ctab" data-t="subagents">${icon('clock',14)} <span>Automations</span></button>
-          <button class="${top === 'mail' ? 'on' : ''}" data-act="ctab" data-t="mail">${icon('mail',14)} <span>Mail</span>${mailCache && mailCache.unread ? ` <span class="cnt">${mailCache.unread}</span>` : ''}</button>
-          <button class="${top === 'payments' ? 'on' : ''}" data-act="ctab" data-t="payments">${icon('wallet',14)} <span>Payments</span></button>
-          <button class="${top === 'approvals' ? 'on' : ''}" data-act="ctab" data-t="approvals">${icon('shieldcheck',14)} <span>Approvals</span></button>
+        <div class="canvas-tabs" role="tablist" aria-label="Agent panel">
+          ${[
+            ['canvas', 'easel', 'Canvas', liveId ? '<span class="livedot"></span>' : ''],
+            ['subagents', 'clock', 'Automations', ''],
+            ['approvals', 'shieldcheck', 'Approvals', ''],
+            ['mail', 'mail', 'Mail', mailCache && mailCache.unread ? `<span class="cnt" aria-hidden="true">${mailCache.unread}</span>` : ''],
+            ['payments', 'wallet', 'Payments', ''],
+          ].map(([t, ic, label, badge]) => `<button class="canvas-tab${top === t ? ' on' : ''}" role="tab" aria-selected="${top === t}" data-act="ctab" data-t="${t}" title="${label}" aria-label="${label}${t === 'mail' && mailCache?.unread ? `, ${mailCache.unread} unread` : ''}">${icon(ic,18)}${badge}</button>`).join('')}
         </div>
         <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
       </div>
@@ -4809,8 +5127,6 @@ function paintCanvas(){
   }
   if (state.canvasTab === 'subagents'){
     body.innerHTML = subAgentsTabContent();
-    const builtins = body.querySelector('.automation-builtins');
-    if (builtins) builtins.addEventListener('toggle', () => { state.builtInAutomationsOpen = builtins.open; save(); });
     refreshSubAgents();
     return;
   }
@@ -5009,23 +5325,132 @@ function paintProfile(M){
 
 /* ---------------- Settings (profiles / secrets / browser / billing) ---------------- */
 function settingsSecretsBody(v){
-  return `
-    <div class="warnband">${icon('shieldcheck',18)}<div><b>Your secrets remain protected.</b>Values are masked in chat and activity history. Reveal below is for your eyes alone, on this device.</div></div>
-    <div class="kv">
-      ${v.secrets.map(s => `<div class="row">
-        <span style="color:var(--mut)">${icon('lock',16)}</span>
-        <div><b class="mono">${esc(s.name)}</b><div class="sub">${esc(s.ref)} · added ${fmtWhen(s.at)}</div></div>
-        <div class="rgt">
-          <span class="mono mut" data-rev="${s.id}" style="letter-spacing:.08em">${s.revealed ? esc(s.value) : '•••• •••• ••••'}</span>
-          <button class="iconbtn" data-act="reveal" data-id="${s.id}" title="Reveal (only you)">${s.revealed ? icon('eyeoff',14) : icon('eye',14)}</button>
-          <button class="iconbtn" data-act="delsecret" data-id="${s.id}" title="Delete">${icon('trash',14)}</button>
-        </div></div>`).join('') || '<div class="row mut">No secrets yet — the secrets box in chat adds them here.</div>'}
-      <div class="row" style="background:var(--panel)">
-        <input class="field" id="vname" placeholder="name" style="max-width:170px">
-        <input class="field mono" id="vval" type="password" placeholder="value" style="flex:1">
-        <button class="btn small" data-act="addsecret">${icon('plus',14)} Add</button>
+  const secrets = v.secrets || [];
+  const agentName = esc((state.agent && state.agent.name) || 'Your agent');
+  const encryption = v.encrypted === false
+    ? `<span class="chip vault-chip-warn">${icon('alert',12)} Encoded, not encrypted</span>`
+    : `<span class="chip green">${icon('shieldcheck',12)} Encrypted at rest</span>`;
+  return `<section class="vault">
+    <header class="vault-hero">
+      <span class="vault-hero-icon">${icon('key',22)}</span>
+      <div class="vault-hero-copy">
+        <h2>Your vault</h2>
+        <p>Passwords, API keys and payment details ${agentName} can use for you, without ever seeing them.</p>
+        <div class="vault-hero-chips"><span class="chip">${secrets.length} saved</span>${encryption}</div>
       </div>
-    </div>`;
+    </header>
+    ${v.encrypted === false ? `<div class="warnband vault-warn">${icon('alert',18)}<div><b>Vault encryption is off on this server.</b>Values are stored encoded but not encrypted until ENCRYPTION_KEY is set on the backend.</div></div>` : ''}
+    <ol class="vault-steps">
+      <li><span>1</span><div><b>Save it once</b><p>Add it here, or when ${agentName} asks for it in chat.</p></div></li>
+      <li><span>2</span><div><b>Only a reference is shared</b><p>${agentName} sees a name and a ref like <code>sec_ab12</code>, never the value.</p></div></li>
+      <li><span>3</span><div><b>You approve each use</b><p>It is typed only into the site you approve, in the agent browser.</p></div></li>
+    </ol>
+    <div class="vault-add">
+      <div class="vault-section-head"><h3>Add a secret</h3><span>Stays in your account, scoped to you</span></div>
+      <div class="vault-add-form">
+        <label><span>Name</span><input class="field" id="vname" placeholder="e.g. GitHub password" maxlength="80" autocomplete="off"></label>
+        <label class="vault-add-value"><span>Value</span><input class="field mono" id="vval" type="password" placeholder="Paste or type the value" autocomplete="new-password" spellcheck="false"></label>
+        <button class="btn" data-act="addsecret">${icon('plus',14)} Add to vault</button>
+      </div>
+    </div>
+    <div class="vault-list">
+      <div class="vault-section-head"><h3>Saved secrets</h3><span>Reveal is only for you, on this device</span></div>
+      ${secrets.map(s => `<div class="vault-item">
+        <span class="vault-item-icon">${icon('lock',16)}</span>
+        <div class="vault-item-copy">
+          <b>${esc(s.name)}</b>
+          <div class="vault-item-meta"><code>${esc(s.ref)}</code><span>Added ${fmtAgo(s.at)}</span>${s.backend ? '' : '<span>Only on this device</span>'}</div>
+          ${s.revealed ? `<div class="vault-item-value mono" data-rev="${s.id}">${esc(s.value)}</div>` : ''}
+        </div>
+        <div class="vault-item-actions">
+          ${s.revealed ? `<button class="iconbtn" data-act="copysecret" data-id="${s.id}" title="Copy value" aria-label="Copy ${esc(s.name)}">${icon('copy',14)}</button>` : ''}
+          <button class="iconbtn" data-act="reveal" data-id="${s.id}" title="${s.revealed ? 'Hide' : 'Reveal (only you)'}" aria-label="${s.revealed ? 'Hide' : 'Reveal'} ${esc(s.name)}">${s.revealed ? icon('eyeoff',14) : icon('eye',14)}</button>
+          <button class="iconbtn" data-act="delsecret" data-id="${s.id}" title="Delete" aria-label="Delete ${esc(s.name)}">${icon('trash',14)}</button>
+        </div>
+      </div>`).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Add a secret above, or ${agentName} will ask when a task needs a sign-in or payment detail.</p></div></div>`}
+    </div>
+  </section>`;
+}
+/* Sites the agent browser opened, newest chat first, from this account's chat cards. */
+function recentBrowsedSites(limit = 6){
+  const seen = new Map();
+  for (const c of state.chats || []) {
+    const messages = c.messages || [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const cd = messages[i].card;
+      if (!cd || cd.type !== 'browser' || cd.desktop || !cd.url) continue;
+      let host;
+      try { const u = new URL(cd.url); if (!/^https?:$/.test(u.protocol)) continue; host = u.hostname.replace(/^www\./, ''); } catch { continue; }
+      if (!seen.has(host)) seen.set(host, { host, chatId:c.id, chatTitle:c.title || 'Chat', at:c.updatedAt || c.createdAt || 0, failed:cd.status === 'failed' });
+    }
+    if (seen.size >= limit) break;
+  }
+  return [...seen.values()].slice(0, limit);
+}
+function settingsBrowserBody(){
+  const info = workspacePresenceInfo;
+  const agentName = esc((state.agent && state.agent.name) || 'Your agent');
+  const available = info ? info.fullOs === 'on-demand-vm' : null;
+  const saved = info?.persistence?.browserProfile;
+  const status = available === null
+    ? '<span class="chip">Checking…</span>'
+    : available ? `<span class="chip green">${icon('check',12)} Ready when needed</span>` : '<span class="chip">Not set up on this server</span>';
+  const profile = saved === 'private-workspace-backup'
+    ? { label:'Saved to your private backup', text:'The profile is backed up after finished browser work and before the computer shuts down, so sign-ins survive restarts.', tone:'green' }
+    : saved === 'vm-os-disk-only'
+      ? { label:'Kept on your dedicated computer', text:'The profile lives on your agent computer’s disk. It survives restarts, but is not backed up separately.', tone:'' }
+      : { label:'Not available yet', text:'A persistent profile is created when the agent computer is configured for this server.', tone:'' };
+  const worker = info?.worker?.status === 'on-demand-with-vm'
+    ? 'Shell and code run in a hardened container inside your dedicated computer. Both start only for an active task, then shut down.'
+    : 'Chat works from your account storage. Browser and code tools become available once the dedicated computer is configured.';
+  const credentials = (state.vault.secrets || []).length;
+  const sites = recentBrowsedSites();
+  const guards = [
+    ['card', 'Buying, paying or booking'],
+    ['mail', 'Sending, posting or publishing'],
+    ['trash', 'Deleting anything'],
+    ['gear', 'Changing account settings'],
+    ['key', 'Typing a saved secret'],
+  ];
+  return `<section class="agent-browser">
+    <header class="browser-hero">
+      <div class="browser-hero-window" aria-hidden="true"><span class="browser-hero-bar"><i></i><i></i><i></i><em>${icon('lock',10)} agent browser</em></span><span class="browser-hero-glyph">${icon('globe',30)}</span></div>
+      <div class="browser-hero-copy">
+        <div class="browser-hero-status">${status}</div>
+        <h2>${agentName}’s own browser</h2>
+        <p>A real browser on a private computer, separate from yours. It starts only when a task needs the web, and you can watch or take over live from any browser card in chat.</p>
+      </div>
+    </header>
+    <div class="browser-grid">
+      <article class="browser-card">
+        <div class="browser-card-head"><span class="browser-card-icon">${icon('user',16)}</span><div><h3>Browser profile</h3><span class="chip ${profile.tone}">${profile.label}</span></div></div>
+        <p>${profile.text}</p>
+        <ul class="browser-keeps"><li>${icon('check',12)} Cookies and sign-ins</li><li>${icon('check',12)} Site settings and local storage</li><li>${icon('check',12)} Browsing history</li></ul>
+      </article>
+      <article class="browser-card">
+        <div class="browser-card-head"><span class="browser-card-icon">${icon('key',16)}</span><div><h3>Sign-ins and payment details</h3><span class="chip">${credentials} in your vault</span></div></div>
+        <p>Passwords and cards come from your vault. ${agentName} gets a reference only, asks you to save anything missing, and types it after you approve — only on the site it is for.</p>
+        <button class="btn ghost small" data-act="stab" data-t="secrets">${icon('lock',13)} Manage secrets</button>
+      </article>
+    </div>
+    <article class="browser-card browser-guard">
+      <div class="browser-card-head"><span class="browser-card-icon">${icon('shieldcheck',16)}</span><div><h3>Asks you before the final step</h3><span class="browser-card-sub">${agentName} pauses for your OK on each of these</span></div></div>
+      <ul class="browser-guard-list">${guards.map(([ic, text]) => `<li>${icon(ic,14)} ${text}</li>`).join('')}</ul>
+      <p class="browser-fine">${icon('alert',12)} Private and local network addresses are blocked. When a CAPTCHA or one-time code appears, ${agentName} asks you to take over.</p>
+    </article>
+    <article class="browser-card">
+      <div class="browser-card-head"><span class="browser-card-icon">${icon('clock',16)}</span><div><h3>Recently visited</h3><span class="browser-card-sub">From your chats on this device</span></div></div>
+      ${sites.length ? `<ul class="browser-sites">${sites.map(s => `<li>
+        <span class="browser-site-mark" aria-hidden="true">${esc(s.host.slice(0, 1).toUpperCase())}</span>
+        <div><b>${esc(s.host)}</b><span>${esc(s.chatTitle)}${s.at ? ' · ' + fmtAgo(s.at) : ''}${s.failed ? ' · did not load' : ''}</span></div>
+        <button class="btn ghost small" data-act="openchat" data-id="${esc(s.chatId)}">Open chat</button>
+      </li>`).join('')}</ul>` : `<p class="browser-empty">Nothing yet. Ask ${agentName} to look something up, fill in a form or book something.</p>`}
+    </article>
+    <article class="browser-card browser-compute">
+      <div class="browser-card-head"><span class="browser-card-icon">${icon('box',16)}</span><div><h3>Workspace computer</h3><span class="browser-card-sub">Only runs while a task needs it</span></div></div>
+      <p>${worker}</p>
+    </article>
+  </section>`;
 }
 function libraryMemoryBody(){
   const memories = state.memory || [];
@@ -5149,24 +5574,14 @@ function paintSettings(M){
   } else if (tab === 'secrets'){
     body = settingsSecretsBody(state.vault);
   } else if (tab === 'browser'){
-    const saved = workspacePresenceInfo?.persistence?.browserProfile;
-    const browserStorage = saved === 'private-workspace-backup' ? 'Private account backup' : saved === 'vm-os-disk-only' ? 'On the dedicated VM only' : 'Available when the full-OS workspace is configured';
-    const worker = workspacePresenceInfo?.worker;
-    const presenceText = worker?.status === 'on-demand-with-vm'
-      ? 'Shell and code use a hardened worker container inside your dedicated VM. Both start only for an active compute task.'
-      : 'Agent chat is ready from account storage. Compute tools become available after the dedicated VM is configured.';
-    body = `<div class="kv">
-      <div class="row"><span style="color:var(--mut)">${icon('globe',16)}</span><div><b>Agent browser</b><div class="sub">Isolated from your personal browser. The full OS starts only when browser or computer work needs it.</div></div></div>
-      <div class="row"><span style="color:var(--mut)">${icon('folder',16)}</span><div><b>Browser data</b><div class="sub">${browserStorage}.${saved === 'private-workspace-backup' ? ' The profile and workspace files are backed up after completed computer work and before shutdown.' : ''}</div></div></div>
-      <div class="row"><span style="color:var(--mut)">${icon('box',16)}</span><div><b>Workspace compute</b><div class="sub">${presenceText} The container shares the VM’s compute and does not create a second always-on container service.</div></div></div>
-    </div>`;
+    body = settingsBrowserBody();
   } else if (tab === 'billing'){
     body = billingBodyHtml();
   }
   const previousTabScroll = M.querySelector('.settings-tabs')?.scrollLeft || 0;
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">${tab === 'billing' ? 'A space for you, your agent, and what comes next.' : tab === 'profiles' ? 'Your account, agent appearance, system files, and private settings — all scoped to you.' : 'Profiles, theme, secrets, browser and billing — all scoped to your account, never shared.'}</p>
+    <p class="psub">${({ billing:'Your plan, tokens and gift cards.', profiles:'Your account, agent appearance, system files, and private settings — all scoped to you.', secrets:'Credentials and payment details your agent can use without seeing them.', browser:'Your agent’s own browser: profile, sign-ins and what it asks you about.' })[tab] || 'Scoped to your account, never shared.'}</p>
     <div class="seg settings-tabs" aria-label="Settings sections">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles" aria-pressed="${tab === 'profiles'}">${icon('user',14)} Profiles</button>
       <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets" aria-pressed="${tab === 'secrets'}">${icon('key',14)} Secrets</button>
@@ -5192,6 +5607,11 @@ function paintSettings(M){
   });
   if (tab === 'billing'){
     loadBillingContent();
+  }
+  // One status check per user if presence has not reported yet; the reply repaints this tab.
+  if (tab === 'browser' && !workspacePresenceInfo && signedIn() && browserPresenceChecked !== currentUserId()) {
+    browserPresenceChecked = currentUserId();
+    workspacePresenceRequest('status');
   }
 }
 
@@ -5464,7 +5884,7 @@ document.addEventListener('click', async e => {
     state.canvasOpen = false; state.view = 'settings'; state.settingsTab = 'profiles'; save(); renderApp(); return;
   }
 
-  if (act === 'rmfile'){ removeFile(+b.dataset.idx); return; }
+  if (act === 'rmfile'){ e.preventDefault(); removeFile(+b.dataset.idx, b.closest('form')); return; }
   if (act === 'scroll'){ e.preventDefault(); const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
   if (act === 'open-app'){
     e.preventDefault();
@@ -5488,7 +5908,7 @@ document.addEventListener('click', async e => {
     belnaStopLandingFx();
     if (!signedIn()){ renderAuth(); toast('Sign in first, then claim your agent — your message is saved.'); return; }
     ensureOwnerScope();
-    if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); if (state.pendingPrompt){ const p = state.pendingPrompt; state.pendingPrompt = null; save(); sendPrompt(p); } }
+    if (state.onboarded && state.agent && !state.agent.provisional){ renderApp(); if (state.pendingPrompt){ const p = state.pendingPrompt; const files = state.pendingPromptFiles || []; state.pendingPrompt = null; state.pendingPromptFiles = []; save(); sendPrompt(p, files); } }
     else if (state.pendingPrompt){ await startPendingPromptFlow(); }
     else { openOnboarding(); }
     return;
@@ -5547,6 +5967,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'shop-pay-refresh'){ refreshShopPay(true); return; }
+  if (act === 'payments-refresh'){ refreshShopPay(true); refreshComposioApps(true); return; }
   if (act === 'app-filter'){ state.appFilter = b.dataset.f === 'connected' ? 'connected' : 'all'; save(); paintApps(document.getElementById('main')); return; }
   if (act === 'app-focus'){
     const tk = String(b.dataset.toolkit || '');
@@ -5576,36 +5997,21 @@ document.addEventListener('click', async e => {
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
   if (act === 'open-system-files'){
-    state.view = 'library'; state.libraryCat = 'system'; state.systemPath = 'root'; state.systemFile = null; state.librarySelect = false; save();
+    state.view = 'library'; state.libraryCat = 'system'; state.systemFile = null; state.librarySelect = false; save();
     renderApp(); refreshSystemFiles(true); return;
   }
   if (act === 'open-system-memory'){
-    state.view = 'library'; state.libraryCat = 'system'; state.systemPath = 'memory'; state.systemFile = 'system:memory'; state.librarySelect = false; save();
+    state.view = 'library'; state.libraryCat = 'system'; state.systemFile = 'system:memory'; state.librarySelect = false; save();
     renderApp(); refreshSystemFiles(true); return;
   }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
-  if (act === 'open-library'){ mobileNavOpen = false; state.view = 'library'; state.userMenuOpen = false; save(); renderApp(); return; }
-  if (act === 'open-goals'){ mobileNavOpen = false; state.view = 'goals'; state.userMenuOpen = false; save(); renderApp(); return; }
+  if (act === 'open-library'){ mobileNavOpen = false; state.view = 'library'; state.userMenuOpen = false; save(); renderApp(); refreshLibrary(); return; }
+  if (act === 'open-goals'){ mobileNavOpen = false; state.view = 'goals'; state.userMenuOpen = false; save(); renderApp(); refreshGoals(); return; }
   /* goals */
-  const repaintGoals = () => {
-    if (state.view === 'goals' && $('#main')) paintGoals($('#main'));
-    if ($('#side')) paintSide();
-  };
-  if (act === 'goal-start'){ mobileNavOpen = false; newChat({goal:true}); return; }
-  if (act === 'goal-save'){
-    const current = chat();
-    if (!current?.goalDraft || current.goalDraft.savedId) return;
-    const title = String($('#goal-draft-title')?.value || '').trim();
-    const cat = String($('#goal-draft-cat')?.value || 'other');
-    if (!title){ $('#goal-draft-title')?.focus(); toast('Name your goal before saving it.'); return; }
-    const goal = { id:uid(), title:title.slice(0,120), category:GOAL_CATS.some(c => c.id === cat) ? cat : 'other', active:true, done:false, createdAt:Date.now(), subgoals:[], chatId:current.id };
-    state.goals.unshift(goal);
-    current.goalDraft = { title:goal.title, category:goal.category, savedId:goal.id };
-    save(); paintChat($('#main')); paintSide(); toast('Goal saved. Add steps from your Goals page.');
-    return;
-  }
+  const repaintGoals = repaintGoalViews;
+  if (act === 'goal-start'){ mobileNavOpen = false; newChat({goal:true, category:b.dataset.c}); return; }
   if (act === 'goal-view'){
-    state.view = 'goals'; state.goalFilter = 'all'; state.goalCat = 'all'; save(); renderApp();
+    state.view = 'goals'; state.goalFilter = 'all'; save(); renderApp(); refreshGoals();
     return;
   }
   if (act === 'goal-menu'){
@@ -5622,6 +6028,7 @@ document.addEventListener('click', async e => {
     state.goals = (state.goals || []).filter(g => g.id !== id);
     state.goalMenu = null;
     save(); repaintGoals(); toast('Goal deleted.');
+    saveGoalChange(id, null);
     return;
   }
   if (act === 'goal-done'){
@@ -5629,7 +6036,9 @@ document.addEventListener('click', async e => {
     if (!g) return;
     g.done = !g.done;
     if (g.done){ g.active = false; (g.subgoals || []).forEach(s => { s.done = true; }); }
+    else g.active = true;
     save(); repaintGoals();
+    saveGoalChange(g.id, { status:g.done ? 'done' : 'active' });
     return;
   }
   if (act === 'goal-active'){
@@ -5638,36 +6047,41 @@ document.addEventListener('click', async e => {
     g.active = !g.active;
     state.goalMenu = null;
     save(); repaintGoals();
+    saveGoalChange(g.id, { status:g.active ? 'active' : 'paused' });
     return;
   }
   if (act === 'goal-filter'){ state.goalFilter = b.dataset.f || 'all'; save(); repaintGoals(); return; }
-  if (act === 'goal-cat'){ state.goalCat = b.dataset.c || 'all'; save(); repaintGoals(); return; }
   if (act === 'sub-add'){
     const g = (state.goals || []).find(x => x.id === b.dataset.id);
     if (!g || g.done) return;
     const inp = document.getElementById('sub-' + g.id);
-    const title = String((inp && inp.value) || '').trim();
-    if (!title){ toast('Write the sub-goal first.'); return; }
+    const title = String((inp && inp.value) || '').trim().slice(0, 120);
+    if (!title){ toast('Write the step first.'); return; }
     if (!Array.isArray(g.subgoals)) g.subgoals = [];
-    g.subgoals.push({ id: uid(), title: title.slice(0, 120), done: false, at: Date.now() });
+    g.subgoals.push({ id: uid(), title, done: false });
     save(); repaintGoals();
+    saveGoalChange(g.id, { addSteps:[title] });
     return;
   }
+  // Steps are addressed by title too, so a step added a moment ago still matches.
   if (act === 'sub-done'){
     const g = (state.goals || []).find(x => x.id === b.dataset.id);
     const s = g && (g.subgoals || []).find(x => x.id === b.dataset.sub);
     if (!s) return;
     s.done = !s.done;
     if ((g.subgoals || []).length && (g.subgoals || []).every(x => x.done)) { g.done = true; g.active = false; }
-    else if (g.done && !s.done) { g.done = false; }
+    else if (g.done && !s.done) { g.done = false; g.active = true; }
     save(); repaintGoals();
+    saveGoalChange(g.id, s.done ? { completeSteps:[s.title] } : { reopenSteps:[s.title] });
     return;
   }
   if (act === 'sub-del'){
     const g = (state.goals || []).find(x => x.id === b.dataset.id);
-    if (!g) return;
-    g.subgoals = (g.subgoals || []).filter(x => x.id !== b.dataset.sub);
+    const s = g && (g.subgoals || []).find(x => x.id === b.dataset.sub);
+    if (!s) return;
+    g.subgoals = (g.subgoals || []).filter(x => x.id !== s.id);
     save(); repaintGoals();
+    saveGoalChange(g.id, { removeSteps:[s.title] });
     return;
   }
   if (act === 'theme'){ state.theme = b.dataset.v || 'grey'; save(); applyTheme(); if (state.view === 'settings' && $('#main')) paintSettings($('#main')); toast('Chat color: ' + ((THEMES.find(t => t.id === state.theme) || THEMES[0]).name)); return; }
@@ -5764,7 +6178,13 @@ document.addEventListener('click', async e => {
   if (act === 'delchat'){
     e.stopPropagation();
     const deleting = state.chats.find(x => x.id === b.dataset.id);
-    if (deleting) stopDelegatedTask(deleting);
+    if (deleting){
+      stopDelegatedTask(deleting);
+      for (const m of deleting.messages || []) for (const file of m.files || []) {
+        if (file.storageId) void storedFile('readwrite', store => store.delete(file.storageId)).catch(() => {});
+      }
+    }
+    pendingFilesByForm.delete(`cform:${b.dataset.id}`);
     state.chats = state.chats.filter(x => x.id !== b.dataset.id);
     if (state.activeChat === b.dataset.id) state.activeChat = state.chats[0] ? state.chats[0].id : null;
     save(); renderApp(); return;
@@ -5792,7 +6212,9 @@ document.addEventListener('click', async e => {
     });
     item.classList.toggle('open', willOpen);
     b.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-    state.approvalOpenId = willOpen ? (b.dataset.id || item.dataset.id) : null;
+    // Approvals, Automations and Payments share this row; each remembers its own open row.
+    const openKey = { automation:'automationOpenId', payment:'paymentOpenId' }[b.dataset.key] || 'approvalOpenId';
+    state[openKey] = willOpen ? (b.dataset.id || item.dataset.id) : null;
     return;
   }
   if (act === 'mtab'){
@@ -5889,25 +6311,25 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'lib-download'){ downloadLibraryItem(libraryItemById(b.dataset.id)); return; }
+  if (act === 'library-item-open'){ libraryViewer = b.dataset.libId || null; paintLibrary($('#main')); return; }
+  if (act === 'lib-viewer-close'){ libraryViewer = null; paintLibrary($('#main')); return; }
   if (act === 'lib-upload'){ $('#libupload')?.click(); return; }
   if (act === 'libcat'){
     state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = [];
-    if (state.libraryCat === 'system'){ state.systemPath = 'root'; state.systemFile = null; }
-    save(); paintLibrary($('#main')); $('#main .page').scrollTop = 0;
+    if (state.libraryCat === 'system') state.systemFile = null;
+    save(); paintLibrary($('#main')); $('#main .lib-main, #main .page').forEach(n => { n.scrollTop = 0; });
     if (state.libraryCat === 'memory' && signedIn()) syncFromBackend(true).then(() => {
       if (state.view === 'library' && state.libraryCat === 'memory') paintLibrary($('#main'));
     }).catch(e => toast(e.message));
     return;
   }
-  if (act === 'system-folder'){ state.systemPath = b.dataset.path || 'root'; state.systemFile = null; save(); paintLibrary($('#main')); return; }
   if (act === 'system-open'){ state.systemFile = b.dataset.systemId || null; save(); paintLibrary($('#main')); return; }
   if (act === 'system-back'){
-    if (state.systemFile){ state.systemFile = null; }
-    else { state.systemPath = 'root'; }
+    state.systemFile = null;
     save(); paintLibrary($('#main')); return;
   }
   if (act === 'system-memory'){
-    state.view = 'library'; state.libraryCat = 'memory'; state.systemFile = null; state.systemPath = 'root'; save();
+    state.view = 'library'; state.libraryCat = 'memory'; state.systemFile = null; save();
     if (signedIn()) await syncFromBackend(true).catch(() => {});
     paintLibrary($('#main')); return;
   }
@@ -5919,7 +6341,7 @@ document.addEventListener('click', async e => {
     b.disabled = true;
     try {
       await persistAgentContext(documents);
-      state.systemFile = null; state.systemPath = 'root'; save(); paintLibrary($('#main')); toast(`${key.toUpperCase()}.md saved.`);
+      state.systemFile = null; save(); paintLibrary($('#main')); toast(`${key.toUpperCase()}.md saved.`);
     } catch (error) { b.disabled = false; toast(error.message || 'Could not save that file.'); }
     return;
   }
@@ -5938,6 +6360,15 @@ document.addEventListener('click', async e => {
     if (!window.confirm(`Delete ${ids.size} selected item${ids.size > 1 ? 's' : ''}?`)) return;
     let removed = 0;
     ids.forEach(id => {
+      if (String(id).startsWith('lib:')){
+        const libId = String(id).slice(4);
+        state.libraryServer = (state.libraryServer || []).filter(item => item.id !== libId);
+        libraryContent.delete(libId);
+        removed++;
+        window.LingonAuth.api('/api/library/' + encodeURIComponent(libId), { method:'DELETE' })
+          .catch(error => { toast(error.message || 'A file could not be deleted.'); refreshLibrary(); });
+        return;
+      }
       if (String(id).startsWith('upload:')){
         const before = state.libraryUploads.length;
         state.libraryUploads = state.libraryUploads.filter(item => 'upload:' + item.id !== id);
@@ -6045,18 +6476,28 @@ document.addEventListener('click', async e => {
   if (act === 'managed-resume') { await Engine.resume(makeRT(chat())); return; }
   if (m?.card?.managedCallId && ['save-secret','skip-secret'].includes(act)) {
     if (!signedIn()) { renderAuth(); return; }
-    if(act === 'save-secret') {
-      const node=document.querySelector(`[data-mid="${m.id}"]`);
-      const input=node.querySelector('[data-f="val"]');
-      if(!input.value) { toast('Enter the credential value.'); return; }
-      b.disabled=true;
-      try {
-        await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name:m.card.suggest,value:input.value})});
-        input.value='';
-      } catch(err) {b.disabled=false;toast(err.message);return;}
-    }
-    await Engine.resume(makeRT(c),{callId:m.card.managedCallId,allow:act==='save-secret'});
-    b.disabled=false;return;
+    const allow = act === 'save-secret';
+    b.disabled = true;
+    try {
+      // Save first so the agent's vault_request finds the name when it resumes.
+      // A retry after a failed resume reuses the already-saved secret.
+      if (allow && !m.card.ref) {
+        const input = document.querySelector(`[data-mid="${m.id}"] [data-f="val"]`);
+        if (!input?.value) { toast('Enter the value to save.'); return; }
+        const added = await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name:m.card.suggest,value:input.value})});
+        input.value = '';
+        if (added?.secret) {
+          state.vault.secrets = [{ ...added.secret, backend:true }, ...state.vault.secrets.filter(s => s.id !== added.secret.id)];
+          m.card.ref = added.secret.ref;
+        }
+      }
+      if (m.card.taskId) await Engine.controlTask(makeRT(c), m.card.taskId, 'decide', { callId:m.card.managedCallId, allow, version:m.card.taskVersion });
+      else await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow });
+      m.card.status = allow ? 'saved' : 'skipped';
+      replaceNode(c, m); save(); paintSide();
+    } catch (err) { toast(err.message || 'Could not save that secret.'); }
+    finally { b.disabled = false; }
+    return;
   }
   if (m?.card?.managedCallId && ['managed-allow','managed-deny','qopt'].includes(act)) {
     if (!signedIn()) { renderAuth(); return; }
@@ -6130,8 +6571,15 @@ document.addEventListener('click', async e => {
     }catch(err){toast(err.message || 'Could not reveal that secret.');}
     return;
   }
+  if (act === 'copysecret'){
+    const s=state.vault.secrets.find(x=>x.id===b.dataset.id);if(!s?.revealed || !s.value)return;
+    try{await navigator.clipboard.writeText(s.value);toast('Copied — clear your clipboard when you are done.');}
+    catch{toast('Could not copy in this browser.');}
+    return;
+  }
   if (act === 'delsecret'){
     const secret=state.vault.secrets.find(x=>x.id===b.dataset.id);if(!secret)return;
+    if(!window.confirm(`Delete “${secret.name}”? Your agent will no longer be able to use it.`))return;
     try{
       if(secret.backend && signedIn())await window.LingonAuth.api('/api/secrets/'+encodeURIComponent(secret.id),{method:'DELETE'});
       state.vault.secrets=state.vault.secrets.filter(x=>x.id!==secret.id);save();repaintSettings();paintSide();toast('Secret deleted');
@@ -6149,7 +6597,7 @@ document.addEventListener('click', async e => {
       }else{
         const ref='sec_'+uid().slice(0,4);secret={id:ref,ref,name:n,value:v,at:Date.now()};
       }
-      state.vault.secrets.push(secret);save();repaintSettings();paintSide();toast('Sealed in vault — agent gets '+secret.ref+' only');
+      state.vault.secrets.unshift(secret);save();repaintSettings();paintSide();toast('Sealed in vault — agent gets '+secret.ref+' only');
     }catch(err){toast(err.message || 'Could not save that secret.');}
     return;
   }
@@ -6168,6 +6616,8 @@ document.addEventListener('click', async e => {
   if (act === 'otp-verify'){ authOtpVerify(); return; }
   if (act === 'signout'){
     stopWorkspacePresence();
+    closeGift();
+    giftCache = null;
     window.LingonAuth.set(null);
     state.view = 'chat';
     render();
@@ -6175,7 +6625,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'billing-topup'){
     const pack = $('#buypack');
-    if (pack) { pack.scrollIntoView({ block:'center', behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); pack.focus({ preventScroll:true }); }
+    if (pack) { pack.scrollIntoView({ block:'center', behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); (pack.querySelector('input:checked') || pack).focus({ preventScroll:true }); }
     return;
   }
   if (act === 'billing-refresh'){
@@ -6185,10 +6635,20 @@ document.addEventListener('click', async e => {
   }
   if (act === 'opengift'){ openGift(); return; }
   if (act === 'closegift'){ closeGift(); return; }
+  if (act === 'gift-reveal'){
+    const code = giftCache && giftCache.code;
+    if (!code){ toast('Your code isn’t ready yet.'); return; }
+    const codeText = $('#giftcode-text');
+    if (codeText) codeText.textContent = code;
+    b.dataset.act = 'gift-copy-code';
+    b.setAttribute('aria-label', 'Copy invite code');
+    b.innerHTML = `${icon('copy',16)}<span>Copy code</span>`;
+    return;
+  }
   if (act === 'gift-copy-code'){
     const code = (giftCache && giftCache.code) || (($('#giftcode-text') || {}).textContent || '').trim();
     if (!code){ toast('Your code isn’t ready yet.'); return; }
-    copyText(code).then(() => toast('Gift code copied — share it with a friend.')).catch(() => toast(code));
+    copyText(code).then(() => toast('Invite code copied — share it with a friend.')).catch(() => toast(code));
     return;
   }
   if (act === 'gift-copy-link'){
@@ -6200,8 +6660,8 @@ document.addEventListener('click', async e => {
   if (act === 'gift-share'){
     const link = (giftCache && giftCache.link) || '';
     const code = (giftCache && giftCache.code) || '';
-    const text = 'Join me on Belna — we each get 500,000 tokens when you redeem my invite.';
-    if (navigator.share){ navigator.share({ title: 'A $50 Belna gift for us', text: link ? text : `${text} Code: ${code}`, url: link || undefined }).catch(() => {}); return; }
+    const text = 'Join me on Belna — we each get 10 million tokens when you redeem my invite.';
+    if (navigator.share){ navigator.share({ title: 'Belna invite', text: link ? text : `${text} Code: ${code}`, url: link || undefined }).catch(() => {}); return; }
     copyText(link || code).then(() => toast('Invite copied — send it to a friend.')).catch(() => toast(`${text} ${link || code}`));
     return;
   }
@@ -6215,9 +6675,14 @@ document.addEventListener('click', async e => {
       giftCache = null; invalidateBilling();
       setBillingCache(j.billing);
       paintSide();
-      toast(`+${fmtTokens(j.tokens || 500000)} tokens for you — your friend got +${fmtTokens(j.inviterTokens || 500000)} too.`);
+      toast(`+${fmtTokens(j.tokens || 10000000)} tokens for you — your friend got +${fmtTokens(j.inviterTokens || 10000000)} too.`);
       openGift();
     }).catch((e) => { b.disabled = false; toast(e.message); });
+    return;
+  }
+  if (act === 'copy-gift'){
+    try { await navigator.clipboard.writeText(b.dataset.code || ''); toast('Gift code copied.'); }
+    catch { toast('Could not copy in this browser.'); }
     return;
   }
   if (act === 'redeem'){
@@ -6236,17 +6701,9 @@ document.addEventListener('click', async e => {
   }
   if (act === 'buycredits'){
     try {
-      const pack = Number((($('#buypack') || {}).value) || 0);
+      const pack = Number((document.querySelector('input[name="buypack"]:checked') || {}).value || 0);
       if (!pack){ toast('Pick a token pack.'); return; }
       const j = await window.LingonAuth.api('/api/billing/tokens', { method: 'POST', body: JSON.stringify({ packTokens: pack }) });
-      if (j.url) { window.location.href = j.url; return; }
-      toast(j.note || 'Checkout started.');
-    } catch (e) { toast(e.message); }
-    return;
-  }
-  if (act === 'buygift'){
-    try {
-      const j = await window.LingonAuth.api('/api/billing/gift', { method: 'POST', body: JSON.stringify({ amount: Number(b.dataset.amt || 0) }) });
       if (j.url) { window.location.href = j.url; return; }
       toast(j.note || 'Checkout started.');
     } catch (e) { toast(e.message); }
@@ -6394,7 +6851,7 @@ async function bootHash(){
   } catch {}
   return 'none';
 }
-const bootReady = bootHash().then((st) => {
+const bootReady = hydrateStoredFiles().then(() => bootHash()).then((st) => {
   expirePending();
   applyTheme();
   // Navigation can remove the React host while the scripts/auth are loading.
@@ -6410,7 +6867,9 @@ const bootReady = bootHash().then((st) => {
     else setTimeout(() => toast('Sign-in failed: ' + msg), 400);
     return;
   }
-  render();
+  if (signedIn() && state.pendingPrompt && !needsOnboarding()) {
+    void landingRun(state.pendingPrompt, state.pendingPromptFiles || []).catch(error => { console.error(error); render(); });
+  } else render();
   try {
     // Referral gift link (?ref= / ?gift=) auto-opens the gift popup.
     // A pre-sign-in visit stashes the code, then opens it after login.
