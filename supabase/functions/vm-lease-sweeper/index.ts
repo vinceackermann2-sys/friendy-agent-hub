@@ -11,7 +11,7 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
   const token = Deno.env.get('VM_SWEEP_TOKEN') || '';
   // SECURITY: only the scheduler holding the trigger secret may start a sweep.
-  const triggerToken = Deno.env.get('VM_SWEEP_TRIGGER_TOKEN') || '';
+  const triggerToken = Deno.env.get('VM_SWEEP_TRIGGER_TOKEN')?.trim() || '';
   if (!token || !triggerToken) return Response.json({ error: 'Sweeper is not configured.' }, { status: 503 });
   const supplied = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
   if (!sameSecret(supplied, triggerToken)) return Response.json({ error: 'Unauthorized' }, { status: 401 });
