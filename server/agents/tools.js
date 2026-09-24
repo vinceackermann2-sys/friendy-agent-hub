@@ -206,13 +206,27 @@ const foldText = (text) => String(text || '').toLowerCase().replace(/ø/g,'o').r
 // directly for free; Firecrawl scrapes a page (1 credit) only when the direct
 // read fails or finds almost no text, as on pages built by JavaScript.
 const FIRECRAWL_API = 'https://api.firecrawl.dev/v2';
+const FIRECRAWL_GATEWAY = 'https://connector-gateway.lovable.dev/firecrawl/v2';
 const SEARCH_COUNTRIES = new Set(['US','GB','SE','NO','DK','FI','DE','FR','ES','NL','IT','PT','PL','AT','CH','BE','IE','CA','AU','NZ']);
 const firecrawlKey = () => String(process.env.FIRECRAWL_API_KEY || '').trim();
+// Lovable-managed connections use a lovc_ connection key that only the gateway accepts.
+const firecrawlBase = () => (firecrawlKey().startsWith('lovc_') ? FIRECRAWL_GATEWAY : FIRECRAWL_API);
+const firecrawlHeaders = () => {
+  const key = firecrawlKey();
+  const h = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (key.startsWith('lovc_')) {
+    h.Authorization = `Bearer ${String(process.env.LOVABLE_API_KEY || '').trim()}`;
+    h['X-Connection-Api-Key'] = key;
+  } else {
+    h.Authorization = `Bearer ${key}`;
+  }
+  return h;
+};
 async function firecrawl(pathname, body, signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
-  const r = await fetch(`${FIRECRAWL_API}${pathname}`, {
+  const r = await fetch(`${firecrawlBase()}${pathname}`, {
     method: 'POST', redirect: 'error',
-    headers: { Authorization: `Bearer ${firecrawlKey()}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers: firecrawlHeaders(),
     body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   const json = await r.json().catch(() => ({}));
