@@ -56,9 +56,25 @@ export const lingonHeadLinks: Array<
   },
 ];
 
+// Server-rendered for crawlers and link previews, but visually hidden so
+// visitors see the app background instead of an unstyled page while
+// the vanilla app scripts load.
+const visuallyHidden: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  clipPath: "inset(50%)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
 function CrawlableOverview({ page }: { page: "home" | "app" }) {
   return (
-    <main style={{ maxWidth: 900, margin: "64px auto", padding: "0 24px", fontFamily: "system-ui, sans-serif" }}>
+    <main style={visuallyHidden}>
       <nav aria-label="Public pages" style={{ display: "flex", flexWrap: "wrap", gap: 20, marginBottom: 64 }}>
         <a href="/">Belna</a>
         <a href="/research">Research</a>
@@ -91,6 +107,7 @@ function CrawlableOverview({ page }: { page: "home" | "app" }) {
         <a href="/privacy">Privacy</a>
         <a href="/cookies">Cookies</a>
         <a href="/withdrawal">Withdraw from a purchase</a>
+        <a href="mailto:support@belna.se">support@belna.se</a>
       </footer>
     </main>
   );

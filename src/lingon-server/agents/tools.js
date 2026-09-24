@@ -53,9 +53,11 @@ async function searchWeb(query, { country } = {}, ctx) {
   const cc = String(country || '').toUpperCase();
   if (SEARCH_COUNTRIES.has(cc)) body.country = cc;
   const timeout = AbortSignal.timeout(ctx.quick ? 15000 : 45000);
-  const r = await fetch(firecrawlEndpoint() + '/search', { method: 'POST', redirect: 'error',
+  const r = await fetch(firecrawlEndpoint() + '/search', { method: 'POST', redirect: 'manual',
     headers: firecrawlHeaders(),
     body: JSON.stringify(body), signal: ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout });
+  // Workers only allow 'follow' or 'manual'. Refuse redirects so the key headers never go elsewhere.
+  if (r.status >= 300 && r.status < 400) throw new Error('Firecrawl search failed: unexpected redirect (HTTP ' + r.status + ')');
   const json = await r.json().catch(() => ({}));
   if (!r.ok || json.success === false) throw new Error('Firecrawl search failed: ' + String(json.error || 'HTTP ' + r.status).slice(0, 200));
   const seen = new Set();

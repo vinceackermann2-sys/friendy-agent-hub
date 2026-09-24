@@ -1870,7 +1870,22 @@ async function updateShopPayOrder(userId, id, patch) {
 function sealSecret(plain) { return encryptValue(plain); }
 function openSecret(obj) { return decryptValue(obj); }
 const { createTokenWallet } = require('./token-wallet');
-const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, uid, plans: require('./plans').PLANS });
+const signupDates = new Map();
+async function getSignupAt(userId) {
+  if (signupDates.has(userId)) return signupDates.get(userId);
+  const s = supa();
+  if (s) {
+    const { data, error } = await s.auth.admin.getUserById(userId);
+    if (error || !data?.user?.created_at) throw error || new Error('Could not load account signup date.');
+    signupDates.set(userId, data.user.created_at);
+    return data.user.created_at;
+  }
+  const d = loadLocal();
+  d.signupDates = d.signupDates || {};
+  if (!d.signupDates[userId]) { d.signupDates[userId] = new Date().toISOString(); saveLocal(d); }
+  return d.signupDates[userId];
+}
+const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, getSignupAt, uid, plans: require('./plans').PLANS });
 const { createPersonalStore } = require('./personal-store');
 const personalStore = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 const getTokenWallet = tokenWallet.tokenWallet;

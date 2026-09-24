@@ -25,6 +25,7 @@ import * as Automations from './agents/automations.js';
 import * as composio from './composio.js';
 import * as mail from './mail.js';
 import * as shoppay from './shoppay.js';
+import { saveSupportSubmission } from './support.js';
 import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases } from './agents/azure-vm.js';
 import { handle as vmHarnessHandle } from './agents/vm-harness.js';
 import { handle as conversationHandle, tasks as chatTasks } from './agents/conversation.js';
@@ -198,6 +199,18 @@ app.get('/api/auth/status', (req, res) => {
 app.get('/api/plans', (req, res) => {
   res.json({ plans: Object.values(PLANS) });
 });
+
+app.post('/api/support/submissions', rateLimit(5, 60000), requireAuth(async (req, res) => {
+  const admin = adminClient();
+  if (!admin) return res.status(503).json({ error:'Support submissions are temporarily unavailable.' });
+  try {
+    res.status(201).json(await saveSupportSubmission(admin, req.user, req.body));
+  } catch (error) {
+    if (error.code === 'BAD_INPUT') return res.status(400).json({ error:error.message });
+    console.error('[support] submission failed:', error);
+    res.status(503).json({ error:'Could not save your submission. Please try again.' });
+  }
+}));
 
 // Public withdrawal function for eligible online purchases. A request is a notice,
 // not an automatic refund; staff can review eligibility from the saved record.

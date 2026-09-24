@@ -118,6 +118,13 @@ syncStripeProvider();
   if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted personal store');
   writeFileSync(join(root, 'src/lingon-server/personal-store.js'), esm, 'utf8');
 }
+// Support form validation and storage are shared by both API runtimes.
+{
+  const src = readFileSync(join(root, 'server/support.js'), 'utf8');
+  const esm = src.replace('module.exports = { saveSupportSubmission };', 'export { saveSupportSubmission };');
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted support module');
+  writeFileSync(join(root, 'src/lingon-server/support.js'), esm, 'utf8');
+}
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.

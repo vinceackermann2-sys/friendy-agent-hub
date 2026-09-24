@@ -18,7 +18,16 @@ async function query(result) {
 const first = async (request) => (await query(request))?.[0] || null;
 const get = (userId, id) => first(db().from('agent_chat_tasks').select('*').eq('user_id', userId).eq('id', id));
 const list = (userId, chatId, cursors={}, events=true) => query(db().rpc('list_chat_tasks', {p_user_id:userId,p_chat_id:chatId,p_cursors:cursors,p_events:events}));
-const due = () => query(db().from('agent_chat_tasks').select('id,user_id,revision').in('state->>status', ['queued','running','stopping']).or(`lease_until.is.null,lease_until.lte.${new Date().toISOString()}`).order('updated_at').limit(12));
+const due = async () => {
+  try { return await query(db().rpc('due_chat_tasks')); }
+  catch (error) {
+    // Keep existing workers running during a rolling deploy until the new
+    // migration is applied. Parent wakeups require due_chat_tasks afterward.
+    if (!['TASK_STORE_PGRST202','TASK_STORE_42883'].includes(error.code)) throw error;
+    return query(db().from('agent_chat_tasks').select('id,user_id,revision').in('state->>status',['queued','running','stopping'])
+      .or(`lease_until.is.null,lease_until.lte.${new Date().toISOString()}`).order('updated_at').limit(12));
+  }
+};
 const create = (row) => first(db().rpc('create_chat_task', { p_id:row.id,p_user_id:row.user_id,p_chat_id:row.chat_id,p_request_key:row.request_key,p_state:row.state }));
 const claim = (userId,id,token) => first(db().rpc('claim_chat_task', { p_id:id,p_user_id:userId,p_token:token }));
 const write = (row,state,token=null) => first(db().rpc('write_chat_task', { p_id:row.id,p_user_id:row.user_id,p_revision:row.revision,p_token:token,p_state:state }));

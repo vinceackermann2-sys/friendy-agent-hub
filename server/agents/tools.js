@@ -226,10 +226,12 @@ const firecrawlHeaders = () => {
 async function firecrawl(pathname, body, signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
   const r = await fetch(`${firecrawlBase()}${pathname}`, {
-    method: 'POST', redirect: 'error',
+    method: 'POST', redirect: 'manual',
     headers: firecrawlHeaders(),
     body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
+  // Workers only allow 'follow' or 'manual'. Refuse redirects so the key headers never go elsewhere.
+  if (r.status >= 300 && r.status < 400) throw new Error(`Firecrawl ${pathname.slice(1)} failed: unexpected redirect (HTTP ${r.status})`);
   const json = await r.json().catch(() => ({}));
   if (!r.ok || json.success === false) throw new Error(`Firecrawl ${pathname.slice(1)} failed: ${String(json.error || `HTTP ${r.status}`).slice(0, 200)}`);
   return json.data;

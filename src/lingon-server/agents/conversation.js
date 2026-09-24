@@ -68,7 +68,7 @@ function sameTask(a,b) {
   const shared=[...x].filter(w=>y.has(w)).length;
   return shared/Math.max(1,Math.min(x.size,y.size))>=0.6;
 }
-const REACTION_EMOJIS={up:'👍',down:'👎',heart:'❤️',poop:'💩',laugh:'😂',wow:'😮',party:'🎉'};
+const REACTION_EMOJIS={up:'👍',down:'👎',heart:'❤️',poop:'💩'};
 const REACTION_TOOL=schema('react_to_message','Optionally add one emoji reaction to the latest user message when it fits naturally. This is a visible reaction, not a reply. Do not react to every message.',{emoji:{type:'string',enum:Object.keys(REACTION_EMOJIS)}},['emoji']);
 
 function createCoordinator(d) {
@@ -105,7 +105,7 @@ function createCoordinator(d) {
     const usageLogs=[];
     timing.prepMs=Date.now()-started;
     const teamId=crypto.createHash('sha256').update(JSON.stringify([userId,chatId,requestId])).digest('hex');
-    const direct=taskStorageAvailable && !context.replyTo && !tasks.some(t=>['queued','running','waiting_approval','stopping'].includes(t.status))
+    const direct=taskStorageAvailable && !context.replyTo && !tasks.some(t=>['queued','running','waiting_peers','waiting_approval','stopping'].includes(t.status))
       ? directWorkerRequest(prompt) : null;
     if(direct) {
       const row=await d.tasks.create({userId,chatId,requestKey:`${requestId}:direct`,...direct,history:historyCopy,

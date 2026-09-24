@@ -73,6 +73,7 @@ const ctx = { trace: () => {} };
   const search = searches.find((s) => s.url.pathname === '/v2/search');
   assert.equal(search.url.origin, 'https://api.firecrawl.dev');
   assert.equal(search.opts.headers.Authorization, 'Bearer fc-test');
+  assert.equal(search.opts.redirect, 'manual', "the edge runtime rejects redirect: 'error'");
   assert.deepEqual(JSON.parse(search.opts.body), { query: 'öppettider bibliotek', limit: 8, sources: ['web'], country: 'SE' });
   assert.equal(hit.ok, true);
   const parsed = JSON.parse(hit.text);

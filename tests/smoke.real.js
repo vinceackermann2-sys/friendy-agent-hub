@@ -160,7 +160,7 @@ import { chromium } from 'playwright';
   if (/connected · tokens sealed/.test(apps)) errs.push('Fake connection row still present');
   step('apps honestly empty');
 
-  // Billing lives in Settings → Billing tab
+  // Billing shows plans; Usage holds the token meter and gift cards.
   await p.click('[data-act="usermenu"]');
   await p.click('.usermenu [data-act="nav"][data-view="settings"]');
   await p.waitForSelector('[data-act="stab"][data-t="billing"]');
@@ -170,9 +170,14 @@ import { chromium } from 'playwright';
   const bill = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
   console.log('BILLING SAMPLE:\n' + bill.slice(0, 600));
   if (!/FREE/i.test(bill)) errs.push('Billing plan missing');
-  if (!/20 starter credits/i.test(bill)) errs.push('Free 20 starter credits missing');
-  if (!/Redeem gift/i.test(bill)) errs.push('Gift redeem missing');
-  step('billing real');
+  if (!/Plans/i.test(bill)) errs.push('Billing plans missing');
+  await p.click('[data-act="stab"][data-t="usage"]');
+  await p.waitForSelector('#giftcode', { timeout: 15000 });
+  const usage = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
+  if (!/Monthly plan allowance/i.test(usage)) errs.push('Usage meter missing');
+  if (!/Extra tokens/i.test(usage)) errs.push('Extra token balance missing');
+  if (!/Redeem gift card/i.test(usage)) errs.push('Gift redeem missing');
+  step('billing and usage real');
 
   await p.waitForTimeout(800);
   console.log(errs.length ? 'ERRORS:\n' + errs.join('\n') : 'NO CONSOLE/PAGE ERRORS');

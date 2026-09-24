@@ -254,14 +254,15 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   // or allowing the model to pick a different message in the chat.
   const reactionEvents=[],reactionCalls=[];
   await chat(async opts=>{reactionCalls.push(opts);return reactionCalls.length===1
-    ? {functionCalls:[{name:'react_to_message',args:{emoji:'party'}}]}
+    ? {functionCalls:[{name:'react_to_message',args:{emoji:'heart'}}]}
     : {text:'That is great news!'};})
     .run({userId:'a',chatId:'chat',requestId:'reaction',prompt:'I finished my project!',context:{userMessageId:'user-42'},onEvent:e=>reactionEvents.push(e)});
   assert.ok(reactionCalls[0].tools.some(t=>t.name==='react_to_message'));
-  assert.deepEqual(reactionEvents.filter(e=>e.type==='message_reaction'),[{type:'message_reaction',messageId:'user-42',emoji:'party'}]);
+  assert.deepEqual(reactionEvents.filter(e=>e.type==='message_reaction'),[{type:'message_reaction',messageId:'user-42',emoji:'heart'}]);
+  assert.deepEqual(reactionCalls[0].tools.find(t=>t.name==='react_to_message').parameters.properties.emoji.enum,['up','down','heart','poop']);
   assert.equal(reactionEvents.find(e=>e.type==='message').text,'That is great news!');
   const invalidReactionEvents=[];
-  await chat(async opts=>opts.toolChoice==='none'?{text:'Done.'}:{functionCalls:[{name:'react_to_message',args:{emoji:'unknown'}}]})
+  await chat(async opts=>opts.toolChoice==='none'?{text:'Done.'}:{functionCalls:[{name:'react_to_message',args:{emoji:'party'}}]})
     .run({userId:'a',chatId:'chat',requestId:'invalid-reaction',prompt:'Hello',context:{userMessageId:'user-42'},onEvent:e=>invalidReactionEvents.push(e)});
   assert.equal(invalidReactionEvents.some(e=>e.type==='message_reaction'),false,'unsupported emoji is ignored');
   // A failing search is reported to the model instead of failing the turn.
