@@ -57,13 +57,15 @@ from `supabase/templates/magic_link.html` as described in
 
 ## Supabase setup
 
-1. SQL Editor → run `supabase/schema.sql`, then `supabase/schema2.sql`,
-   `supabase/schema3.sql`, and `supabase/schema4.sql` in order. The fourth
-   migration adds owner-scoped triggers, automation runs, and automation chats.
-   For an already linked project, deploy tracked updates with `npx supabase db push`,
-   including `20260920120000_connector_permissions.sql` for per-tool connector controls.
-2. API settings → URL + publishable + secret into `.env` (already done here).
-3. Restart `npm start` → `/api/health` shows `"supabase": true`.
+The linked project `alikzitdkdiatimjygdz` already has the base chat and billing
+tables. Do not rerun `schema.sql` through `schema4.sql` in its SQL Editor. Apply
+new tracked migrations with `npx supabase db push --linked --skip-vault`.
+
+For a brand new, empty Supabase project only, bootstrap `supabase/schema.sql`,
+`schema2.sql`, `schema3.sql`, and `schema4.sql` in that order before pushing the
+tracked migrations. Then put the project URL, publishable key, and server-only
+secret key in `.env` and restart `npm start`. `/api/health` should show
+`"supabase": true`.
 
 ## Plans and raw-token wallet
 

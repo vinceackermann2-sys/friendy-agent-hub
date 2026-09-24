@@ -1,20 +1,22 @@
-# Supabase free backend (5 min)
+# Supabase backend
 
-1. Go to https://supabase.com/dashboard → your project `alikzitdkdiatimjygdz`.
-2. SQL Editor → New query → run `supabase/schema.sql`, `schema2.sql`, `schema3.sql`, and `schema4.sql` in order.
-   You must see “Success”. This creates profiles / agents / chats / messages /
-   memories / vault_secrets / vault_apps / approvals / connector_permissions.
-   Run `migrations/20260919120000_billing_totals.sql` after those files to
-   enable the fast billing summary.
-   For an existing linked project, run `npx supabase db push` instead; deployable
-   updates are tracked in `supabase/migrations/`. The connector permissions
-   table is added by `20260920120000_connector_permissions.sql` with RLS enabled.
-3. Project Settings → API → copy (new dashboard names):
+The linked project `alikzitdkdiatimjygdz` is already bootstrapped. Its chat,
+message, subscription, usage, credit-grant, and token tables exist, and the
+tracked migrations are applied. Do not rerun `schema.sql` through `schema4.sql`
+in that project's SQL Editor. For future updates, use
+`npx supabase db push --linked --skip-vault`; this includes the tracked billing
+and connector-permission migrations.
+
+For a brand new, empty project only, run `schema.sql`, `schema2.sql`,
+`schema3.sql`, and `schema4.sql` once in that order, then apply the tracked
+migrations with the CLI. Configure the project keys afterward:
+
+1. Project Settings → API → copy (new dashboard names):
    - `SUPABASE_URL` = Project URL
    - `SUPABASE_PUBLISHABLE_KEY` (sb_publishable_…, anon equivalent)
    - `SUPABASE_SECRET_KEY` (sb_secret_…, service_role equivalent — server only)
    Old ANON / SERVICE_ROLE names also work.
-4. In `C:\lingon`, values are already in `.env` (gitignored). Restart: `npm start`.
+2. In `C:\lingon`, values are already in `.env` (gitignored). Restart: `npm start`.
    Health: http://localhost:8000/api/health should show `"supabase": true`
    AND memory writes should stop logging “Could not find table public.memories”.
 
