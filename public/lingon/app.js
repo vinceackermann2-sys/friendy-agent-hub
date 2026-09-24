@@ -384,13 +384,14 @@ function md(src){
 
 /* ---------------- state ---------------- */
 const LS = 'lingon.v1';
+const publicAgentName = name => /^lingon$/i.test(String(name || '').trim()) ? 'Your agent' : String(name || '').trim();
 const fresh = () => ({
   onboarded:false, agent:null, view:'chat', activeChat:null,
   ownerId:null,
   canvasOpen:false, canvasTab:'canvas', model:'Smart', theme:'grey',
   chats:[], pendingPrompt:null, pendingPromptFiles:[],
   vault:{ secrets:[], apps:[], approvals:[], mode:'default' },
-  memory:[], memoryTotal:0, memoryQuery:'', memoryEditing:null,
+  memory:[], memoryTotal:0,
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
   composioApps:[], composioLoading:false, appQuery:'', appFilter:'all', appOpen:null, appDetails:{},
@@ -399,6 +400,7 @@ const fresh = () => ({
   agentEdit:false, mailTab:'inbox',
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
+  agentPermissions:null,
   userProfile:null, agentContext:null,
   // Library — only real agent artifacts and user uploads.
   libraryCat:'all', librarySearch:'', librarySelect:false, librarySelected:[], libraryLayout:'grid',
@@ -410,6 +412,7 @@ let state;
 let mobileNavOpen = false;
 try { state = Object.assign(fresh(), JSON.parse(localStorage.getItem(LS) || 'null')) || fresh(); }
 catch (e) { state = fresh(); }
+if (state.agent?.name) state.agent.name = publicAgentName(state.agent.name);
 if (!state.vault) state.vault = fresh().vault;
 // Canvas is never open by default — user or a fresh artifact opens it.
 state.canvasOpen = false;
@@ -429,15 +432,15 @@ if (state.settingsTab === 'library') {
 }
 if (state.settingsTab === 'memory') {
   state.settingsTab = 'profiles';
-  if (state.view === 'settings') { state.view = 'library'; state.libraryCat = 'memory'; }
+  if (state.view === 'settings') { state.view = 'library'; state.libraryCat = 'system'; state.systemFile = 'system:memory'; }
 }
+if (state.libraryCat === 'memory') { state.libraryCat = 'system'; state.systemFile = 'system:memory'; }
 if (!state.agentContext || typeof state.agentContext !== 'object') state.agentContext = null;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
 delete state.builtInAutomationsOpen;
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
 if (!Array.isArray(state.composioApps)) state.composioApps = [];
 state.composioLoading = false;
-if (state.memoryEditing !== null && typeof state.memoryEditing !== 'string') state.memoryEditing = null;
   if (typeof state.appQuery !== 'string') state.appQuery = '';
   if (!state.appFilter || state.appFilter === 'available') state.appFilter = 'all';
   if (typeof state.appOpen !== 'string') state.appOpen = null;
@@ -546,7 +549,7 @@ async function syncFromBackend(force = false) {
   if (!force && Date.now() - backendSyncedAt < BACKEND_SYNC_MS) return false;
   const request = (async () => {
     const [memories, secrets, automationChats, agentContext] = await Promise.allSettled([
-      window.LingonAuth.api('/api/memories'+(state.memoryQuery?'?q='+encodeURIComponent(state.memoryQuery):'?limit='+Math.min(Math.max(state.memory.length,250),1000))),
+      window.LingonAuth.api('/api/memories?limit=1000'),
       window.LingonAuth.api('/api/secrets'),
       window.LingonAuth.api('/api/automation-chats'),
       window.LingonAuth.api('/api/agent-context'),
@@ -557,7 +560,6 @@ async function syncFromBackend(force = false) {
     if (m) {
       state.memory=(m.memories || []).map(r=>({...r,at:r.at || Date.parse(r.updatedAt || r.observedAt) || Date.now()}));
       state.memoryTotal=Number(m.total ?? state.memory.length);
-      state.memoryQuery=String(m.query || '');
     }
     const s = value(secrets);
     const vaultBefore = state.vault.secrets.map((item) => item.id).join() + '|' + state.vault.encrypted;
@@ -577,7 +579,7 @@ async function syncFromBackend(force = false) {
     const ac = value(agentContext);
     if (ac) {
       state.agentContext = ac;
-      if (ac.revision > 0 && ac.agent) state.agent = { ...state.agent, ...ac.agent };
+      if (ac.revision > 0 && ac.agent) state.agent = { ...state.agent, ...ac.agent, name:publicAgentName(ac.agent.name) || 'Your agent' };
     }
     for (const remote of (value(automationChats)?.chats || [])) {
       const messages = (remote.messages || []).map((m) => ({
@@ -962,6 +964,8 @@ let workspacePresenceState = 'offline';
 let workspacePresenceInfo = null;
 let workspacePresenceOwner = null;
 let browserPresenceChecked = null;
+let browserPermissionsChecked = null;
+let browserPermissionsVersion = 0;
 function workspaceConnectionView(){
   const work = statusFor(chat());
   if (work && work !== 'Available') return { label:work, tone:'busy' };
@@ -1120,6 +1124,10 @@ function renderAuth(){
         <button class="btn authbtn" id="pwgo" data-act="pw-go">Log in with password</button>
         <button class="btn ghost authbtn" data-act="auth-back">Back</button>
       </div>
+      <label class="authlegal" for="authlegal">
+        <input id="authlegal" type="checkbox" required>
+        <span>I agree to the <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> and acknowledge the <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.</span>
+      </label>
       <div class="secnote" id="amsg" style="min-height:18px;justify-content:center;margin-top:14px"></div>
       <div class="authfoot" id="authfoot">New to Belna? <button data-act="auth-mode">Create an account</button></div>
       <div><button class="backlink" data-act="back-home">← Back to home</button></div>
@@ -1156,13 +1164,23 @@ function authPaintMode(){
     if (foot) foot.innerHTML = 'New to Belna? <button data-act="auth-mode">Create an account</button>';
   }
 }
+const TERMS_VERSION = '2026-09-24';
+function authLegalAccepted(){
+  const box = document.getElementById('authlegal');
+  if (box?.checked) return true;
+  const msg = document.getElementById('amsg');
+  if (msg) msg.textContent = 'Please agree to the Terms and acknowledge the Privacy Policy to continue.';
+  box?.focus();
+  return false;
+}
 async function authOAuth(){
+  if (!authLegalAccepted()) return;
   const msg = document.getElementById('amsg');
   const btn = document.querySelector('[data-act="google"]');
   if (btn) btn.disabled = true;
   if (msg) msg.textContent = 'Redirecting to Google…';
   try {
-    const r = await fetch('/api/auth/oauth-url?provider=google&next=' + encodeURIComponent('/'));
+    const r = await fetch('/api/auth/oauth-url?provider=google&next=' + encodeURIComponent('/') + '&terms_version=' + encodeURIComponent(TERMS_VERSION));
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'Google sign-in unavailable');
     if (!j.url) throw new Error('Google sign-in unavailable — no redirect URL.');
@@ -1190,12 +1208,13 @@ async function paintGoogleState(){
   } catch {}
 }
 async function authOtpSend(){
+  if (!authLegalAccepted()) return;
   const msg = document.getElementById('amsg');
   const email = ((document.getElementById('aemail') || {}).value || '').trim();
   if (!/.+@.+\..+/.test(email)){ if (msg) msg.textContent = 'Enter a valid email first.'; return; }
   if (msg) msg.textContent = 'Sending code…';
   try {
-    const r = await fetch('/api/auth/otp', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ email }) });
+    const r = await fetch('/api/auth/otp', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ email, terms_version: TERMS_VERSION }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Could not send code');
     document.getElementById('otpemail').textContent = email;
@@ -1204,6 +1223,7 @@ async function authOtpSend(){
   } catch (e){ if (msg) msg.textContent = e.message; }
 }
 async function authOtpVerify(){
+  if (!authLegalAccepted()) return;
   const msg = document.getElementById('amsg');
   const email = ((document.getElementById('aemail') || {}).value || '').trim();
   const token = ((document.getElementById('acode') || {}).value || '').trim();
@@ -1220,14 +1240,19 @@ async function authOtpVerify(){
 }
 
 async function doAuth(kind){
+  if (!authLegalAccepted()) return;
   const msg = $('#amsg');
   const email = ($('#aemail').value || '').trim();
   const password = $('#apass').value || '';
   if (msg) msg.textContent = 'Working…';
   try {
-    const r = await fetch('/api/auth/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const r = await fetch('/api/auth/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, terms_version: TERMS_VERSION }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Auth failed');
+    if (j.confirm_email){
+      if (msg) msg.textContent = j.message || 'Check your email to confirm your account, then log in.';
+      return;
+    }
     window.LingonAuth.set({ access_token: j.access_token, refresh_token: j.refresh_token, user: j.user });
     try { window.LingonConfig.userId = j.user.id; } catch {}
     await afterSignIn(j.user);
@@ -1355,14 +1380,6 @@ function giftCardHtml(p){
     + `<span class="gift-strip-text">+ FREE $${amt} gift card</span></div>`;
 }
 function billingShopHtml(b){
-  const packs = Array.isArray(b?.tokenPacks) ? b.tokenPacks : [];
-  const packTiles = packs.map((t, i) => {
-    const perMillion = Number(t.millions) ? Number(t.usd) / Number(t.millions) : 0;
-    return `<label class="billing-pack"><input type="radio" name="buypack" value="${t.tokens}" ${i === 0 ? 'checked' : ''}>
-      <span class="billing-pack-amount">${esc(t.millions)}M</span><span class="billing-pack-unit">tokens</span>
-      <span class="billing-pack-price">$${fmtC(t.usd)}</span>${perMillion ? `<span class="billing-pack-rate">$${perMillion.toFixed(2)} per million</span>` : ''}
-    </label>`;
-  }).join('');
   const gifts = Array.isArray(b && b.purchasedGifts) ? b.purchasedGifts : [];
   const giftList = gifts.length ? `<ul class="billing-gift-list" aria-label="Your gift cards">${gifts.map((g) => `<li>
       <span class="billing-gift-amount">$${fmtC(g.amount_usd)}</span>
@@ -1370,25 +1387,12 @@ function billingShopHtml(b){
       <span class="chip ${g.redeemed_by ? '' : 'green'}">${g.redeemed_by ? 'Redeemed' : 'Ready to share'}</span>
       ${g.redeemed_by ? '' : `<button class="iconbtn" data-act="copy-gift" data-code="${esc(g.code)}" title="Copy code" aria-label="Copy gift code">${icon('copy',14)}</button>`}
     </li>`).join('')}</ul>` : '';
-  return `<div class="billing-shop">
-    <section class="billing-extra" aria-labelledby="topup-title">
-      <div class="billing-extra-head"><span class="billing-extra-icon" aria-hidden="true">${icon('spark',20)}</span><div><h3 id="topup-title">Add tokens</h3><p>One-time packs for bigger ideas. They carry over until used, and your plan stays the same.</p></div></div>
-      <fieldset class="billing-packs" id="buypack" tabindex="-1"><legend class="billing-label">Choose your token pack</legend>
-        ${packTiles || '<span class="billing-fine">Packs load with your balance…</span>'}
-      </fieldset>
-      <button class="btn billing-primary" data-act="buycredits" ${packs.length ? '' : 'disabled'}>${icon('card',14)} Continue to checkout</button>
-      <span class="billing-fine">Secure checkout · agent computer time also uses tokens · daily image and transcription limits follow your plan</span>
-    </section>
-    <section class="billing-extra billing-gifts" aria-labelledby="gift-title">
-      <div class="billing-extra-head"><span class="billing-extra-icon" aria-hidden="true">${icon('gift',20)}</span><div><h3 id="gift-title">Gift cards</h3><p>Redeem a code someone shared with you, or share one you bought.</p></div></div>
-      <div class="billing-redeem">
-        <label class="billing-label" for="giftcode">Redeem a gift code</label>
-        <div class="billing-redeem-form"><input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
-        <button class="btn ghost small" data-act="redeem">Redeem</button></div>
-      </div>
-      ${giftList}
-    </section>
-  </div>`;
+  return `<section class="billing-card billing-gifts" aria-labelledby="gift-title">
+    <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('gift',16)}</span><div><h3 id="gift-title">Gift cards</h3><p>Redeem a code someone shared with you.</p></div></div>
+    <div class="billing-redeem-form"><input class="field mono" id="giftcode" placeholder="LNG-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" aria-label="Gift code">
+    <button class="btn ghost" data-act="redeem">Redeem</button></div>
+    ${giftList}
+  </section>`;
 }
 function planCards(b){
   const ids = ['free', 'pro', 'max'];
@@ -1420,48 +1424,62 @@ function billSummary(b){
   const v = creditView(b);
   const firstName = currentUser().name.trim().split(/\s+/)[0];
   const manage = b && b.plan !== 'free'
-    ? `<button class="billing-manage" data-act="portal">Manage subscription ${icon('aur',14)}</button>`
+    ? `<button class="btn ghost small billing-manage" data-act="portal">Manage ${icon('aur',13)}</button>`
     : '';
   const note = v.tone === 'empty'
     ? v.extraRemaining > 0 ? 'Monthly tokens used. Your extra tokens are still available.' : 'Monthly tokens used. Add tokens whenever you need them.'
     : v.tone === 'low' ? 'Your monthly tokens are running low.'
     : `Ready for your next idea${firstName && firstName !== 'Guest' ? ', ' + esc(firstName) : ''}.`;
   const resets = b.resetAt ? `Resets ${esc(new Date(b.resetAt).toLocaleDateString(undefined, { day:'numeric', month:'short' }))}` : '';
-  return `<section class="billing-balance credit-tone-${v.tone}" aria-label="Monthly plan token usage">
-    <div class="billing-balance-top"><span class="billing-plan-pill">${icon('spark',13)} ${esc(billingPlanName(b))} plan</span><span class="billing-status">${esc(b.status || 'active')}</span>${manage}</div>
-    <div class="billing-balance-main">
-      <div class="billing-balance-copy">
-        <span class="billing-label">Left this month</span>
-        <div class="billing-balance-number"><strong>${fmtShortTokens(v.remaining)}</strong><span>of ${fmtShortTokens(v.granted)} tokens</span></div>
+  return `<header class="billing-hero credit-tone-${v.tone}" aria-label="Monthly plan token usage">
+    <div class="billing-hero-head">
+      <span class="billing-hero-icon" aria-hidden="true">${icon('spark',22)}</span>
+      <div class="billing-hero-copy">
+        <h2>${esc(billingPlanName(b))} plan</h2>
         <p class="billing-balance-note">${note}</p>
+        <div class="billing-hero-chips"><span class="chip green billing-status">${esc(b.status || 'active')}</span>${resets ? `<span class="chip">${icon('clock',12)} ${resets}</span>` : ''}</div>
       </div>
-      <div class="billing-companion" aria-hidden="true"><span class="billing-companion-orbit"></span>${Mascot.svg('lingon',v.tone === 'ready' ? 'happy' : 'idle',116)}</div>
+      ${manage}
     </div>
-    <div class="billing-balance-bottom"><div class="billing-balance-meter">
-      <div class="billing-meter-label"><b>${Math.round(v.percent)}% of plan used</b><span>${resets}</span></div>
+    <div class="billing-usage">
+      <div class="billing-usage-top"><div class="billing-balance-number"><strong>${fmtShortTokens(v.remaining)}</strong><span>of ${fmtShortTokens(v.granted)} left this month</span></div><b>${Math.round(v.percent)}% used</b></div>
       ${creditMeterHtml(v)}
       <dl class="billing-token-breakdown">
         <div><dt>Monthly tokens used</dt><dd>${fmtTokens(v.used)}</dd></div>
         <div><dt>Monthly tokens left</dt><dd>${fmtTokens(v.remaining)}</dd></div>
         <div><dt>Monthly plan allowance</dt><dd>${fmtTokens(v.granted)}</dd></div>
       </dl>
-    </div></div>
-  </section>
+    </div>
+  </header>
   <div class="billing-daily" aria-label="Daily limits">
     ${billingDailyTile('image', 'Images today', b.imagesToday, b.imagesPerDay)}
     ${billingDailyTile('mic', 'Transcriptions today', b.transcriptionsToday, b.transcriptionsPerDay)}
   </div>
   <section class="billing-extra-balance" aria-labelledby="extra-token-balance-title">
-    <div class="billing-extra-balance-copy"><span class="billing-extra-icon" aria-hidden="true">${icon('plus',20)}</span>
-      <div><h3 id="extra-token-balance-title">Extra tokens</h3><p>Packs, gift cards and invite rewards. They carry over until used and are separate from your monthly plan.</p></div>
-    </div>
+    <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('plus',16)}</span><div><h3 id="extra-token-balance-title">Extra tokens</h3><p>Packs, gift cards and invite rewards. They carry over until used and don’t change your plan.</p></div></div>
     <dl class="billing-token-breakdown">
       <div><dt>Extra tokens added</dt><dd>${fmtTokens(v.extra)}</dd></div>
       <div><dt>Extra tokens used</dt><dd>${fmtTokens(v.extraUsed)}</dd></div>
       <div><dt>Extra tokens left</dt><dd>${fmtTokens(v.extraRemaining)}</dd></div>
     </dl>
-    <button class="btn billing-primary small" data-act="billing-topup">${icon('plus',14)} Add tokens</button>
+    ${tokenPackPickerHtml(b)}
   </section>`;
+}
+function tokenPackRate(t){
+  const perMillion = Number(t && t.millions) ? Number(t.usd) / Number(t.millions) : 0;
+  return perMillion ? `$${perMillion.toFixed(2)} per million · one-time · carries over` : 'One-time · carries over';
+}
+function tokenPackPickerHtml(b){
+  const packs = Array.isArray(b && b.tokenPacks) ? b.tokenPacks : [];
+  if (!packs.length) return '<p class="billing-fine">Token packs aren’t available right now.</p>';
+  return `<div class="billing-topup">
+    <label class="billing-label" for="buypack">Add tokens</label>
+    <div class="billing-topup-row">
+      <span class="billing-select"><select class="field" id="buypack">${packs.map((t, i) => `<option value="${esc(t.tokens)}" data-rate="${esc(tokenPackRate(t))}"${i === 0 ? ' selected' : ''}>${esc(t.millions)}M tokens — $${fmtC(t.usd)}</option>`).join('')}</select>${icon('chev',15)}</span>
+      <button class="btn" data-act="buycredits">${icon('card',14)} Buy tokens</button>
+    </div>
+    <span class="billing-fine" id="buypack-rate">${esc(tokenPackRate(packs[0]))} · secure checkout</span>
+  </div>`;
 }
 function fmtShortTokens(n){
   const x = Math.max(0, Number(n) || 0);
@@ -1486,9 +1504,11 @@ function billingLoadingHtml(){
 function billingBodyHtml(){
   const b = billingOwner === billingIdentity() ? billingCache : null;
   return `<div class="billing-content">
-    <header class="billing-intro"><span class="billing-eyebrow">Billing & tokens</span><h2>A little fuel for big ideas.</h2><p>For everything you and ${esc((state.agent && state.agent.name) || 'your agent')} want to do next.</p></header>
     <div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div>
-    <section class="billing-plans" aria-labelledby="billing-plans-title"><div class="billing-section-heading"><h3 id="billing-plans-title">Find your kind of room</h3><p>Start small. Grow when you’re ready.</p></div><div id="plancards">${b ? planCards(b) : ''}</div></section>
+    <section class="billing-card billing-plans" aria-labelledby="billing-plans-title">
+      <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('star',16)}</span><div><h3 id="billing-plans-title">Plans</h3><p>Start small. Switch or cancel any time.</p></div></div>
+      <div id="plancards">${b ? planCards(b) : ''}</div>
+    </section>
     <div id="billshop">${billingShopHtml(b)}</div>
   </div>`;
 }
@@ -1526,16 +1546,20 @@ function closeGift(){
   const m = $('#giftmodal');
   if (m) m.remove();
 }
+function giftShareMessage(){
+  const code = (giftCache && giftCache.code) || '';
+  const link = (giftCache && giftCache.link) || '';
+  return `Join me on Belna! Redeem my invite code ${code} and we’ll each get 10 million tokens.${link ? ` ${link}` : ''}`;
+}
 function openGift(prefillCode){
   if (!signedIn()){ renderAuth(); toast('Sign in to use your invite code.'); return; }
   closeGift();
   const overlay = el(`<div id="giftmodal" role="dialog" aria-modal="true" aria-labelledby="giftmodal-title">
     <div class="giftmodal-card">
-      <button class="iconbtn giftmodal-x" data-act="closegift" aria-label="Close invite">${icon('x',16)}</button>
       <div class="giftmodal-head">
-        <div class="giftmodal-brand">${Mascot.logo(25)}<span>belna</span><span class="giftmodal-brand-divider"></span><span>Invite a friend</span></div>
-        <h2 id="giftmodal-title">10 million tokens each</h2>
-        <p class="msub">Share your invite with one friend. Once they redeem it, you both get 10 million tokens.</p>
+        <button class="iconbtn giftmodal-x" data-act="closegift" aria-label="Close invite">${icon('x',22)}</button>
+        <div class="giftmodal-brand">${Mascot.logo(20)}<span>belna</span></div>
+        <h2 id="giftmodal-title">Invite a friend</h2>
       </div>
       <div class="giftmodal-body"><p class="mut giftmodal-loading">Getting your invite code…</p></div>
     </div>
@@ -1544,6 +1568,13 @@ function openGift(prefillCode){
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeGift(); });
   overlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape'){ e.stopPropagation(); closeGift(); }
+    if (e.key === 'Tab'){
+      const controls = [...overlay.querySelectorAll('button:not([disabled]), input:not([disabled])')];
+      if (!controls.length) return;
+      const first = controls[0], last = controls[controls.length - 1];
+      if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+    }
     if (e.key === 'Enter' && e.target.id === 'giftfriendcode'){
       e.preventDefault(); e.stopPropagation();
       overlay.querySelector('[data-act="gift-redeem"]')?.click();
@@ -1556,19 +1587,49 @@ function openGift(prefillCode){
     if (!g || !g.code){ body.innerHTML = `<p class="mut">Couldn’t load your invite right now.</p><button class="btn" data-act="opengift">Try again</button>`; return; }
     const friendCode = String(g.prefill || '').toUpperCase();
     const showFriendBox = !!friendCode && friendCode !== String(g.code).toUpperCase();
+    const alreadyUsed = Number(g.invited || 0) > 0;
     body.innerHTML = `
-      <div class="giftmodal-code">
-        <div class="giftmodal-code-text"><span>Your invite code</span><strong id="giftcode-text" aria-live="polite">BELNA-••••••</strong></div>
-        <button class="giftmodal-copy" data-act="gift-reveal" aria-label="Reveal invite code">${icon('eye',16)}<span>Reveal code</span></button>
+      <div class="giftmodal-illustration" aria-hidden="true">
+        <svg viewBox="0 0 280 210" role="img">
+          <defs>
+            <linearGradient id="gift-lid" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#fffaf5"/><stop offset="1" stop-color="#e9dcd4"/></linearGradient>
+            <linearGradient id="gift-front" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#fcf5ef"/><stop offset="1" stop-color="#d8c9c2"/></linearGradient>
+            <linearGradient id="gift-ribbon" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#cf7480"/><stop offset="1" stop-color="#9d4157"/></linearGradient>
+            <filter id="gift-shadow" x="-30%" y="-50%" width="160%" height="210%"><feGaussianBlur stdDeviation="10"/></filter>
+          </defs>
+          <ellipse cx="140" cy="187" rx="98" ry="12" fill="#6f5050" opacity=".15" filter="url(#gift-shadow)"/>
+          <path d="M52 88 139 58 228 88 139 120Z" fill="#efe1d8"/>
+          <path d="M55 104 139 132 139 184 63 157Q55 154 55 145Z" fill="url(#gift-front)"/>
+          <path d="M139 132 225 104 225 145Q225 153 218 157L139 184Z" fill="#dfd0c8"/>
+          <path d="M118 125 139 132 139 184 118 176Z" fill="url(#gift-ribbon)"/>
+          <path d="M139 132 160 125 160 176 139 184Z" fill="#a9455a"/>
+          <path d="M45 83Q45 78 51 76L131 49Q139 46 146 49L229 76Q235 78 235 83V101Q235 105 231 107L145 137Q139 139 134 137L49 107Q45 105 45 101Z" fill="url(#gift-lid)"/>
+          <path d="M45 83 139 115V137Q136 138 133 137L49 107Q45 105 45 101Z" fill="#f7ebe4"/>
+          <path d="M139 115 235 83V101Q235 105 231 107L145 137Q142 138 139 137Z" fill="#e6d8d0"/>
+          <path d="M119 108 139 115V137Q136 138 133 137L119 132Z" fill="#b95668"/>
+          <path d="M139 115 159 108V132L145 137Q142 138 139 137Z" fill="#a9455a"/>
+          <path d="M51 76 131 49Q139 46 146 49L229 76 139 107Z" fill="#fff7f0"/>
+          <path d="M92 62 113 55 184 91 162 99Z" fill="url(#gift-ribbon)"/>
+          <path d="M119 101 139 107 168 53 147 49Z" fill="#b65366"/>
+          <path d="M138 55C115 46 102 31 107 25c8-10 34 3 39 21 7-18 30-30 38-20 6 8-12 25-35 31" fill="none" stroke="#a84358" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M139 59c-7-2-8-11-2-15 6-4 16 1 15 8-1 5-7 9-13 7Z" fill="#d27b86"/>
+        </svg>
       </div>
-      <p class="giftmodal-once">${Number(g.invited || 0) ? 'This invite has been redeemed. Each code works once.' : 'Free invite: one friend can redeem this code once.'}</p>
-      <div class="giftmodal-actions">
-        <button class="giftmodal-action giftmodal-action-primary" data-act="gift-share"${Number(g.invited || 0) ? ' disabled title="Invite already redeemed"' : ''}>${icon('share',17)}<span>Share invite</span></button>
-        <button class="giftmodal-action" data-act="gift-copy-link"${Number(g.invited || 0) ? ' disabled title="Invite already redeemed"' : ''}>${icon('copy',17)}<span>Copy invite link</span></button>
+      <div class="giftmodal-code">
+        <div class="giftmodal-code-text"><span>Your invite code</span><strong id="giftcode-text">${esc(g.code)}</strong></div>
+        <button class="giftmodal-copy" data-act="gift-copy-code" aria-label="Copy invite code" title="Copy invite code">${icon('copy',23)}<span>Copy</span></button>
+      </div>
+      <p class="giftmodal-description">Invite a friend and you’ll each get <strong>10 million tokens</strong> when they redeem your code in Belna.</p>
+      <p class="giftmodal-once">${alreadyUsed ? 'Your invite has been redeemed. Each code works once.' : 'One friend can redeem your code once.'}</p>
+      <div class="giftmodal-share" aria-label="Share your invite">
+        <button class="giftmodal-share-option" data-act="gift-share"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon">${icon('share',25)}</span><span>Share</span></button>
+        <button class="giftmodal-share-option" data-act="gift-share-sms"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon">${icon('chatb',25)}</span><span>Messages</span></button>
+        <button class="giftmodal-share-option" data-act="gift-share-whatsapp"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon giftmodal-share-whatsapp">${icon('phone',24)}</span><span>WhatsApp</span></button>
+        <button class="giftmodal-share-option" data-act="gift-copy-link"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon">${icon('copy',24)}</span><span>Copy link</span></button>
       </div>
       <div class="giftmodal-stats"><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span class="giftmodal-stat-dot" aria-hidden="true"></span><span><b>${fmtTokens(g.earnedTokens || 0)}</b> tokens earned</span></div>
       <div class="giftmodal-redeem">
-        <div class="giftmodal-redeem-head"><span class="giftmodal-redeem-ico">${icon('share',18)}</span><div><h3>Have a friend’s invite?</h3><p>Redeem their code once and you’ll both get 10 million tokens.</p></div></div>
+        <div class="giftmodal-redeem-head"><span class="giftmodal-redeem-ico">${icon('gift',20)}</span><div><h3>Have a friend’s invite?</h3><p>Redeem their code and you’ll both get 10 million tokens.</p></div></div>
         <label class="giftmodal-redeem-label" for="giftfriendcode">Friend’s invite code</label>
         <div class="giftmodal-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
         <button class="btn" data-act="gift-redeem">Redeem code</button></div>
@@ -2015,7 +2076,7 @@ function renderPromo(){
       <div><div class="abrand">${Mascot.logo(28)}belna</div></div>
       <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div><h4>Company</h4><a href="#promo-cta" data-act="promo-cta">Get started</a><a href="/app" data-act="signin-nav">Sign in</a></div>
-      <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div>
+      <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div>
     </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
   </div>`;
   const f = document.getElementById('pform');
@@ -2216,7 +2277,7 @@ function renderLanding(){
       <div><div class="abrand">${Mascot.logo(28)}belna</div></div>
       <div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div>
       <div><h4>Company</h4><a href="/app" data-act="open-app">Get started</a><a href="/app" data-act="signin-nav">Sign in</a></div>
-      <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div>
+      <div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div>
     </div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
   </div>`;
   const wire = (formId, inputId) => {
@@ -2331,11 +2392,11 @@ function runInChatOnboarding(c){
     }
     card({ type:'question', step:'name', q:'What should I call myself?', options:['Alex','Rosa','Tao'], customName:true });
   } else if (!answers.color) {
-    state.agent.name = answers.name;
-    card({ type:'question', step:'color', q:'Pick a color for ' + answers.name, options:Mascot.keys.map(k => Mascot.PALETTE[k].name), mascotColors:true });
+    state.agent.name = publicAgentName(answers.name);
+    card({ type:'question', step:'color', q:'Pick a color for ' + state.agent.name, options:Mascot.keys.map(k => Mascot.PALETTE[k].name), mascotColors:true });
   } else {
-    state.agent.name = answers.name; state.agent.color = answers.color;
-    say('Hej ' + currentUser().name + '! I’m ' + answers.name + ', your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. Tell me what you want done, and I’ll take it from there. I’ll ask for access or approval when needed.');
+    state.agent.name = publicAgentName(answers.name); state.agent.color = answers.color;
+    say('Hej ' + currentUser().name + '! I’m ' + state.agent.name + ', your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. Tell me what you want done, and I’ll take it from there. I’ll ask for access or approval when needed.');
     card({ type:'passport', title:'Your agent is ready', note:'Finish setup and start chatting.' });
   }
 }
@@ -2358,7 +2419,7 @@ async function openOnboardingPassport(c, m){
   const answers = c.onboardingAnswers;
   if (!answers?.name || !Mascot.PALETTE[answers.color]) return;
   const ownerId = currentUserId();
-  state.agent = { name:answers.name, color:answers.color, pers:'Playful', ownerId, claimedAt:Date.now() };
+  state.agent = { name:publicAgentName(answers.name), color:answers.color, pers:'Playful', ownerId, claimedAt:Date.now() };
   state.onboarded = true; c.onboarding = false; c.busy = false; m.card.status = 'done';
   const pending = state.pendingPrompt;
   state.pendingPrompt = null;
@@ -2858,7 +2919,7 @@ function systemEditorHtml(item){
       <span class="chip ${readOnly ? '' : 'acc'}">${readOnly ? 'Read-only' : 'Editable'}</span>
     </div>
     ${readOnly
-      ? `<pre class="system-editor-code">${esc(item.content)}</pre><button class="btn soft small" data-act="system-memory">${icon('book',14)} Manage memories</button>`
+      ? `<pre class="system-editor-code">${esc(item.content)}</pre>`
       : `<textarea class="field system-editor-text" id="system-editor-text" data-system-key="${esc(item.key)}" maxlength="${item.key === 'user' ? '4000' : '8000'}">${esc(item.content)}</textarea><div class="system-editor-actions"><button class="btn dark small" data-act="system-save">Save changes</button><button class="btn ghost small" data-act="system-back">Cancel</button></div>`}
   </div>`;
 }
@@ -3231,6 +3292,7 @@ function saveGoalChange(id, request){
 function paintSide(){
   const a = state.agent;
   if (!a) return;
+  const chatScrollTop = $('#side .chatlist')?.scrollTop || 0;
   const u = currentUser();
   const initials = esc((u.name || 'U').slice(0, 1).toUpperCase());
   let libCount = 0;
@@ -3241,7 +3303,7 @@ function paintSide(){
   $('#side').innerHTML = `
     <button class="sidebrand" data-act="nav" data-view="chat" title="Belna — back to chat">${Mascot.logo(28)}<span>belna</span></button>
     <button class="btn" style="margin:8px 4px 4px" data-act="newchat">${icon('plus',15)} New chat</button>
-    <div class="side-scroll">
+    <div class="side-workspace">
       <div class="slabel">Workspace</div>
       <button class="sitem navitem${libOn ? ' on' : ''}" data-act="open-library" title="Open your file library">
         <span class="sicon sicon-lib">${icon('library',15)}</span><span>Library</span>
@@ -3251,8 +3313,10 @@ function paintSide(){
         <span class="sicon sicon-goal">${icon('target',15)}</span><span>Goals</span>
         ${gc.total ? `<span class="cnt">${gc.active}/${gc.total}</span>` : ''}
       </button>
+    </div>
+    <div class="side-chats">
       <div class="slabel">Chats</div>
-      <div class="chatlist">
+      <div class="chatlist" role="region" aria-label="Chats" tabindex="0">
         ${state.chats.map(c => `
           <button class="sitem chatitem ${c.id === state.activeChat && state.view === 'chat' ? 'on' : ''}" data-act="openchat" data-id="${c.id}">
             ${icon(c.source === 'automation' ? 'clock' : 'chatb',14)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span>
@@ -3275,6 +3339,8 @@ function paintSide(){
         </button>
       </div>
     </div>`;
+  const chatList = $('#side .chatlist');
+  if (chatList) chatList.scrollTop = chatScrollTop;
   // usage card: credit usage meter (real billing when signed in).
   // Only touch the DOM when the resolved HTML actually changed (avoids
   // layout thrash on every paintSide while a billing fetch is in flight).
@@ -3291,12 +3357,11 @@ function paintSide(){
 }
 function usageCardHtml(b){
   const v = creditView(b);
-  const note = `${fmtTokens(v.used)} of ${fmtTokens(v.granted)} monthly tokens used`;
-  return `<div class="usage-content credit-tone-${v.tone}">
-    <div class="usage-balance"><strong>${Math.round(v.percent)}%</strong><span>monthly plan used</span></div>
-    ${creditMeterHtml(v)}<div class="usage-meter-scale"><span>0%</span><span>100%</span></div><div class="usage-caption">${note}</div>
-    <div class="usage-footer"><span class="usage-companion">${Mascot.svg('lingon','happy',28)}</span>${icon('aur',14)}</div>
-    <button class="usage-link" data-act="nav" data-view="billing" aria-label="View billing and tokens" title="View billing and tokens"></button>
+  const pct = Math.round(v.percent);
+  return `<div class="usage-content credit-tone-${v.tone}" title="${fmtTokens(v.used)} of ${fmtTokens(v.granted)} monthly tokens used">
+    <div class="usage-balance"><span>${icon('spark',12)} Usage</span><strong>${pct}%</strong></div>
+    ${creditMeterHtml(v)}
+    <button class="usage-link" data-act="nav" data-view="billing" aria-label="${pct}% of monthly tokens used. View billing and tokens"></button>
   </div>`;
 }
 
@@ -3385,7 +3450,7 @@ function paintMain(){
   if (state.view === 'goals') return paintGoals(M);
   // Legacy links continue to reach the current destinations.
   if (state.view === 'vault'){ state.view = 'settings'; state.settingsTab = 'secrets'; save(); return paintSettings(M); }
-  if (state.view === 'memory'){ state.view = 'library'; state.libraryCat = 'memory'; save(); return paintLibrary(M); }
+  if (state.view === 'memory'){ state.view = 'library'; state.libraryCat = 'system'; state.systemFile = 'system:memory'; save(); return paintLibrary(M); }
   if (state.view === 'profile'){ state.view = 'settings'; state.settingsTab = 'profiles'; save(); return paintSettings(M); }
   if (state.view === 'billing'){ state.view = 'settings'; state.settingsTab = 'billing'; save(); return paintSettings(M); }
   return paintChat(M);
@@ -3590,8 +3655,10 @@ function msgNode(c, m){
     return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body"><div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
   if (m.kind === 'chips')
     return el('<div style="display:none"></div>');
+  if (m.kind === 'card' && m.card?.type === 'memory')
+    return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
   if (m.kind === 'card')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${['progress','browser','computer','file','artifact','canvas','goal','library','secret'].includes(m.card.type) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${!(m.card.type === 'subagents' || (m.card.type === 'present' && ['dashboard','table'].includes(m.card.kind))) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
   return el('<div></div>');
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
@@ -3699,6 +3766,337 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
   });
 })();
 
+/* ---------------- visual cards ----------------
+   Everything the agent asks, shows or wants to do renders as a card: questions
+   and picks, approvals that show the exact email, order or action, connect-app
+   and credential requests, product lists, dashboards, tables, files, media and
+   browser/computer previews. Cards stay in the chat; Canvas opens only when
+   the owner asks for it. */
+const safeImg = (u) => {
+  const s = String(u || '');
+  return /^https:\/\/[^\s"'<>]+$/i.test(s) || /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(s) ? s : '';
+};
+const safeLink = (u) => (/^https:\/\/[^\s"'<>]+$/i.test(String(u || '')) ? String(u) : '');
+const hostName = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+const optLabel = (o) => (typeof o === 'string' ? o : String(o?.label || ''));
+const CV_TOOLKITS = { gmail:'Gmail', googlecalendar:'Google Calendar', googledrive:'Google Drive', googlesheets:'Google Sheets', googledocs:'Google Docs', outlook:'Outlook', slack:'Slack', github:'GitHub', notion:'Notion', linear:'Linear', hubspot:'HubSpot', stripe:'Stripe', mailbox:'Agent mailbox' };
+const cvAppName = (tk) => CV_TOOLKITS[String(tk || '').toLowerCase()] || humanizeSlug(tk || 'App');
+function cvAppMark(tk){
+  const toolkit = String(tk || '').toLowerCase();
+  const app = composioAppByToolkit(toolkit);
+  if (app && app.logo) return `<span class="cv-app">${appLogoHtml(app)}</span>`;
+  if (toolkit === 'gmail') return `<span class="cv-app">${GMAIL_MARK}</span>`;
+  if (toolkit === 'github') return `<span class="cv-app">${icon('git',18)}</span>`;
+  if (toolkit === 'mailbox') return `<span class="cv-app">${icon('mail',18)}</span>`;
+  return `<span class="cv-app"><span class="app-fallback">${esc((cvAppName(toolkit) || '?').slice(0,1).toUpperCase())}</span></span>`;
+}
+const cvHead = (tile, title, sub, chip) => `<div class="hd">${tile}<div class="cv-hd-copy"><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ''}</div>${chip ? `<div class="st">${chip}</div>` : ''}</div>`;
+const cvTile = (ic, tone = '') => `<div class="tile cv-tile ${tone}">${icon(ic,20)}</div>`;
+// Only long text is clamped behind "Show all"; short text shows in full.
+const cvLong = (text, chars = 360, lines = 7) => String(text || '').length > chars || String(text || '').split('\n').length > lines;
+const cvClamp = (html, cls = '', long = true) => (long ? `<div class="cv-clamp ${cls}">${html}</div><button type="button" class="cv-more" data-act="cv-expand">Show all</button>` : html);
+const cvRow = (label, value) => value ? `<div class="cv-kv"><span>${label}</span><b>${value}</b></div>` : '';
+const cvChips = (list) => (list || []).map(a => `<span class="cv-chip">${esc(a)}</span>`).join('');
+function cvDecisionChip(status){
+  if (status === 'pending') return '<span class="chip">needs you</span>';
+  if (['approved','allowed','always'].includes(status)) return STCHIP.approved;
+  if (status === 'denied') return STCHIP.denied;
+  if (status === 'expired') return STCHIP.expired;
+  return '';
+}
+function cvProductImage(c, title){
+  const want = String(title || '').toLowerCase();
+  if (!want) return '';
+  for (const m of (c.messages || []).slice().reverse()) {
+    const hit = m.card?.type === 'present' && (m.card.items || []).find(it => String(it.title || '').toLowerCase() === want && safeImg(it.image));
+    if (hit) return safeImg(hit.image);
+  }
+  return '';
+}
+
+function cvEmailHTML(v, opts = {}){
+  const from = v.provider === 'mailbox'
+    ? ((mailCache && mailCache.address) || `${state.agent.name}’s mailbox`)
+    : `Your ${cvAppName(v.provider)} account`;
+  return `<div class="cv-mail">
+    ${opts.hideFrom ? '' : `<div class="cv-mail-row"><span>From</span><div>${cvAppMark(v.provider)}<b>${esc(from)}</b></div></div>`}
+    <div class="cv-mail-row"><span>To</span><div class="cv-chips">${cvChips(v.to) || '<i>No recipient</i>'}</div></div>
+    ${(v.cc || []).length ? `<div class="cv-mail-row"><span>Cc</span><div class="cv-chips">${cvChips(v.cc)}</div></div>` : ''}
+    ${(v.bcc || []).length ? `<div class="cv-mail-row"><span>Bcc</span><div class="cv-chips">${cvChips(v.bcc)}</div></div>` : ''}
+    <div class="cv-mail-subject">${esc(v.subject || '(no subject)')}</div>
+    ${v.body ? cvClamp(`<div class="cv-mail-body">${esc(v.body)}</div>`, '', cvLong(v.body)) : ''}
+  </div>`;
+}
+function cvOrderHTML(c, v){
+  const items = (v.items || []).map(it => {
+    const img = cvProductImage(c, it.title);
+    return `<div class="cv-line"><span class="cv-thumb">${img ? `<img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : icon('card',18)}</span>
+      <div class="cv-line-main"><b>${esc(it.title)}</b><small>${esc([v.merchant, it.quantity > 1 ? `Qty ${it.quantity}` : ''].filter(Boolean).join(' · '))}</small></div>
+      ${it.price ? `<span class="cv-price">${esc(it.price)}</span>` : ''}</div>`;
+  }).join('');
+  return `<div class="cv-order">${items}
+    ${v.payment ? `<div class="cv-pay">${icon('card',16)}<div><b>${esc(v.payment)}</b>${v.email ? `<small>${esc(v.email)}</small>` : ''}</div></div>` : ''}
+    ${(v.delivery || []).length ? `<div class="cv-kvs">${cvRow('Deliver to', esc(v.delivery.join(' · ')))}</div>` : ''}
+    ${v.total ? `<div class="cv-total"><span>${v.estimated === false ? 'Total' : 'Estimated total'}</span><b>${esc(v.total)}</b></div>` : ''}
+  </div>`;
+}
+const APPROVAL_TILES = { email:'mail', message:'chatb', event:'clock', app_action:'box', purchase:'card', submit:'check', credential:'key', website:'globe', search:'websearch', web_action:'globe', automation:'clock', generic:'shieldcheck' };
+const APPROVAL_VERBS = { email:'Send', message:'Send', event:'Add event', purchase:'Place order', automation:'Create', website:'Open site', search:'Search', credential:'Allow', submit:'Allow', web_action:'Allow', app_action:'Allow', generic:'Allow' };
+function cvApprovalBody(c, cd){
+  const v = cd.view || {};
+  switch (v.kind) {
+    case 'email': return v.draft ? cvEmailHTML(v, { hideFrom:true }) : cvEmailHTML(v);
+    case 'message': return `<div class="cv-kvs">${cvRow('Where', esc(v.to || ''))}</div>${v.body ? cvClamp(`<div class="cv-bubble">${esc(v.body)}</div>`, '', cvLong(v.body)) : ''}`;
+    case 'event': return `<div class="cv-event"><b>${esc(v.title || 'Event')}</b><div class="cv-kvs">${cvRow('Starts', esc(v.start))}${cvRow('Ends', esc(v.end))}${cvRow('Where', esc(v.location))}</div>${(v.attendees || []).length ? `<div class="cv-chips">${cvChips(v.attendees)}</div>` : ''}</div>`;
+    case 'app_action': return (v.fields || []).length ? `<div class="cv-kvs">${v.fields.map(f => cvRow(esc(f.k), esc(f.v))).join('')}</div>` : '';
+    case 'purchase': return cvOrderHTML(c, v) + `<p class="cv-fine">Check the order details and the merchant’s terms before you approve.</p>`;
+    case 'submit': return `<div class="cv-callout">${icon(v.surface === 'computer' ? 'laptop' : 'globe',16)}<span>${esc(v.summary || 'Final step on the website')}</span></div><p class="cv-fine">This is the final click. It may not be reversible.</p>`;
+    case 'credential': return `<div class="cv-callout">${icon('key',16)}<span>${esc(v.summary || 'Type a saved credential')}</span></div><p class="cv-fine">${esc(state.agent.name)} never sees the value. It is typed only while ${esc(v.host || v.window || 'that page')} is open.</p>`;
+    case 'website': return `<div class="cv-site">${icon('globe',16)}<div><b>${esc(v.host || 'Website')}</b><small>${esc(v.url || '')}</small></div></div>`;
+    case 'search': return v.query ? `<div class="cv-callout">${icon('websearch',16)}<span>“${esc(v.query)}”</span></div>` : `<div class="cv-chips">${cvChips(v.urls)}</div>`;
+    case 'web_action': return `<div class="cv-callout">${icon(v.surface === 'computer' ? 'laptop' : 'globe',16)}<span>${esc(humanizeSlug(v.action || 'action'))}${v.text ? ` · ${esc(v.text)}` : ''}</span></div>`;
+    case 'automation': return `<div class="cv-kvs">${cvRow('Name', esc(v.name))}${cvRow('When', esc(v.when))}</div>${v.prompt ? cvClamp(`<div class="cv-bubble">${esc(v.prompt)}</div>`, '', cvLong(v.prompt)) : ''}`;
+    default: return `<pre class="cv-pre">${esc(cd.detail || '')}</pre>`;
+  }
+}
+function approvalCardHTML(c, m){
+  const cd = m.card, v = cd.view || {}, k = c.id, mid = m.id;
+  const pending = cd.status === 'pending';
+  const app = v.app || (v.kind === 'email' ? v.provider : '');
+  const tile = app ? `<div class="tile cv-tile brand">${cvAppMark(app)}</div>` : cvTile(APPROVAL_TILES[v.kind] || 'shieldcheck');
+  const sub = pending ? `${esc(state.agent.name)} wants to do this` : v.appName ? esc(v.appName) : 'Action approval';
+  const verb = APPROVAL_VERBS[v.kind] || 'Allow';
+  return `<div class="acard cv-card cv-approval ${pending ? 'is-pending' : ''}">
+    ${cvHead(tile, esc(cd.view && cd.title ? cd.title : approvalHeadline({ title:cd.title, detail:cd.detail })), sub, cvDecisionChip(cd.status))}
+    <div class="bd">${cvApprovalBody(c, cd)}</div>
+    ${pending ? `<div class="cv-actions"><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Deny</button><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">${verb}</button></div>`
+      : `<div class="ft"><span class="note">${icon('shield',12)} ${cd.status === 'denied' ? 'Nothing was done' : cd.status === 'expired' ? 'No longer needed' : 'Approved by you · logged in activity'}</span></div>`}
+  </div>`;
+}
+
+function questionCardHTML(c, m){
+  const cd = m.card, k = c.id, mid = m.id;
+  const opts = (cd.options || []).map(o => (typeof o === 'string' ? { label:o } : o)).filter(o => o && o.label);
+  const answered = ['answered','approved'].includes(cd.status);
+  const skipped = ['denied','skipped','expired'].includes(cd.status);
+  const live = cd.status === 'pending';
+  const picked = new Set(answered ? String(cd.choice || '').split(', ') : (cd.sel || []));
+  const grid = opts.some(o => safeImg(o.image));
+  const staged = cd.multi || grid;
+  const attrs = `data-chat="${k}" data-msg="${mid}"`;
+  const optHTML = opts.map(o => {
+    const on = picked.has(o.label);
+    const cls = `${on ? 'on' : answered ? 'dim' : ''}`;
+    const act = live ? `data-act="${staged ? 'qpick' : 'qopt'}" ${attrs} data-o="${esc(o.label)}"` : 'disabled';
+    const img = safeImg(o.image);
+    if (grid) return `<button type="button" class="cv-pick ${cls}" ${act}>${img ? `<img src="${esc(img)}" alt="${esc(o.label)}" loading="lazy" referrerpolicy="no-referrer">` : `<span class="cv-pick-empty">${icon('image',22)}</span>`}<span class="cv-pick-label">${esc(o.label)}</span><span class="tick">${icon('check',12)}</span></button>`;
+    return `<button type="button" class="qopt cv-opt ${cls}" ${act}><span class="cv-opt-copy"><span>${esc(o.label)}</span>${o.description ? `<small>${esc(o.description)}</small>` : ''}</span><span class="tick">${icon('check',12)}</span></button>`;
+  }).join('');
+  const own = answered && cd.choice && !opts.some(o => o.label === cd.choice) && !String(cd.choice).split(', ').every(x => opts.some(o => o.label === x));
+  const image = safeImg(cd.image);
+  return `<div class="acard cv-card cv-question">
+    ${cvHead(cvTile('spark'), 'Question', `${esc(state.agent.name)} is asking`, answered ? `<span class="chip green">answered</span>` : skipped ? STCHIP.skipped : '')}
+    <div class="bd">
+      ${cd.context ? `<p class="cv-context">${esc(cd.context)}</p>` : ''}
+      ${image ? `<div class="cv-hero"><img src="${esc(image)}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>` : ''}
+      <b class="cv-q">${esc(cd.q || '')}</b>
+      ${opts.length ? `<div class="${grid ? 'cv-picks' : 'qopts cv-opts'}">${optHTML}</div>` : ''}
+      ${own ? `<div class="cv-own">${icon('chatb',13)} ${esc(cd.choice)}</div>` : ''}
+      ${live && cd.allowOther ? `<form class="cv-other" data-q-other ${attrs}><input name="answer" aria-label="Type your own answer" placeholder="${opts.length ? 'Or type your own answer' : 'Type your answer'}" maxlength="500" autocomplete="off"><button class="btn small" type="submit">${icon('up',14)}</button></form>` : ''}
+    </div>
+    ${live && (staged || cd.managedCallId || cd.ask) ? `<div class="cv-actions">${cd.managedCallId || cd.ask ? `<button class="btn ghost" data-act="qskip" ${attrs}>Skip</button>` : ''}${staged ? `<button class="btn" data-act="qsubmit" ${attrs} ${picked.size ? '' : 'disabled'}>${cd.multi ? `Select${picked.size ? ` (${picked.size})` : ''}` : 'Select'}</button>` : ''}</div>` : ''}
+  </div>`;
+}
+
+function connectCardHTML(c, m){
+  const cd = m.card, k = c.id, mid = m.id;
+  const tk = String(cd.toolkit || cd.app || '').toLowerCase();
+  const name = cd.name || cvAppName(tk);
+  const app = composioAppByToolkit(tk);
+  const linked = cd.status === 'connected' || (app && (app.accounts || []).length > 0 && cd.status !== 'denied');
+  const pending = cd.status === 'pending' && !linked;
+  const attrs = `data-chat="${k}" data-msg="${mid}"`;
+  const managed = !!cd.managedCallId, chatCard = !!cd.chat;
+  const buttons = !pending ? '' : managed
+    ? `<div class="cv-actions wrap"><button class="btn" data-act="cv-connect" data-tk="${esc(tk)}" ${attrs}>Connect ${esc(name)}</button><button class="btn ghost" data-act="managed-allow" ${attrs}>I’ve connected it</button><button class="btn ghost" data-act="managed-deny" ${attrs}>Not now</button></div>`
+    : chatCard
+      ? `<div class="cv-actions"><button class="btn ghost" data-act="deny-connect" ${attrs}>Not now</button><button class="btn" data-act="cv-connect" data-tk="${esc(tk)}" ${attrs}>Connect ${esc(name)}</button></div>`
+      : `<div class="cv-actions"><button class="btn ghost" data-act="deny-connect" ${attrs}>Not now</button><button class="btn" data-act="connect" ${attrs}>Connect</button></div>`;
+  return `<div class="acard cv-card cv-connect">
+    ${cvHead(`<div class="tile cv-tile brand big">${cvAppMark(tk)}</div>`, pending ? `Connect ${esc(name)}` : esc(name), linked ? 'Connected app' : 'Secure sign-in · no passwords shared', linked ? STCHIP.connected : cd.status === 'denied' ? STCHIP.skipped : '')}
+    <div class="bd">${cd.note ? `<p>${esc(cd.note)}</p>` : `<p class="mut">${esc(state.agent.name)} asks only for the permissions it needs.</p>`}
+      ${pending ? `<div class="cv-perm">${icon('lock',13)} You sign in on ${esc(name)}’s own page. You can disconnect anytime in Apps.</div>` : ''}</div>
+    ${buttons}
+  </div>`;
+}
+
+function cvChartSVG(chart){
+  const series = (chart.series || []).filter(s => (s.values || []).length);
+  if (!series.length) return '';
+  const W = 320, H = 132, pad = 8, base = H - 18;
+  const n = Math.max(...series.map(s => s.values.length));
+  const max = Math.max(1, ...series.flatMap(s => s.values));
+  const min = Math.min(0, ...series.flatMap(s => s.values));
+  const y = v => base - ((v - min) / (max - min || 1)) * (base - pad);
+  const colors = ['var(--ink)', 'var(--purple)', 'var(--green)'];
+  const step = (W - pad * 2) / n;
+  let marks = '';
+  if (chart.type === 'line') {
+    series.forEach((s, si) => {
+      const pts = s.values.map((v, i) => `${(pad + step * i + step / 2).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+      marks += `<polyline points="${pts}" fill="none" stroke="${colors[si]}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      s.values.forEach((v, i) => { marks += `<circle cx="${(pad + step * i + step / 2).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="${colors[si]}"><title>${esc(s.name || '')} ${esc(chart.labels?.[i] || '')}: ${v}</title></circle>`; });
+    });
+  } else {
+    const bw = Math.max(3, (step - 4) / series.length);
+    series.forEach((s, si) => s.values.forEach((v, i) => {
+      const x = pad + step * i + 2 + bw * si, top = Math.min(y(v), y(0)), h = Math.max(1.5, Math.abs(y(0) - y(v)));
+      marks += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${(bw - 1.5).toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="${colors[si]}" opacity="${si ? .85 : 1}"><title>${esc(s.name || '')} ${esc(chart.labels?.[i] || '')}: ${v}</title></rect>`;
+    }));
+  }
+  const every = Math.ceil(n / 6);
+  const labels = (chart.labels || []).map((l, i) => i % every ? '' : `<text x="${(pad + step * i + step / 2).toFixed(1)}" y="${H - 4}" text-anchor="middle">${esc(l)}</text>`).join('');
+  const legend = series.length > 1 ? `<div class="cv-legend">${series.map((s, i) => `<span><i style="background:${colors[i]}"></i>${esc(s.name || `Series ${i + 1}`)}</span>`).join('')}</div>` : '';
+  return `<div class="cv-chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Chart"><line x1="${pad}" x2="${W - pad}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" class="cv-axis"/>${marks}<g class="cv-ticks">${labels}</g></svg>${legend}</div>`;
+}
+function presentCardHTML(c, m){
+  const cd = m.card;
+  const items = cd.items || [];
+  const kindIcon = { products:'card', inbox:'mail', gallery:'image', dashboard:'chart', table:'grid', steps:'checksq', list:'list' }[cd.kind] || 'list';
+  let body = '';
+  if (cd.kind === 'dashboard') {
+    body = `${(cd.metrics || []).length ? `<div class="cv-metrics">${cd.metrics.map(x => `<div class="cv-metric"><small>${esc(x.label)}</small><b>${esc(x.value)}</b>${x.delta ? `<span class="cv-delta ${esc(x.trend || '')}">${x.trend === 'up' ? '▲ ' : x.trend === 'down' ? '▼ ' : ''}${esc(x.delta)}</span>` : ''}</div>`).join('')}</div>` : ''}${cd.chart ? cvChartSVG(cd.chart) : ''}`;
+  } else if (cd.kind === 'table') {
+    body = `<div class="cv-table-wrap"><table class="cv-table">${(cd.columns || []).length ? `<thead><tr>${cd.columns.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>` : ''}<tbody>${(cd.rows || []).map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  } else if (cd.kind === 'gallery') {
+    body = `<div class="cv-gallery">${items.map(it => { const img = safeImg(it.image), link = safeLink(it.url); const inner = `${img ? `<img src="${esc(img)}" alt="${esc(it.title)}" loading="lazy" referrerpolicy="no-referrer">` : `<span class="cv-pick-empty">${icon('image',22)}</span>`}<figcaption>${esc(it.title)}</figcaption>`; return link ? `<a class="cv-fig" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${inner}</a>` : `<figure class="cv-fig">${inner}</figure>`; }).join('')}</div>`;
+  } else if (cd.kind === 'steps') {
+    body = `<ol class="cv-steps">${items.map((it, i) => `<li class="${it.done ? 'done' : ''}"><span class="cv-step-dot">${it.done ? icon('check',12) : i + 1}</span><div><b>${esc(it.title)}</b>${it.subtitle ? `<small>${esc(it.subtitle)}</small>` : ''}</div></li>`).join('')}</ol>`;
+  } else {
+    body = `<div class="cv-list">${items.map(it => {
+      const img = safeImg(it.image), link = safeLink(it.url);
+      const tag = link ? 'a' : 'div';
+      const thumb = img ? `<span class="cv-thumb"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : cd.kind === 'inbox' ? `<span class="cv-thumb">${icon('mail',16)}</span>` : cd.kind === 'products' ? `<span class="cv-thumb">${icon('card',16)}</span>` : '';
+      return `<${tag} class="cv-item${img ? ' has-img' : ''}"${link ? ` href="${esc(link)}" target="_blank" rel="noopener noreferrer"` : ''}>${thumb}<span class="cv-item-main"><b>${esc(it.title)}</b>${it.subtitle ? `<small>${esc(it.subtitle)}</small>` : ''}${it.price ? `<span class="cv-item-price">${esc(it.price)}</span>` : ''}${it.meta ? `<small class="cv-meta">${esc(it.meta)}</small>` : ''}</span>${it.badge ? `<span class="chip green">${esc(it.badge)}</span>` : ''}${link ? `<span class="cv-go">${icon('chev',14)}</span>` : ''}</${tag}>`;
+    }).join('') || '<p class="mut">Nothing to show.</p>'}</div>`;
+  }
+  return `<div class="acard cv-card cv-present is-${esc(cd.kind || 'list')}">
+    ${cvHead(cvTile(kindIcon), esc(cd.title || 'Overview'), cd.subtitle ? esc(cd.subtitle) : items.length ? `${items.length} ${items.length === 1 ? 'item' : 'items'}` : '', '')}
+    <div class="bd">${body}</div>
+  </div>`;
+}
+
+function orderCardHTML(c, m){
+  const cd = m.card;
+  const placed = cd.orderStatus === 'completed';
+  const title = placed ? 'Order placed' : cd.continueUrl ? 'Finish checkout' : 'Checkout ready';
+  const cont = safeLink(cd.continueUrl), view = safeLink(cd.orderUrl);
+  return `<div class="acard cv-card cv-order-card">
+    ${cvHead(cvTile(placed ? 'check' : 'card', placed ? 'green' : ''), title, esc(cd.merchant || ''), placed ? '<span class="chip green">placed</span>' : cont ? '<span class="chip">needs you</span>' : '')}
+    <div class="bd">${cvOrderHTML(c, { ...cd, payment:'', estimated:!placed })}</div>
+    ${cont || view ? `<div class="cv-actions">${cont ? `<a class="btn" href="${esc(cont)}" target="_blank" rel="noopener noreferrer">Finish in Shop Pay</a>` : ''}${view ? `<a class="btn ghost" href="${esc(view)}" target="_blank" rel="noopener noreferrer">View order</a>` : ''}</div>` : ''}
+  </div>`;
+}
+function emailCardHTML(c, m){
+  const cd = m.card;
+  const sent = cd.state === 'sent';
+  return `<div class="acard cv-card cv-email">
+    ${cvHead(`<div class="tile cv-tile brand">${cvAppMark(cd.provider || 'mailbox')}</div>`, sent ? 'Email sent' : 'Draft saved', sent ? `to ${esc((cd.to || []).join(', ') || 'recipient')}` : 'Not sent yet', sent ? '<span class="chip green">sent</span>' : '<span class="chip">draft</span>')}
+    <div class="bd">${cvEmailHTML({ ...cd, provider:cd.provider || 'mailbox' }, { hideFrom:!cd.from })}</div>
+  </div>`;
+}
+
+function browserCardHTML(c, m){
+  const cd = m.card, k = c.id, mid = m.id;
+  const running = cd.status === 'running';
+  const word = running ? 'Working' : cd.status === 'failed' ? 'Stopped' : cd.status === 'interrupted' ? 'Interrupted' : 'Completed';
+  const shot = safeImg(cd.screenshot);
+  const host = cd.desktop ? 'Virtual computer' : hostName(cd.url) || cd.url || 'Browser';
+  const label = cd.liveId || running ? 'Open live view' : 'Open preview';
+  return `<div class="acard cv-card cv-browser ${running ? 'is-running' : ''}">
+    ${cvHead(`<div class="tile cv-tile ${cd.status === 'failed' ? '' : 'green'}">${icon(cd.desktop ? 'laptop' : 'globe',20)}</div>`, cd.desktop ? 'Computer' : 'Browser', `${word}${cd.note ? ` · ${esc(cd.note)}` : ''}`, '')}
+    <button type="button" class="cv-shot" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="${label}">
+      ${shot ? `<img src="${esc(shot)}" alt="Screenshot of ${esc(host)}" loading="lazy">` : `<span class="cv-shot-empty">${running ? '<span class="tdots"><i></i><i></i><i></i></span>' : icon(cd.desktop ? 'laptop' : 'globe',26)}</span>`}
+      <span class="cv-shot-url">${icon(cd.desktop ? 'laptop' : 'globe',12)} ${esc(host)}</span>
+    </button>
+    <div class="stack"><button class="btn ghost" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${label}</button></div>
+  </div>`;
+}
+function computerCardHTML(c, m){
+  const cd = m.card, k = c.id, mid = m.id;
+  const running = cd.status === 'running';
+  const lines = (cd.lines || []).slice(-5);
+  return `<div class="acard cv-card cv-computer">
+    ${cvHead(`<div class="tile cv-tile dark">${icon('term',20)}</div>`, 'Computer', running ? 'Running in your workspace' : cd.status === 'failed' ? 'Stopped with an error' : `${(cd.lines || []).length} output lines`, '')}
+    <div class="bd"><div class="term mini cv-term">${lines.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('') || '<div>$ …</div>'}${running ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div></div>
+    <div class="stack"><button class="btn ghost" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${cd.pcId || running ? 'Open live view' : 'Open output'}</button></div>
+  </div>`;
+}
+
+const CV_IMAGE_EXT = ['png','jpg','jpeg','webp','gif'];
+function fileCardHTML(c, m){
+  const cd = m.card, k = c.id, mid = m.id;
+  const name = String(cd.name || 'file');
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+  const data = String(cd.dataUrl || (String(cd.content || '').startsWith('data:') ? cd.content : ''));
+  const isImage = /^image\//.test(cd.mime || '') || CV_IMAGE_EXT.includes(ext);
+  const img = isImage ? safeImg(data) : '';
+  const video = /^data:video\/(mp4|webm|ogg);base64,/.test(data) ? data : '';
+  const audio = /^data:audio\/(mpeg|mp3|wav|ogg|webm|mp4);base64,/.test(data) ? data : '';
+  const html = !data && ['html','htm'].includes(ext) && typeof cd.content === 'string' ? cd.content : '';
+  let media = '';
+  if (img) media = `<button type="button" class="cv-media" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="Open ${esc(name)}"><img src="${esc(img)}" alt="${esc(name)}" loading="lazy"></button>`;
+  else if (video) media = `<div class="cv-media"><video controls preload="metadata" src="${esc(video)}"></video></div>`;
+  else if (audio) media = `<div class="cv-audio"><audio controls preload="metadata" src="${esc(audio)}"></audio></div>`;
+  else if (html) media = `<button type="button" class="cv-media cv-frame" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="Open ${esc(name)}"><iframe sandbox="allow-scripts" srcdoc="${esc(html)}" tabindex="-1" title="${esc(name)} preview"></iframe></button>`;
+  const type = img ? 'Image' : video ? 'Video' : audio ? 'Audio' : (ext || 'file').toUpperCase();
+  return `<div class="acard cv-card cv-file">${media}
+    <div class="filrow">
+      <div class="fic cv-ext">${ext && !img && !video && !audio ? `<span>${esc(ext.slice(0,4).toUpperCase())}</span>` : icon(img ? 'image' : video ? 'video' : audio ? 'audio' : 'file',17)}</div>
+      <div class="cv-file-copy"><b>${esc(name)}</b><div class="sz">${esc(type)}${cd.size ? ` · ${fmtBytes(cd.size)}` : ''} · saved to Files</div></div>
+      <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="Open">${icon('eye',15)}</button><button class="iconbtn" data-act="download" data-chat="${k}" data-msg="${mid}" title="Download">${icon('down',15)}</button></div>
+    </div></div>`;
+}
+function canvasCardHTML(c, m){
+  const cd = m.card, k = c.id, mid = m.id;
+  const format = String(cd.format || 'text');
+  const content = String(cd.content || '');
+  let preview;
+  if (format === 'md') preview = `<div class="cv-doc md">${md(content.slice(0, 1800))}</div>`;
+  else if (format === 'html' || format === 'svg') preview = `<div class="cv-frame"><iframe sandbox="${format === 'html' ? 'allow-scripts' : ''}" srcdoc="${esc(content.slice(0, 60000))}" tabindex="-1" title="Preview"></iframe></div>`;
+  else if (format === 'csv') {
+    const rows = content.split(/\r?\n/).filter(Boolean).slice(0, 7).map(r => r.split(',').slice(0, 6));
+    preview = `<div class="cv-table-wrap"><table class="cv-table">${rows.map((r, i) => `<tr>${r.map(v => i ? `<td>${esc(v)}</td>` : `<th>${esc(v)}</th>`).join('')}</tr>`).join('')}</table></div>`;
+  } else preview = `<div class="minicode cv-code">${esc(content.split('\n').slice(0, 10).join('\n'))}</div>`;
+  return `<div class="acard cv-card cv-canvas">
+    ${cvHead(cvTile(format === 'md' ? 'doc' : format === 'csv' ? 'grid' : format === 'html' || format === 'svg' ? 'web' : 'code'), esc(cd.title || 'Document'), esc(format.toUpperCase()), '')}
+    <div class="bd">${cvClamp(preview, 'short', format === 'html' || format === 'svg' ? false : cvLong(content, 700, 10))}</div>
+    <div class="cv-actions"><button class="btn ghost" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${icon('easel',14)} Open</button></div>
+  </div>`;
+}
+
+// Question cards from the agent: task questions resume the task with the answer,
+// chat questions send the answer as the owner's next message.
+async function answerQuestion(c, m, answer, button){
+  if (!signedIn()) { renderAuth(); return; }
+  const reply = String(answer || '').trim().slice(0, 500);
+  if (!reply || m.card.status !== 'pending') return;
+  if (m.card.managedCallId) {
+    if (button) button.disabled = true;
+    try {
+      if (m.card.taskId) await Engine.controlTask(makeRT(c), m.card.taskId, 'decide', { callId:m.card.managedCallId, allow:true, answer:reply, version:m.card.taskVersion });
+      else await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow:true, answer:reply });
+      m.card.status = 'answered'; m.card.choice = reply;
+    } catch (error) { toast(error.message); }
+    finally { if (button) button.disabled = false; }
+    replaceNode(c, m); save(); return;
+  }
+  m.card.status = 'answered'; m.card.choice = reply;
+  replaceNode(c, m); save();
+  if (m.card.ask) sendPrompt(reply);
+  else resolveCard(c, m, { choice:reply }, 'answered');
+}
+
 /* ---------------- cards ---------------- */
 const STCHIP = {
   pending:'<span class="chip">waiting for you</span>',
@@ -3722,6 +4120,18 @@ function cardNode(c, m){
     : stChip(cd);
   const hd = (ic, bg, fg, title, sub) => `<div class="hd"><div class="tile" style="background:${bg};color:${fg}">${ic}</div><div><b>${title}</b><div class="sub">${sub}</div></div><div class="st">${chip}</div></div>`;
   const pending = cd.status === 'pending';
+
+  if (cd.type === 'memory') return '';
+  if (cd.type === 'approval' && cd.managedCallId) return approvalCardHTML(c, m);
+  if (cd.type === 'question' && !cd.onboarding && !cd.mascotColors && !cd.customName) return questionCardHTML(c, m);
+  if (cd.type === 'connect') return connectCardHTML(c, m);
+  if (cd.type === 'present') return presentCardHTML(c, m);
+  if (cd.type === 'order') return orderCardHTML(c, m);
+  if (cd.type === 'email') return emailCardHTML(c, m);
+  if (cd.type === 'browser') return browserCardHTML(c, m);
+  if (cd.type === 'computer') return computerCardHTML(c, m);
+  if (cd.type === 'file') return fileCardHTML(c, m);
+  if (cd.type === 'canvas') return canvasCardHTML(c, m);
 
   if (cd.type === 'task') {
     const ongoing=['queued','running','waiting_approval','stopping'].includes(cd.status);
@@ -3844,6 +4254,9 @@ function cardNode(c, m){
     return `<div class="acard">${hd(icon('library',20),'var(--acc-soft)','var(--acc)',heading,esc(cd.kind ? libTypeLabel(cd.kind === 'file' ? 'artifact' : cd.kind) : 'File'))}
       <div class="bd">${esc(cd.title || '')}</div>${cd.action === 'deleted' ? '' : `<div class="ft"><button class="btn ghost small" data-act="open-library">Open Library ${icon('aur',13)}</button></div>`}</div>`;
   }
+  if (cd.type === 'system_file') return `<div class="acard">
+    ${hd(icon('doc',20),'var(--acc-soft)','var(--acc)','System file updated','Used in future agent replies')}
+    <div class="bd">${esc(cd.title || '')}</div><div class="ft"><button class="btn ghost small" data-act="system-file-view" data-key="${esc(cd.key || '')}">View file ${icon('aur',13)}</button></div></div>`;
   if (cd.type === 'memory') return `<div class="acard">
     ${hd(icon('book',20),'var(--green-soft)','var(--green)','Saved to memory','I can recall this in any chat')}
     <div class="bd">${esc(cd.text)}</div></div>`;
@@ -3978,6 +4391,13 @@ function makeRT(c){
           replaceNode(c, m);
         }
       }
+      if (event.type === 'card' && event.card?.type === 'memory') {
+        // Memory saves stay out of the chat; the Library memory file shows them.
+        if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='library'&&state.libraryCat==='system'&&state.systemFile==='system:memory'&&$('#main'))paintLibrary($('#main'));}).catch(()=>{});
+        else if (!state.memory.some(x => x.text === event.card.text)) rt.remember(event.card.text, 'account');
+        save();
+        return;
+      }
       if (event.type === 'card') {
         let m = c.messages.find(x => x.managedId === event.id);
         const card = { ...event.card, managedCallId:event.callId, taskId:task?.id, taskVersion:task?.version };
@@ -3985,17 +4405,12 @@ function makeRT(c){
         else { m.card = card; replaceNode(c,m); }
         if (card.type === 'goal') refreshGoals();
         if (card.type === 'library' || card.libraryId) refreshLibrary();
+        if (card.type === 'system_file') refreshSystemFiles(true);
         if (card.type === 'memory') {
-          if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='library'&&state.libraryCat==='memory'&&$('#main'))paintLibrary($('#main'));}).catch(()=>{});
+          if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='library'&&state.libraryCat==='system'&&state.systemFile==='system:memory'&&$('#main'))paintLibrary($('#main'));}).catch(()=>{});
           else if (!state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
         }
-        if (card.type === 'canvas' && active() && !task) {
-          c.canvasSelectedMessageId = m.id;
-          state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-          $('#app')?.classList.remove('nocanvas'); syncShellClasses();
-          paintCanvas();
-        }
-        else if (active() && state.canvasOpen && c.canvasSelectedMessageId && ['browser','computer'].includes(card.type)) paintCanvas();
+        if (active() && state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && (!c.canvasSelectedMessageId || ['browser','computer'].includes(card.type))) paintCanvas();
       }
       if (event.type === 'error') {
         c.managedStatus = 'failed';
@@ -4027,7 +4442,6 @@ function makeRT(c){
       c.artifact = a;
       if(!opts.background){c.canvasSelectedMessageId = null; delete c.canvasSelectedFileIndex;}
       if(active()) {
-        if(!opts.background){state.canvasOpen = true;state.canvasTab = 'canvas';const app = $('#app');if(app)app.classList.remove('nocanvas'); syncShellClasses();}
         if(state.canvasOpen && state.canvasTab==='canvas')paintCanvas();
       }
       save();
@@ -4369,9 +4783,9 @@ function libraryTabContent(){
   const titles = { all:'All artifacts', artifacts:'Artifacts', documents:'Documents', web:'Web artifacts', images:'Images', videos:'Videos', podcasts:'Podcasts', system:'System files' };
   const recent = items.slice(0, 4);
   const rest = items.slice(4);
-  // Memory is managed inside System files → memory/, so it has no separate nav entry.
+  // Memory is shown as a generated system file, so it has no separate nav entry.
   const sideBtn = (id, ic, label) => {
-    const on = cat === id || (id === 'system' && cat === 'memory');
+    const on = cat === id;
     const n = id === 'system' ? 0 : count(id);
     return `<button class="lib-nav${on ? ' on' : ''}" data-act="libcat" data-cat="${id}"${on ? ' aria-current="page"' : ''}>${icon(ic,16)}<span>${label}</span>${n ? `<em>${n}</em>` : ''}</button>`;
   };
@@ -4391,7 +4805,7 @@ function libraryTabContent(){
       <div class="lib-side-foot">${sideBtn('system','folder','System files')}</div>
     </aside>
     <section class="lib-main"><div class="lib-main-inner">
-      ${cat === 'memory' ? `<button class="system-back" data-act="libcat" data-cat="system">${icon('left',14)} System files</button>${libraryMemoryBody()}` : cat === 'system' ? systemLibraryBody() : `<div class="lib-head">
+      ${cat === 'system' ? systemLibraryBody() : `<div class="lib-head">
         <div><span class="lib-eyebrow">Library</span><h1>${esc(title)}</h1></div>
         <span class="lib-actions">
           ${state.librarySelect ? `<button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete">${icon('trash',13)} Delete (${(state.librarySelected || []).length})</button>` : items.length ? `<button class="btn ghost small" data-act="lib-select">Select</button>` : ''}
@@ -4422,7 +4836,7 @@ function paintLibrary(M){
   const libSearch = M.querySelector('#libsearch');
   if (libSearch) libSearch.addEventListener('input', (e) => {
     state.librarySearch = e.target.value;
-    if (state.libraryCat === 'system' || state.libraryCat === 'memory') state.libraryCat = 'all';
+    if (state.libraryCat === 'system') state.libraryCat = 'all';
     save();
     const pos = e.target.selectionStart;
     paintLibrary(M);
@@ -4433,12 +4847,6 @@ function paintLibrary(M){
   if (libUpload) libUpload.addEventListener('change', (e) => {
     addLibraryUploads(e.target.files);
     e.target.value = '';
-  });
-  M.querySelector('#memory-search')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="searchmem"]')?.click(); }
-  });
-  M.querySelector('#memory-new')?.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); M.querySelector('[data-act="addmem"]')?.click(); }
   });
   if (signedIn() && state.libraryCat === 'system') refreshSystemFiles();
   refreshLibrary(false);
@@ -5032,7 +5440,7 @@ function canvasGalleryHTML(c){
   if (!c) return '';
   const items = [];
   for (const m of c.messages || []) {
-    if (m.kind === 'card') items.push({m, label:m.card.title || m.card.name || m.card.q || m.card.note || m.card.label || m.card.type, kind:m.card.type});
+    if (m.kind === 'card' && m.card.type !== 'memory') items.push({m, label:m.card.title || m.card.name || m.card.q || m.card.note || m.card.label || m.card.type, kind:m.card.type});
     for (const [i,file] of (m.files || []).entries()) items.push({m, i, label:file.name, kind:'file'});
   }
   if (!items.length) return '';
@@ -5106,9 +5514,9 @@ function paintCanvas(){
   const an = $('#agentname');
   if (an) an.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
-    state.agent.name = v; save(); paintSide(); paintMain(); paintCanvas();
-    ensureMailbox(v).then(() => { if ($('#cbody')) paintCanvas(); });
-    toast('Renamed — they answer to ' + v + ' now.');
+    state.agent.name = publicAgentName(v); save(); paintSide(); paintMain(); paintCanvas();
+    ensureMailbox(state.agent.name).then(() => { if ($('#cbody')) paintCanvas(); });
+    toast('Renamed — they answer to ' + state.agent.name + ' now.');
   });
   const body = $('#cbody');
   if (top === 'mail'){
@@ -5276,24 +5684,7 @@ function paintVault(M){
 }
 
 
-function memoryFile(m){return m.category==='user'?'About you · USER.md':m.category==='daily'?`Daily note · ${new Date(m.observedAt || m.at || Date.now()).toISOString().slice(0,10)}`:'Long-term · MEMORY.md';}
-function memorySource(m){return ({explicit:'You asked to remember this',auto:'Saved automatically',auto_correction:'Updated automatically',agent:'Saved by your agent',agent_correction:'Corrected by your agent',user:'Added by you',user_edit:'Edited by you',onboarding:'Added during setup'})[m.src] || 'Account memory';}
-function memoryCategoryLabel(category){return ({user:'About you',long_term:'Long-term',daily:'Daily note'})[category] || 'Long-term';}
-function memoryCategoryIcon(category){return category === 'user' ? 'user' : category === 'daily' ? 'clock' : 'book';}
-function memoryEntryHtml(m){
-  const category = ['user','long_term','daily'].includes(m.category) ? m.category : 'long_term';
-  const editing = String(state.memoryEditing || '') === String(m.id);
-  return `<article class="memory-entry${editing ? ' is-editing' : ''}">
-    <span class="memory-file-icon memory-file-${category}">${icon(memoryCategoryIcon(category),16)}</span>
-    <div class="memory-entry-copy">
-      <div class="memory-entry-meta"><span class="memory-tag memory-tag-${category}">${memoryCategoryLabel(category)}</span><span>${esc(memorySource(m))}</span><span>· ${esc(memoryFile(m))}</span></div>
-      ${editing
-        ? `<textarea class="field memory-entry-edit" id="memory-edit" maxlength="2000">${esc(m.text)}</textarea><div class="memory-entry-edit-actions"><button class="btn dark small" data-act="save-editmem" data-id="${esc(m.id)}">Save</button><button class="btn ghost small" data-act="cancel-editmem">Cancel</button></div>`
-        : `<b>${esc(m.text)}</b><div class="memory-entry-time">${fmtWhen(m.updatedAt || m.at)}</div>`}
-    </div>
-    ${editing ? '' : `<div class="memory-entry-actions"><button class="iconbtn" data-act="editmem" data-id="${esc(m.id)}" title="Correct memory" aria-label="Correct memory">${icon('edit',14)}</button><button class="iconbtn" data-act="delmem" data-id="${esc(m.id)}" title="Forget memory" aria-label="Forget memory">${icon('trash',14)}</button></div>`}
-  </article>`;
-}
+function memorySource(m){return ({explicit:'You asked to remember this',auto:'Saved automatically',auto_correction:'Updated automatically',agent:'Saved by your agent',agent_correction:'Corrected by your agent',user:'Added by you',user_import:'Imported by you',user_edit:'Edited by you',onboarding:'Added during setup'})[m.src] || 'Account memory';}
 function paintProfile(M){
   const a = state.agent;
   M.innerHTML = `<div class="page"><div class="pageinner">
@@ -5317,46 +5708,80 @@ function paintProfile(M){
   </div></div>`;
   $('#pname').addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
-    state.agent.name = v; save(); paintSide(); paintCanvas();
-    ensureMailbox(v);
-    toast('Renamed — they answer to ' + v + ' now.');
+    state.agent.name = publicAgentName(v); save(); paintSide(); paintCanvas();
+    ensureMailbox(state.agent.name);
+    toast('Renamed — they answer to ' + state.agent.name + ' now.');
   });
 }
 
 /* ---------------- Settings (profiles / secrets / browser / billing) ---------------- */
+/* Each kind is a small form; saving turns it into one or more named vault
+   secrets (a login becomes "<site> username" + "<site> password") so the agent
+   can fill each field by ref. Fields marked secret are stored encrypted. */
+const VAULT_KINDS = {
+  login: { label:'Login', icon:'user', fields:[
+    { k:'site', label:'Website', placeholder:'e.g. github.com' },
+    { k:'username', label:'Username or email', secret:true, optional:true },
+    { k:'password', label:'Password', secret:true, masked:true },
+  ] },
+  apikey: { label:'API key', icon:'key', fields:[
+    { k:'name', label:'Name', placeholder:'e.g. OpenAI API key' },
+    { k:'value', label:'Key', placeholder:'Paste the key', secret:true, masked:true },
+  ] },
+  card: { label:'Card', icon:'card', fields:[
+    { k:'name', label:'Card label', placeholder:'e.g. Personal Visa' },
+    { k:'number', label:'Card number', secret:true, masked:true, inputmode:'numeric' },
+    { k:'expiry', label:'Expiry', placeholder:'MM/YY', secret:true, optional:true, short:true },
+    { k:'cvc', label:'CVC', secret:true, masked:true, optional:true, short:true, inputmode:'numeric' },
+  ] },
+  other: { label:'Other', icon:'lock', fields:[
+    { k:'name', label:'Name', placeholder:'e.g. Wi-Fi password' },
+    { k:'value', label:'Value', secret:true, masked:true },
+  ] },
+};
+function vaultKindEntries(kind, f){
+  const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+  if (kind === 'login'){
+    const site = clean(f.site).replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '').replace(/^www\./i, '');
+    if (!site || !f.password) return { error:'Add the website and the password.' };
+    return { entries:[f.username && [`${site} username`, f.username], [`${site} password`, f.password]].filter(Boolean) };
+  }
+  if (kind === 'card'){
+    const label = clean(f.name);
+    if (!label || !f.number) return { error:'Add a card label and the card number.' };
+    return { entries:[[`${label} card number`, f.number.replace(/[\s-]+/g, '')], f.expiry && [`${label} expiry`, f.expiry.trim()], f.cvc && [`${label} CVC`, f.cvc.trim()]].filter(Boolean) };
+  }
+  const name = clean(f.name);
+  if (!name || !f.value) return { error:'Add a name and a value.' };
+  return { entries:[[name, f.value]] };
+}
+function vaultItemIcon(name){
+  if (/card number|expiry|cvc/i.test(name)) return 'card';
+  if (/username|password/i.test(name)) return 'user';
+  if (/key|token/i.test(name)) return 'key';
+  return 'lock';
+}
 function settingsSecretsBody(v){
   const secrets = v.secrets || [];
   const agentName = esc((state.agent && state.agent.name) || 'Your agent');
-  const encryption = v.encrypted === false
-    ? `<span class="chip vault-chip-warn">${icon('alert',12)} Encoded, not encrypted</span>`
-    : `<span class="chip green">${icon('shieldcheck',12)} Encrypted at rest</span>`;
+  const kind = VAULT_KINDS[state.vaultKind] ? state.vaultKind : 'login';
+  const locked = v.encrypted === false;
   return `<section class="vault">
-    <header class="vault-hero">
-      <span class="vault-hero-icon">${icon('key',22)}</span>
-      <div class="vault-hero-copy">
-        <h2>Your vault</h2>
-        <p>Passwords, API keys and payment details ${agentName} can use for you, without ever seeing them.</p>
-        <div class="vault-hero-chips"><span class="chip">${secrets.length} saved</span>${encryption}</div>
-      </div>
-    </header>
-    ${v.encrypted === false ? `<div class="warnband vault-warn">${icon('alert',18)}<div><b>Vault encryption is off on this server.</b>Values are stored encoded but not encrypted until ENCRYPTION_KEY is set on the backend.</div></div>` : ''}
-    <ol class="vault-steps">
-      <li><span>1</span><div><b>Save it once</b><p>Add it here, or when ${agentName} asks for it in chat.</p></div></li>
-      <li><span>2</span><div><b>Only a reference is shared</b><p>${agentName} sees a name and a ref like <code>sec_ab12</code>, never the value.</p></div></li>
-      <li><span>3</span><div><b>You approve each use</b><p>It is typed only into the site you approve, in the agent browser.</p></div></li>
-    </ol>
+    ${locked ? `<div class="warnband vault-warn">${icon('alert',18)}<div><b>The vault is locked on this server.</b>New secrets can’t be saved until ENCRYPTION_KEY is set on the backend, so nothing is ever stored unencrypted.</div></div>` : ''}
     <div class="vault-add">
-      <div class="vault-section-head"><h3>Add a secret</h3><span>Stays in your account, scoped to you</span></div>
-      <div class="vault-add-form">
-        <label><span>Name</span><input class="field" id="vname" placeholder="e.g. GitHub password" maxlength="80" autocomplete="off"></label>
-        <label class="vault-add-value"><span>Value</span><input class="field mono" id="vval" type="password" placeholder="Paste or type the value" autocomplete="new-password" spellcheck="false"></label>
-        <button class="btn" data-act="addsecret">${icon('plus',14)} Add to vault</button>
+      <div class="vault-section-head"><h3>Add to vault</h3><span>${locked ? 'Locked' : `${icon('shieldcheck',12)} Encrypted, only a ref is shared with ${agentName}`}</span></div>
+      <div class="vault-kinds" role="radiogroup" aria-label="What are you saving?">
+        ${Object.entries(VAULT_KINDS).map(([k, d]) => `<button type="button" class="vault-kind ${k === kind ? 'on' : ''}" role="radio" aria-checked="${k === kind}" data-act="vault-kind" data-k="${k}">${icon(d.icon,14)} ${d.label}</button>`).join('')}
       </div>
+      <form class="vault-add-form" data-kind="${kind}" autocomplete="off" onsubmit="return false">
+        ${VAULT_KINDS[kind].fields.map(fd => `<label class="${fd.short ? 'vault-add-short' : fd.secret ? 'vault-add-value' : ''}"><span>${fd.label}${fd.optional ? ' <i>optional</i>' : ''}</span><input class="field${fd.secret ? ' mono' : ''}" data-vf="${fd.k}" type="${fd.masked ? 'password' : 'text'}" placeholder="${esc(fd.placeholder || '')}" maxlength="${fd.secret ? 4000 : 80}" autocomplete="${fd.masked ? 'new-password' : 'off'}" spellcheck="false"${fd.inputmode ? ` inputmode="${fd.inputmode}"` : ''}${locked ? ' disabled' : ''}></label>`).join('')}
+        <button class="btn" data-act="addsecret"${locked ? ' disabled' : ''}>${icon('plus',14)} Save</button>
+      </form>
     </div>
     <div class="vault-list">
-      <div class="vault-section-head"><h3>Saved secrets</h3><span>Reveal is only for you, on this device</span></div>
+      <div class="vault-section-head"><h3>Saved</h3><span>${secrets.length} · reveal is only for you</span></div>
       ${secrets.map(s => `<div class="vault-item">
-        <span class="vault-item-icon">${icon('lock',16)}</span>
+        <span class="vault-item-icon">${icon(vaultItemIcon(s.name),16)}</span>
         <div class="vault-item-copy">
           <b>${esc(s.name)}</b>
           <div class="vault-item-meta"><code>${esc(s.ref)}</code><span>Added ${fmtAgo(s.at)}</span>${s.backend ? '' : '<span>Only on this device</span>'}</div>
@@ -5371,116 +5796,28 @@ function settingsSecretsBody(v){
     </div>
   </section>`;
 }
-/* Sites the agent browser opened, newest chat first, from this account's chat cards. */
-function recentBrowsedSites(limit = 6){
-  const seen = new Map();
-  for (const c of state.chats || []) {
-    const messages = c.messages || [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const cd = messages[i].card;
-      if (!cd || cd.type !== 'browser' || cd.desktop || !cd.url) continue;
-      let host;
-      try { const u = new URL(cd.url); if (!/^https?:$/.test(u.protocol)) continue; host = u.hostname.replace(/^www\./, ''); } catch { continue; }
-      if (!seen.has(host)) seen.set(host, { host, chatId:c.id, chatTitle:c.title || 'Chat', at:c.updatedAt || c.createdAt || 0, failed:cd.status === 'failed' });
-    }
-    if (seen.size >= limit) break;
-  }
-  return [...seen.values()].slice(0, limit);
-}
 function settingsBrowserBody(){
-  const info = workspacePresenceInfo;
-  const agentName = esc((state.agent && state.agent.name) || 'Your agent');
-  const available = info ? info.fullOs === 'on-demand-vm' : null;
-  const saved = info?.persistence?.browserProfile;
-  const status = available === null
-    ? '<span class="chip">Checking…</span>'
-    : available ? `<span class="chip green">${icon('check',12)} Ready when needed</span>` : '<span class="chip">Not set up on this server</span>';
-  const profile = saved === 'private-workspace-backup'
-    ? { label:'Saved to your private backup', text:'The profile is backed up after finished browser work and before the computer shuts down, so sign-ins survive restarts.', tone:'green' }
-    : saved === 'vm-os-disk-only'
-      ? { label:'Kept on your dedicated computer', text:'The profile lives on your agent computer’s disk. It survives restarts, but is not backed up separately.', tone:'' }
-      : { label:'Not available yet', text:'A persistent profile is created when the agent computer is configured for this server.', tone:'' };
-  const worker = info?.worker?.status === 'on-demand-with-vm'
-    ? 'Shell and code run in a hardened container inside your dedicated computer. Both start only for an active task, then shut down.'
-    : 'Chat works from your account storage. Browser and code tools become available once the dedicated computer is configured.';
-  const credentials = (state.vault.secrets || []).length;
-  const sites = recentBrowsedSites();
-  const guards = [
-    ['card', 'Buying, paying or booking'],
-    ['mail', 'Sending, posting or publishing'],
-    ['trash', 'Deleting anything'],
-    ['gear', 'Changing account settings'],
-    ['key', 'Typing a saved secret'],
-  ];
-  return `<section class="agent-browser">
-    <header class="browser-hero">
-      <div class="browser-hero-window" aria-hidden="true"><span class="browser-hero-bar"><i></i><i></i><i></i><em>${icon('lock',10)} agent browser</em></span><span class="browser-hero-glyph">${icon('globe',30)}</span></div>
-      <div class="browser-hero-copy">
-        <div class="browser-hero-status">${status}</div>
-        <h2>${agentName}’s own browser</h2>
-        <p>A real browser on a private computer, separate from yours. It starts only when a task needs the web, and you can watch or take over live from any browser card in chat.</p>
-      </div>
-    </header>
-    <div class="browser-grid">
-      <article class="browser-card">
-        <div class="browser-card-head"><span class="browser-card-icon">${icon('user',16)}</span><div><h3>Browser profile</h3><span class="chip ${profile.tone}">${profile.label}</span></div></div>
-        <p>${profile.text}</p>
-        <ul class="browser-keeps"><li>${icon('check',12)} Cookies and sign-ins</li><li>${icon('check',12)} Site settings and local storage</li><li>${icon('check',12)} Browsing history</li></ul>
-      </article>
-      <article class="browser-card">
-        <div class="browser-card-head"><span class="browser-card-icon">${icon('key',16)}</span><div><h3>Sign-ins and payment details</h3><span class="chip">${credentials} in your vault</span></div></div>
-        <p>Passwords and cards come from your vault. ${agentName} gets a reference only, asks you to save anything missing, and types it after you approve — only on the site it is for.</p>
-        <button class="btn ghost small" data-act="stab" data-t="secrets">${icon('lock',13)} Manage secrets</button>
-      </article>
-    </div>
-    <article class="browser-card browser-guard">
-      <div class="browser-card-head"><span class="browser-card-icon">${icon('shieldcheck',16)}</span><div><h3>Asks you before the final step</h3><span class="browser-card-sub">${agentName} pauses for your OK on each of these</span></div></div>
-      <ul class="browser-guard-list">${guards.map(([ic, text]) => `<li>${icon(ic,14)} ${text}</li>`).join('')}</ul>
-      <p class="browser-fine">${icon('alert',12)} Private and local network addresses are blocked. When a CAPTCHA or one-time code appears, ${agentName} asks you to take over.</p>
+  const a=state.agent || {name:'Your agent',color:'lingon'};
+  const permissions=state.agentPermissions || {web:'ask_some',connectors:'ask_some'};
+  const profileStatus=workspacePresenceInfo?.persistence?.browserProfile === 'private-workspace-backup' ? 'Browser data backed up' : workspacePresenceInfo?.persistence?.browserProfile === 'vm-os-disk-only' ? 'Browser data kept on your agent computer' : 'Your agent’s browser profile';
+  const modeOptions=(group,selected,options)=>`<div class="browser-mode-options" role="radiogroup" aria-label="${group === 'web' ? 'Web access' : 'Connected apps'} permissions">${options.map(([value,title,description])=>`<button type="button" class="browser-mode-option ${selected===value?'is-selected':''}" role="radio" aria-checked="${selected===value}" data-act="browser-permission" data-group="${group}" data-mode="${value}"><span class="browser-mode-indicator" aria-hidden="true"></span><span><b>${title}</b><small>${description}</small></span></button>`).join('')}</div>`;
+  return `<section class="agent-browser browser-stack">
+    <article class="browser-settings-card">
+      <div class="browser-settings-heading"><span class="browser-card-icon">${icon('user',17)}</span><div><h2>Browser profile</h2><p>Your agent’s profile and memory</p></div></div>
+      <div class="browser-profile-identity"><div class="browser-profile-avatar">${Mascot.svg(a.color,'happy',76,'mascot-bob')}</div><div><b>${esc(a.name)}</b><span>${esc(profileStatus)}</span></div></div>
+      <label class="alabel" for="browser-agent-name">Agent name</label>
+      <input class="field browser-name-input" id="browser-agent-name" value="${esc(a.name)}" maxlength="18" autocomplete="off">
+      <div class="browser-profile-actions"><button class="btn soft small" data-act="browser-reset-agent">${icon('clock',14)} Reset agent</button><button class="btn soft small" data-act="import-memory">${icon('book',14)} Import memory</button><input id="browser-memory-file" type="file" accept=".txt,.md,.json,text/plain,text/markdown,application/json" hidden></div>
+      <p class="browser-settings-note">Reset restores the agent’s name and appearance. Import adds facts from a text, Markdown, or JSON file to account memory.</p>
     </article>
-    <article class="browser-card">
-      <div class="browser-card-head"><span class="browser-card-icon">${icon('clock',16)}</span><div><h3>Recently visited</h3><span class="browser-card-sub">From your chats on this device</span></div></div>
-      ${sites.length ? `<ul class="browser-sites">${sites.map(s => `<li>
-        <span class="browser-site-mark" aria-hidden="true">${esc(s.host.slice(0, 1).toUpperCase())}</span>
-        <div><b>${esc(s.host)}</b><span>${esc(s.chatTitle)}${s.at ? ' · ' + fmtAgo(s.at) : ''}${s.failed ? ' · did not load' : ''}</span></div>
-        <button class="btn ghost small" data-act="openchat" data-id="${esc(s.chatId)}">Open chat</button>
-      </li>`).join('')}</ul>` : `<p class="browser-empty">Nothing yet. Ask ${agentName} to look something up, fill in a form or book something.</p>`}
+    <article class="browser-settings-card">
+      <div class="browser-settings-heading"><span class="browser-card-icon">${icon('globe',17)}</span><div><h2>Web access</h2><p>Choose when your agent asks before using websites</p></div></div>
+      ${modeOptions('web',permissions.web,[['ask_some','Ask for some actions','Search freely. Ask when a website is unfamiliar or an action types or submits something.'],['always_ask','Always ask','Ask before accessing any website or taking a web action.']])}
     </article>
-    <article class="browser-card browser-compute">
-      <div class="browser-card-head"><span class="browser-card-icon">${icon('box',16)}</span><div><h3>Workspace computer</h3><span class="browser-card-sub">Only runs while a task needs it</span></div></div>
-      <p>${worker}</p>
+    <article class="browser-settings-card">
+      <div class="browser-settings-heading"><span class="browser-card-icon">${icon('box',17)}</span><div><h2>Connected apps</h2><p>Choose when your agent asks before using a connection</p></div></div>
+      ${modeOptions('connectors',permissions.connectors,[['ask_some','Ask for some actions','Ask before every write and sensitive read action.'],['always_ask','Always ask','Ask before every connected app action.']])}
     </article>
-  </section>`;
-}
-function libraryMemoryBody(){
-  const memories = state.memory || [];
-  const total = Number(state.memoryTotal || memories.length);
-  const aboutCount = memories.filter(m => m.category === 'user').length;
-  const longTermCount = memories.filter(m => !m.category || m.category === 'long_term').length;
-  const dailyCount = memories.filter(m => m.category === 'daily').length;
-  const query = String(state.memoryQuery || '');
-  const resultLabel = query ? `${memories.length} result${memories.length === 1 ? '' : 's'} · ${total} active total` : `${memories.length} loaded · ${total} active total`;
-  return `<section class="memory-root">
-    <div class="memory-hero">
-      <span class="memory-hero-mark">${Mascot.logo(34)}</span>
-      <div class="memory-hero-copy"><span class="memory-kicker">Private account memory</span><h2>What your agent remembers</h2><p>Keep durable facts accurate across chats. You can add memories directly or correct anything your agent saved.</p><div class="memory-hero-actions"><span class="chip green">${total} active</span><button class="btn ghost small" data-act="open-system-memory">${icon('file',14)} View MEMORY.md</button></div></div>
-    </div>
-    <div class="memory-stats">
-      <div class="memory-stat"><span class="memory-stat-icon">${icon('book',15)}</span><div><b>${total}</b><small>Active memories</small></div></div>
-      <div class="memory-stat"><span class="memory-stat-icon">${icon('user',15)}</span><div><b>${aboutCount}</b><small>About you</small></div></div>
-      <div class="memory-stat"><span class="memory-stat-icon">${icon('clock',15)}</span><div><b>${dailyCount}</b><small>Daily notes</small></div></div>
-      <div class="memory-stat"><span class="memory-stat-icon">${icon('spark',15)}</span><div><b>${longTermCount}</b><small>Long-term</small></div></div>
-    </div>
-    <div class="memory-compose">
-      <div class="memory-section-head"><div><span class="memory-kicker">New entry</span><h3>Remember something useful</h3><p>Write a clear fact, preference, or piece of context you want across chats.</p></div><span class="memory-compose-hint">Saved to your account</span></div>
-      <textarea class="field memory-new" id="memory-new" placeholder="For example: I prefer concise answers with practical next steps." maxlength="2000"></textarea>
-      <div class="memory-compose-foot"><select class="field" id="memory-category" aria-label="Memory type"><option value="user">About me</option><option value="long_term">Long-term</option><option value="daily">Daily note</option></select><span class="memory-compose-spacer"></span><button class="btn dark small" data-act="addmem">${icon('plus',14)} Save memory</button></div>
-    </div>
-    <div class="memory-toolbar"><label class="memory-search-box">${icon('search',16)}<input id="memory-search" value="${esc(query)}" placeholder="Search memories" aria-label="Search memories"></label><button class="btn soft small" data-act="searchmem">Search</button>${query ? '<button class="btn ghost small" data-act="clearmemsearch">Clear</button>' : ''}</div>
-    ${query ? `<div class="memory-search-note">${icon('search',14)} Showing ${esc(resultLabel)}. Search results are ranked by relevance.</div>` : ''}
-    <div class="memory-list-head"><div><span class="memory-kicker">Your memory</span><h3>${query ? 'Search results' : 'Recent entries'}</h3></div><span class="memory-list-count">${esc(resultLabel)}</span></div>
-    <div class="memory-items">${memories.map(memoryEntryHtml).join('') || `<div class="memory-empty"><span class="memory-empty-mark">${icon(query ? 'search' : 'book',20)}</span><div><b>${query ? 'No matching memories' : 'Nothing remembered yet'}</b><p>${query ? 'Try another phrase or clear the search.' : 'Tell your agent naturally, or save your first memory above.'}</p></div></div>`}</div>
-    ${!query && memories.length < total ? `<div class="memory-load-more"><button class="btn soft small" data-act="moremem">Show more (${memories.length} of ${total})</button></div>` : ''}
   </section>`;
 }
 function centerActiveSeg(container){
@@ -5498,7 +5835,7 @@ function centerActiveSeg(container){
 }
 function centerActiveSettingsTab(container){ centerActiveSeg(container); }
 function editableAgentDocuments(){
-  const a=state.agent || {name:'Lingon',pers:'Playful'};
+  const a=state.agent || {name:'Your agent',pers:'Playful'};
   const fallback = {
     identity:`# Identity\n\nName: ${a.name}\nStyle: ${a.pers}`,
     soul:'# Soul\n\nBe warm, candid, practical, and reliable. Adapt detail to the user and keep promises explicit.',
@@ -5517,7 +5854,7 @@ async function persistAgentContext(documents){
     const nextDocuments=queuedAgentDocuments || current.documents;queuedAgentDocuments=null;
     const saved=await window.LingonAuth.api('/api/agent-context',{method:'PUT',body:JSON.stringify({agent:state.agent,documents:nextDocuments,revision:current.revision})});
     state.agentContext=saved;if(saved.agent)state.agent={...state.agent,...saved.agent};
-    state.systemManifest={...(state.systemManifest || {}),revision:saved.revision,documents:{...((state.systemManifest || {}).documents || {}),...(saved.documents || {}),tools:systemToolsDocument()}};
+    state.systemManifest={...(state.systemManifest || {}),revision:saved.revision,documents:{...((state.systemManifest || {}).documents || {}),...(saved.documents || {})}};
     save();completed=target;
   }while(completed<agentContextSaveVersion);})();
   try{return await agentContextSavePending;}finally{agentContextSavePending=null;}
@@ -5552,15 +5889,6 @@ function paintSettings(M){
         <div class="row"><span style="color:var(--mut)">${icon('wallet',16)}</span><div><b>Shop Pay</b><div class="sub">${state.shopPay?.connected ? 'Connected for approved purchases' : state.shopPay?.configured ? 'Ready to connect in Payments' : 'Payment connection unavailable'}</div></div></div>
       </div>
     </div>
-    <div class="psec"><h3>${icon('file',15)} System files</h3>
-      <div class="kv">
-        <div class="row" style="align-items:flex-start">
-          <span style="color:var(--mut)">${icon('folder',16)}</span>
-          <div style="flex:1"><b>Agent context lives in Library</b><div class="sub">Edit IDENTITY.md, SOUL.md, USER.md and AGENTS.md in one place. Runtime TOOLS.md stays visible but read-only.</div></div>
-          <button class="btn soft small" data-act="open-system-files">${icon('file',14)} Open System files</button>
-        </div>
-      </div>
-    </div>
     <div class="psec"><h3>${icon('star',15)} Theme</h3>
       <div class="kv"><div class="row" style="align-items:flex-start"><span style="color:var(--mut)">${icon('star',16)}</span>
         <div style="flex:1"><b>Chat color</b><div class="sub">Current: ${esc(curTheme.name)} · colors your messages and the send button</div>
@@ -5580,8 +5908,8 @@ function paintSettings(M){
   }
   const previousTabScroll = M.querySelector('.settings-tabs')?.scrollLeft || 0;
   M.innerHTML = `<div class="page"><div class="pageinner">
-    <div class="phead"><h1>Settings</h1><span style="display:flex;gap:8px;align-items:center"><span class="chip">${icon('gear',12)} Arche 1.0</span><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></span></div>
-    <p class="psub">${({ billing:'Your plan, tokens and gift cards.', profiles:'Your account, agent appearance, system files, and private settings — all scoped to you.', secrets:'Credentials and payment details your agent can use without seeing them.', browser:'Your agent’s own browser: profile, sign-ins and what it asks you about.' })[tab] || 'Scoped to your account, never shared.'}</p>
+    <div class="phead"><h1>Settings</h1><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></div>
+    <p class="psub">${({ billing:'Your plan, tokens and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Credentials and payment details your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.' })[tab] || 'Scoped to your account, never shared.'}</p>
     <div class="seg settings-tabs" aria-label="Settings sections">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles" aria-pressed="${tab === 'profiles'}">${icon('user',14)} Profiles</button>
       <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets" aria-pressed="${tab === 'secrets'}">${icon('key',14)} Secrets</button>
@@ -5595,7 +5923,7 @@ function paintSettings(M){
   const pn = $('#pname');
   if (pn) pn.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
-    state.agent.name = v; save(); paintSide(); paintCanvas();
+    state.agent.name = publicAgentName(v); save(); paintSide(); paintCanvas();
     persistAgentContext().catch(e=>toast(e.message));
     ensureMailbox(v);
     toast('Renamed — they answer to ' + v + ' now.');
@@ -5605,6 +5933,30 @@ function paintSettings(M){
     const v = e.target.value.trim(); if (!v) return;
     state.userProfile = Object.assign({}, state.userProfile, { name: v }); save(); paintSide(); toast('Profile updated.');
   });
+  const browserName=M.querySelector('#browser-agent-name');
+  if(browserName)browserName.addEventListener('change',e=>{
+    const name=String(e.target.value || '').trim();if(!name){e.target.value=state.agent.name;return;}
+    state.agent.name=publicAgentName(name);save();paintSide();paintCanvas();persistAgentContext().catch(err=>toast(err.message));ensureMailbox(state.agent.name);paintSettings(M);toast('Agent name updated.');
+  });
+  const memoryFile=M.querySelector('#browser-memory-file');
+  if(memoryFile)memoryFile.addEventListener('change',async e=>{
+    const file=e.target.files?.[0];if(!file)return;
+    if(file.size>1024*1024){toast('Choose a memory file smaller than 1 MB.');e.target.value='';return;}
+    try{
+      const raw=await file.text();let entries;
+      if(/\.json$/i.test(file.name)){
+        const parsed=JSON.parse(raw),items=Array.isArray(parsed)?parsed:parsed?.memories;
+        if(!Array.isArray(items))throw new Error('JSON must contain a memories array.');
+        entries=items.map(item=>typeof item==='string'?{text:item}:item);
+      }else entries=raw.split(/\r?\n/).map(line=>({text:line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()})).filter(item=>item.text && !/^#/.test(item.text));
+      entries=entries.filter(item=>item && typeof item.text==='string' && item.text.trim()).map(item=>({text:item.text.trim().slice(0,2000),category:['user','long_term','daily'].includes(item.category)?item.category:'long_term'}));
+      if(!entries.length)throw new Error('No memories found in that file.');
+      if(entries.length>100)throw new Error('Import up to 100 memories at a time.');
+      const result=await window.LingonAuth.api('/api/memories/import',{method:'POST',body:JSON.stringify({memories:entries})});
+      const out=await window.LingonAuth.api('/api/memories');state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);save();paintSide();toast(`${result.imported} memories imported.`);
+    }catch(err){toast(err.message || 'Could not import memory.');}
+    e.target.value='';
+  });
   if (tab === 'billing'){
     loadBillingContent();
   }
@@ -5612,6 +5964,11 @@ function paintSettings(M){
   if (tab === 'browser' && !workspacePresenceInfo && signedIn() && browserPresenceChecked !== currentUserId()) {
     browserPresenceChecked = currentUserId();
     workspacePresenceRequest('status');
+  }
+  if(tab==='browser' && signedIn() && browserPermissionsChecked!==currentUserId()){
+    browserPermissionsChecked=currentUserId();
+    const version=browserPermissionsVersion;
+    window.LingonAuth.api('/api/agent-permissions').then(result=>{if(version!==browserPermissionsVersion)return;state.agentPermissions=result.permissions;save();if(state.view==='settings' && state.settingsTab==='browser' && $('#main'))paintSettings($('#main'));}).catch(err=>{if(version!==browserPermissionsVersion)return;browserPermissionsChecked=null;toast(err.message || 'Could not load permissions.');});
   }
 }
 
@@ -5815,6 +6172,14 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', () => { stopVoice(); stopWorkspacePresence(); });
 document.addEventListener('submit', e => {
+  const other = e.target.closest('[data-q-other]');
+  if (other) {
+    e.preventDefault();
+    const c = state.chats.find(x => x.id === other.dataset.chat);
+    const m = c?.messages.find(x => x.id === other.dataset.msg);
+    if (c && m) answerQuestion(c, m, other.elements.answer.value, other.querySelector('button'));
+    return;
+  }
   const form = e.target.closest('[data-onboarding-name]');
   if (!form) return;
   e.preventDefault();
@@ -5835,6 +6200,10 @@ document.addEventListener('change', (e) => {
     state.subAgentDraftName = (($('#subname') || {}).value || '');
     state.subAgentTriggerType = e.target.value;
     save(); paintCanvas();
+  }
+  if (e.target && e.target.id === 'buypack') {
+    const rate = $('#buypack-rate'), opt = e.target.selectedOptions[0];
+    if (rate && opt) rate.textContent = `${opt.dataset.rate} · secure checkout`;
   }
   if (e.target && e.target.id === 'subinterval') {
     state.subAgentDraftInterval = Number(e.target.value || 60);
@@ -5996,16 +6365,32 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
-  if (act === 'open-system-files'){
-    state.view = 'library'; state.libraryCat = 'system'; state.systemFile = null; state.librarySelect = false; save();
-    renderApp(); refreshSystemFiles(true); return;
-  }
-  if (act === 'open-system-memory'){
-    state.view = 'library'; state.libraryCat = 'system'; state.systemFile = 'system:memory'; state.librarySelect = false; save();
-    renderApp(); refreshSystemFiles(true); return;
-  }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
+  if(act==='browser-permission'){
+    const group=b.dataset.group,mode=b.dataset.mode;
+    if(!['web','connectors'].includes(group) || !['ask_some','always_ask'].includes(mode))return;
+    browserPermissionsVersion++;
+    const previous={...(state.agentPermissions || {web:'ask_some',connectors:'ask_some'})};
+    state.agentPermissions={...previous,[group]:mode};save();paintSettings($('#main'));
+    try{const result=await window.LingonAuth.api('/api/agent-permissions',{method:'PUT',body:JSON.stringify({[group]:mode})});state.agentPermissions=result.permissions;save();paintSettings($('#main'));toast('Permission setting saved.');}
+    catch(err){state.agentPermissions=previous;browserPermissionsChecked=null;save();paintSettings($('#main'));toast(err.message || 'Could not save permission setting.');}
+    return;
+  }
+  if(act==='import-memory'){$('#browser-memory-file')?.click();return;}
+  if(act==='browser-reset-agent'){
+    if(!window.confirm('Reset your agent’s name and appearance to the defaults? Your chats and memory will stay.'))return;
+    state.agent={...state.agent,name:'Your agent',color:'lingon',pers:'Playful'};save();paintSide();paintCanvas();
+    try{await persistAgentContext({...editableAgentDocuments(),identity:'# Identity\n\nName: Your agent\nStyle: Playful'});paintSettings($('#main'));toast('Agent profile reset.');}
+    catch(err){toast(err.message || 'Could not save agent reset.');}
+    return;
+  }
   if (act === 'open-library'){ mobileNavOpen = false; state.view = 'library'; state.userMenuOpen = false; save(); renderApp(); refreshLibrary(); return; }
+  if (act === 'system-file-view'){
+    const key=b.dataset.key;
+    if(!['identity','soul','user','agents'].includes(key))return;
+    mobileNavOpen=false;state.view='library';state.libraryCat='system';state.systemFile=`system:${key}`;state.userMenuOpen=false;
+    save();renderApp();refreshSystemFiles(true);return;
+  }
   if (act === 'open-goals'){ mobileNavOpen = false; state.view = 'goals'; state.userMenuOpen = false; save(); renderApp(); refreshGoals(); return; }
   /* goals */
   const repaintGoals = repaintGoalViews;
@@ -6318,20 +6703,18 @@ document.addEventListener('click', async e => {
     state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = [];
     if (state.libraryCat === 'system') state.systemFile = null;
     save(); paintLibrary($('#main')); $('#main .lib-main, #main .page').forEach(n => { n.scrollTop = 0; });
-    if (state.libraryCat === 'memory' && signedIn()) syncFromBackend(true).then(() => {
-      if (state.view === 'library' && state.libraryCat === 'memory') paintLibrary($('#main'));
+    return;
+  }
+  if (act === 'system-open'){
+    state.systemFile = b.dataset.systemId || null; save(); paintLibrary($('#main'));
+    if (state.systemFile === 'system:memory' && signedIn()) syncFromBackend(true).then(() => {
+      if (state.view === 'library' && state.libraryCat === 'system' && state.systemFile === 'system:memory') paintLibrary($('#main'));
     }).catch(e => toast(e.message));
     return;
   }
-  if (act === 'system-open'){ state.systemFile = b.dataset.systemId || null; save(); paintLibrary($('#main')); return; }
   if (act === 'system-back'){
     state.systemFile = null;
     save(); paintLibrary($('#main')); return;
-  }
-  if (act === 'system-memory'){
-    state.view = 'library'; state.libraryCat = 'memory'; state.systemFile = null; save();
-    if (signedIn()) await syncFromBackend(true).catch(() => {});
-    paintLibrary($('#main')); return;
   }
   if (act === 'system-save'){
     const field = $('#system-editor-text');
@@ -6499,6 +6882,31 @@ document.addEventListener('click', async e => {
     finally { b.disabled = false; }
     return;
   }
+  if (act === 'cv-expand') { const card = b.closest('.acard'); if (card) { card.classList.toggle('cv-open'); b.textContent = card.classList.contains('cv-open') ? 'Show less' : 'Show all'; } return; }
+  if (act === 'cv-connect') { if (!signedIn()) { renderAuth(); return; } connectComposioApp(b.dataset.tk); return; }
+  if (m?.card?.type === 'question' && !m.card.onboarding && !m.card.mascotColors && !m.card.customName && ['qopt','qpick','qsubmit','qskip'].includes(act)) {
+    if (m.card.status !== 'pending') return;
+    if (act === 'qpick') {
+      const sel = new Set(m.card.multi ? (m.card.sel || []) : []);
+      if (sel.has(b.dataset.o)) sel.delete(b.dataset.o); else sel.add(b.dataset.o);
+      m.card.sel = [...sel]; replaceNode(c, m); save(); return;
+    }
+    if (act === 'qskip') {
+      if (m.card.managedCallId) {
+        if (!signedIn()) { renderAuth(); return; }
+        b.disabled = true;
+        try {
+          if (m.card.taskId) await Engine.controlTask(makeRT(c), m.card.taskId, 'decide', { callId:m.card.managedCallId, allow:false, version:m.card.taskVersion });
+          else await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow:false });
+          m.card.status = 'skipped';
+        } catch (error) { toast(error.message); }
+        b.disabled = false;
+      } else m.card.status = 'skipped';
+      replaceNode(c, m); save(); return;
+    }
+    await answerQuestion(c, m, act === 'qsubmit' ? (m.card.sel || []).join(', ') : b.dataset.o, b);
+    return;
+  }
   if (m?.card?.managedCallId && ['managed-allow','managed-deny','qopt'].includes(act)) {
     if (!signedIn()) { renderAuth(); return; }
     b.disabled = true;
@@ -6529,16 +6937,11 @@ document.addEventListener('click', async e => {
     const name = (node.querySelector('[data-f="name"]').value || '').trim();
     const val = node.querySelector('[data-f="val"]').value;
     if (!name || !val){ toast('Give the secret a name and a value first.'); return; }
+    if (!signedIn()){ renderAuth(); return; }
     try{
-      let secret;
-      if(signedIn()){
-        const added=await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name,value:val})});
-        secret={...added.secret,backend:true};
-      }else{
-        const ref='sec_'+uid().slice(0,4);
-        secret={id:ref,ref,name,value:val,at:Date.now()};
-      }
-      state.vault.secrets.push(secret);
+      const added=await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name,value:val})});
+      const secret={...added.secret,backend:true};
+      state.vault.secrets.unshift(secret);
       m.card.ref=secret.ref;m.card.nameVal=name;
       save();resolveCard(c,m,{ok:true},'saved');paintSide();return;
     }catch(err){toast(err.message || 'Could not save that secret.');return;}
@@ -6556,9 +6959,6 @@ document.addEventListener('click', async e => {
     if (state.view === 'settings' && $('#main')) paintSettings($('#main'));
     else if ($('#main') && state.view === 'vault') paintVault($('#main'));
     if ($('#canvas')) paintCanvas();
-  };
-  const repaintMemory = () => {
-    if (state.view === 'library' && state.libraryCat === 'memory' && $('#main')) paintLibrary($('#main'));
   };
   if (act === 'reveal'){
     const s=state.vault.secrets.find(x=>x.id===b.dataset.id);if(!s)return;
@@ -6586,19 +6986,31 @@ document.addEventListener('click', async e => {
     }catch(err){toast(err.message || 'Could not delete that secret.');}
     return;
   }
+  if (act === 'vault-kind'){ state.vaultKind = b.dataset.k; save(); repaintSettings(); return; }
   if (act === 'addsecret'){
-    const n = $('#vname').value.trim(), v = $('#vval').value;
-    if (!n || !v){ toast('Name and value required.'); return; }
+    // Secrets live only in the encrypted server vault the agent reads from,
+    // never in this browser's storage.
+    if (!signedIn()){ renderAuth(); return; }
+    const form = b.closest('.vault-add-form');
+    if (!form) return;
+    const fields = {};
+    form.querySelectorAll('[data-vf]').forEach(input => { fields[input.dataset.vf] = input.value; });
+    const { entries, error } = vaultKindEntries(form.dataset.kind, fields);
+    if (error){ toast(error); return; }
+    b.disabled = true;
+    const saved = [];
     try{
-      let secret;
-      if(signedIn()){
-        const added=await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name:n,value:v})});
-        secret={...added.secret,backend:true};
-      }else{
-        const ref='sec_'+uid().slice(0,4);secret={id:ref,ref,name:n,value:v,at:Date.now()};
+      for (const [name, value] of entries){
+        const added = await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name,value})});
+        saved.push({ ...added.secret, backend:true });
       }
-      state.vault.secrets.unshift(secret);save();repaintSettings();paintSide();toast('Sealed in vault — agent gets '+secret.ref+' only');
+      form.querySelectorAll('[data-vf]').forEach(input => { input.value = ''; });
+      toast(saved.length > 1 ? `Saved ${saved.length} items — your agent only sees their refs` : `Saved — your agent only sees ${saved[0].ref}`);
     }catch(err){toast(err.message || 'Could not save that secret.');}
+    finally{
+      if (saved.length){ state.vault.secrets = [...saved.reverse(), ...state.vault.secrets]; save(); repaintSettings(); paintSide(); }
+      else b.disabled = false;
+    }
     return;
   }
   if (act === 'toggleapp'){
@@ -6623,11 +7035,6 @@ document.addEventListener('click', async e => {
     render();
     return;
   }
-  if (act === 'billing-topup'){
-    const pack = $('#buypack');
-    if (pack) { pack.scrollIntoView({ block:'center', behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); (pack.querySelector('input:checked') || pack).focus({ preventScroll:true }); }
-    return;
-  }
   if (act === 'billing-refresh'){
     invalidateBilling(); paintSide();
     if (state.view === 'settings') paintSettings($('#main')); else paintBilling($('#main'));
@@ -6635,16 +7042,6 @@ document.addEventListener('click', async e => {
   }
   if (act === 'opengift'){ openGift(); return; }
   if (act === 'closegift'){ closeGift(); return; }
-  if (act === 'gift-reveal'){
-    const code = giftCache && giftCache.code;
-    if (!code){ toast('Your code isn’t ready yet.'); return; }
-    const codeText = $('#giftcode-text');
-    if (codeText) codeText.textContent = code;
-    b.dataset.act = 'gift-copy-code';
-    b.setAttribute('aria-label', 'Copy invite code');
-    b.innerHTML = `${icon('copy',16)}<span>Copy code</span>`;
-    return;
-  }
   if (act === 'gift-copy-code'){
     const code = (giftCache && giftCache.code) || (($('#giftcode-text') || {}).textContent || '').trim();
     if (!code){ toast('Your code isn’t ready yet.'); return; }
@@ -6658,11 +7055,19 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'gift-share'){
-    const link = (giftCache && giftCache.link) || '';
-    const code = (giftCache && giftCache.code) || '';
-    const text = 'Join me on Belna — we each get 10 million tokens when you redeem my invite.';
-    if (navigator.share){ navigator.share({ title: 'Belna invite', text: link ? text : `${text} Code: ${code}`, url: link || undefined }).catch(() => {}); return; }
-    copyText(link || code).then(() => toast('Invite copied — send it to a friend.')).catch(() => toast(`${text} ${link || code}`));
+    const message = giftShareMessage();
+    if (navigator.share){ navigator.share({ title: 'Belna invite', text: message }).catch(() => {}); return; }
+    copyText(message).then(() => toast('Invite copied — send it to a friend.')).catch(() => toast(message));
+    return;
+  }
+  if (act === 'gift-share-sms'){
+    if (!giftCache || !giftCache.code){ toast('Your invite isn’t ready yet.'); return; }
+    window.location.href = 'sms:?&body=' + encodeURIComponent(giftShareMessage());
+    return;
+  }
+  if (act === 'gift-share-whatsapp'){
+    if (!giftCache || !giftCache.code){ toast('Your invite isn’t ready yet.'); return; }
+    window.open('https://wa.me/?text=' + encodeURIComponent(giftShareMessage()), '_blank', 'noopener,noreferrer');
     return;
   }
   if (act === 'gift-redeem'){
@@ -6701,7 +7106,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'buycredits'){
     try {
-      const pack = Number((document.querySelector('input[name="buypack"]:checked') || {}).value || 0);
+      const pack = Number(($('#buypack') || {}).value || 0);
       if (!pack){ toast('Pick a token pack.'); return; }
       const j = await window.LingonAuth.api('/api/billing/tokens', { method: 'POST', body: JSON.stringify({ packTokens: pack }) });
       if (j.url) { window.location.href = j.url; return; }
@@ -6736,45 +7141,6 @@ document.addEventListener('click', async e => {
   }
   if (act === 'revoke'){ state.vault.approvals = state.vault.approvals.filter(x => x.id !== b.dataset.id); save(); repaintSettings(); toast('Revoked — it will ask again'); return; }
   if (act === 'pmode'){ state.vault.mode = b.dataset.m; save(); repaintSettings(); return; }
-  if (act === 'addmem'){
-    const text=String(($('#memory-new') || {}).value || '').trim(),category=String(($('#memory-category') || {}).value || 'user');
-    if(!text){toast('Write something to remember.');return;}
-    try{
-      if(window.LingonAuth.signedIn()){await window.LingonAuth.api('/api/memories',{method:'POST',body:JSON.stringify({text,category,importance:2,src:'user'})});const out=await window.LingonAuth.api('/api/memories');state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}
-      else{state.memory.unshift({id:uid('mem'),text,category,importance:2,src:'user',at:Date.now()});state.memoryTotal=state.memory.length;}
-      state.memoryQuery=''; state.memoryEditing=null; save(); repaintMemory(); paintSide(); toast('Memory saved.');
-    }catch(e){toast(e.message);}return;
-  }
-  if(act==='searchmem' || act==='clearmemsearch'){
-    const query=act==='clearmemsearch'?'':String(($('#memory-search') || {}).value || '').trim();
-    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories'+(query?'?q='+encodeURIComponent(query):''));state.memory=out.memories || [];state.memoryTotal=Number(out.total ?? state.memory.length);}state.memoryQuery=query;state.memoryEditing=null;save();repaintMemory();}catch(e){toast(e.message);}return;
-  }
-  if(act==='moremem'){
-    try{if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories?offset='+state.memory.length);const seen=new Set(state.memory.map(x=>x.id));state.memory.push(...(out.memories || []).filter(x=>!seen.has(x.id)));state.memoryTotal=Number(out.total ?? state.memory.length);state.memoryEditing=null;save();repaintMemory();}}catch(e){toast(e.message);}return;
-  }
-  if(act==='editmem'){
-    const current=state.memory.find(x=>x.id===b.dataset.id);if(!current)return;
-    state.memoryEditing = current.id; save(); repaintMemory(); return;
-  }
-  if(act==='cancel-editmem'){
-    state.memoryEditing = null; save(); repaintMemory(); return;
-  }
-  if(act==='save-editmem'){
-    const current=state.memory.find(x=>x.id===b.dataset.id), field=$('#memory-edit');
-    if(!current || !field)return;
-    const cleaned=String(field.value || '').trim();if(!cleaned){toast('Memory cannot be empty.');return;}
-    b.disabled=true;
-    try{
-      if(window.LingonAuth.signedIn()){const out=await window.LingonAuth.api('/api/memories/'+encodeURIComponent(current.id),{method:'PATCH',body:JSON.stringify({text:cleaned,category:current.category,importance:current.importance})});state.memory=state.memory.map(x=>x.id===current.id?out.memory:x);}
-      else Object.assign(current,{text:cleaned,src:'user_edit',at:Date.now(),updatedAt:Date.now()});
-      state.memoryEditing=null;save();repaintMemory();toast('Memory corrected.');
-    }catch(e){b.disabled=false;toast(e.message);}return;
-  }
-  if (act === 'delmem'){
-    const id=b.dataset.id;
-    if (!window.confirm('Forget this memory?')) return;
-    try{if(window.LingonAuth.signedIn())await window.LingonAuth.api('/api/memories/'+encodeURIComponent(id),{method:'DELETE'});state.memory=state.memory.filter(x=>x.id!==id);state.memoryTotal=Math.max(0,(state.memoryTotal || 1)-1);state.memoryEditing=null;save();repaintMemory();paintSide();toast('Memory forgotten.');}catch(e){toast(e.message);}return;
-  }
   if (act === 'dlfile'){ const f = window.__fileRows && window.__fileRows[+b.dataset.i]; if (f) dl(f.name, f.content); return; }
 
   /* profile / appearance (shared by Settings + right slider) */

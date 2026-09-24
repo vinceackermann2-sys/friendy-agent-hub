@@ -15,6 +15,7 @@ const live = require('./live');
 const pc = require('./pc');
 const { generateImage } = require('../foundry');
 const { PLANS } = require('../plans');
+const { questionArgs, presentArgs, connectArgs } = require('./cards');
 const browserResult = (s) => ({ url:s.url, title:s.title, text:s.text, elements:s.elements, scrollY:s.scrollY, pageHeight:s.pageHeight, dialog:s.dialog || undefined, links:s.links, screenshot:s.screenshot, liveId:s.id, transport:s.relay ? 'cdp-screencast' : 'compatibility' });
 const BROWSER_ACTIONS = new Set(['click', 'double_click', 'right_click', 'click_text', 'hover', 'type', 'key', 'scroll', 'select', 'drag', 'back', 'forward', 'reload', 'wait']);
 const badInput = (message) => Object.assign(new Error(message), { code: 'BAD_INPUT' });
@@ -375,7 +376,7 @@ const TOOLS = {
   },
   composio_execute: {
     name: 'composio_execute', type: 'function', approval: true,
-    description: 'Run a Composio tool on behalf of the user via their connected app (e.g. GMAIL_FETCH_EMAILS, GITHUB_LIST_PRS). Requires the toolkit to be connected under Apps.',
+    description: 'Run a Composio tool on behalf of the user via their connected app (e.g. GMAIL_FETCH_EMAILS, GITHUB_LIST_PRS). Requires the toolkit to be connected under Apps; owner approval follows the connected-app permission setting.',
     run: async ({ tool, args, connectedAccountId }, ctx) => {
       const slug = String(tool || '').toUpperCase().trim();
       if (!/^[A-Z0-9_]+$/.test(slug)) throw Object.assign(new Error('Valid tool slug required.'), { code: 'BAD_INPUT' });
@@ -525,6 +526,37 @@ const TOOLS = {
       const out = { title:String(title || 'Canvas item').slice(0,120), format:allowed.has(format) ? format : 'text', content:String(content || '').slice(0,60000) };
       ctx.trace(entry('board', `canvas_show: ${out.title}`));
       return out;
+    },
+  },
+  ask_user: {
+    name: 'ask_user', type: 'function', approval: true, sideEffects: false,
+    description: 'Ask the owner a question as a visual card with 2-8 options (each may have a description or an https image) and wait for the answer. Use when a choice or confirmation decides how to continue.',
+    approvalDetail: async (args) => JSON.stringify(questionArgs(args)),
+    run: async (args, ctx) => {
+      const answer = String(ctx.answer || '').slice(0, 500);
+      if (!answer) throw badInput('The owner did not answer. Continue with a sensible default or ask again later.');
+      ctx.trace(entry('spark', `ask_user: answered`));
+      return { question: questionArgs(args).q, answer };
+    },
+  },
+  present: {
+    name: 'present', type: 'function', approval: false,
+    description: 'Show a visual card in chat: a list, gallery of images, dashboard (metrics and a chart), table, or checklist of steps.',
+    run: async (args, ctx) => {
+      const card = presentArgs(args);
+      ctx.trace(entry('board', `present: ${card.kind} ${card.title}`));
+      return { shown: true, kind: card.kind, title: card.title, note: 'The owner now sees this card in the chat. Do not show it again; continue the work or give your final answer.' };
+    },
+  },
+  connect_app: {
+    name: 'connect_app', type: 'function', approval: true, sideEffects: false,
+    description: 'Ask the owner to connect an app (e.g. gmail, googlecalendar, slack, github, notion) with secure OAuth when a request needs it and it is not connected. Waits until they connect or decline.',
+    run: async (args, ctx) => {
+      const { toolkit, name } = connectArgs(args);
+      if (!/^[a-z0-9_-]{2,60}$/.test(toolkit)) throw badInput('Valid toolkit required.');
+      const connected = await composio.isToolkitConnected(ctx.userId, toolkit);
+      ctx.trace(entry('box', `connect_app: ${toolkit} ${connected ? 'connected' : 'not connected'}`));
+      return { toolkit, name, connected, note: connected ? 'Connected. Continue with composio_tools and composio_execute.' : 'Not connected yet. Tell the owner and continue without it.' };
     },
   },
   trigger_list: {
@@ -699,7 +731,7 @@ const TOOLS = {
 // covers anything these patterns miss.
 const TOOL_KEYWORDS = {
   memory: /(remember|memory|memories|forget|forgot|correct that|actually|used to|no longer|kom ihag|minns|minne|glom|husk|glem|merk dir|erinner|vergiss|gedachtnis|souviens|rappelle-toi|oublie|memoire|recuerda|olvida|memoria)/,
-  apps: /(gmail|slack|calendar|kalender|calendrier|calendario|agenda|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket|arende)/,
+  apps: /(gmail|slack|calendar|kalender|calendrier|calendario|agenda|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket|arende|outlook|teams|linear|dropbox|sharepoint|microsoft 365|connected app)/,
   mail: /(email|e-mail|e-post|epost|inbox|inkorg|innboks|indbakke|posteingang|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl|courriel|boite de reception|correo)/,
   page: /(build|landing|page|site|website|dashboard|bygg|webbsida|hemsida|landningssida|nettside|hjemmeside|webseite|pagina|sitio)/,
   image: /(generate|create|make|draw|design|skapa|gor|rita|generera|designa|lag|tegn|erstell|zeichne|generier|genere|cree|creer|dessine|crea|dibuja|genera).{0,30}(image|picture|photo|illustration|artwork|logo|bild|foto|logga|logotyp|bilde|billede|dessin|imagen|dibujo|ilustracion)|\b(image|picture|photo|illustration)\s+(?:of|for)\b/,
@@ -708,7 +740,7 @@ const TOOL_KEYWORDS = {
   history: /(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous|igar|i gar|forra veckan|senast|vi pratade|diskuterade|tidigare|forrige uke|sidste uge|snakket|talte om|tidligere|gestern|letzte woche|besprochen|vorhin|la semaine derniere|on a parle|discute|precedent|ayer|la semana pasada|hablamos|discutimos|anterior)/,
   triggers: /(trigger|watch|schedule|recurring|every (?:hour|day|week)|sub.?agent|automation|schemalagg|varje (?:timme|dag|vecka)|aterkommande|bevaka|automatiser|paminn|hver (?:time|dag|uke|uge)|overvak|zeitplan|jede (?:stunde|woche)|jeden tag|wiederkehrend|automatisier|uberwach|chaque (?:heure|jour|semaine)|planifi|recurren|automatis|surveill|cada (?:hora|dia|semana)|programa|automatiz|vigila)/,
   computer: /(computer|desktop|application|\bapp\b|window|file manager|spreadsheet|text editor|dator|datorn|skrivbord|fonster|programmet|datamaskin|skrivebord|vindue|rechner|anwendung|fenster|ordinateur|bureau|logiciel|fenetre|ordenador|escritorio|aplicacion|ventana)/,
-  vault: /(log ?in|sign ?in|password|passcode|credential|account|checkout|pay\b|payment|card|logga in|inloggning|losenord|konto|betala|betalning|kort|logg inn|passord|log ind|adgangskode|anmelden|einloggen|passwort|konto|zahlung|karte|connexion|mot de passe|compte|paiement|carte|iniciar sesion|contrasena|cuenta|pago|tarjeta)/,
+  vault: /(log ?in|sign ?in|password|passcode|credential|api ?key|access token|secret|account|checkout|pay\b|payment|card|logga in|inloggning|losenord|konto|betala|betalning|kort|logg inn|passord|log ind|adgangskode|anmelden|einloggen|passwort|konto|zahlung|karte|connexion|mot de passe|compte|paiement|carte|iniciar sesion|contrasena|cuenta|pago|tarjeta)/,
   shop: /(shop pay|shopify|shop_pay|\bshop\b|catalog|checkout|order|merchant|butik|bestall|kassa|bestell|kasse|boutique|commande|panier|marchand|tienda|pedido|carrito)/,
   wallet: /(wallet|pay|payment|transfer|usdc|\beth\b|invoice|payout|spend|debit card|virtual card|buy |purchase|planbok|betal|overfor|faktura|kop |lommebok|tegnebog|geldborse|bezahl|zahlung|uberweis|rechnung|kaufe|portefeuille|paie|paiement|virement|facture|achet|billetera|cartera|pago|paga|transferencia|factura|compra)/,
 };
@@ -717,7 +749,7 @@ function pickTools(task) {
   // web_search is read-only and cheap, so every task can look things up.
   const names = new Set(['memory_write','capability_search','web_search']);
   if (TOOL_KEYWORDS.memory.test(t)) { names.add('memory_search'); names.add('memory_get'); names.add('memory_update'); names.add('memory_delete'); }
-  if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); }
+  if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); names.add('connect_app'); }
   if (TOOL_KEYWORDS.mail.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
   if (TOOL_KEYWORDS.page.test(t)) names.add('build_page');
   if (TOOL_KEYWORDS.image.test(t)) names.add('image_generate');

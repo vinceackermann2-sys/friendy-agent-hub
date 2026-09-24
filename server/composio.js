@@ -451,6 +451,7 @@ function mapTool(t, toolkit) {
     logo: (t.toolkit && t.toolkit.logo) || '',
     kind: toolKind(t),
     scopes: t.scopes || [],
+    input_parameters: t.input_parameters || {},
   };
 }
 async function listTools(toolkit, { limit = 30, query = '' } = {}) {

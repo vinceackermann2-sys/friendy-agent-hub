@@ -6,7 +6,7 @@
   const base = process.env.BASE || 'http://127.0.0.1:8000';
   const fail = (m) => { console.error('MEMORY-AUTO FAIL — ' + m); process.exit(1); };
   const em = `auto${Date.now()}@example.com`;
-  const s = await (await fetch(base + '/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, password: 'AutoMem123!' }) })).json();
+  const s = await (await fetch(base + '/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, password: 'AutoMem123!', terms_version: '2026-09-24' }) })).json();
   if (!s.access_token) fail('signup: ' + JSON.stringify(s).slice(0, 200));
   const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.access_token };
   const marker = 'project-' + Date.now();

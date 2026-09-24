@@ -1,8 +1,8 @@
 const assert=require('node:assert/strict');
 const foundryPath=require.resolve('../server/foundry');
 const storePath=require.resolve('../server/store');
-let answer={facts:[]},writes=[],updates=[];
-require.cache[foundryPath]={id:foundryPath,filename:foundryPath,loaded:true,exports:{MODEL_FALLBACK:'cheap',callFoundry:async()=>({text:JSON.stringify(answer),usage:null,model:'cheap'})}};
+let answer={facts:[]},writes=[],updates=[],modelCalls=0;
+require.cache[foundryPath]={id:foundryPath,filename:foundryPath,loaded:true,exports:{MODEL_FALLBACK:'cheap',callFoundry:async()=>{modelCalls++;return {text:JSON.stringify(answer),usage:null,model:'cheap'};}}};
 require.cache[storePath]={id:storePath,filename:storePath,loaded:true,exports:{
   addMemory:async(userId,text,src,meta)=>{writes.push({userId,text,src,meta});return {id:'new-'+writes.length,text,src,category:meta.category};},
   updateMemory:async(userId,id,input)=>{updates.push({userId,id,input});return {id:'corrected',text:input.text,category:input.category};},
@@ -20,6 +20,12 @@ const {maybeExtract,rankMemories}=require('../server/agents/memory');
   assert.equal(correction.saved[0].text,'User now lives in Malmö');
   assert.equal(updates[0].id,'home','correction supersedes prior memory');
   assert.equal(updates[0].input.importance,3);
+  answer={facts:[{text:'User prefers concise answers',category:'user',importance:2}]};
+  const implicit=await maybeExtract({userId:'u',prompt:'Keep your answers concise from now on',answer:'Understood',existing:[]});
+  assert.equal(implicit.saved[0].text,'User prefers concise answers','implicit preferences are reviewed and saved');
+  const calls=modelCalls;
+  await maybeExtract({userId:'u',prompt:'Hello!',answer:'Hi',existing:[]});
+  assert.equal(modelCalls,calls,'trivial greetings skip the extraction model');
   const secret=await maybeExtract({userId:'u',prompt:'Remember that my password: abc123456',answer:'',existing:[]});
   assert.equal(secret.saved.length,0);
   const before=writes.length+updates.length;

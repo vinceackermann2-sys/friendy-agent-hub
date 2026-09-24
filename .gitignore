@@ -12,3 +12,4 @@ supabase/.temp/
 Thumbs.db
 .output/
 .wrangler/
+.tanstack/

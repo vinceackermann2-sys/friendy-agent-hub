@@ -11,7 +11,7 @@ async function signup(prefix) {
   const response = await fetch(base + '/api/auth/signup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password: 'AgentChat123!' }),
+    body: JSON.stringify({ email, password: 'AgentChat123!', terms_version: '2026-09-24' }),
   });
   const body = await response.json();
   assert.equal(response.ok, true, body.error || `signup failed (${response.status})`);

@@ -26,7 +26,7 @@ import { chromium } from 'playwright';
   const password = 'SmokeTest123!';
   let session;
   try {
-    const r = await fetch(base + '/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const r = await fetch(base + '/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, terms_version: '2026-09-24' }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.status);
     session = { access_token: j.access_token, refresh_token: j.refresh_token, user: j.user };

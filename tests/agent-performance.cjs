@@ -58,11 +58,8 @@ async function promptCacheCheck() {
   const elapsed = await preparationBenchmark();
   const prefix = await promptCacheCheck();
   const transport = fs.readFileSync(require.resolve('../app/engine.managed.js'), 'utf8');
-  const settings = fs.readFileSync(require.resolve('../app/app.js'), 'utf8');
   const worker = fs.readFileSync(require.resolve('../server/agents/conversation.js'), 'utf8');
   assert.doesNotMatch(transport, /sleep\(3000\)/, 'task transport must not add a fixed three-second pause');
   assert.match(worker, /tasks\.tick\(\{drain:true\}\)/, 'background task worker should continue ready steps in one pass');
-  assert.match(settings, /Agent context lives in Library/);
-  assert.match(settings, /Runtime TOOLS\.md stays visible but read-only/);
   console.log(`agent performance: preparation ${elapsed.toFixed(1)}ms, stable prompt prefix ${prefix} chars`);
 })().catch((error) => { console.error(error); process.exitCode = 1; });

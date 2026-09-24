@@ -15,6 +15,7 @@ const context = vm.createContext({
   currentUser: () => ({ name: 'Guest' }),
   esc: value => String(value),
   icon: () => '',
+  fmtC: n => String(n),
   Mascot: { svg: () => '' },
 });
 vm.runInContext([
@@ -34,7 +35,8 @@ assert.equal(view.remaining, 75);
 assert.equal(view.extraRemaining, 40);
 
 const sidebar = context.view.usageCardHtml(billing);
-assert.match(sidebar, /25%<\/strong><span>monthly plan used/);
+assert.match(sidebar, /25%<\/strong>/);
+assert.doesNotMatch(sidebar, /usage-caption|usage-meter-scale/, 'sidebar shows only the percentage');
 assert.match(sidebar, /25 of 100 monthly tokens used/);
 assert.match(sidebar, /width:25%/);
 assert.doesNotMatch(sidebar, /of 150|extra tokens added/);

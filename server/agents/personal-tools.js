@@ -19,8 +19,45 @@ const goalBrief = (goal) => ({ id: goal.id, title: goal.title, category: shownCa
 const libraryBrief = (item) => ({ id: item.id, title: item.title, kind: item.kind, mime: item.mime, size: item.size,
   source: item.source, createdAt: new Date(item.createdAt).toISOString() });
 const notFound = (what) => Object.assign(new Error(`${what} not found.`), { code: 'NOT_FOUND' });
+const SYSTEM_FILES = { identity:'IDENTITY.md', soul:'SOUL.md', user:'USER.md', agents:'AGENTS.md' };
+const systemKey = (key) => {
+  if (!Object.hasOwn(SYSTEM_FILES, key)) throw Object.assign(new Error('Unknown system file.'), { code:'BAD_INPUT' });
+  return key;
+};
 
 const PERSONAL_TOOLS = {
+  system_file_read: {
+    name:'system_file_read', type:'function', approval:false,
+    description:'Read one owner-editable agent system file and its current revision before changing it.',
+    run:async({key},ctx)=>{
+      key=systemKey(key);
+      const current=await store.getAgentContext(ctx.userId);
+      ctx.trace(entry('file',`system_file_read: ${SYSTEM_FILES[key]}`));
+      return {key,title:SYSTEM_FILES[key],content:current.documents[key],revision:current.revision};
+    },
+  },
+  system_file_update: {
+    name:'system_file_update', type:'function', approval:false,
+    description:'Update an owner-editable agent system file after reading it. Preserve useful existing content and use only owner-authored facts or explicit owner preferences.',
+    run:async({key,content,revision},ctx)=>{
+      key=systemKey(key);
+      const limit=key==='user'?4000:8000;
+      if(typeof content!=='string'||!content.trim()||content.length>limit||content.includes('\0')) throw Object.assign(new Error('Invalid system file content.'),{code:'BAD_INPUT'});
+      if(!Number.isInteger(revision)||revision<0) throw Object.assign(new Error('Read the system file first and pass its revision.'),{code:'BAD_INPUT'});
+      const current=await store.getAgentContext(ctx.userId);
+      if(current.revision!==revision) throw Object.assign(new Error('System file changed. Read it again before updating.'),{code:'CONFLICT'});
+      if(current.documents[key]===content) return {key,title:SYSTEM_FILES[key],revision,action:'unchanged'};
+      let agent=current.agent;
+      if(key==='identity'){
+        const name=content.match(/^Name:\s*(.+)$/im)?.[1]?.trim();
+        const style=content.match(/^Style:\s*(.+)$/im)?.[1]?.trim();
+        agent={...agent,...(name?{name:name.slice(0,40)}:{}),...(['Playful','Precise','Calm','Bold'].includes(style)?{pers:style}:{})};
+      }
+      const saved=await store.saveAgentContext(ctx.userId,{agent,documents:{[key]:content},revision});
+      ctx.trace(entry('file',`system_file_update: ${SYSTEM_FILES[key]}`));
+      return {key,title:SYSTEM_FILES[key],revision:saved.revision,action:'updated'};
+    },
+  },
   goal_list: {
     name: 'goal_list', type: 'function', approval: false,
     description: 'List the owner goals with their steps and status.',
@@ -119,6 +156,8 @@ const PERSONAL_TOOLS = {
 };
 
 const PERSONAL_TOOL_SCHEMAS = [
+  { name:'system_file_read',description:'Read an editable agent system file with its revision. Read before any update.',parameters:{type:'object',properties:{key:{type:'string',enum:Object.keys(SYSTEM_FILES)}},required:['key']} },
+  { name:'system_file_update',description:'Update IDENTITY.md, SOUL.md, USER.md or AGENTS.md when durable owner-authored context warrants it. Pass the revision from system_file_read; preserve existing useful content.',parameters:{type:'object',properties:{key:{type:'string',enum:Object.keys(SYSTEM_FILES)},content:{type:'string',maxLength:8000},revision:{type:'integer',minimum:0}},required:['key','content','revision']} },
   { name: 'goal_list', description: 'List the owner goals, steps and progress. Check before creating a similar goal.', parameters: { type: 'object', properties: { status: { type: 'string', enum: ['active', 'paused', 'done'] } } } },
   { name: 'goal_create', description: 'Create a goal on the owner Goals page when they decide what they want to work towards. Short specific title, a category, and 3-6 small concrete steps.', parameters: { type: 'object', properties: { title: { type: 'string', maxLength: 120 }, category: { type: 'string', enum: GOAL_CATEGORY_ENUM }, steps: STEP_LIST }, required: ['title', 'category'] } },
   { name: 'goal_update', description: 'Update a goal by id: rename, recategorize, set status (active, paused, done), or add, complete, reopen or remove steps.', parameters: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string', maxLength: 120 }, category: { type: 'string', enum: GOAL_CATEGORY_ENUM }, status: { type: 'string', enum: ['active', 'paused', 'done'] }, add_steps: STEP_LIST, complete_steps: STEP_REFS, reopen_steps: STEP_REFS, remove_steps: STEP_REFS }, required: ['id'] } },
@@ -132,11 +171,13 @@ const PERSONAL_TOOL_SCHEMAS = [
 
 // Matched against foldText output (ASCII), across the same languages as TOOL_KEYWORDS.
 const PERSONAL_KEYWORDS = {
+  system: /(system file|identity|personality|agent instruction|working agreement|soul|user profile|my preference|prefer|always|from now on|remember|about me|profile|systemfil|identitet|personlighet|preferens)/,
   goals: /(goal|milestone|habit|resolution|objective|progress|\bmal(et|en)?\b|delmal|\bmaal\b|\bziel|objectif|\bmeta\b|\bmetas\b|objetivo)/,
   library: /(library|artifact|artefakt|bibliotek|bibliothe|biblioteca|my (files|documents|images|photos|pictures|videos|uploads)|uploaded|saved (file|document|image|page)|rename|mina filer|mine filer|meine dateien|mes fichiers|mis archivos)/,
 };
 function pickPersonalTools(foldedTask) {
   const names = [];
+  if (PERSONAL_KEYWORDS.system.test(foldedTask)) names.push('system_file_read','system_file_update');
   if (PERSONAL_KEYWORDS.goals.test(foldedTask)) names.push('goal_list', 'goal_create', 'goal_update', 'goal_delete');
   if (PERSONAL_KEYWORDS.library.test(foldedTask)) names.push('library_list', 'library_read', 'library_save', 'library_rename', 'library_delete');
   return names;
@@ -180,6 +221,7 @@ function withLibraryAutosave(tools) {
 // shows the owner what changed. Read-only calls produce no card.
 function personalResultCard(name, out) {
   if (!out || out.error || !out.action) return null;
+  if(name==='system_file_update'&&out.action==='updated') return {type:'system_file',action:'updated',key:out.key,title:out.title,status:'done'};
   if (name.startsWith('goal_')) {
     const steps = Array.isArray(out.steps) ? out.steps : [];
     return { type: 'goal', action: out.action, goalId: out.id, title: out.title, category: out.category || null,
@@ -189,6 +231,6 @@ function personalResultCard(name, out) {
   return null;
 }
 // Coordinator-safe subset: fast account reads/writes with no approval step.
-const QUICK_PERSONAL_TOOLS = new Set(['goal_list', 'goal_create', 'goal_update', 'goal_delete', 'library_list', 'library_read', 'library_rename']);
+const QUICK_PERSONAL_TOOLS = new Set(['system_file_read','system_file_update','goal_list', 'goal_create', 'goal_update', 'goal_delete', 'library_list', 'library_read', 'library_rename']);
 
 module.exports = { PERSONAL_TOOLS, PERSONAL_TOOL_SCHEMAS, QUICK_PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave, personalResultCard };

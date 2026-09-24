@@ -23,5 +23,6 @@ Public information on this site is available without signing in. Personal agent 
 - [Terms of Service](https://belna.se/terms)
 - [Privacy Policy](https://belna.se/privacy)
 - [Cookie Policy](https://belna.se/cookies)
+- [Withdraw from a purchase](https://belna.se/withdrawal)
 
 The full list of public pages is in [the XML sitemap](https://belna.se/sitemap.xml).

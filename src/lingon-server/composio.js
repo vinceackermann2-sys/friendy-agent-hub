@@ -475,6 +475,7 @@ function mapTool(t, toolkit) {
     logo: (t.toolkit && t.toolkit.logo) || '',
     kind: toolKind(t),
     scopes: t.scopes || [],
+    input_parameters: t.input_parameters || {},
   };
 }
 async function listToolkitTools(toolkit, cap = 200) {

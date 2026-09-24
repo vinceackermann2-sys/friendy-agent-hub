@@ -22,6 +22,7 @@ import { Route as ResearchArche10RouteImport } from './routes/research-arche-1-0
 import { Route as ResearchStlmSlaRouteImport } from './routes/research-stlm-sla'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as WithdrawalRouteImport } from './routes/withdrawal'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -89,6 +90,11 @@ const TermsRoute = TermsRouteImport.update({
   path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WithdrawalRoute = WithdrawalRouteImport.update({
+  id: '/withdrawal',
+  path: '/withdrawal',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
@@ -109,6 +115,7 @@ export interface FileRoutesByFullPath {
   '/research-stlm-sla': typeof ResearchStlmSlaRoute
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
+  '/withdrawal': typeof WithdrawalRoute
   '/api/$': typeof ApiSplatRoute
 }
 export interface FileRoutesByTo {
@@ -125,6 +132,7 @@ export interface FileRoutesByTo {
   '/research-stlm-sla': typeof ResearchStlmSlaRoute
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
+  '/withdrawal': typeof WithdrawalRoute
   '/api/$': typeof ApiSplatRoute
 }
 export interface FileRoutesById {
@@ -142,6 +150,7 @@ export interface FileRoutesById {
   '/research-stlm-sla': typeof ResearchStlmSlaRoute
   '/security': typeof SecurityRoute
   '/terms': typeof TermsRoute
+  '/withdrawal': typeof WithdrawalRoute
   '/api/$': typeof ApiSplatRoute
 }
 export interface FileRouteTypes {
@@ -160,6 +169,7 @@ export interface FileRouteTypes {
     | '/research-stlm-sla'
     | '/security'
     | '/terms'
+    | '/withdrawal'
     | '/api/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -176,6 +186,7 @@ export interface FileRouteTypes {
     | '/research-stlm-sla'
     | '/security'
     | '/terms'
+    | '/withdrawal'
     | '/api/$'
   id:
     | '__root__'
@@ -192,6 +203,7 @@ export interface FileRouteTypes {
     | '/research-stlm-sla'
     | '/security'
     | '/terms'
+    | '/withdrawal'
     | '/api/$'
   fileRoutesById: FileRoutesById
 }
@@ -209,6 +221,7 @@ export interface RootRouteChildren {
   ResearchStlmSlaRoute: typeof ResearchStlmSlaRoute
   SecurityRoute: typeof SecurityRoute
   TermsRoute: typeof TermsRoute
+  WithdrawalRoute: typeof WithdrawalRoute
   ApiSplatRoute: typeof ApiSplatRoute
 }
 
@@ -305,6 +318,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/withdrawal': {
+      id: '/withdrawal'
+      path: '/withdrawal'
+      fullPath: '/withdrawal'
+      preLoaderRoute: typeof WithdrawalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/$': {
       id: '/api/$'
       path: '/api/$'
@@ -329,6 +349,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResearchStlmSlaRoute: ResearchStlmSlaRoute,
   SecurityRoute: SecurityRoute,
   TermsRoute: TermsRoute,
+  WithdrawalRoute: WithdrawalRoute,
   ApiSplatRoute: ApiSplatRoute,
 }
 export const routeTree = rootRouteImport

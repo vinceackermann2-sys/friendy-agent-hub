@@ -103,7 +103,7 @@ function platformProfile(origin) {
         }],
       },
     },
-    name: 'Lingon',
+    name: 'Belna',
     url: origin || siteUrl() || undefined,
   };
 }

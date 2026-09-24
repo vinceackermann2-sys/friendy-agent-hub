@@ -29,6 +29,9 @@ async function main() {
   assert.deepEqual(pickTools("schedule a sub agent automation").map((tool) => tool.name).sort(), ["capability_search", "memory_write", "trigger_create", "trigger_list", "web_search"]);
   const picked = (task) => pickTools(task).map((tool) => tool.name);
   assert.ok(picked("build a landing page for our cafe").includes("web_search"), "every task can look things up");
+  for (const app of ['Dropbox', 'Linear', 'Teams', 'Outlook', 'SharePoint']) {
+    assert.ok(picked(`Check my ${app}`).includes('composio_apps'), `${app} should expose connected-app tools`);
+  }
   assert.ok(picked("Boka ett bord på restaurangens hemsida").includes("browser_open"), "Swedish browser request");
   assert.ok(picked("Søk på nettsiden og logg inn").includes("browser_open"), "Norwegian browser request");
   assert.ok(picked("Bitte das Formular auf der Webseite ausfüllen").includes("browser_open"), "German browser request");

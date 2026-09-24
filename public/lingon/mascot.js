@@ -7,7 +7,7 @@ window.Mascot = (() => {
   const ASSET = '/lingon/mascot/';
 
   const PALETTE = {
-    lingon:   { name:'Lingon blue', body:'#4A7FD4', dark:'#2E5BA8', glow:'#B8D4F7', blush:'#FF8FB0' },
+    lingon:   { name:'Belna blue', body:'#4A7FD4', dark:'#2E5BA8', glow:'#B8D4F7', blush:'#FF8FB0' },
     blueberry:{ name:'Blueberry',   body:'#5B6EE1', dark:'#4353C6', glow:'#C3CBF7', blush:'#FF8FB0' },
     moss:     { name:'Moss',        body:'#7BA05B', dark:'#5F8344', glow:'#D3E4C2', blush:'#FF8FA0' },
     sun:      { name:'Sunbeam',     body:'#E8B33C', dark:'#C6922A', glow:'#F7DFAE', blush:'#FF7F8E' },
@@ -105,7 +105,7 @@ window.Mascot = (() => {
 <span class="mloop-stage" aria-hidden="true">
   <span class="mloop-halo"></span>
   <span class="mloop-wrap">
-    <svg viewBox="0 0 320 320" role="img" aria-label="Lingon star mascot cycling through mail, phone, laptop and wallet tasks">
+    <svg viewBox="0 0 320 320" role="img" aria-label="Star mascot cycling through mail, phone, laptop and wallet tasks">
       <ellipse cx="160" cy="238" rx="64" ry="8" fill="#1B2A4A" opacity=".08"/>
       <g class="body-star">
         <image href="${sprite('lingon', '-hold')}" ${at}/>

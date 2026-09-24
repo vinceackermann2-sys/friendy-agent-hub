@@ -15,6 +15,7 @@ import * as shoppay from '../shoppay.js';
 import { execInSandbox, isAzureConfigured } from './azure-vm.js';
 import { generateImage } from '../foundry.js';
 import { PLANS } from '../plans.js';
+import { questionArgs, presentArgs, connectArgs } from './cards.js';
 import { PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave } from './personal-tools.js';
 
 // Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
@@ -127,6 +128,59 @@ function browserEvent(args) {
   return event;
 }
 
+// Credentials and payment details come from the user's vault by reference. The
+// owner approves each use; the value goes straight to the VM browser, which
+// masks it in page state, so it never reaches the model.
+const secretRef = (value) => {
+  const ref = String(value || '').trim();
+  if (!/^sec_[A-Za-z0-9]{2,16}$/.test(ref)) throw badInput('secret must be a vault ref such as sec_ab12, from vault_list.');
+  return ref;
+};
+async function vaultSecret(userId, ref) {
+  const row = (await store.listSecrets(userId)).find((item) => item.ref === ref);
+  if (!row) throw badInput(`No vault secret ${ref}. Use vault_list, or ask the user to save it with vault_request.`);
+  const value = await store.revealSecret(userId, row.id);
+  if (!value) throw badInput(`Vault secret ${ref} is empty.`);
+  return { name: row.name, value };
+}
+const hostMatches = (url, host) => {
+  try {
+    const current = new URL(url).hostname.toLowerCase(), want = String(host || '').toLowerCase().replace(/^www\./, '');
+    return !!want && (current === want || current.endsWith(`.${want}`) || current === `www.${want}`);
+  } catch { return false; }
+};
+const hostOf = (url) => { try { return new URL(url).hostname; } catch { return 'another page'; } };
+// vault_request asks the owner to type a missing credential into a secure chat
+// card. The client saves it straight to the encrypted vault; the model only
+// ever gets the resulting ref back.
+function vaultRequestArgs(args = {}) {
+  const name = String(args.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!name) throw badInput('name is a short label for the credential, such as “GitHub password”.');
+  const host = String(args.host || '').trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/?#].*$/, '').slice(0, 120);
+  const reason = String(args.reason || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return { name, host, reason };
+}
+async function secretApprovalDetail(args, { userId }) {
+  let name = String(args.secret || '');
+  try { name = (await store.listSecrets(userId)).find((item) => item.ref === args.secret)?.name || name; } catch {}
+  return JSON.stringify({ ...args, summary: `Type your saved “${name}” on ${args.host || 'unknown site'}` });
+}
+async function fillBrowserSecret(args, ctx) {
+  const ref = secretRef(args.secret);
+  const host = String(args.host || '').trim().toLowerCase();
+  if (!host) throw badInput('host is the site the secret is for, such as github.com.');
+  const event = browserEvent({ type: 'type', ref: args.ref, x: args.x, y: args.y, text: 'x', clear: true, submit: args.submit === true });
+  if (event.ref == null && event.x == null) throw badInput('Give the ref, or x and y, of the field to fill.');
+  const opts = { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId };
+  // Check where the browser is before the value leaves the vault.
+  const here = await execInSandbox(ctx.userId, 'browser_action', { event: { type: 'wait', ms: 1, agent: true }, sessionId: ctx.sessionId }, opts);
+  if (!hostMatches(here?.url, host)) throw badInput(`The browser is on ${hostOf(here?.url)}, not ${host}. Nothing was typed.`);
+  const { value } = await vaultSecret(ctx.userId, ref);
+  const out = await execInSandbox(ctx.userId, 'browser_action', { event: { ...event, text: value, secret: true }, sessionId: ctx.sessionId }, opts);
+  ctx.trace(entry('lock', `browser_fill_secret: ${ref} on ${host}`));
+  return out;
+}
+
 const CAPABILITY_ALIASES = {
   mejl:'email mail inbox', epost:'email mail inbox', kalender:'calendar schedule',
   minne:'memory remember', glom:'forget memory', webb:'web browser search',
@@ -229,7 +283,7 @@ const TOOLS = {
   },
   composio_execute: {
     name: 'composio_execute', type: 'function', approval: true,
-    description: 'Run a Composio tool on behalf of the user via their connected app.',
+    description: 'Run a Composio tool on behalf of the user via their connected app. Owner approval follows the connected-app permission setting.',
     run: async ({ tool, args, connectedAccountId }, ctx) => {
       const slug = String(tool || '').toUpperCase().trim();
       if (!/^[A-Z0-9_]+$/.test(slug)) throw Object.assign(new Error('Valid tool slug required.'), { code: 'BAD_INPUT' });
@@ -306,6 +360,41 @@ const TOOLS = {
       return out;
     },
   },
+  vault_list: {
+    name: 'vault_list', type: 'function', approval: false,
+    description: 'List the names and refs of the credentials and payment details the user saved in the vault. Values are never shown.',
+    run: async (_, ctx) => {
+      const secrets = await store.listSecrets(ctx.userId);
+      ctx.trace(entry('lock', `vault_list: ${secrets.length}`));
+      return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })) };
+    },
+  },
+  vault_request: {
+    name: 'vault_request', type: 'function', approval: true, sideEffects: false,
+    description: 'Ask the user to save a credential or payment detail that vault_list does not have yet (a password, username, API key, card number). The user types it into a secure card and it is encrypted in their vault; you get back only its ref for browser_fill_secret. Never ask for secret values in chat.',
+    approvalDetail: async (args) => {
+      const { name, host, reason } = vaultRequestArgs(args);
+      return JSON.stringify({ name, host, reason, summary: `Save “${name}” to your vault` });
+    },
+    approvalCard: (args) => {
+      const { name, host, reason } = vaultRequestArgs(args);
+      return { type: 'secret', suggest: name, host, note: reason };
+    },
+    run: async (args, ctx) => {
+      const { name } = vaultRequestArgs(args);
+      // listSecrets is newest first, so a re-saved name resolves to the new value.
+      const row = (await store.listSecrets(ctx.userId)).find((item) => item.name === name);
+      if (!row) throw badInput(`“${name}” was not saved to the vault. Ask the user before requesting it again.`);
+      ctx.trace(entry('lock', `vault_request: saved as ${row.ref}`));
+      return { ref: row.ref, name: row.name, saved: true };
+    },
+  },
+  browser_fill_secret: {
+    name: 'browser_fill_secret', type: 'browser', approval: true,
+    description: 'Type a saved vault secret (password, username, API key, card number, expiry, CVC) into a field of the current browser page. Give the field by ref or x,y and host, the site it is for. REQUIRES owner approval; only types when the page is on that host.',
+    approvalDetail: secretApprovalDetail,
+    run: async (args, ctx) => fillBrowserSecret(args, ctx),
+  },
   code_run: {
     name: 'code_run', type: 'code', approval: false,
     description: 'Execute js/python/bash ONLY inside the hardened worker container inside the user Azure VM. Disabled without Azure.',
@@ -353,6 +442,37 @@ const TOOLS = {
       const out = { title:String(title || 'Canvas item').slice(0,120), format:allowed.has(format) ? format : 'text', content:String(content || '').slice(0,60000) };
       ctx.trace(entry('board', `canvas_show: ${out.title}`));
       return out;
+    },
+  },
+  ask_user: {
+    name: 'ask_user', type: 'function', approval: true, sideEffects: false,
+    description: 'Ask the owner a question as a visual card with 2-8 options (each may have a description or an https image) and wait for the answer. Use when a choice or confirmation decides how to continue.',
+    approvalDetail: async (args) => JSON.stringify(questionArgs(args)),
+    run: async (args, ctx) => {
+      const answer = String(ctx.answer || '').slice(0, 500);
+      if (!answer) throw badInput('The owner did not answer. Continue with a sensible default or ask again later.');
+      ctx.trace(entry('spark', `ask_user: answered`));
+      return { question: questionArgs(args).q, answer };
+    },
+  },
+  present: {
+    name: 'present', type: 'function', approval: false,
+    description: 'Show a visual card in chat: a list, gallery of images, dashboard (metrics and a chart), table, or checklist of steps.',
+    run: async (args, ctx) => {
+      const card = presentArgs(args);
+      ctx.trace(entry('board', `present: ${card.kind} ${card.title}`));
+      return { shown: true, kind: card.kind, title: card.title, note: 'The owner now sees this card in the chat. Do not show it again; continue the work or give your final answer.' };
+    },
+  },
+  connect_app: {
+    name: 'connect_app', type: 'function', approval: true, sideEffects: false,
+    description: 'Ask the owner to connect an app (e.g. gmail, googlecalendar, slack, github, notion) with secure OAuth when a request needs it and it is not connected. Waits until they connect or decline.',
+    run: async (args, ctx) => {
+      const { toolkit, name } = connectArgs(args);
+      if (!/^[a-z0-9_-]{2,60}$/.test(toolkit)) throw badInput('Valid toolkit required.');
+      const connected = await composio.isToolkitConnected(ctx.userId, toolkit);
+      ctx.trace(entry('box', `connect_app: ${toolkit} ${connected ? 'connected' : 'not connected'}`));
+      return { toolkit, name, connected, note: connected ? 'Connected. Continue with composio_tools and composio_execute.' : 'Not connected yet. Tell the owner and continue without it.' };
     },
   },
   trigger_list: {
@@ -509,8 +629,9 @@ const TOOLS = {
 // matched against foldText output, so stems are ASCII. capability_search still
 // covers anything these patterns miss.
 const TOOL_KEYWORDS = {
-  memory: /(remember|memory|memories|forget|forgot|correct that|actually|used to|no longer|kom ihag|minns|minne|glom|husk|glem|merk dir|erinner|vergiss|gedachtnis|souviens|rappelle-toi|oublie|memoire|recuerda|olvida|memoria)/,
-  apps: /(gmail|slack|calendar|kalender|calendrier|calendario|agenda|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket|arende)/,
+  vault: /(log ?in|sign ?in|password|passcode|credential|api ?key|access token|secret|account|checkout|pay\b|payment|card|logga in|inloggning|losenord|konto|betala|betalning|kort|logg inn|passord|log ind|adgangskode|anmelden|einloggen|passwort|konto|zahlung|karte|connexion|mot de passe|compte|paiement|carte|iniciar sesion|contrasena|cuenta|pago|tarjeta)/,
+  memory:/(remember|memory|memories|forget|forgot|correct that|actually|used to|no longer|kom ihag|minns|minne|glom|husk|glem|merk dir|erinner|vergiss|gedachtnis|souviens|rappelle-toi|oublie|memoire|recuerda|olvida|memoria)/,
+  apps: /(gmail|slack|calendar|kalender|calendrier|calendario|agenda|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket|arende|outlook|teams|linear|dropbox|sharepoint|microsoft 365|connected app)/,
   mail: /(email|e-mail|e-post|epost|inbox|inkorg|innboks|indbakke|posteingang|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl|courriel|boite de reception|correo)/,
   page: /(build|landing|page|site|website|dashboard|bygg|webbsida|hemsida|landningssida|nettside|hjemmeside|webseite|pagina|sitio)/,
   image: /(generate|create|make|draw|design|skapa|gor|rita|generera|designa|lag|tegn|erstell|zeichne|generier|genere|cree|creer|dessine|crea|dibuja|genera).{0,30}(image|picture|photo|illustration|artwork|logo|bild|foto|logga|logotyp|bilde|billede|dessin|imagen|dibujo|ilustracion)|\b(image|picture|photo|illustration)\s+(?:of|for)\b/,
@@ -526,12 +647,13 @@ function pickTools(task) {
   // web_search is read-only and cheap, so every task can look things up.
   const names = new Set(['memory_write','capability_search','web_search']);
   if (TOOL_KEYWORDS.memory.test(t)) { names.add('memory_search'); names.add('memory_get'); names.add('memory_update'); names.add('memory_delete'); }
-  if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); }
+  if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); names.add('connect_app'); }
   if (TOOL_KEYWORDS.mail.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
   if (TOOL_KEYWORDS.page.test(t)) names.add('build_page');
   if (TOOL_KEYWORDS.image.test(t)) names.add('image_generate');
   if (TOOL_KEYWORDS.browser.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('browser_submit'); names.add('computer_screenshot'); }
   if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
+  if (TOOL_KEYWORDS.vault.test(t)) { names.add('vault_list'); names.add('vault_request'); names.add('browser_fill_secret'); }
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
   for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }

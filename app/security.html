@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Security — Belna Swedish Safe AI Agents</title>
-<meta name="description" content="How Belna Arche 1.0 keeps you safe: sealed vault, approvals, sandboxed agentic harness, masked secrets and visible traces.">
+<meta name="description" content="Belna's account, vault, agent approval and security practices and how to report an issue.">
 <link rel="canonical" href="https://belna.se/security">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,18 +16,18 @@
 <div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 <main class="legal">
 <h1>Security</h1>
-<p class="mut">How Arche 1.0 is built so you can trust it with real life.</p>
-<h2>Sealed vault</h2>
-<p>Secrets are encrypted at rest and masked everywhere — in chat, traces and the model context. The agent only ever receives references like <span class="mono">sec_••••</span>. Reveal is for your eyes alone, on your device.</p>
-<h2>Approvals by default</h2>
-<p>Sensitive actions (apps, browsing, external writes) pause for your explicit yes — or an always-allow rule you can revoke under Vault → Approved.</p>
-<h2>Sandboxed agentic harness</h2>
-<p>Code, browser and computer use run contained with an allowlisted network. GitHub access is read-only via your own per-request token (sent only to api.github.com, never stored or logged). Every step is logged.</p>
-<h2>Auth &amp; transport</h2>
-<p>Real Supabase Auth; the backend verifies your JWT on every stateful request and derives your user id from the token. Security headers and per-IP rate limits are on.</p>
+<p class="mut">Effective 24 September 2026 · An overview of current controls and their limits.</p>
+<h2>Accounts and access</h2>
+<p>Sign-in uses Supabase Auth. Account-scoped API requests require a verified session. Keep access to your email, Google account and device secure. Sign out on shared devices.</p>
+<h2>Vault and connected services</h2>
+<p>Vault values are stored with server-side encryption and normally shown to the agent as references. When you authorize an action that needs a secret or connected app, the service may use the value to complete that action. Review an approval request before confirming it. You can remove saved secrets and disconnect apps in the app.</p>
+<h2>Agent actions</h2>
+<p>Some actions require your approval or a permission you have configured. Review proposed external writes, purchases and messages carefully. Code and browser work use isolated runtime controls where available; no isolation or automated check is a guarantee against every error or misuse.</p>
+<h2>Activity and data</h2>
+<p>The app shows activity for many agent steps so you can review what occurred. AI providers and connected services may receive data needed for a request. See the <a href="/privacy">Privacy Policy</a> for data categories and recipients. Avoid putting unnecessary sensitive information in prompts or files.</p>
 <h2>Report an issue</h2>
-<p>Found something? <a href="mailto:hej@belna.se">hej@belna.se</a> — please include steps to reproduce and avoid sending real secrets.</p>
+<p>Report a suspected security issue to <a href="mailto:hej@belna.se">hej@belna.se</a>. Include steps to reproduce and avoid emailing passwords, tokens or real secret values. We will review the report and follow up.</p>
 </main>
-<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 </body>
 </html>

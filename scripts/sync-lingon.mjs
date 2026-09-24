@@ -36,7 +36,7 @@ for (const f of readdirSync(join(root, 'app', 'mascot')).filter((name) => name.e
   copy(join('app', 'mascot', f), join('public', 'lingon', 'mascot', f));
 }
 // Static Belna pages served from the site root
-for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'robots.txt', 'sitemap.xml', 'llms.txt']) {
+for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'withdrawal.html', 'robots.txt', 'sitemap.xml', 'llms.txt']) {
   copy(join('app', f), join('public', f));
 }
 // Lovable's live Vite server evaluates source files as ESM and cannot execute
@@ -121,7 +121,7 @@ syncStripeProvider();
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'personal-tools']) {
+for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'personal-tools', 'cards']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);

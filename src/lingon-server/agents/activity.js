@@ -39,6 +39,8 @@ function describeTool(name, args = {}) {
     case 'memory_write': return 'Saving to memory';
     case 'memory_update': return 'Updating a memory';
     case 'memory_delete': return 'Removing a memory';
+    case 'system_file_read': return 'Reading a system file';
+    case 'system_file_update': return 'Updating a system file';
     case 'history_search': return `Searching past chats${args.query ? ' for' + quoted(args.query) : ''}`;
     case 'browser_open':
     case 'computer_screenshot': return host(args.url) ? `Opening ${host(args.url)}` : 'Opening a web page';

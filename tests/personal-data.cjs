@@ -8,11 +8,35 @@ const personal = createPersonalStore({
   loadLocal: () => JSON.parse(JSON.stringify(disk)), saveLocal: (d) => { disk = JSON.parse(JSON.stringify(d)); },
 });
 const storePath = require.resolve('../server/store');
-require.cache[storePath] = { id: storePath, filename: storePath, loaded: true, exports: personal };
+const agentContexts = new Map();
+const defaultDocs = {identity:'# Identity\n\nName: Your agent\nStyle: Playful',soul:'# Soul',user:'# User',agents:'# Working agreement'};
+const agentStore = {
+  getAgentContext:async(userId)=>agentContexts.get(userId)||{agent:{name:'Your agent',pers:'Playful'},documents:{...defaultDocs},revision:0},
+  saveAgentContext:async(userId,{agent,documents,revision})=>{
+    const current=await agentStore.getAgentContext(userId);
+    if(revision!==current.revision) throw Object.assign(new Error('Revision conflict'),{code:'CONFLICT'});
+    const saved={agent:{...current.agent,...agent},documents:{...current.documents,...documents},revision:revision+1};
+    agentContexts.set(userId,saved);return saved;
+  },
+};
+require.cache[storePath] = { id: storePath, filename: storePath, loaded: true, exports: {...personal,...agentStore} };
 const { PERSONAL_TOOLS, PERSONAL_TOOL_SCHEMAS, QUICK_PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave, personalResultCard } = require('../server/agents/personal-tools');
 const ctx = (userId) => ({ userId, sessionId: 'task1', chatId: 'chat1', trace: () => {} });
 
 (async () => {
+  // Agent edits use the same versioned documents as the System files editor.
+  const userFile=await PERSONAL_TOOLS.system_file_read.run({key:'user'},ctx('u1'));
+  assert.equal(userFile.revision,0);
+  assert.equal((await PERSONAL_TOOLS.system_file_update.run({key:'user',content:'# User\n\nPrefers concise answers.',revision:userFile.revision},ctx('u1'))).action,'updated');
+  assert.match((await PERSONAL_TOOLS.system_file_read.run({key:'user'},ctx('u1'))).content,/concise answers/);
+  await assert.rejects(PERSONAL_TOOLS.system_file_update.run({key:'user',content:'# User\n\nOld edit',revision:0},ctx('u1')),{code:'CONFLICT'});
+  assert.equal((await PERSONAL_TOOLS.system_file_read.run({key:'user'},ctx('u2'))).content,'# User','files stay account scoped');
+  const identity=await PERSONAL_TOOLS.system_file_read.run({key:'identity'},ctx('u1'));
+  await PERSONAL_TOOLS.system_file_update.run({key:'identity',content:'# Identity\n\nName: Nova\nStyle: Calm',revision:identity.revision},ctx('u1'));
+  assert.equal((await agentStore.getAgentContext('u1')).agent.name,'Nova','identity edits update the runtime name');
+  assert.equal(personalResultCard('system_file_update',{key:'identity',title:'IDENTITY.md',action:'updated'}).type,'system_file');
+  await assert.rejects(PERSONAL_TOOLS.system_file_update.run({key:'memory',content:'No',revision:0},ctx('u1')),{code:'BAD_INPUT'});
+
   // Goals: created by the agent, visible and editable by the owner.
   const created = await PERSONAL_TOOLS.goal_create.run({ title: '  Run a 10k  ', category: 'relationships', steps: ['Run 3x per week', 'Book a race'] }, ctx('u1'));
   assert.equal(created.title, 'Run a 10k');

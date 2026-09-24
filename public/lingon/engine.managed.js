@@ -109,7 +109,7 @@
         if(event.type==='task') {acceptTask(rt,event.task);void recoverTasks(rt);}
         else rt.managedEvent(event);
         if (event.type === 'card' && event.card?.managedArtifactId && /\.(png|jpe?g|webp)$/i.test(event.card.name) && event.card.size <= 1000000) {
-          void previewImage(rt, event.card).catch(error => rt.trace('alert', error.message));
+          void previewImage(rt, event).catch(error => rt.trace('alert', error.message));
         }
         if (['done', 'paused', 'error'].includes(event.type)) terminal = true;
       }
@@ -144,7 +144,7 @@
     const last = rt.chat.messages.filter(m => m.role === 'user').slice(-1)[0];
     const history = rt.chat.messages.filter(m => m.kind === 'text' && m !== last).slice(-24).map(m => ({ role: m.role, text: m.text }));
     const cards = rt.chat.messages.filter(m => m.kind === 'card' && m.card?.type !== 'progress').slice(-12).map(({card}) => ({
-      type:card.type,title:card.title,name:card.name,status:card.status,text:card.text,
+      type:card.type,title:card.title,name:card.name,status:card.status,text:card.text,q:card.q,choice:card.choice,kind:card.kind || card.view?.kind,
       url:card.url,note:card.note,content:String(card.content || '').slice(0,8000),
       lines:(card.lines || []).slice(-8),agents:card.agents,
     }));
@@ -175,7 +175,8 @@
     const link = document.createElement('a'); link.href = url; link.download = card.name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  async function previewImage(rt, card) {
+  async function previewImage(rt, event) {
+    const card = event.card;
     const response = await window.LingonAuth.apiStream(`/api/agent/artifact?chatId=${encodeURIComponent(rt.chat.id)}&id=${encodeURIComponent(card.managedArtifactId)}`);
     if (!response.ok) throw new Error('Could not load the generated image preview.');
     const bytes = await response.arrayBuffer();
@@ -184,8 +185,8 @@
       const reader = new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;
       reader.readAsDataURL(new Blob([bytes],{type}));
     });
-    rt.managedEvent({type:'card',id:`image_${card.managedArtifactId}`,card:{type:'browser',url:'about:blank',
-      note:`Hosted workspace image: ${card.name}`,screenshot:dataUrl,status:'done'}});
+    // The file card itself gains the inline image preview.
+    rt.managedEvent({type:'card',id:event.id,callId:event.callId,card:{...card,mime:type,dataUrl}});
   }
   window.Engine = { ...legacy, managed: true, isRunning: (chatId) => !!(active.get(chatId) && !active.get(chatId).answerReady), run, runTask: run, respondWhileWorking: run,
     isTask: () => false, taskKind: () => null, routeMessage: () => 'respond',

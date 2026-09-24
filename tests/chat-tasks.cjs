@@ -2,6 +2,9 @@ const assert=require('node:assert/strict');
 const {createTaskRuntime}=require('../server/agents/task-runtime');
 const {createCoordinator}=require('../server/agents/conversation');
 const clone=x=>x==null?x:structuredClone(x);
+// These tests cover task mechanics, not web permissions (tests/agent-permissions.cjs does):
+// the test sites count as already visited, so opening them does not wait for approval.
+require('../server/store').getAgentPermissions=async()=>({web:'ask_some',connectors:'ask_some',knownHosts:['shop.example','github.com']});
 const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 function setup() {
   const rows=new Map(),calls=[],answers=[];
@@ -33,7 +36,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   let mainCalls=0;const events=[];
   const main=createCoordinator({tasks:h.runtime,model:async()=>{mainCalls++;return mainReplies.shift();},schemas:[],tools:{},azure:h.d.azure,
     store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:h.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[]});
-  await main.run({userId:'a',chatId:'chat',requestId:'request',prompt:'Research',onEvent:e=>events.push(e)});
+  await main.run({userId:'a',chatId:'chat',requestId:'request',prompt:'Explore this topic',onEvent:e=>events.push(e)});
   assert.equal(mainCalls,1);
   const id=events.find(e=>e.type==='task').task.id;
   h.answers.push({functionCalls:[{name:'shell',args:{command:'check'}}]});await h.runtime.step('a',id);
@@ -54,6 +57,45 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await assert.rejects(h.runtime.details('b',id,'chat'),/not found/);
   await assert.rejects(h.runtime.details('a',id,'different'),/not found/);
   console.log(`controlled concurrency: foreground reply ${replyMs.toFixed(2)}ms with worker held; 1 main model call per message, 0 narrator calls`);
+
+  // Clear requests for worker-only capabilities start a durable task without
+  // spending a coordinator model call. Capability questions stay in chat.
+  const directRequests=[
+    'Check my Gmail inbox',
+    'Check my Dropbox files',
+    'Check my connected Trello account',
+    'Schedule a meeting in Google Calendar',
+    'Send a message in Slack',
+    'Review my GitHub pull requests',
+    'Buy headphones with Shop Pay',
+    'Browse the merchant website and fill the form',
+    'Generate an image of a fox',
+    'Run this code in my workspace',
+    'Research current flight prices',
+    'Remind me every day to take a break',
+    'What is my Shop Pay daily limit?',
+    'Where is my Shop Pay order?',
+  ];
+  for(const prompt of directRequests) {
+    const routed=setup(),routedEvents=[];let modelCalls=0;
+    const coordinator=createCoordinator({tasks:routed.runtime,model:async()=>{modelCalls++;return {text:'Direct answer'};},schemas:[],tools:{},azure:routed.d.azure,
+      store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},
+      checkPrompt:routed.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[]});
+    await coordinator.run({userId:'a',chatId:'chat',requestId:'route',prompt,onEvent:e=>routedEvents.push(e)});
+    assert.equal(modelCalls,0,`${prompt} should avoid an extra planning call`);
+    const task=routedEvents.find(e=>e.type==='task');
+    assert.ok(task,`${prompt} should start a task`);
+    assert.equal(routed.rows.get(task.task.id).state.instructions,prompt);
+  }
+  for(const prompt of ['What is the capital of France?','Why can’t you use my Gmail?','How do I connect Gmail?','Can you use Gmail?','What is the best way to use Shopify?']) {
+    const routed=setup(),routedEvents=[];let modelCalls=0;
+    const coordinator=createCoordinator({tasks:routed.runtime,model:async()=>{modelCalls++;return {text:'Direct answer'};},schemas:[],tools:{},azure:routed.d.azure,
+      store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},
+      checkPrompt:routed.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[]});
+    await coordinator.run({userId:'a',chatId:'chat',requestId:'route',prompt,onEvent:e=>routedEvents.push(e)});
+    assert.equal(modelCalls,1,`${prompt} should remain a chat question`);
+    assert.equal(routedEvents.some(e=>e.type==='task'),false);
+  }
 
   // A task-store outage must not take down ordinary conversation. The model
   // receives no delegation controls, so it cannot claim background work began.
@@ -88,7 +130,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
     schemas:[],tools:{},azure:h.d.azure,store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',
     ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:h.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],
   });
-  await toolThen.run({userId:'a',chatId:'chat',requestId:'retract',prompt:'Research',onEvent:e=>retracted.push(e)});
+  await toolThen.run({userId:'a',chatId:'chat',requestId:'retract',prompt:'Explore this topic',onEvent:e=>retracted.push(e)});
   assert.ok(retracted.some(e=>e.type==='message_retract'));
   assert.ok(retracted.some(e=>e.type==='task'));
   assert.deepEqual(degradedModels[0].tools.map(t=>t.name),['react_to_message','history_search']);
@@ -228,11 +270,11 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
     {schemas:[searchSchema],tools:{web_search:{run:async()=>{throw new Error('A search query or URL is required.');}}}})
     .run({userId:'a',chatId:'chat',requestId:'search-fail',prompt:'Latest news?',onEvent:()=>{}});
   assert.match(failedModels[1].history.at(-1).text,/web_search result \(untrusted\).*required/);
-  // Tasks have no fixed round limit, and workers always see the core tools.
+  // Tasks have no fixed round limit, and workers start with a small core.
   const schemaFor=name=>({name,description:name,parameters:{type:'object',properties:{}}});
   const runToEnd=async(h,id)=>{for(let i=0;i<60 && !['completed','partial','failed','needs_review','waiting_approval'].includes(h.rows.get(id).state.status);i++) await h.runtime.step('a',id);return h.rows.get(id).state;};
   const long=setup();
-  long.d.schemas=['web_search','browser_open','browser_action','shell','mail_send'].map(schemaFor);long.d.selectSchemas=()=>[];
+  long.d.schemas=['web_search','browser_open','browser_action','shell','mail_send','composio_apps','composio_tools','composio_execute','connect_app'].map(schemaFor);long.d.selectSchemas=()=>[];
   long.d.tools.web_search={run:async a=>[{ok:true,text:`result for ${a.query}`}]};
   for(let i=0;i<12;i++) long.answers.push({functionCalls:[{name:'web_search',args:{query:`q${i}`}}]});
   long.answers.push({text:'Finished after 12 searches.'});
@@ -240,8 +282,9 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   assert.equal(longState.status,'completed');
   assert.equal(longState.result,'Finished after 12 searches.');
   const workerTools=long.calls.find(c=>c.model).model.tools.map(t=>t.name);
-  for(const name of ['web_search','browser_open','browser_action','shell']) assert.ok(workerTools.includes(name),`core tool ${name} is always loaded`);
-  assert.ok(!workerTools.includes('mail_send'),'specialised tools still need a keyword or capability_search');
+  assert.ok(workerTools.includes('web_search'),'read-only search remains available');
+  assert.ok(workerTools.includes('composio_apps'),'workers can discover any connected app');
+  for(const name of ['browser_open','browser_action','shell','mail_send']) assert.ok(!workerTools.includes(name),`${name} needs relevant task intent or capability_search`);
   // A worker repeating one call with identical results is stopped and returns what it has.
   const loop=setup();
   loop.d.schemas=[schemaFor('web_search')];loop.d.selectSchemas=()=>[];

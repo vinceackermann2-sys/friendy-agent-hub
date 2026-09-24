@@ -40,21 +40,33 @@ chat.canvasSelectedFileIndex = 0;
 context.paintCanvasSelection(body, chat, upload);
 assert.match(body.innerHTML, /Hello/, 'uploaded text files render in Canvas');
 
-const cardsStart = source.indexOf('const STCHIP = {');
+const cardsStart = source.indexOf('/* ---------------- visual cards ----------------');
 const cardsEnd = source.indexOf('\nfunction prevFor(', cardsStart);
 assert.ok(cardsStart >= 0 && cardsEnd > cardsStart);
 const cardsContext = vm.createContext({
   state:{agent:{name:'Agent'}},
   esc: context.esc,
   icon: context.icon,
+  md: context.md,
+  fmtBytes: n => `${n} B`,
+  humanizeSlug: s => String(s || ''),
+  composioAppByToolkit: () => null,
+  appLogoHtml: () => '',
+  GMAIL_MARK: '<svg></svg>',
+  mailCache: null,
 });
 vm.runInContext(source.slice(cardsStart, cardsEnd), cardsContext);
 const browserCard = cardsContext.cardNode(chat, { ...browser, card:{...browser.card,screenshot:'data:image/jpeg;base64,AA=='} });
-assert.equal((browserCard.match(/data-act="canvas-card"/g) || []).length, 1);
-assert.doesNotMatch(browserCard, /<img|data:image\//, 'browser screenshot is shown only in Canvas');
+// Chat cards preview their work; the full live view still opens in Canvas on request.
+assert.match(browserCard, /<img src="data:image\/jpeg;base64,AA=="/, 'browser card previews its screenshot');
+assert.match(browserCard, /data-act="canvas-card" data-chat="chat-1" data-msg="browser-1"/);
+assert.match(browserCard, /Open live view/);
+const unsafeShot = cardsContext.cardNode(chat, { ...browser, card:{...browser.card,screenshot:'javascript:alert(1)'} });
+assert.doesNotMatch(unsafeShot, /javascript:/, 'only https or data images render');
 const computerCard = cardsContext.cardNode(chat, { id:'computer-1', card:{ type:'computer', managed:true, status:'done', lines:[{t:'private output'}] } });
-assert.equal((computerCard.match(/data-act="canvas-card"/g) || []).length, 1);
-assert.doesNotMatch(computerCard, /private output|class="term"/, 'computer output is shown only in Canvas');
+assert.match(computerCard, /data-act="canvas-card"/);
+assert.match(computerCard, /class="term mini cv-term"/, 'computer card previews its latest output');
+assert.equal(cardsContext.cardNode(chat, { id:'mem-1', card:{ type:'memory', text:'likes tea', status:'done' } }), '', 'memory saves never render a chat card');
 const runsStart = source.indexOf('function runTimelineHTML(c){');
 const runsEnd = source.indexOf('\nfunction resolveCard(', runsStart);
 const runsContext = vm.createContext({ icon:context.icon, esc:context.esc });

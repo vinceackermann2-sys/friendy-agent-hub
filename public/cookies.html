@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cookie Policy — Belna</title>
-<meta name="description" content="Belna Cookie Policy: strictly necessary storage only — session, agent claim and preferences. No advertising trackers.">
+<meta name="description" content="Browser storage used by Belna for sign-in, app state, files and preferences.">
 <link rel="canonical" href="https://belna.se/cookies">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg fill='%234A7FD4' transform='translate(0 35.64)'%3E%3Cpolygon points='100,0 126.9,68.56 100,95.45 73.1,68.56'/%3E%3Cpolygon points='0,99.99 68.56,73.11 95.46,99.99 68.56,126.89'/%3E%3Cpolygon points='200,99.99 131.44,73.11 104.54,99.99 131.44,126.89'/%3E%3Cpolygon points='100,104.55 124.18,128.72 75.82,128.72'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,15 +16,17 @@
 <div class="anav"><nav class="nav"><a class="abrand" href="/"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</a><div class="navlinks"><a href="/#agent">Product</a><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a><a class="btn small" href="/#cta">Get started</a></div></nav></div>
 <main class="legal">
 <h1>Cookie Policy</h1>
-<p class="mut">Last updated: September 2026</p>
-<p>Belna uses strictly necessary browser storage only — no advertising trackers, no cross-site profiling:</p>
+<p class="mut">Effective 24 September 2026</p>
+<p>Belna uses browser storage to keep the app working. This includes local and session storage and IndexedDB, even where the browser does not call them “cookies.” The app does not currently set an advertising or analytics cookie in its own code.</p>
 <ul>
-<li><b>Session</b> (<span class="mono">lingon.session</span>): keeps you signed in.</li>
-<li><b>Agent &amp; app state</b> (<span class="mono">lingon.v1</span>): your claim, chats, vault references and preferences on this device.</li>
-<li><b>Display name</b> (<span class="mono">belna.username</span>): remembers how to greet you.</li>
+<li><b>Sign-in</b> (<span class="mono">lingon.session</span>, local storage): holds the account session and refresh token so you remain signed in. It lasts until sign-out, expiry or clearing site data.</li>
+<li><b>App state</b> (<span class="mono">lingon.v1</span>, local storage): keeps chats, settings, local workspace state and references needed to resume the app. It remains until removed in the app or browser.</li>
+<li><b>Provider preference</b> (<span class="mono">belna.lastProvider</span>, local storage): remembers the last sign-in method for the sign-in screen. It remains until site data is cleared.</li>
+<li><b>Pending invite</b> (<span class="mono">belna.pendingGift</span>, session storage): carries an invite code through sign-in and is cleared after use or when the browser session ends.</li>
+<li><b>Draft attachments</b> (<span class="mono">belna-composer-files</span>, IndexedDB): temporarily keeps files selected for a draft on this device. Remove the draft or clear site data to remove them.</li>
 </ul>
-<p>Clearing site data signs you out and removes the local claim (server-side account data is managed under <a href="/privacy">Privacy</a>).</p>
+<p>These items support requested functions and are not used for advertising. You can clear them in your browser settings, although that may sign you out or remove local drafts. Google sign-in, Stripe checkout, connected apps and externally loaded fonts may use their own technologies under their policies when you use those features. Clearing site data does not delete account records held on the server; see <a href="/privacy">Privacy</a>.</p>
 </main>
-<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<footer class="afooter"><div class="fin"><div><div class="abrand"><svg class="belna-mark" width="28" height="18" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true"><polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872"/><polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176"/><polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176"/><polygon points="100 104.546384 124.18 128.72 75.82 128.72"/></svg>belna</div></div><div><h4>Product</h4><a href="/research">Research</a><a href="/pricing">Pricing</a></div><div><h4>Company</h4><a href="/#cta">Get started</a><a href="/app">Sign in</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/security">Security</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
 </body>
 </html>

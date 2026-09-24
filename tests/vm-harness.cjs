@@ -36,6 +36,8 @@ async function main(){
     sandbox:{mode:'local'},
   });
   assert.ok(system.length<=11800,'system context stays below the downstream clipping limit');
+  assert.match(system,/Name: Your agent/,'the internal code name is not presented as the agent name');
+  assert.doesNotMatch(system,/personal Lingon agent|Name: Lingon/);
   assert.match(system,/MEMORY-MARKER-7/,'all ranked memory survives large profile documents');
   assert.match(system,/capability_search/);
   const cards=[];

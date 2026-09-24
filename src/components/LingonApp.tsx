@@ -90,6 +90,7 @@ function CrawlableOverview({ page }: { page: "home" | "app" }) {
         <a href="/terms">Terms</a>
         <a href="/privacy">Privacy</a>
         <a href="/cookies">Cookies</a>
+        <a href="/withdrawal">Withdraw from a purchase</a>
       </footer>
     </main>
   );

@@ -2,8 +2,8 @@
    - If SUPABASE_URL + key are set, uses Supabase tables (see supabase/schema.sql).
    - Otherwise uses local JSON file server/data.json (gitignored) so the app is
      fully real + persistent today, and migrates cleanly to Supabase later.
-   Secrets are AES-256-GCM encrypted at rest when ENCRYPTION_KEY is set.
-   Otherwise they are base64-obscured (still never sent to the model). */
+   Vault secrets are AES-256-GCM encrypted at rest and need ENCRYPTION_KEY to
+   be saved; values are never sent to the model. */
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { upkeepRows } from './agents/upkeep.js';
@@ -30,21 +30,24 @@ function encKey() {
   return null; // no key -> obfuscation fallback
 }
 const secretsEncrypted = () => !!encKey();
-function encryptValue(plain) {
+function encryptValue(plain, aad) {
   const k = encKey();
   if (!k) return { alg: 'b64', data: Buffer.from(String(plain), 'utf8').toString('base64') };
   const iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv('aes-256-gcm', k, iv);
+  if (aad) c.setAAD(Buffer.from(aad, 'utf8'));
   const ct = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
-  return { alg: 'aes-256-gcm', iv: iv.toString('hex'), tag: c.getAuthTag().toString('hex'), data: ct.toString('hex') };
+  return { alg: 'aes-256-gcm', iv: iv.toString('hex'), tag: c.getAuthTag().toString('hex'), data: ct.toString('hex'), ...(aad ? { aad: true } : {}) };
 }
-function decryptValue(obj) {
+function decryptValue(obj, aad) {
   try {
     if (!obj) return '';
     if (obj.alg === 'b64') return Buffer.from(obj.data, 'base64').toString('utf8');
     const k = encKey();
     if (!k || obj.alg !== 'aes-256-gcm') return '';
     const d = crypto.createDecipheriv('aes-256-gcm', k, Buffer.from(obj.iv, 'hex'));
+    // Values sealed with an owner/row binding only open for that same row.
+    if (obj.aad) { if (!aad) return ''; d.setAAD(Buffer.from(aad, 'utf8')); }
     d.setAuthTag(Buffer.from(obj.tag, 'hex'));
     return Buffer.concat([d.update(Buffer.from(obj.data, 'hex')), d.final()]).toString('utf8');
   } catch {
@@ -93,7 +96,8 @@ const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 const AGENT_DOC_KEYS = ['identity', 'soul', 'user', 'agents'];
 function cleanAgent(agent = {}) {
   const style = ['Playful', 'Precise', 'Calm', 'Bold'].includes(agent.pers) ? agent.pers : 'Playful';
-  return { name:String(agent.name || 'Lingon').trim().slice(0,40) || 'Lingon', color:String(agent.color || 'lingon').trim().slice(0,30) || 'lingon', pers:style };
+  const rawName=String(agent.name || '').trim().slice(0,40);
+  return { name:!rawName || /^lingon$/i.test(rawName) ? 'Your agent' : rawName, color:String(agent.color || 'lingon').trim().slice(0,30) || 'lingon', pers:style };
 }
 function defaultAgentDocuments(agent = {}) {
   const a=cleanAgent(agent);
@@ -106,7 +110,7 @@ function defaultAgentDocuments(agent = {}) {
 }
 function cleanAgentDocuments(documents={},agent={}) {
   const defaults=defaultAgentDocuments(agent);
-  return Object.fromEntries(AGENT_DOC_KEYS.map(key=>[key,String(documents?.[key] || defaults[key]).replace(/\u0000/g,'').slice(0,key==='user'?4000:8000)]));
+  return Object.fromEntries(AGENT_DOC_KEYS.map(key=>[key,String(documents?.[key] || defaults[key]).replace(/\u0000/g,'').replace(key==='identity' ? /^(Name:[ \t]*)Lingon[ \t]*$/im : /$^/,`$1${agent.name || 'Your agent'}`).slice(0,key==='user'?4000:8000)]));
 }
 function contextView(row,hint={}) {
   const agent=cleanAgent({...row?.agent,...hint});
@@ -159,61 +163,59 @@ async function updateMemory(userId,id,input={}) {
 }
 async function delMemory(userId,id){const s=supa();if(s){const {data,error}=await s.rpc('forget_agent_memory',{p_user_id:userId,p_memory_id:id});if(error)throw Object.assign(new Error('Memory could not be deleted. Try again.'),{code:'PERSISTENCE'});return Number(data || 0);}const d=loadLocal(),family=new Set([id]);let changed=true;while(changed){changed=false;for(const m of d.memories || []){if(m.userId!==userId)continue;if(family.has(m.id)||family.has(m.superseded_by)){if(!family.has(m.id)){family.add(m.id);changed=true;}if(m.superseded_by&&!family.has(m.superseded_by)){family.add(m.superseded_by);changed=true;}}}}const before=d.memories.length;d.memories=d.memories.filter(m=>!(m.userId===userId&&family.has(m.id)));saveLocal(d);return before-d.memories.length;}
 
+// Vault secrets. With Supabase configured it is the only store: a failed read
+// or write surfaces as an error instead of landing in a non-durable fallback.
+// New values are only sealed with a real key (AES-256-GCM, bound to the owner
+// and row id), never base64-obscured.
+const vaultError = (message, code = 'PERSISTENCE') => Object.assign(new Error(message), { code });
+const secretAad = (userId, id) => `vault:${userId}:${id}`;
 async function listSecrets(userId) {
   const s = supa();
   if (s) {
-    try {
-      const { data, error } = await s.from('vault_secrets').select('id,ref,name,created_at').eq('user_id', userId).order('created_at', { ascending: false });
-      if (error) throw error;
-      return (data || []).map((r) => ({ id: r.id, ref: r.ref, name: r.name, at: new Date(r.created_at).getTime() }));
-    } catch (e) {
-      console.warn('[store] supabase secrets fallback:', e.message);
-    }
+    const { data, error } = await s.from('vault_secrets').select('id,ref,name,created_at').eq('user_id', userId).order('created_at', { ascending: false });
+    if (error) { console.warn('[store] vault list failed:', error.message); throw vaultError('Your vault could not be loaded. Try again.'); }
+    return (data || []).map((r) => ({ id: r.id, ref: r.ref, name: r.name, at: new Date(r.created_at).getTime() }));
   }
   const d = loadLocal();
-  return d.secrets.filter((x) => x.userId === userId).map(({ value, ...rest }) => rest);
+  return d.secrets.filter((x) => x.userId === userId).map(({ value, userId: _owner, ...rest }) => rest);
 }
 async function addSecret(userId, name, value) {
+  if (!secretsEncrypted()) throw vaultError('The vault is locked: ENCRYPTION_KEY is not set on the server, so nothing was saved.', 'NOT_ENCRYPTED');
   const ref = 'sec_' + uid().slice(0, 4);
   const id = ref + '_' + uid();
-  const sealed = encryptValue(value);
+  const sealed = encryptValue(value, secretAad(userId, id));
   const s = supa();
   if (s) {
-    try {
-      await ensureProfile(userId);
-      const { error } = await s.from('vault_secrets').insert({ id, user_id: userId, name, ref, encrypted_value: sealed });
-      if (error) throw error;
-      return { id, ref, name, at: Date.now() };
-    } catch (e) {
-      console.warn('[store] supabase insert secret fallback:', e.message);
-    }
+    await ensureProfile(userId);
+    const { error } = await s.from('vault_secrets').insert({ id, user_id: userId, name, ref, encrypted_value: sealed });
+    if (error) { console.warn('[store] vault insert failed:', error.message); throw vaultError('The secret could not be saved. Try again.'); }
+    return { id, ref, name, at: Date.now() };
   }
   const d = loadLocal();
   const row = { id, ref, userId, name, value: sealed, at: Date.now() };
   d.secrets.unshift(row);
   saveLocal(d);
-  return { id, ref, name, at: Date.now() };
+  return { id, ref, name, at: row.at };
 }
 async function revealSecret(userId, id) {
-  // owner-only reveal; server logs access, value never goes to the model
+  // Owner-only: the value goes to the owner's own screen or straight into the
+  // approved field on the agent computer, never to the model.
   const s = supa();
   if (s) {
-    try {
-      const { data, error } = await s.from('vault_secrets').select('*').eq('id', id).eq('user_id', userId).single();
-      if (error) throw error;
-      return decryptValue(data.encrypted_value);
-    } catch (e) {
-      console.warn('[store] supabase reveal fallback:', e.message);
-    }
+    const { data, error } = await s.from('vault_secrets').select('encrypted_value').eq('id', id).eq('user_id', userId).maybeSingle();
+    if (error) { console.warn('[store] vault reveal failed:', error.message); throw vaultError('The secret could not be read. Try again.'); }
+    return data ? decryptValue(data.encrypted_value, secretAad(userId, id)) : '';
   }
   const d = loadLocal();
   const row = d.secrets.find((x) => x.id === id && x.userId === userId);
-  return row ? decryptValue(row.value) : '';
+  return row ? decryptValue(row.value, secretAad(userId, id)) : '';
 }
 async function delSecret(userId, id) {
   const s = supa();
   if (s) {
-    try { await s.from('vault_secrets').delete().eq('id', id).eq('user_id', userId); } catch {}
+    const { error } = await s.from('vault_secrets').delete().eq('id', id).eq('user_id', userId);
+    if (error) { console.warn('[store] vault delete failed:', error.message); throw vaultError('The secret could not be deleted. Try again.'); }
+    return;
   }
   const d = loadLocal();
   d.secrets = d.secrets.filter((x) => !(x.id === id && x.userId === userId));
@@ -1303,6 +1305,44 @@ async function setConnectorPermissions(userId, toolkit, disabled) {
   return list;
 }
 
+const DEFAULT_AGENT_PERMISSIONS = Object.freeze({ web:'ask_some', connectors:'ask_some', knownHosts:[] });
+function cleanAgentPermissions(input = {}) {
+  const modes = ['ask_some','always_ask'];
+  return {
+    web: modes.includes(input.web) ? input.web : DEFAULT_AGENT_PERMISSIONS.web,
+    connectors: modes.includes(input.connectors) ? input.connectors : DEFAULT_AGENT_PERMISSIONS.connectors,
+    knownHosts: [...new Set((Array.isArray(input.knownHosts) ? input.knownHosts : []).map(h => String(h).toLowerCase()).filter(h => /^[a-z0-9.-]{1,253}$/.test(h)))].slice(-200),
+  };
+}
+async function getAgentPermissions(userId) {
+  const s=supa();
+  if(s){const {data,error}=await s.from('agent_permissions').select('web_mode,connector_mode,known_hosts').eq('user_id',userId).maybeSingle();if(error){if(['42P01','PGRST205'].includes(error.code))return cleanAgentPermissions();throw error;}return cleanAgentPermissions(data ? {web:data.web_mode,connectors:data.connector_mode,knownHosts:data.known_hosts} : {});}
+  const row=(loadLocal().agentPermissions || []).find(r=>r.userId===userId);
+  return cleanAgentPermissions(row || {});
+}
+async function setAgentPermissions(userId, patch) {
+  const current=await getAgentPermissions(userId), next=cleanAgentPermissions({...current,...(patch.web!==undefined?{web:patch.web}:{}),...(patch.connectors!==undefined?{connectors:patch.connectors}:{}),knownHosts:current.knownHosts});
+  const s=supa();
+  if(s){await ensureProfile(userId);const {error}=await s.from('agent_permissions').upsert({user_id:userId,web_mode:next.web,connector_mode:next.connectors,known_hosts:next.knownHosts,updated_at:new Date().toISOString()});if(error)throw error;}
+  else {const d=loadLocal();d.agentPermissions=(d.agentPermissions || []).filter(r=>r.userId!==userId);d.agentPermissions.push({userId,...next});saveLocal(d);}
+  return next;
+}
+async function rememberBrowserHost(userId, host) {
+  const clean=String(host || '').toLowerCase();
+  if(!/^[a-z0-9.-]{1,253}$/.test(clean))return;
+  const current=await getAgentPermissions(userId);
+  if(!current.knownHosts.includes(clean)){
+    const next={...current,knownHosts:[...current.knownHosts,clean].slice(-200)},s=supa();
+    if(s){
+      await ensureProfile(userId);
+      const {data,error}=await s.from('agent_permissions').update({known_hosts:next.knownHosts,updated_at:new Date().toISOString()}).eq('user_id',userId).select('user_id');
+      if(error)throw error;
+      if(!data?.length){const inserted=await s.from('agent_permissions').insert({user_id:userId,known_hosts:next.knownHosts});if(inserted.error){if(inserted.error.code!=='23505')throw inserted.error;const retry=await s.from('agent_permissions').update({known_hosts:next.knownHosts}).eq('user_id',userId);if(retry.error)throw retry.error;}}
+    }
+    else {const d=loadLocal(),latest=cleanAgentPermissions((d.agentPermissions || []).find(r=>r.userId===userId) || {});d.agentPermissions=(d.agentPermissions || []).filter(r=>r.userId!==userId);d.agentPermissions.push({userId,...latest,knownHosts:[...new Set([...latest.knownHosts,clean])].slice(-200)});saveLocal(d);}
+  }
+}
+
 function mapShopPayAccount(r, userId) {
   return {
     userId: r.user_id || r.userId || userId,
@@ -1563,6 +1603,7 @@ export {
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
   countUnreadMail, countOutboundMailToday,   listMailDrafts, upsertMailDraft, deleteMailDraft,
   getConnectorPermissions, setConnectorPermissions,
+  getAgentPermissions, setAgentPermissions, rememberBrowserHost,
   getShopPayAccount, findShopPayByOAuthState, upsertShopPayAccount, deleteShopPayAccount,
   listShopPayOrders, getShopPayOrder, reserveShopPaySpend, updateShopPayOrder,
   sealSecret, openSecret,

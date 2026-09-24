@@ -525,6 +525,12 @@ function buildBrowserSessionScript(action, args = {}) {
   if (!/^https:\/\/[a-z0-9]{3,24}\.blob\.core\.windows\.net\//.test(payload.uploadUrl)) {
     throw Object.assign(new Error('Valid Azure Blob upload URL required.'), { code: 'BAD_INPUT' });
   }
+  // A vault value never travels in the Run Command script, which the VM agent
+  // keeps on disk. The script only gets a short-lived link to a one-time blob.
+  if (payload.event && payload.event.secret
+    && (payload.event.text || !/^https:\/\/[a-z0-9]{3,24}\.blob\.core\.windows\.net\//.test(String(payload.event.secretUrl || '')))) {
+    throw Object.assign(new Error('A vault value must be handed over by one-time blob.'), { code: 'BAD_INPUT' });
+  }
   const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
   const runner = [
     "const fs = require('fs');",
@@ -556,6 +562,14 @@ function buildBrowserSessionScript(action, args = {}) {
     "    if (payload.action === 'navigate') await kit.open(page, payload.url);",
     "    else {",
     "      if (!reused && state.url && state.url !== 'about:blank' && kit.allowedRequest(state.url)) { await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}); if (Number.isFinite(state.scrollY)) await page.evaluate((y) => window.scrollTo(0, y), state.scrollY).catch(() => {}); }",
+    "      if (payload.action === 'input' && payload.event && payload.event.secretUrl) {",
+    "        const secretUrl = payload.event.secretUrl; delete payload.event.secretUrl;",
+    `        const got = await fetch(secretUrl, { headers: { 'x-ms-version': '${BLOB_API}' } });`,
+    "        const value = got.ok ? await got.text() : '';",
+    `        await fetch(secretUrl, { method: 'DELETE', headers: { 'x-ms-version': '${BLOB_API}' } }).catch(() => {});`,
+    "        if (!value) throw new Error('The vault value was not available on the VM, so nothing was typed.');",
+    "        payload.event.text = value;",
+    "      }",
     "      if (payload.action === 'input') await kit.act(page, payload.event || {});",
     "    }",
     "    const snap = await kit.snapshot(page, pageState);",
@@ -1710,10 +1724,31 @@ async function statusForUser(userId) {
   };
 }
 
+// Stages a vault value in a private one-time blob for the VM browser to read
+// and delete; the server deletes it too once the session command returns.
+async function createSecretTransfer(userId, sessionId, value) {
+  const cfg = azureConfig();
+  const storage = await ensureScreenshotStorage(cfg);
+  const keys = await arm(cfg, 'POST', `${storage.accountId}/listKeys`, {}, STORAGE_API);
+  const accountKey = (keys.keys || []).find((key) => key.value)?.value;
+  if (!accountKey) throw Object.assign(new Error('Azure Storage account key was not returned.'), { code: 'AZURE_STORAGE' });
+  const blob = `${userHash(userId)}/${browserSessionId(sessionId)}-${crypto.randomUUID()}.v`;
+  const writeUrl = blobServiceSas({ ...storage, accountKey, blob, permissions: 'cwd', minutes: 2 });
+  const put = await fetch(writeUrl, { method: 'PUT', headers: { 'x-ms-version': BLOB_API, 'x-ms-blob-type': 'BlockBlob', 'content-type': 'text/plain; charset=utf-8' }, body: String(value) });
+  if (!put.ok) throw Object.assign(new Error(`The vault value could not be handed to the VM (HTTP ${put.status}). Nothing was typed.`), { code: 'AZURE_BROWSER' });
+  return { writeUrl, readUrl: blobServiceSas({ ...storage, accountKey, blob, permissions: 'rd', minutes: 2 }) };
+}
+
 async function runBrowserSession(userId, sb, args) {
   const transfer = await createScreenshotTransfer(userId, args.sessionId);
+  let secretTransfer = null;
   try {
-    const out = await runCommand(userId, buildBrowserSessionScript(args.action, { ...args, uploadUrl: transfer.url }), { maxStdout: 12000, maxStderr: 12000 });
+    let event = args.event;
+    if (event && event.secret && typeof event.text === 'string') {
+      secretTransfer = await createSecretTransfer(userId, args.sessionId, event.text);
+      event = { ...event, text: '', secretUrl: secretTransfer.readUrl };
+    }
+    const out = await runCommand(userId, buildBrowserSessionScript(args.action, { ...args, event, uploadUrl: transfer.url }), { maxStdout: 12000, maxStderr: 12000 });
     let parsed = null;
     try { parsed = JSON.parse(String(out.stdout || '').trim().split('\n').pop()); } catch {}
     if (!parsed || parsed.ok === false) {
@@ -1723,6 +1758,7 @@ async function runBrowserSession(userId, sb, args) {
     return { mode: 'azure', vmName: sb.vmName, ...parsed, screenshot };
   } finally {
     await fetch(transfer.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {});
+    if (secretTransfer) await fetch(secretTransfer.writeUrl, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {});
   }
 }
 

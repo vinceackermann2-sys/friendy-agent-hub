@@ -18,7 +18,7 @@ function rankMemories(all,prompt,limit=8){
   }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,limit).map(x=>x.m);
 }
 
-function looksFactWorthy(text){return /(i (am|like|love|hate|prefer|work|live|study|use|need|want|'m|have)|we (are|use|have|work|prefer|need|'re)|our |my |call me|remember|always|never|don't|birthday|family|project|company|team|deadline|allergic|vegetarian|vegan|language|swedish|english|actually|no longer|used to)/i.test(String(text || ''));}
+function looksFactWorthy(text){const value=String(text || '').trim();return value.length>=8&&!/^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|bye|good morning|good night)[.!?\s]*$/i.test(value);}
 function looksSecret(text){return /(ghp_|github_pat_|sk-|bearer |password\s*[:=]|api[_-]?key\s*[:=][A-Za-z0-9_\-]{8,}|AQ\.[A-Za-z0-9_\-]+|sb_secret)/i.test(String(text || ''));}
 function sameFact(a,b){const wa=new Set(words(a)),wb=new Set(words(b));if(!wa.size||!wb.size)return false;const n=[...wa].filter(w=>wb.has(w)).length;return n/Math.max(wa.size,wb.size)>.6;}
 function categoryFor(text){return /^(user |i |my |call me)|prefer|allerg|language|timezone|live|work as/i.test(String(text || ''))?'user':'long_term';}

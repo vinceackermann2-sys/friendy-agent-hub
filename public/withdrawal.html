@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Withdraw from a purchase — Belna</title>
+<meta name="description" content="Submit a withdrawal notice for an eligible Belna online purchase and receive a dated receipt.">
+<link rel="canonical" href="https://belna.se/withdrawal">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="anav"><nav class="nav"><a class="abrand" href="/">belna</a><div class="navlinks"><a href="/pricing">Pricing</a><a href="/terms">Terms</a></div><div class="anav-cta"><a class="btn ghost small" href="/app">Sign in</a></div></nav></div>
+<main class="legal withdrawal-page">
+<h1>Withdraw from a purchase</h1>
+<p>If you have a legal right to withdraw from a Belna purchase, send your notice here. You can also email <a href="mailto:hej@belna.se">hej@belna.se</a>. Sending a notice records the date received; eligibility and any refund are reviewed under applicable law. See the <a href="/terms">Terms of Service</a> for withdrawal information.</p>
+<form id="withdrawal-form">
+  <label for="purchase-kind">Purchase type</label>
+  <select class="field" id="purchase-kind" name="purchase_kind" required>
+    <option value="">Choose a purchase</option>
+    <option value="subscription">Subscription</option>
+    <option value="token_pack">Token pack</option>
+    <option value="other">Other Belna purchase</option>
+  </select>
+  <label for="purchase-reference">Purchase reference</label>
+  <input class="field" id="purchase-reference" name="purchase_reference" maxlength="160" required placeholder="Order ID, invoice ID, or purchase date and plan">
+  <label for="withdrawal-email">Email for your receipt</label>
+  <input class="field" id="withdrawal-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="The email used for your purchase">
+  <p class="mut">We use these details to identify the purchase and send your receipt. See our <a href="/privacy">Privacy Policy</a>.</p>
+  <button class="btn" id="withdrawal-submit" type="submit">Send withdrawal notice</button>
+</form>
+<div id="withdrawal-result" role="status" aria-live="polite"></div>
+</main>
+<footer class="afooter"><div class="fin"><div><div class="abrand">belna</div></div><div><h4>Product</h4><a href="/pricing">Pricing</a><a href="/app">App</a></div><div><h4>Legal</h4><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/cookies">Cookie Policy</a><a href="/withdrawal">Withdraw from a purchase</a></div></div><div class="base"><span>© 2026 Belna — Swedish Safe AI Agents</span></div></footer>
+<script>
+const form = document.getElementById('withdrawal-form');
+const result = document.getElementById('withdrawal-result');
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = document.getElementById('withdrawal-submit');
+  const fields = Object.fromEntries(new FormData(form));
+  button.disabled = true;
+  result.textContent = 'Sending your notice…';
+  try {
+    const response = await fetch('/api/legal/withdrawal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not send your notice.');
+    form.hidden = true;
+    result.replaceChildren();
+    const title = document.createElement('h2');
+    title.textContent = 'Withdrawal notice received';
+    const details = document.createElement('p');
+    details.textContent = 'Receipt ' + data.id + ' · Received ' + new Date(data.received_at).toLocaleString() + '. ' + (data.email_sent ? 'A receipt was emailed to ' + data.email + '.' : 'Email delivery is unavailable. Download and keep the receipt below.');
+    const download = document.createElement('button');
+    download.className = 'btn ghost small';
+    download.type = 'button';
+    download.textContent = 'Download receipt';
+    download.addEventListener('click', () => {
+      const text = 'Belna withdrawal notice received\nReceipt: ' + data.id + '\nReceived (UTC): ' + data.received_at + '\nPurchase type: ' + data.purchase_kind + '\nPurchase reference: ' + data.purchase_reference + '\nEmail: ' + data.email + '\n';
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = 'belna-withdrawal-receipt.txt'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    result.append(title, details, download);
+  } catch (error) {
+    result.textContent = error.message || 'Could not send your notice. Please email hej@belna.se.';
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

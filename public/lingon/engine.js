@@ -52,7 +52,7 @@ window.Engine = (() => {
   async function greet(rt){
     const n = rt.agent.name;
     const mem = rt.recall().find(m => m.src === 'you said so' || m.src === 'from our chat');
-    await rt.say(`Hej — I'm **${n}**, your Lingon agent. I can research, browse, write code, manage files, and keep your work organized. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood:'happy' });
+    await rt.say(`Hej — I'm **${n}**, your personal agent. I can research, browse, write code, manage files, and keep your work organized. Your private information stays private.` + (mem ? `\n\nI still remember: *"${mem.text}"*.` : ` What shall we do first?`), { mood:'happy' });
   }
 
   /* ---------------- scenarios ---------------- */
@@ -231,19 +231,19 @@ window.Engine = (() => {
       return rt.say(privateDetailsReply(), { mood:'idle' });
     }
     if (/who are you|what are you/.test(p)){
-      return rt.say(`I'm **${rt.agent.name}**, your Lingon agent. How can I help?`, { mood:'happy' });
+      return rt.say(`I'm **${rt.agent.name}**, your personal agent. How can I help?`, { mood:'happy' });
     }
     if (/what do you remember|do you remember|your memor|recall|what do you know about me/.test(p)){
       const ms = rt.recall().filter(m => m.src !== 'onboarding');
       if (!ms.length) return rt.say(`I don't have any memories of yours yet — say "remember that …" and I'll keep it across chats.`);
-      return rt.say(`Here's what I'm carrying across chats:\n\n` + ms.slice(0, 6).map(m => `- ${m.text}`).join('\n') + `\n\nYou can review or delete any of these under **Memory**.`, { mood:'happy' });
+      return rt.say(`Here's what I'm carrying across chats:\n\n` + ms.slice(0, 6).map(m => `- ${m.text}`).join('\n') + `\n\nAsk me to forget or correct any of these.`, { mood:'happy' });
     }
     if (/what can you do/.test(p)){
       await rt.say(`Quite a lot: **deep research**, **browser and computer use**, **code and files** on your canvas, **email triage**, and memory across chats. Sensitive actions require your approval.`);
       return;
     }
     if (/keep me safe|safe|security|secret/.test(p)){
-      await rt.say(`Your secrets are encrypted, actions require approval unless you explicitly allow them, and external access is restricted. You can review activity in the Trace tab.`);
+      await rt.say(`Your secrets are encrypted, actions require approval unless you explicitly allow them, and external access is restricted. Activity is logged.`);
       return;
     }
     if (/^run it/.test(p)){

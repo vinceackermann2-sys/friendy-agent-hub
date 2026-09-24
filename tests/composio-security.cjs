@@ -26,6 +26,12 @@ global.fetch = async (url, options = {}) => {
   if (String(url).includes('/tools/GMAIL_SEND_EMAIL')) {
     return new Response(JSON.stringify({ slug: 'GMAIL_SEND_EMAIL', toolkit: { slug: 'gmail' } }), { status: 200 });
   }
+  if (String(url).includes('/tools?')) {
+    return new Response(JSON.stringify({ items: [{
+      slug: 'GMAIL_SEND_EMAIL', name: 'Send email', toolkit: { slug: 'gmail' },
+      input_parameters: { recipient_email: { type: 'string', required: true }, subject: { type: 'string', required: true } },
+    }] }), { status: 200 });
+  }
   if (String(url).includes('/connected_accounts')) {
     return new Response(JSON.stringify({ items: [
       { id: 'ca_owner', user_id: 'belna:user-a', status: 'ACTIVE', toolkit: { slug: 'gmail' }, data: { email: 'jane@gmail.com', name: 'Jane', picture: 'https://example.com/j.png' } },
@@ -78,6 +84,14 @@ async function main() {
   assert.equal(mine[0].email, 'jane@gmail.com');
   assert.equal(mine[0].picture, 'https://example.com/j.png');
   assert.equal(mine.some((a) => a.email === 'other@x.com'), false);
+
+  const gmailTools = await composio.listTools('gmail', { query: 'send' });
+  assert.equal(gmailTools[0].input_parameters.recipient_email.required, true,
+    'connected-app discovery must preserve the action argument schema');
+  const { TOOLS } = require('../server/agents/tools');
+  const discovered = await TOOLS.composio_tools.run({ toolkit: 'gmail', query: 'send' }, { userId: 'user-a', trace: () => {} });
+  assert.equal(discovered[0].parameters.recipient_email.required, true,
+    'the agent must receive the required action arguments');
 
   const fs = require('node:fs');
   const path = require('node:path');
