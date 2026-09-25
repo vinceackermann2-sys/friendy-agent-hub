@@ -48,7 +48,7 @@ const clone=x=>x==null?x:structuredClone(x);
   const sent=resultCard('mail_send',{id:'m1',to:['ana@example.com'],subject:'Dinner',from:'agent@mail.belna.se'},{body:'See you at 7'});
   assert.equal(sent.type,'email');assert.equal(sent.state,'sent');assert.equal(sent.body,'See you at 7');
   assert.equal(resultCard('connect_app',{toolkit:'gmail',connected:false}),null,'an unconnected app adds no second card');
-  assert.equal(resultCard('connect_app',{toolkit:'gmail',connected:true}).status,'connected');
+  assert.equal(resultCard('connect_app',{toolkit:'gmail',connected:true}),null,'a connected app is used without a card');
   for(const name of ['ask_user','present','connect_app']) assert.ok(TOOL_SCHEMAS.some(s=>s.name===name),`${name} has a model schema`);
 
   // Markdown tables and task lists written instead of present become cards; plain lists stay text.

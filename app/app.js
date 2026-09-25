@@ -115,6 +115,12 @@ const IC = {
   dollar:'<path d="M12 2v20M17 6.5C17 4.6 14.8 3.5 12 3.5S7 4.8 7 7s2 3 5 3.8 5 1.7 5 4.2-2.2 3.5-5 3.5-5-1.1-5-3"/>',
   palette:'<path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-.6-.3-1-.6-1.4-.3-.4-.6-.8-.6-1.4 0-1.1.9-1.7 2-1.7h2.3A3.9 3.9 0 0 0 21 10.6C21 6.4 17 3 12 3Z"/><circle cx="7.5" cy="11" r="1" fill="currentColor"/><circle cx="10" cy="7" r="1" fill="currentColor"/><circle cx="15" cy="7" r="1" fill="currentColor"/>',
   checksq:'<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12.5l2.8 2.8L16 10"/>',
+  game:'<path d="M6.5 8h11A4.5 4.5 0 0 1 22 12.5v1a3.5 3.5 0 0 1-6.3 2.1L14.5 14h-5l-1.2 1.6A3.5 3.5 0 0 1 2 13.5v-1A4.5 4.5 0 0 1 6.5 8Z"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="16" cy="11.5" r=".9" fill="currentColor" stroke="none"/><circle cx="18" cy="13.5" r=".9" fill="currentColor" stroke="none"/>',
+  clipboard:'<rect x="5" y="4" width="14" height="18" rx="2"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M9 10h6M9 14h6M9 18h4"/>',
+  calc:'<rect x="5" y="2" width="14" height="20" rx="2"/><rect x="8" y="5" width="8" height="4" rx="1"/><path d="M8.5 13h.01M12 13h.01M15.5 13h.01M8.5 17h.01M12 17h.01M15.5 17h.01"/>',
+  calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h3v3H8Z"/>',
+  slides:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8M7 12l3-3 2 2 4-4"/>',
+  map:'<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/>',
 };
 const icon = (n, s = 16) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[n] || ''}</svg>`;
 
@@ -756,7 +762,11 @@ function refreshComposioApps(force = false) {
   const request = (async () => {
     try {
       const j = await window.LingonAuth.api('/api/composio/apps');
-      if (owner === billingIdentity() && Array.isArray(j.apps)) state.composioApps = j.apps;
+      if (owner === billingIdentity() && Array.isArray(j.apps)) {
+        state.composioApps = j.apps;
+        // A task waiting on a connect card for an app that is now connected resumes.
+        for (const app of j.apps.filter((a) => a.connected)) resumeConnectCards(app.toolkit, { tasksOnly: true }).catch(() => {});
+      }
     } catch (e) {
       if (owner === billingIdentity()) toast(e.message || 'Could not load apps.');
     } finally {
@@ -784,34 +794,58 @@ function accountLabel(acc){
   if (acc.name && acc.email && acc.name !== acc.email) return `${acc.name} · ${acc.email}`;
   return acc.email || acc.name || acc.alias || acc.wordId || 'Connected account';
 }
-async function connectComposioApp(toolkit, authConfigId) {
+async function connectComposioApp(toolkit, authConfigId, { fromChat = false } = {}) {
   const tk = String(toolkit || '').toLowerCase();
   if (!tk) return;
   try {
-    toast(`Opening ${tk} connection…`);
+    toast(`Opening ${cvAppName(tk)} sign-in…`);
     const before = ((composioAppByToolkit(tk) || {}).accounts || []).map((a) => a.id);
     const j = await window.LingonAuth.api('/api/composio/connect', {
       method: 'POST',
       body: JSON.stringify({ toolkit: tk, authConfigId }),
     });
     if (j.redirectUrl) {
-      // Keep the connector open so the new account identity lands in view.
-      state.appOpen = tk;
-      save();
-      if (state.view === 'apps' && $('#main')) paintApps($('#main'));
-      else openConnector(tk, true);
-      pendingConnect = { toolkit: tk, before, startedAt: Date.now() };
+      // From a chat card the owner stays in the chat; elsewhere the connector
+      // stays open so the new account identity lands in view.
+      if (!fromChat) {
+        state.appOpen = tk;
+        save();
+        if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+        else openConnector(tk, true);
+      }
+      pendingConnect = { toolkit: tk, before, startedAt: Date.now(), fromChat };
       window.open(j.redirectUrl, '_blank', 'noopener');
-      toast('Finish signing in — your account will appear here automatically.');
+      toast(fromChat ? 'Finish signing in — I’ll continue here once it’s connected.' : 'Finish signing in — your account will appear here automatically.');
       pollPendingConnect();
     }
   } catch (e) {
     toast(e.message || 'Could not start connection.');
   }
 }
+// Once an app is connected, the chat picks up where it asked: a task waiting on
+// the connect card resumes, and a chat reply that asked for it continues.
+async function resumeConnectCards(toolkit, { tasksOnly = false } = {}){
+  const tk = String(toolkit || '').toLowerCase();
+  let changed = false;
+  for (const c of state.chats) {
+    for (const m of c.messages) {
+      const cd = m.kind === 'card' ? m.card : null;
+      if (!cd || cd.type !== 'connect' || cd.status !== 'pending' || String(cd.toolkit || cd.app || '').toLowerCase() !== tk) continue;
+      if (tasksOnly && !(cd.managedCallId && cd.taskId)) continue;
+      changed = true;
+      cd.status = 'connected';
+      replaceNode(c, m);
+      try {
+        if (cd.managedCallId && cd.taskId) await Engine.controlTask(makeRT(c), cd.taskId, 'decide', { callId:cd.managedCallId, allow:true, version:cd.taskVersion });
+        else if (cd.chat && c === chat() && state.view === 'chat') sendPrompt(`I connected ${cd.name || cvAppName(tk)}. Please continue.`);
+      } catch (e) { if (!tasksOnly) toast(e.message || 'Connected — ask me to continue.'); }
+    }
+  }
+  if (changed) save();
+}
 async function pollPendingConnect(){
   if (!pendingConnect) return;
-  const { toolkit, before, startedAt } = pendingConnect;
+  const { toolkit, before, startedAt, fromChat } = pendingConnect;
   // Poll for up to ~2 minutes: Composio OAuth happens in another tab.
   for (let i = 0; i < 30; i++) {
     if (!pendingConnect || pendingConnect.toolkit !== toolkit) return;
@@ -826,10 +860,15 @@ async function pollPendingConnect(){
       const fresh = now.filter((a) => !before.includes(a.id));
       if (fresh.length) {
         pendingConnect = null;
+        const who = accountLabel(fresh[0]);
+        if (fromChat) {
+          toast(`${who} connected.`);
+          await resumeConnectCards(toolkit);
+          return;
+        }
         state.appOpen = toolkit;
         save();
         await openConnector(toolkit, true);
-        const who = accountLabel(fresh[0]);
         toast(`${who} connected. You can add another account anytime.`);
         return;
       }
@@ -999,7 +1038,9 @@ function expirePending(){
     // A background task keeps waiting on the server across reloads, so its
     // approval or secret request stays answerable; the server expires it.
     const waitingTask = m.card?.taskId && c.managedTasks?.[m.card.taskId]?.status === 'waiting_approval';
-    if (m.kind === 'card' && m.card.status === 'pending' && !m.card.onboarding && !waitingTask) m.card.status = 'expired';
+    // A connect card stays usable: signing in to the app often reloads this page.
+    const connect = m.card?.type === 'connect' && m.card.chat;
+    if (m.kind === 'card' && m.card.status === 'pending' && !m.card.onboarding && !waitingTask && !connect) m.card.status = 'expired';
   }));
 }
 
@@ -3593,11 +3634,13 @@ function syncComposerActions(c){
   const send = $('#csend');
   const stop = $('#cstop');
   if (!input || !send || !stop) return;
-  const running = !!(Engine.managed && Engine.isRunning?.(c?.id));
+  // Stop covers the reply being written and, with task cards gone, any task still working.
+  const running = !!(Engine.managed && (Engine.isRunning?.(c?.id) || liveTaskIds(c).length));
   const hasDraft = !!input.value.trim() || filesFor($('#cform')).length > 0;
   stop.hidden = !running || hasDraft;
   send.hidden = running && !hasDraft;
 }
+const liveTaskIds = (c) => Object.entries(c?.managedTasks || {}).filter(([, t]) => ['queued','running','waiting_peers'].includes(t.status)).map(([id]) => id);
 
 /* ---------------- chat view ---------------- */
 function paintChat(M){
@@ -3747,6 +3790,17 @@ function msgNode(c, m){
     return el('<div style="display:none"></div>');
   if (m.kind === 'card' && m.card?.type === 'memory')
     return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
+  // A working task shows only as typing dots at the end of the chat (CSS order keeps
+  // them below newer messages). Results, approvals and questions arrive as their own
+  // cards; only a paused task keeps a card, for Continue.
+  if (m.kind === 'card' && m.card?.type === 'task' && m.card.status !== 'partial') {
+    if (!['queued','running','waiting_peers','stopping'].includes(m.card.status)) return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
+    return el(`<div class="msg agent task-working" data-mid="${m.id}" role="status" aria-label="${esc(state.agent.name)} is working on ${esc(m.card.title || 'a task')}"><div class="ava">${Mascot.svg(state.agent.color,'think',30)}</div><div class="body"><div class="bub-wrap"><div class="bub"><span class="tdots"><i></i><i></i><i></i></span></div></div></div></div>`);
+  }
+  // Task milestones and "changes queued" notes are progress chatter; the task's
+  // answer reports the outcome. Failures still show.
+  if (m.kind === 'card' && m.card?.type === 'progress' && m.card.taskId && m.card.status === 'done')
+    return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
   if (m.kind === 'card')
     return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${!(m.card.type === 'subagents' || (m.card.type === 'present' && ['dashboard','table'].includes(m.card.kind))) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
   return el('<div></div>');
@@ -3878,7 +3932,10 @@ function cvAppMark(tk){
   if (toolkit === 'gmail') return `<span class="cv-app">${GMAIL_MARK}</span>`;
   if (toolkit === 'github') return `<span class="cv-app">${icon('git',18)}</span>`;
   if (toolkit === 'mailbox') return `<span class="cv-app">${icon('mail',18)}</span>`;
-  return `<span class="cv-app"><span class="app-fallback">${esc((cvAppName(toolkit) || '?').slice(0,1).toUpperCase())}</span></span>`;
+  const letter = `<span class="app-fallback">${esc((cvAppName(toolkit) || '?').slice(0,1).toUpperCase())}</span>`;
+  // Before the app list loads, the logo comes from the same logo service it uses.
+  if (/^[a-z0-9_-]{2,40}$/.test(toolkit)) return `<span class="cv-app"><img src="https://logos.composio.dev/api/${toolkit}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'app-fallback',textContent:'${esc((cvAppName(toolkit) || '?').slice(0,1).toUpperCase())}'}))"></span>`;
+  return `<span class="cv-app">${letter}</span>`;
 }
 const cvHead = (tile, title, sub, chip) => `<div class="hd">${tile}<div class="cv-hd-copy"><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ''}</div>${chip ? `<div class="st">${chip}</div>` : ''}</div>`;
 const cvTile = (ic, tone = '') => `<div class="tile cv-tile ${tone}">${icon(ic,20)}</div>`;
@@ -4007,17 +4064,19 @@ function connectCardHTML(c, m){
   const linked = cd.status === 'connected' || (app && (app.accounts || []).length > 0 && cd.status !== 'denied');
   const pending = cd.status === 'pending' && !linked;
   const attrs = `data-chat="${k}" data-msg="${mid}"`;
-  const managed = !!cd.managedCallId, chatCard = !!cd.chat;
-  const buttons = !pending ? '' : managed
-    ? `<div class="cv-actions wrap"><button class="btn" data-act="cv-connect" data-tk="${esc(tk)}" ${attrs}>Connect ${esc(name)}</button><button class="btn ghost" data-act="managed-allow" ${attrs}>I’ve connected it</button><button class="btn ghost" data-act="managed-deny" ${attrs}>Not now</button></div>`
-    : chatCard
-      ? `<div class="cv-actions"><button class="btn ghost" data-act="deny-connect" ${attrs}>Not now</button><button class="btn" data-act="cv-connect" data-tk="${esc(tk)}" ${attrs}>Connect ${esc(name)}</button></div>`
-      : `<div class="cv-actions"><button class="btn ghost" data-act="deny-connect" ${attrs}>Not now</button><button class="btn" data-act="connect" ${attrs}>Connect</button></div>`;
-  return `<div class="acard cv-card cv-connect">
-    ${cvHead(`<div class="tile cv-tile brand big">${cvAppMark(tk)}</div>`, pending ? `Connect ${esc(name)}` : esc(name), linked ? 'Connected app' : 'Secure sign-in · no passwords shared', linked ? STCHIP.connected : cd.status === 'denied' ? STCHIP.skipped : '')}
-    <div class="bd">${cd.note ? `<p>${esc(cd.note)}</p>` : `<p class="mut">${esc(state.agent.name)} asks only for the permissions it needs.</p>`}
-      ${pending ? `<div class="cv-perm">${icon('lock',13)} You sign in on ${esc(name)}’s own page. You can disconnect anytime in Apps.</div>` : ''}</div>
-    ${buttons}
+  const managed = !!cd.managedCallId;
+  // One clear action: Connect opens the app's own sign-in, and the chat continues
+  // by itself once the account appears (see resumeConnectCards).
+  const status = linked ? `<span class="conn-state is-on">${icon('check',13)} Connected</span>`
+    : cd.status === 'denied' || cd.status === 'skipped' ? '<span class="conn-state">Not connected</span>' : '';
+  return `<div class="acard conn-card${pending ? ' is-pending' : ''}">
+    <div class="conn-card-row">
+      <span class="conn-card-logo">${cvAppMark(tk)}</span>
+      <span class="conn-card-copy"><b>${esc(name)}</b><span>Connector</span></span>
+      ${status}
+    </div>
+    ${pending ? `<button class="conn-card-btn" data-act="cv-connect" data-tk="${esc(tk)}" ${attrs}>Connect</button>
+      <button type="button" class="conn-card-skip" data-act="${managed ? 'managed-deny' : 'deny-connect'}" ${attrs}>Not now</button>` : ''}
   </div>`;
 }
 
@@ -4125,6 +4184,54 @@ function computerCardHTML(c, m){
 }
 
 const CV_IMAGE_EXT = ['png','jpg','jpeg','webp','gif'];
+/* Artifacts (pages, documents, images the agent made) show as one card: a live
+   preview, then an icon that fits what it is, its real title and "Artifact".
+   The kind comes from the title and the first part of the content. */
+const ARTIFACT_KINDS = [
+  ['game', 'game', 'Game', /\b(game|tic.?tac|snake|tetris|puzzle|quiz|trivia|memory match|wordle|chess|sudoku|spel)\b/i],
+  ['calc', 'calc', 'Calculator', /\b(calculator|converter|estimator|kalkylator|räknare)\b/i],
+  ['list', 'clipboard', 'List', /\b(leads?|prospects?|contacts|shortlist|checklist|to-?do|inventory|directory|lista)\b/i],
+  ['dash', 'chart', 'Dashboard', /\b(dashboard|analytics|metrics|kpis?|report|chart|stats|statistics|tracker|budget)\b/i],
+  ['plan', 'calendar', 'Plan', /\b(itinerary|schedule|planner|timeline|calendar|agenda|trip|travel|resa|schema)\b/i],
+  ['slides', 'slides', 'Presentation', /\b(slides?|presentation|pitch deck|deck)\b/i],
+  ['sheet', 'grid', 'Spreadsheet', /\b(spreadsheet|table|csv|comparison|jämförelse)\b/i],
+  ['map', 'map', 'Map', /\b(map|route|karta)\b/i],
+  ['doc', 'doc', 'Document', /\b(letter|essay|article|blog|resume|cv|contract|proposal|brief|notes|guide|recipe|story|poem)\b/i],
+  ['web', 'web', 'Web page', /\b(landing|website|homepage|web ?page|portfolio|site|app)\b/i],
+];
+function artifactInfo(cd){
+  const name = String(cd.name || cd.title || 'Artifact');
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+  const content = typeof cd.content === 'string' && !cd.content.startsWith('data:') ? cd.content : '';
+  const format = String(cd.format || ext || '');
+  const isImage = /^image\//.test(cd.mime || '') || CV_IMAGE_EXT.includes(ext);
+  const htmlTitle = /<title[^>]*>([^<]{2,120})<\/title>/i.exec(content)?.[1] || /<h1[^>]*>([\s\S]{2,200}?)<\/h1>/i.exec(content)?.[1]?.replace(/<[^>]+>/g, '') || '';
+  const mdTitle = format === 'md' ? /^#\s+(.{2,120})$/m.exec(content)?.[1] || '' : '';
+  // Generic file names ("your-page.html") say nothing; the page's own title does.
+  const generic = /^(your-page|page|index|untitled|file|document|generated)(\.\w+)?$/i.test(name);
+  const title = String(cd.title && cd.title !== name ? cd.title : (htmlTitle || mdTitle || (generic ? '' : name.replace(/\.(html?|md|txt|csv|json|svg)$/i, '').replace(/[-_]+/g, ' ')) || 'Artifact'))
+    .replace(/\s+/g, ' ').trim().slice(0, 90);
+  if (isImage) return { title, label:'Image', tone:'image', ic:'image' };
+  if (/^video\//.test(cd.mime || '') || ['mp4','webm','mov'].includes(ext)) return { title, label:'Video', tone:'image', ic:'video' };
+  if (/^audio\//.test(cd.mime || '') || ['mp3','wav','ogg','m4a'].includes(ext)) return { title, label:'Audio', tone:'plan', ic:'audio' };
+  const probe = `${title} ${name} ${content.slice(0, 1500).replace(/<[^>]+>/g, ' ')}`;
+  const hit = ARTIFACT_KINDS.find(([, , , rx]) => rx.test(`${title} ${name}`)) || ARTIFACT_KINDS.find(([, , , rx]) => rx.test(probe));
+  if (hit) return { title, label:'Artifact', kind:hit[2], tone:hit[0], ic:hit[1] };
+  if (format === 'csv') return { title, label:'Spreadsheet', tone:'sheet', ic:'grid' };
+  if (format === 'md' || format === 'text') return { title, label:'Document', tone:'doc', ic:'doc' };
+  if (['code','json','js','py','ts','css'].includes(format)) return { title, label:'Code', tone:'code', ic:'code' };
+  return { title, label:'Artifact', tone:'web', ic:['html','htm','svg'].includes(format) ? 'web' : 'file' };
+}
+function artifactRow(c, m, info, canDownload){
+  const k = c.id, mid = m.id;
+  return `<div class="art-row">
+      <span class="art-icon tone-${esc(info.tone)}" title="${esc(info.kind || info.label)}">${icon(info.ic, 22)}</span>
+      <button type="button" class="art-copy" data-act="canvas-card" data-chat="${k}" data-msg="${mid}"><b>${esc(info.title)}</b><span>${esc(info.label)}</span></button>
+      <details class="art-menu"><summary class="iconbtn" aria-label="More actions for ${esc(info.title)}">${icon('more', 18)}</summary>
+        <div class="art-menu-list"><button type="button" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${icon('easel',14)} Open in Canvas</button>${canDownload ? `<button type="button" data-act="download" data-chat="${k}" data-msg="${mid}">${icon('down',14)} Download</button>` : ''}</div>
+      </details>
+    </div>`;
+}
 function fileCardHTML(c, m){
   const cd = m.card, k = c.id, mid = m.id;
   const name = String(cd.name || 'file');
@@ -4135,35 +4242,27 @@ function fileCardHTML(c, m){
   const video = /^data:video\/(mp4|webm|ogg);base64,/.test(data) ? data : '';
   const audio = /^data:audio\/(mpeg|mp3|wav|ogg|webm|mp4);base64,/.test(data) ? data : '';
   const html = !data && ['html','htm'].includes(ext) && typeof cd.content === 'string' ? cd.content : '';
+  const info = artifactInfo(cd);
   let media = '';
-  if (img) media = `<button type="button" class="cv-media" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="Open ${esc(name)}"><img src="${esc(img)}" alt="${esc(name)}" loading="lazy"></button>`;
-  else if (video) media = `<div class="cv-media"><video controls preload="metadata" src="${esc(video)}"></video></div>`;
-  else if (audio) media = `<div class="cv-audio"><audio controls preload="metadata" src="${esc(audio)}"></audio></div>`;
-  else if (html) media = `<button type="button" class="cv-media cv-frame" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="Open ${esc(name)}"><iframe sandbox="allow-scripts" srcdoc="${esc(html)}" tabindex="-1" title="${esc(name)} preview"></iframe></button>`;
-  const type = img ? 'Image' : video ? 'Video' : audio ? 'Audio' : (ext || 'file').toUpperCase();
-  return `<div class="acard cv-card cv-file">${media}
-    <div class="filrow">
-      <div class="fic cv-ext">${ext && !img && !video && !audio ? `<span>${esc(ext.slice(0,4).toUpperCase())}</span>` : icon(img ? 'image' : video ? 'video' : audio ? 'audio' : 'file',17)}</div>
-      <div class="cv-file-copy"><b>${esc(name)}</b><div class="sz">${esc(type)}${cd.size ? ` · ${fmtBytes(cd.size)}` : ''} · saved to Files</div></div>
-      <div class="acts"><button class="iconbtn" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" title="Open">${icon('eye',15)}</button><button class="iconbtn" data-act="download" data-chat="${k}" data-msg="${mid}" title="Download">${icon('down',15)}</button></div>
-    </div></div>`;
+  if (img) media = `<button type="button" class="art-preview is-image" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="Open ${esc(info.title)}"><img src="${esc(img)}" alt="${esc(info.title)}" loading="lazy"></button>`;
+  else if (video) media = `<div class="art-preview is-media"><video controls preload="metadata" src="${esc(video)}"></video></div>`;
+  else if (audio) media = `<div class="art-audio"><audio controls preload="metadata" src="${esc(audio)}"></audio></div>`;
+  else if (html) media = `<button type="button" class="art-preview" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="Open ${esc(info.title)}"><span class="art-frame"><iframe sandbox="allow-scripts" srcdoc="${esc(html)}" tabindex="-1" title="${esc(info.title)} preview"></iframe></span></button>`;
+  return `<div class="acard art-card${media ? '' : ' no-preview'}">${media}${artifactRow(c, m, info, true)}</div>`;
 }
 function canvasCardHTML(c, m){
-  const cd = m.card, k = c.id, mid = m.id;
+  const cd = m.card;
   const format = String(cd.format || 'text');
   const content = String(cd.content || '');
   let preview;
-  if (format === 'md') preview = `<div class="cv-doc md">${md(content.slice(0, 1800))}</div>`;
-  else if (format === 'html' || format === 'svg') preview = `<div class="cv-frame"><iframe sandbox="${format === 'html' ? 'allow-scripts' : ''}" srcdoc="${esc(content.slice(0, 60000))}" tabindex="-1" title="Preview"></iframe></div>`;
+  // The title shows under the preview, so a leading heading is not repeated.
+  if (format === 'md') preview = `<div class="art-doc md">${md(content.replace(/^\s*#{1,3}\s+[^\n]*\n+/, '').slice(0, 1400))}</div>`;
+  else if (format === 'html' || format === 'svg') preview = `<span class="art-frame"><iframe sandbox="${format === 'html' ? 'allow-scripts' : ''}" srcdoc="${esc(content.slice(0, 60000))}" tabindex="-1" title="Preview"></iframe></span>`;
   else if (format === 'csv') {
-    const rows = content.split(/\r?\n/).filter(Boolean).slice(0, 7).map(r => r.split(',').slice(0, 6));
-    preview = `<div class="cv-table-wrap"><table class="cv-table">${rows.map((r, i) => `<tr>${r.map(v => i ? `<td>${esc(v)}</td>` : `<th>${esc(v)}</th>`).join('')}</tr>`).join('')}</table></div>`;
-  } else preview = `<div class="minicode cv-code">${esc(content.split('\n').slice(0, 10).join('\n'))}</div>`;
-  return `<div class="acard cv-card cv-canvas">
-    ${cvHead(cvTile(format === 'md' ? 'doc' : format === 'csv' ? 'grid' : format === 'html' || format === 'svg' ? 'web' : 'code'), esc(cd.title || 'Document'), esc(format.toUpperCase()), '')}
-    <div class="bd">${cvClamp(preview, 'short', format === 'html' || format === 'svg' ? false : cvLong(content, 700, 10))}</div>
-    <div class="cv-actions"><button class="btn ghost" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${icon('easel',14)} Open</button></div>
-  </div>`;
+    const rows = content.split(/\r?\n/).filter(Boolean).slice(0, 6).map(r => r.split(',').slice(0, 5));
+    preview = `<div class="art-doc"><table class="cv-table">${rows.map((r, i) => `<tr>${r.map(v => i ? `<td>${esc(v)}</td>` : `<th>${esc(v)}</th>`).join('')}</tr>`).join('')}</table></div>`;
+  } else preview = `<div class="art-doc"><div class="minicode cv-code">${esc(content.split('\n').slice(0, 9).join('\n'))}</div></div>`;
+  return `<div class="acard art-card"><button type="button" class="art-preview is-doc" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}" aria-label="Open ${esc(cd.title || 'document')}">${preview}</button>${artifactRow(c, m, artifactInfo({ ...cd, name: cd.title || cd.name }), false)}</div>`;
 }
 
 // Question cards from the agent: task questions resume the task with the answer,
@@ -4233,9 +4332,9 @@ function cardNode(c, m){
     const ongoing=['queued','running','waiting_peers','waiting_approval','stopping'].includes(cd.status);
     const teamId=c.managedTasks?.[cd.taskId]?.teamId;
     const hasPeers=teamId && Object.values(c.managedTasks || {}).filter(t=>t.teamId===teamId).length>1;
-    const labels={queued:'Queued',running:'Working',waiting_peers:'Combining parallel work',waiting_approval:'Needs approval',stopping:'Stopping',stopped:'Stopped',completed:'Completed',partial:'Work limit reached · findings saved',failed:'Could not finish',needs_review:'Check outcome'};
-    return `<div class="acard">${hd(icon('box',20),'var(--acc-soft)','var(--acc)',esc(cd.title),'You can keep chatting here')}
-      <div class="bd"><b>${esc(labels[cd.status] || cd.status)}</b>${cd.connectionLost ? '<div class="mut">Reconnecting to your saved task…</div>' : ''}${cd.summary ? `<p>${esc(cd.summary)}</p>` : ''}</div>
+    const labels={queued:'Queued',running:'Working',waiting_peers:'Combining parallel work',waiting_approval:'Needs approval',stopping:'Stopping',stopped:'Stopped',completed:'Completed',partial:'Paused before finishing',failed:'Could not finish',needs_review:'Check outcome'};
+    return `<div class="acard">${hd(icon('box',20),'var(--acc-soft)','var(--acc)',esc(cd.title),cd.status==='partial' ? 'Paused · findings saved' : 'You can keep chatting here')}
+      <div class="bd"><b>${esc(labels[cd.status] || cd.status)}</b>${cd.connectionLost ? '<div class="mut">Reconnecting to your saved task…</div>' : ''}${cd.summary && cd.status!=='partial' ? `<p>${esc(cd.summary)}</p>` : ''}</div>
       ${cd.status==='partial' ? `<div class="stack"><button class="btn ghost" data-act="task-continue" data-chat="${k}" data-msg="${mid}">Continue task</button></div>` : ''}
       ${hasPeers ? `<div class="stack"><button class="btn ghost" data-act="task-change-team" data-chat="${k}" data-msg="${mid}">Update shared goal</button></div>` : ''}
       ${ongoing ? `<div class="stack"><button class="btn ghost" data-act="task-change" data-chat="${k}" data-msg="${mid}">Change task</button><button class="btn ghost" data-act="task-stop" data-chat="${k}" data-msg="${mid}" ${cd.status==='stopping'?'disabled':''}>Stop task</button></div>` : ''}</div>`;
@@ -6388,13 +6487,14 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('click', e => {
-  document.querySelectorAll('.billing-select[open]').forEach(menu => {
-    if (!menu.contains(e.target)) menu.open = false;
+  document.querySelectorAll('.billing-select[open], .art-menu[open]').forEach(menu => {
+    // A choice in an artifact menu closes it too.
+    if (!menu.contains(e.target) || (menu.classList.contains('art-menu') && e.target.closest('.art-menu-list button'))) menu.open = false;
   });
 });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  const menu = document.querySelector('.billing-select[open]');
+  const menu = document.querySelector('.billing-select[open], .art-menu[open]');
   if (!menu) return;
   menu.open = false;
   menu.querySelector('summary')?.focus();
@@ -7061,7 +7161,14 @@ document.addEventListener('click', async e => {
     finally{b.disabled=false;}return;
   }
   if (act === 'voice') { toggleVoice(); return; }
-  if (act === 'managed-stop') { await Engine.stop(makeRT(chat())); return; }
+  if (act === 'managed-stop') {
+    const current = chat();
+    if (Engine.isRunning?.(current?.id)) { await Engine.stop(makeRT(current)); return; }
+    b.disabled = true;
+    for (const id of liveTaskIds(current)) { try { await Engine.controlTask(makeRT(current), id, 'cancel'); } catch (error) { toast(error.message); } }
+    b.disabled = false; syncComposerActions(current);
+    return;
+  }
   if (act === 'managed-resume') { await Engine.resume(makeRT(chat())); return; }
   if (m?.card?.managedCallId && ['save-secret','skip-secret'].includes(act)) {
     if (!signedIn()) { renderAuth(); return; }
@@ -7107,7 +7214,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'cv-expand') { const card = b.closest('.acard'); if (card) { card.classList.toggle('cv-open'); b.textContent = card.classList.contains('cv-open') ? 'Show less' : 'Show all'; } return; }
-  if (act === 'cv-connect') { if (!signedIn()) { renderAuth(); return; } connectComposioApp(b.dataset.tk); return; }
+  if (act === 'cv-connect') { if (!signedIn()) { renderAuth(); return; } connectComposioApp(b.dataset.tk, undefined, { fromChat: !!m }); return; }
   if (m?.card?.type === 'question' && !m.card.onboarding && !m.card.mascotColors && !m.card.customName && ['qopt','qpick','qsubmit','qskip'].includes(act)) {
     if (m.card.status !== 'pending') return;
     if (act === 'qpick') {

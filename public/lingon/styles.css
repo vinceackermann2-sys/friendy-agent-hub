@@ -2873,3 +2873,73 @@ a.cv-item:hover{ border-color:#D5D5DA; background:#fff; }
   .cv-frame{ height:180px; }
   .cv-frame iframe{ height:360px; }
 }
+
+/* ---------- working task: typing dots at the end of the chat ---------- */
+/* The thread is a flex column: order keeps the dots below newer messages without
+   moving DOM nodes, and one set of dots shows however many tasks are working. */
+.threadinner > .task-working{ order:1; }
+.threadinner > .task-working ~ .task-working{ display:none; }
+.task-working .bub{ padding:6px 14px; }
+
+/* ---------- artifact card: preview, fitting icon, title, "Artifact" ---------- */
+.acard.art-card{ max-width:520px; padding:8px; border-radius:22px; background:#F2F2F4; border:1px solid var(--line2); box-shadow:none; overflow:visible; }
+.art-preview{ display:block; width:100%; padding:0; border:0; border-radius:16px; overflow:hidden; background:#fff; cursor:pointer; position:relative; box-shadow:0 1px 2px rgba(20,20,30,.06); }
+.art-preview:focus-visible{ outline:2px solid var(--ink); outline-offset:2px; }
+.art-preview img{ width:100%; max-height:380px; object-fit:cover; display:block; }
+.art-preview.is-media{ cursor:default; background:#000; }
+.art-preview video{ width:100%; max-height:380px; display:block; }
+.art-frame{ display:block; position:relative; height:230px; overflow:hidden; pointer-events:none; }
+.art-frame iframe{ width:200%; height:460px; transform:scale(.5); transform-origin:0 0; border:0; display:block; }
+.art-doc{ display:block; max-height:230px; overflow:hidden; padding:14px 16px; text-align:left; font-size:12.5px; color:var(--ink); -webkit-mask-image:linear-gradient(#000 70%, transparent); mask-image:linear-gradient(#000 70%, transparent); }
+.art-doc .cv-code{ margin:0; }
+.art-audio{ padding:6px 4px 2px; } .art-audio audio{ width:100%; }
+.art-row{ display:flex; align-items:center; gap:12px; padding:10px 6px 4px 8px; }
+.art-card.no-preview .art-row{ padding-top:6px; }
+.art-icon{ width:46px; height:46px; flex:none; border-radius:13px; display:flex; align-items:center; justify-content:center; color:#fff;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35), inset 0 -2px 0 rgba(0,0,0,.12), 0 2px 6px rgba(20,20,30,.12); }
+.art-icon .ic{ filter:drop-shadow(0 1px 1px rgba(0,0,0,.18)); }
+.art-icon.tone-game{ background:linear-gradient(145deg,#8B6CF6,#5B3FD6); }
+.art-icon.tone-calc{ background:linear-gradient(145deg,#FFA64D,#F07818); }
+.art-icon.tone-list{ background:linear-gradient(145deg,#EF4B4B,#C4161C); }
+.art-icon.tone-dash{ background:linear-gradient(145deg,#4C8DF6,#1F5FD0); }
+.art-icon.tone-plan{ background:linear-gradient(145deg,#F5B93D,#D9861A); }
+.art-icon.tone-slides{ background:linear-gradient(145deg,#FF8A5C,#E0502A); }
+.art-icon.tone-sheet{ background:linear-gradient(145deg,#34B37A,#16895A); }
+.art-icon.tone-map{ background:linear-gradient(145deg,#3CC2C9,#16919A); }
+.art-icon.tone-doc{ background:linear-gradient(145deg,#6F7C8E,#475366); }
+.art-icon.tone-web{ background:linear-gradient(145deg,#2FB5A0,#12806F); }
+.art-icon.tone-image{ background:linear-gradient(145deg,#F46BA8,#D0357C); }
+.art-icon.tone-code{ background:linear-gradient(145deg,#3A3D45,#17181A); }
+.art-copy{ flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:1px; padding:0; border:0; background:none; text-align:left; cursor:pointer; color:inherit; font:inherit; }
+.art-copy b{ font-size:15px; font-weight:650; line-height:1.3; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.art-copy span{ font-size:13px; color:var(--mut); }
+.art-menu{ position:relative; flex:none; }
+.art-menu > summary{ list-style:none; width:36px; height:36px; display:flex; align-items:center; justify-content:center; border-radius:10px; color:var(--mut); cursor:pointer; }
+.art-menu > summary::-webkit-details-marker{ display:none; }
+.art-menu > summary:hover, .art-menu[open] > summary{ background:rgba(0,0,0,.06); color:var(--ink); }
+.art-menu-list{ position:absolute; right:0; bottom:calc(100% + 6px); z-index:30; min-width:180px; padding:6px; border-radius:14px; background:#fff; border:1px solid var(--line); box-shadow:0 12px 32px rgba(20,20,30,.16); display:flex; flex-direction:column; }
+.art-menu-list button{ display:flex; align-items:center; gap:9px; padding:9px 10px; border:0; border-radius:9px; background:none; font:inherit; font-size:13.5px; color:var(--ink); text-align:left; cursor:pointer; }
+.art-menu-list button:hover{ background:var(--line2); }
+
+/* ---------- connect card: app, "Connector", one Connect button ---------- */
+.acard.conn-card{ max-width:340px; padding:14px; border-radius:22px; background:#F2F2F4; border:1px solid var(--line2); box-shadow:none; }
+.conn-card-row{ display:flex; align-items:center; gap:13px; }
+.conn-card-logo{ width:52px; height:52px; flex:none; border-radius:14px; background:#fff; display:flex; align-items:center; justify-content:center; overflow:hidden; box-shadow:0 1px 3px rgba(20,20,30,.1); }
+.conn-card-logo .cv-app, .conn-card-logo .cv-app img, .conn-card-logo .cv-app svg{ width:32px; height:32px; display:flex; align-items:center; justify-content:center; object-fit:contain; }
+.conn-card-copy{ flex:1; min-width:0; display:flex; flex-direction:column; }
+.conn-card-copy b{ font-size:16px; font-weight:650; }
+.conn-card-copy span{ font-size:13.5px; color:var(--mut); }
+.conn-state{ flex:none; display:inline-flex; align-items:center; gap:5px; font-size:12.5px; font-weight:600; color:var(--mut); }
+.conn-state.is-on{ color:var(--green); }
+.conn-card-btn{ display:block; width:100%; margin-top:14px; padding:12px 16px; border:0; border-radius:14px; background:#DCDCE0; color:var(--ink); font:inherit; font-size:15px; font-weight:650; cursor:pointer; transition:background .15s; }
+.conn-card-btn:hover{ background:#D0D0D5; }
+.conn-card-btn:focus-visible, .conn-card-skip:focus-visible{ outline:2px solid var(--ink); outline-offset:2px; }
+.conn-card-skip{ display:block; margin:8px auto 0; padding:4px 8px; border:0; background:none; font:inherit; font-size:12.5px; color:var(--mut); cursor:pointer; }
+.conn-card-skip:hover{ color:var(--ink); }
+
+@media (max-width:760px){
+  .acard.art-card{ max-width:100%; }
+  .art-frame{ height:190px; } .art-frame iframe{ height:380px; }
+}
+.acard.art-card.no-preview{ content-visibility:visible; }
+.art-menu > summary.iconbtn{ background:none; border:0; box-shadow:none; }

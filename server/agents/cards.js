@@ -211,8 +211,8 @@ function resultCard(name, out, args = {}) {
     const view = appActionView(args.tool, args.args || {});
     if (view.kind === 'email' && !view.draft) return { type: 'email', state: 'sent', provider: view.provider, to: view.to, subject: view.subject, body: view.body, status: 'done' };
   }
-  // The pending connect card already asked; only a confirmed connection adds a card.
-  if (name === 'connect_app' && out.toolkit && out.connected) return { ...connectArgs(out), status: 'connected' };
+  // An app that is connected needs no card: the pending connect card (if one asked)
+  // updates itself, and an app that was already connected just gets used.
   return null;
 }
 
