@@ -6,7 +6,7 @@
 */
 import { fetchAllowlisted } from './sandbox.js';
 import { entry } from './tracing.js';
-import { hostAllowed } from './sandbox.js';
+import { publicUrlProblem, readPage } from './public-web.js';
 import * as store from '../store.js';
 import { normalizeSubAgent, nextRunAt } from './triggers.js';
 import * as composio from '../composio.js';
@@ -39,15 +39,38 @@ function safeBrowserResult(out, ctx) {
   if (Array.isArray(result.elements)) result.elements = result.elements.map(redact);
   if (Array.isArray(result.links)) result.links = result.links.map((link) => ({ ...link, t:redact(link.t), h:redact(link.h) }));
   if (result.sensitivePresent || privateBrowserSessions.has(sessionKey(ctx.userId,ctx.sessionId))) delete result.screenshot;
+  if (ctx.liveTopic) { result.liveId = `rt:${ctx.liveTopic}`; result.transport = 'realtime'; }
   return result;
 }
+
+// The live view streams over the project's Supabase Realtime (see liveStreamer in
+// azure-vm.js). Each task's browser gets its own channel, named by an HMAC of the
+// owner and task under the server key: stable across steps, unguessable, and never
+// stored. Without a public Realtime key the view falls back to step screenshots.
+const liveKey = () => (process.env.SUPABASE_ANON_KEY || process.env.LINGON_SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.LINGON_SUPABASE_PUBLISHABLE_KEY || '').trim();
+const liveServerSecret = () => (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.LINGON_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.LINGON_SUPABASE_SECRET_KEY || '').trim();
+function liveRealtimeUrl() {
+  const base = (process.env.SUPABASE_URL || process.env.LINGON_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  return /^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/.test(base) ? `${base.replace(/^https:/, 'wss:')}/realtime/v1/websocket` : '';
+}
+async function liveChannel(ctx) {
+  const url = liveRealtimeUrl(), key = liveKey(), secret = liveServerSecret();
+  if (!url || !key || !secret || !ctx.userId || !ctx.sessionId) return null;
+  const enc = new TextEncoder();
+  const hmac = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, enc.encode(`live:${ctx.userId}:${ctx.sessionId}`)));
+  const topic = `live-${btoa(String.fromCharCode(...mac)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  ctx.liveTopic = topic;
+  return { url, key, topic };
+}
+const liveRealtimeConfig = () => (liveRealtimeUrl() && liveKey() ? { url: liveRealtimeUrl(), key: liveKey() } : null);
 
 // Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
 const foldText = (text) => String(text || '').toLowerCase().replace(/ø/g,'o').replace(/æ/g,'ae').replace(/ß/g,'ss').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 
-// Web search runs on Firecrawl (FIRECRAWL_API_KEY, managed through Lovable).
-// This copy has no direct page reader, so Firecrawl returns the text of the top
-// results (1 credit each) except in quick chat lookups, which use snippets.
+// Web search runs on Firecrawl (FIRECRAWL_API_KEY, managed through Lovable). Tasks get
+// the text of the top results from Firecrawl (1 credit each); quick chat lookups read
+// the top result directly (free), so a chat answer rests on a real page, not snippets.
 const FIRECRAWL_API = 'https://api.firecrawl.dev/v2';
 const FIRECRAWL_GATEWAY = 'https://connector-gateway.lovable.dev/firecrawl/v2';
 const SEARCH_COUNTRIES = new Set(['US','GB','SE','NO','DK','FI','DE','FR','ES','NL','IT','PT','PL','AT','CH','BE','IE','CA','AU','NZ']);
@@ -87,8 +110,37 @@ async function searchWeb(query, { country } = {}, ctx) {
   const seen = new Set();
   const results = (json.data?.web || []).filter((item) => item.url && !seen.has(item.url) && seen.add(item.url)).slice(0, 8)
     .map((item) => ({ title: String(item.title || '').slice(0, 200), url: item.url, snippet: String(item.description || '').slice(0, 400), text: item.markdown ? String(item.markdown).slice(0, 1800) : undefined }));
+  if (ctx.quick) await Promise.all(results.slice(0, 2).map(async (item) => {
+    try { item.text = (await readPage(item.url, { signal: ctx.signal, timeoutMs: 4000, maxChars: 1800 })).text || undefined; } catch {}
+  }));
   const text = results.length ? JSON.stringify({ results }) : JSON.stringify({ note: 'No results found for this query.' });
   return { url: 'search:' + q, provider: 'firecrawl', text };
+}
+async function scrapePage(url, signal, timeoutMs = 20000) {
+  const timeout = AbortSignal.timeout(timeoutMs + 5000);
+  const r = await fetch(firecrawlEndpoint() + '/scrape', { method: 'POST', redirect: 'manual', headers: firecrawlHeaders(),
+    body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true, timeout: timeoutMs }), signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+  if (r.status >= 300 && r.status < 400) throw new Error('Firecrawl scrape failed: unexpected redirect (HTTP ' + r.status + ')');
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok || json.success === false) throw new Error('Firecrawl scrape failed: ' + String(json.error || 'HTTP ' + r.status).slice(0, 200));
+  const title = Array.isArray(json.data?.metadata?.title) ? json.data.metadata.title[0] : json.data?.metadata?.title;
+  return { url: json.data?.metadata?.sourceURL || url, title: String(title || ''), text: String(json.data?.markdown || '') };
+}
+// Reads any public page as text: directly first, then through Firecrawl when the page
+// needs a real browser (little text came back) or refused the direct request.
+async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000 } = {}) {
+  let page = null, failure = null;
+  try { page = await readPage(url, { signal, timeoutMs, maxChars }); } catch (error) { failure = error; }
+  // Private addresses are refused outright, never sent to Firecrawl.
+  if (failure?.code === 'HOST_BLOCKED') throw failure;
+  if ((!page || page.text.trim().length < 200) && firecrawlKey()) {
+    try {
+      const scraped = await scrapePage(url, signal);
+      if (scraped.text.trim()) return { ...scraped, text: scraped.text.slice(0, maxChars) };
+    } catch (error) { failure = failure || error; }
+  }
+  if (page) return page;
+  throw failure;
 }
 
 // DuckDuckGo instant answers arrive as verbose JSON; keep only what a model can use.
@@ -254,7 +306,7 @@ const TOOLS = {
   },
   web_search: {
     name: 'web_search', type: 'web_search', approval: false,
-    description: 'Search the public web (results include text extracted from the pages) or fetch allowlisted public sources.',
+    description: 'Search the public web (top results include page text) or read up to 4 public URLs as text.',
     run: async ({ query, urls = [], country, language }, ctx) => {
       if (query) {
         const t0 = Date.now();
@@ -268,13 +320,13 @@ const TOOLS = {
         }
       }
       if (!urls.length) throw Object.assign(new Error('A search query or URL is required.'), { code:'BAD_INPUT' });
+      // Any public page can be read; private and internal addresses are refused.
       return Promise.all(urls.slice(0, 4).map(async (u) => {
         const t0 = Date.now();
         try {
-          const r = await fetchAllowlisted(u, { signal: ctx.signal });
-          const text = (await r.text()).slice(0, 12000);
-          ctx.trace(entry('globe', `web_search: ${new URL(u).hostname} · ${Date.now() - t0}ms`));
-          return { url: u, ok: true, text };
+          const page = await readWebPage(u, { signal: ctx.signal, maxChars: 12000 });
+          ctx.trace(entry('globe', `web_search: ${new URL(page.url).hostname} · ${Date.now() - t0}ms`));
+          return { url: page.url, ok: true, title: page.title, text: page.text };
         } catch (e) {
           ctx.trace(entry('alert', `web_search failed: ${e.message}`));
           return { url: u, ok: false, error: e.message };
@@ -355,24 +407,26 @@ const TOOLS = {
   },
   computer_screenshot: {
     name: 'computer_screenshot', type: 'browser', approval: false,
-    description: 'Screenshot a page in the user Azure VM browser.',
+    description: 'Open a public page in the user Azure VM browser and take a screenshot.',
     run: async ({ url }, ctx) => {
       const u = String(url || '');
-      if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
-      const out = await execInSandbox(ctx.userId, 'computer_screenshot', { url: u, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      const problem = publicUrlProblem(u);
+      if (problem) throw Object.assign(new Error(`Only public web pages can be opened (${problem}).`), { code: 'HOST_BLOCKED' });
+      const out = await execInSandbox(ctx.userId, 'computer_screenshot', { url: u, sessionId: ctx.sessionId, live: await liveChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `computer_screenshot: ${new URL(u).hostname}`));
       return out;
     },
   },
   browser_open: {
     name: 'browser_open', type: 'browser', approval: false,
-    description: 'Open one allowlisted URL in the user Azure VM browser.',
+    description: 'Open any public http or https page in the user Azure VM browser (Chromium). Returns the page text, numbered interactive elements and a screenshot.',
     run: async ({ url }, ctx) => {
       const u = String(url || '');
-      if (!hostAllowed(u)) throw Object.assign(new Error('host blocked by sandbox allowlist'), { code: 'HOST_BLOCKED' });
+      const problem = publicUrlProblem(u);
+      if (problem) throw Object.assign(new Error(`Only public web pages can be opened (${problem}).`), { code: 'HOST_BLOCKED' });
       if (ctx.signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
       if (!isAzureConfigured()) throw Object.assign(new Error('browser tool unavailable until Azure VM is configured'), { code: 'DISABLED' });
-      const out = await execInSandbox(ctx.userId, 'browser_open', { url: u, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      const out = await execInSandbox(ctx.userId, 'browser_open', { url: u, sessionId: ctx.sessionId, live: await liveChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_open: ${new URL(u).hostname} on ${out.vmName}`));
       return safeBrowserResult(out, ctx);
     },
@@ -383,7 +437,7 @@ const TOOLS = {
     run: async (args, ctx) => {
       const event = browserEvent(args || {});
       await purchaseFlow.beforeAction(args, ctx);
-      const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId, live: await liveChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_action: ${event.type} on ${out.vmName}`));
       return safeBrowserResult(out, ctx);
     },
@@ -396,7 +450,7 @@ const TOOLS = {
       const event = browserEvent(args || {});
       if (!String(args.summary || '').trim()) throw badInput('browser_submit needs a summary of what the action will do.');
       await purchaseFlow.beforeSubmit(args, ctx);
-      const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId, live: await liveChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_submit: ${event.type} on ${out.vmName}`));
       return safeBrowserResult(out, ctx);
     },
@@ -721,4 +775,5 @@ async function runParallel(calls, ctx) {
   return Promise.all(calls.map((c) => TOOLS[c.tool].run(c.args || {}, ctx)));
 }
 
+export { liveRealtimeConfig };
 export { TOOLS, pickTools, runParallel };

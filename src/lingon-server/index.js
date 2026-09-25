@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 import * as Runner from './agents/runner.js';
 import { checkPrompt, asksAboutInternalDetails, protectAgentResponse, INTERNAL_DETAILS_REPLY } from './agents/guardrails.js';
 import { entry } from './agents/tracing.js';
-import { pickTools } from './agents/tools.js';
+import { pickTools, liveRealtimeConfig } from './agents/tools.js';
 import { fetchAllowlisted } from './agents/sandbox.js';
 import { normalizeSubAgent, nextRunAt } from './agents/triggers.js';
 import * as Automations from './agents/automations.js';
@@ -166,6 +166,14 @@ app.post('/api/voice/transcribe', rateLimit(20, 60000), requireAuth(async (req, 
     const status = e.code === 'NO_CREDIT' ? 402 : e.code === 'BAD_INPUT' ? 400 : e.code === 'NO_KEY' ? 503 : 502;
     res.status(status).json({ error: e.code === 'BAD_INPUT' || e.code === 'NO_CREDIT' ? e.message : 'Couldn’t transcribe that.' });
   }
+}));
+
+// The live browser view joins the task's Realtime channel with the project's public key.
+app.get('/api/live/realtime', requireAuth(async (req, res) => {
+  const cfg = liveRealtimeConfig();
+  if (!cfg) return res.status(404).json({ error: 'The live view is not configured.' });
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.json(cfg);
 }));
 
 app.get('/api/health', (req, res) => {

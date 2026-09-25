@@ -221,6 +221,19 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   const keepAlive=setInterval(()=>{},1000); // the runtime's poll timer is unref'd
   await remoteStep;clearInterval(keepAlive);
   assert.equal(x.rows.get(xr.id).state.status,'stopped');
+  // A stop applies whatever version the owner last saw, and stops the subtasks the task started.
+  const tree=setup();const parent=await tree.create();
+  tree.rows.get(parent.id).state.version=3;
+  const child=await tree.runtime.create({userId:'a',chatId:'chat',requestKey:'child',title:'Child',instructions:'Research one part',relatedTaskId:parent.id,parentTaskId:parent.id});
+  const grandchild=await tree.runtime.create({userId:'a',chatId:'chat',requestKey:'grandchild',title:'Grandchild',instructions:'Research a smaller part',relatedTaskId:child.id,parentTaskId:child.id});
+  const stranger=await tree.create();
+  await tree.runtime.control('a',parent.id,{action:'cancel',version:1,requestId:'stop-all'},'chat');
+  assert.equal(tree.rows.get(parent.id).state.status,'stopped','a stale version still stops the task');
+  assert.equal(tree.rows.get(child.id).state.status,'stopped','its subtask stops');
+  assert.equal(tree.rows.get(grandchild.id).state.status,'stopped','and the subtask’s own subtask');
+  assert.equal(tree.rows.get(stranger.id).state.status,'queued','other tasks keep working');
+  await tree.runtime.control('a',parent.id,{action:'cancel',version:1,requestId:'stop-again'},'chat');
+  assert.equal(tree.rows.get(parent.id).state.status,'stopped','stopping a stopped task is a no-op');
 
   const chat=(model,extra={})=>createCoordinator({tasks:{summaries:async()=>[]},model,schemas:[],tools:{},azure:{getSandbox:async()=>({mode:'azure'})},
     store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},

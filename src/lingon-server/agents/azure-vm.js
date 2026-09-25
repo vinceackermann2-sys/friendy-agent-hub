@@ -628,7 +628,109 @@ function browserProfileRuntime(root) {
     fs.writeFileSync(targetFile, page.target()._targetId, { mode: 0o600 });
     return { page, reusedPage, stateFile: path.join(dir, 'state.json'), targetFile };
   };
-  return { profile, connectOrLaunch, session, saveCookies };
+  return { profile, connectOrLaunch, connectExisting: connect, session, saveCookies };
+}
+
+/*
+ * Live view over Supabase Realtime, for hosts without the WebSocket relay (the
+ * Lovable-hosted app). A small streamer on the VM attaches to the session's page
+ * in the running Chromium and joins one Realtime broadcast channel whose name is
+ * an unguessable per-session secret. While a viewer is watching (it says so every
+ * few seconds) the streamer sends screencast frames, only when the screen changes;
+ * nobody watching means no frames. When the owner takes over, their mouse and
+ * keyboard input is applied through the same browser kit the agent uses, and a
+ * takeover file makes the agent's next browser step wait. The VM still accepts no
+ * inbound connections: it dials out to Realtime, like the relay dials the app.
+ */
+const LIVE_REALTIME_URL = /^wss:\/\/[a-z0-9-]+\.supabase\.(co|in)\/realtime\/v1\/websocket$/;
+const LIVE_TOPIC = /^live-[A-Za-z0-9_-]{32,64}$/;
+function liveRealtimeArgs(live) {
+  if (!live) return null;
+  const url = String(live.url || ''), key = String(live.key || ''), topic = String(live.topic || '');
+  if (!LIVE_REALTIME_URL.test(url) || !/^[A-Za-z0-9._-]{20,400}$/.test(key) || !LIVE_TOPIC.test(topic)) {
+    throw Object.assign(new Error('Invalid live view channel.'), { code: 'BAD_INPUT' });
+  }
+  return { url, key, topic };
+}
+function liveStreamer(kit, profileRuntime, cfg) {
+  const fs = require('fs');
+  const path = require('path');
+  const WebSocket = require('/opt/lingon/node_modules/ws');
+  const puppeteer = require('/opt/lingon/node_modules/puppeteer-core');
+  const dir = path.join('/var/lib/lingon-browser/sessions', cfg.sessionId);
+  const takeoverFile = path.join(dir, 'takeover');
+  const topic = `realtime:${cfg.topic}`;
+  // A viewer says it is watching every 10 s; frames stop 30 s after the last one,
+  // and the streamer exits after 20 idle minutes (the next browser step restarts it).
+  const VIEWER_MS = 30000, IDLE_EXIT_MS = 20 * 60000, MAX_FRAME = 240000, FRAME_GAP_MS = 120;
+  let ws = null, joined = false, ref = 1, lastViewer = 0, lastActivity = Date.now();
+  let page = null, cdp = null, streaming = false, quality = 60, pending = null, lastSent = 0, flushTimer = null, takeover = false;
+  const send = (event, payload) => {
+    if (!ws || ws.readyState !== 1 || !joined) return false;
+    ws.send(JSON.stringify({ topic, event: 'broadcast', payload: { type: 'broadcast', event, payload }, ref: String(++ref), join_ref: '1' }));
+    return true;
+  };
+  const meta = async () => send('state', { url: page ? page.url() : '', title: page ? await page.title().catch(() => '') : '', state: takeover ? 'user' : 'idle', transport: 'realtime' });
+  const flush = () => { flushTimer = null; if (pending && send('frame', { d: pending })) lastSent = Date.now(); pending = null; };
+  const startCast = async () => {
+    if (streaming || !cdp) return;
+    streaming = true;
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality, maxWidth: 1280, maxHeight: 900, everyNthFrame: 1 }).catch(() => { streaming = false; });
+  };
+  const stopCast = async () => { if (!streaming || !cdp) return; streaming = false; await cdp.send('Page.stopScreencast').catch(() => {}); };
+  const setTakeover = (on) => {
+    takeover = !!on;
+    if (takeover) fs.writeFileSync(takeoverFile, String(Date.now()), { mode: 0o600 }); else fs.rmSync(takeoverFile, { force: true });
+  };
+  const onBroadcast = (event, p) => {
+    lastActivity = Date.now();
+    if (event === 'watch') { lastViewer = Date.now(); startCast(); meta(); }
+    else if (event === 'control') { setTakeover(p.takeover === true); meta(); }
+    else if (event === 'input' && takeover && p.ev && typeof p.ev === 'object') {
+      const ev = { ...p.ev, agent: false };
+      if (['move', 'click', 'double_click', 'right_click', 'scroll', 'type', 'key', 'back', 'forward', 'reload'].includes(String(ev.type))) kit.act(page, ev).then(() => (ev.type === 'move' ? null : meta())).catch(() => {});
+    }
+  };
+  const connect = () => {
+    ws = new WebSocket(`${cfg.url}?apikey=${encodeURIComponent(cfg.key)}&vsn=1.0.0`);
+    ws.on('open', () => ws.send(JSON.stringify({ topic, event: 'phx_join', payload: { config: { broadcast: { self: false, ack: false }, presence: { key: '' }, private: false } }, ref: '1', join_ref: '1' })));
+    ws.on('message', (raw) => {
+      let m; try { m = JSON.parse(String(raw)); } catch { return; }
+      if (m.event === 'phx_reply' && m.ref === '1') { joined = m.payload && m.payload.status === 'ok'; if (joined) meta(); }
+      else if (m.event === 'broadcast' && m.payload) onBroadcast(m.payload.event, m.payload.payload || {});
+    });
+    ws.on('close', () => { joined = false; setTimeout(connect, 2000); });
+    ws.on('error', () => {});
+  };
+  setInterval(() => {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(++ref) }));
+    if (streaming && Date.now() - lastViewer > VIEWER_MS) stopCast();
+    // An owner who left without handing back still hands back: the agent must not wait forever.
+    if (takeover && Date.now() - lastViewer > VIEWER_MS) setTakeover(false);
+    else if (takeover) fs.writeFileSync(takeoverFile, String(Date.now()), { mode: 0o600 });
+    if (Date.now() - Math.max(lastViewer, lastActivity) > IDLE_EXIT_MS) { fs.rmSync(takeoverFile, { force: true }); process.exit(0); }
+  }, 10000).unref?.();
+  (async () => {
+    const browser = await profileRuntime.connectExisting(puppeteer);
+    if (!browser) throw new Error('The browser is not running.');
+    const targetId = fs.readFileSync(path.join(dir, 'target-id'), 'utf8').trim();
+    page = (await browser.pages()).find((item) => item.target()._targetId === targetId);
+    if (!page) throw new Error('The session page is gone.');
+    cdp = await page.target().createCDPSession();
+    await cdp.send('Page.enable');
+    cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
+      cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+      // An oversized frame lowers the quality instead of being dropped repeatedly.
+      if (data.length > MAX_FRAME) { if (quality > 30) { quality -= 15; stopCast().then(startCast); } return; }
+      pending = data;
+      const wait = FRAME_GAP_MS - (Date.now() - lastSent);
+      if (wait <= 0) flush(); else if (!flushTimer) flushTimer = setTimeout(flush, wait);
+    });
+    page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) meta(); });
+    page.on('close', () => process.exit(0));
+    browser.on('disconnected', () => process.exit(0));
+    connect();
+  })().catch((error) => { process.stderr.write(String(error.message || error)); process.exit(1); });
 }
 
 function buildBrowserSessionScript(action, args = {}) {
@@ -656,6 +758,7 @@ function buildBrowserSessionScript(action, args = {}) {
     && (payload.event.text || !/^https:\/\/[a-z0-9]{3,24}\.blob\.core\.windows\.net\//.test(String(payload.event.secretUrl || '')))) {
     throw Object.assign(new Error('A vault value must be handed over by one-time blob.'), { code: 'BAD_INPUT' });
   }
+  const live = liveRealtimeArgs(args.live);
   const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
   const runner = [
     "const fs = require('fs');",
@@ -663,6 +766,10 @@ function buildBrowserSessionScript(action, args = {}) {
     `const kit = (${browserKit.toString()})();`,
     `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions');`,
     "const payload = JSON.parse(Buffer.from(process.env.LINGON_BROWSER_PAYLOAD, 'base64').toString('utf8'));",
+    // While the owner drives the live view, the agent's browser steps wait. The streamer
+    // refreshes the file every 10 s, so a stale file (streamer gone) no longer blocks.
+    "const takeoverFile = path.join('/var/lib/lingon-browser/sessions', payload.sessionId, 'takeover');",
+    "try { if (Date.now() - fs.statSync(takeoverFile).mtimeMs < 45000) { process.stdout.write(JSON.stringify({ ok: false, error: 'The owner has taken over this browser in the live view. Wait until they hand it back, then continue.' })); process.exit(1); } } catch {}",
     "const findBrowser = () => ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p));",
     "const executablePath = findBrowser();",
     "if (!executablePath) throw new Error('Chromium is not installed yet (first boot is still running).');",
@@ -710,8 +817,30 @@ function buildBrowserSessionScript(action, args = {}) {
     `runuser -u lingon-browser -- env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /tmp/lingon-browser-session.js`,
     'EC=$?',
     'rm -f /tmp/lingon-browser-session.js',
+    ...(live ? liveStreamerLaunch(sessionId, live) : []),
     'exit $EC',
   ].join('\n');
+}
+// Starts this session's live streamer after a browser step, unless it is running.
+function liveStreamerLaunch(sessionId, live) {
+  const root = `/var/lib/lingon-browser/sessions/${sessionId}`;
+  const source = [
+    `const kit = (${browserKit.toString()})();`,
+    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions');`,
+    `(${liveStreamer.toString()})(kit, profileRuntime, JSON.parse(Buffer.from(process.env.LINGON_LIVE_PAYLOAD, 'base64').toString('utf8')));`,
+  ].join('\n');
+  const codeB64 = Buffer.from(source, 'utf8').toString('base64');
+  const payloadB64 = Buffer.from(JSON.stringify({ sessionId, ...live }), 'utf8').toString('base64');
+  return [
+    `if [ -f '${root}/target-id' ] && ! { [ -f '${root}/live.pid' ] && kill -0 "$(cat '${root}/live.pid')" 2>/dev/null; }; then`,
+    '  if [ ! -d /opt/lingon/node_modules/ws ]; then npm install --prefix /opt/lingon ws@8.21.3 >/dev/null 2>&1; fi',
+    `  echo '${codeB64}' | base64 -d > '${root}/live.js'`,
+    `  chown lingon-browser:lingon-browser '${root}/live.js' && chmod 600 '${root}/live.js'`,
+    `  runuser -u lingon-browser -- env LINGON_LIVE_PAYLOAD='${payloadB64}' nohup node '${root}/live.js' >> '${root}/live.log' 2>&1 &`,
+    `  echo $! > '${root}/live.pid'`,
+    `  chown lingon-browser:lingon-browser '${root}/live.pid' '${root}/live.log' 2>/dev/null || true`,
+    'fi',
+  ];
 }
 
 let tokenCache = { accessToken: '', exp: 0 };
@@ -1956,6 +2085,7 @@ async function execInSandbox(userId, tool, args = {}, { alreadyRunning = false, 
       sessionId: toolBrowserSessionId(userId, args.sessionId),
       action: 'navigate',
       url: args.url,
+      live: args.live,
     });
   }
   if (tool === 'browser_action') {
@@ -1963,6 +2093,7 @@ async function execInSandbox(userId, tool, args = {}, { alreadyRunning = false, 
       sessionId: toolBrowserSessionId(userId, args.sessionId),
       action: 'input',
       event: args.event,
+      live: args.live,
     });
   }
   if (tool === 'browser_session') {
@@ -1993,6 +2124,7 @@ export {
   buildShellScript,
   browserKit,
   browserProfileRuntime,
+  liveStreamer,
   desktopKit,
   buildDesktopRelayScript,
   buildDesktopRelayStopScript,

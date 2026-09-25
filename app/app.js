@@ -3640,7 +3640,7 @@ function syncComposerActions(c){
   stop.hidden = !running || hasDraft;
   send.hidden = running && !hasDraft;
 }
-const liveTaskIds = (c) => Object.entries(c?.managedTasks || {}).filter(([, t]) => ['queued','running','waiting_peers'].includes(t.status)).map(([id]) => id);
+const liveTaskIds = (c) => Object.entries(c?.managedTasks || {}).filter(([, t]) => ['queued','running','waiting_peers','waiting_approval'].includes(t.status)).map(([id]) => id);
 
 /* ---------------- chat view ---------------- */
 function paintChat(M){
@@ -5316,8 +5316,54 @@ function drawLiveFrame(data){
   };
   consume();
 }
+/* Realtime live view (rt:<channel>): the VM streams its browser over the project's
+   Realtime channel for this task. The viewer says it is watching every 10 s (frames
+   flow only while someone watches); takeover and input go back on the same channel. */
+let liveRealtimeCfg = null;
+function liveConnectRealtime(id){
+  liveClose();
+  liveIdShown = id; liveControl = false;
+  const topic = 'realtime:' + id.slice(3);
+  const st = () => $('#livestate');
+  const cfgRequest = liveRealtimeCfg ? Promise.resolve(liveRealtimeCfg) : window.LingonAuth.api('/api/live/realtime').then((cfg) => (liveRealtimeCfg = cfg));
+  cfgRequest.then((cfg) => {
+    if (liveIdShown !== id) return;
+    const ws = new WebSocket(cfg.url + '?apikey=' + encodeURIComponent(cfg.key) + '&vsn=1.0.0');
+    let ref = 1, joined = false, beat = null;
+    const send = (event, payload) => { if (ws.readyState === 1 && joined) ws.send(JSON.stringify({ topic, event:'broadcast', payload:{ type:'broadcast', event, payload }, ref:String(++ref), join_ref:'1' })); };
+    const adapter = {
+      realtime: send,
+      get readyState(){ return joined ? ws.readyState : 0; },
+      send(raw){ try { const m = JSON.parse(raw); if (m.type === 'input') send('input', { ev: m.ev }); } catch {} },
+      close(){ clearInterval(beat); if (liveControl) send('control', { takeover:false }); try { ws.close(); } catch {} },
+    };
+    liveWS = adapter;
+    ws.onopen = () => ws.send(JSON.stringify({ topic, event:'phx_join', payload:{ config:{ broadcast:{ self:false, ack:false }, presence:{ key:'' }, private:false } }, ref:'1', join_ref:'1' }));
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.event === 'phx_reply' && m.ref === '1') {
+        joined = m.payload?.status === 'ok';
+        if (!joined) { if (st()) st().textContent = 'live view unavailable'; return; }
+        send('watch', {});
+        if (st()) st().textContent = 'connecting to the browser…';
+        beat = setInterval(() => { if (ws.readyState !== 1) return; ws.send(JSON.stringify({ topic:'phoenix', event:'heartbeat', payload:{}, ref:String(++ref) })); send('watch', {}); }, 10000);
+        return;
+      }
+      if (m.event !== 'broadcast' || !m.payload) return;
+      const data = m.payload.payload || {};
+      if (m.payload.event === 'frame' && typeof data.d === 'string') {
+        try { drawLiveFrame(Uint8Array.from(atob(data.d), (ch) => ch.charCodeAt(0))); } catch {}
+        if (st() && /connecting/.test(st().textContent)) liveState(liveControl ? 'user' : 'live');
+      }
+      if (m.payload.event === 'state') liveState(liveControl ? 'user' : (data.state === 'user' ? 'user' : 'live'), { ...data, transport:'realtime' });
+    };
+    ws.onclose = () => { clearInterval(beat); if (liveWS === adapter && st()) st().textContent = 'session ended'; };
+    bindLiveInput(adapter);
+  }).catch(() => { if (st()) st().textContent = 'live view unavailable'; });
+}
 function liveConnect(id){
   if (liveWS && liveIdShown === id){ bindLiveInput(liveWS); liveState(liveControl ? 'user' : 'idle'); pcConnect(); return; }
+  if (String(id).startsWith('rt:')) { liveConnectRealtime(id); return; }
   liveClose();
   const sess = window.LingonAuth && window.LingonAuth.get();
   if (!sess || !sess.access_token){ $('#livestate').textContent = 'sign in expired'; return; }
@@ -5394,7 +5440,7 @@ function liveState(s, m){
   if (desktop && $('#livestatus')) $('#livestatus').textContent = 'Agent computer';
   if (m && $('#liveurl') && (desktop ? m.title : m.url)) $('#liveurl').textContent = desktop ? m.title : m.url;
   if (m && m.title && $('#livesub') && !liveControl) sub.textContent = m.title;
-  if (m && m.transport && sub && !liveControl) sub.textContent = m.transport === 'x11-stream' ? 'live virtual computer — the agent is connected to the VM' : m.transport === 'cdp-screencast' ? 'live interactive stream — the agent is connected to the VM' : 'compatibility preview — live relay is not connected';
+  if (m && m.transport && sub && !liveControl) sub.textContent = m.transport === 'x11-stream' ? 'live virtual computer — the agent is connected to the VM' : m.transport === 'cdp-screencast' || m.transport === 'realtime' ? 'live interactive stream — the agent is connected to the VM' : 'compatibility preview — live relay is not connected';
   if (wrap) wrap.classList.toggle('working', s === 'working' && !liveControl);
   if (st) st.textContent = liveControl ? 'you drive' : s;
   if (btn) btn.textContent = liveControl ? 'Give back' : 'Take over';
@@ -5406,7 +5452,10 @@ async function liveTakeover(){
   if (!id){ toast('No live browser session in this chat yet.'); return; }
   const want = !liveControl;
   try {
-    await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
+    if (liveWS?.realtime) {
+      if (liveWS.readyState !== 1) throw new Error('The live view is still connecting.');
+      liveWS.realtime('control', { takeover: want });
+    } else await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
     liveControl = want;
     pcConnect();
     liveState(want ? 'user' : 'idle');
@@ -7162,10 +7211,13 @@ document.addEventListener('click', async e => {
   }
   if (act === 'voice') { toggleVoice(); return; }
   if (act === 'managed-stop') {
+    // Stop means stop: the reply being written and every task working in this chat.
     const current = chat();
-    if (Engine.isRunning?.(current?.id)) { await Engine.stop(makeRT(current)); return; }
     b.disabled = true;
-    for (const id of liveTaskIds(current)) { try { await Engine.controlTask(makeRT(current), id, 'cancel'); } catch (error) { toast(error.message); } }
+    const stops = [Engine.isRunning?.(current?.id) ? Engine.stop(makeRT(current)) : null,
+      ...liveTaskIds(current).map((id) => Engine.controlTask(makeRT(current), id, 'cancel'))].filter(Boolean);
+    const failed = (await Promise.allSettled(stops)).find((r) => r.status === 'rejected');
+    if (failed) toast(failed.reason?.message || 'Could not stop everything. Try again.');
     b.disabled = false; syncComposerActions(current);
     return;
   }
