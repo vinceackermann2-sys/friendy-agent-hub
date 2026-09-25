@@ -73,8 +73,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
     'Run this code in my workspace',
     'Research current flight prices',
     'Remind me every day to take a break',
-    'What is my Shop Pay daily limit?',
-    'Where is my Shop Pay order?',
+    'What did I get in my inbox today?',
   ];
   for(const prompt of directRequests) {
     const routed=setup(),routedEvents=[];let modelCalls=0;
@@ -87,7 +86,8 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
     assert.ok(task,`${prompt} should start a task`);
     assert.equal(routed.rows.get(task.task.id).state.instructions,prompt);
   }
-  for(const prompt of ['What is the capital of France?','Why can’t you use my Gmail?','How do I connect Gmail?','Can you use Gmail?','What is the best way to use Shopify?']) {
+  // Shop Pay status and orders are read-only chat lookups now, so they stay in chat too.
+  for(const prompt of ['What is the capital of France?','Why can’t you use my Gmail?','How do I connect Gmail?','Can you use Gmail?','What is the best way to use Shopify?','What is my Shop Pay daily limit?','Where is my Shop Pay order?']) {
     const routed=setup(),routedEvents=[];let modelCalls=0;
     const coordinator=createCoordinator({tasks:routed.runtime,model:async()=>{modelCalls++;return {text:'Direct answer'};},schemas:[],tools:{},azure:routed.d.azure,
       store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},
@@ -133,7 +133,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await toolThen.run({userId:'a',chatId:'chat',requestId:'retract',prompt:'Explore this topic',onEvent:e=>retracted.push(e)});
   assert.ok(retracted.some(e=>e.type==='message_retract'));
   assert.ok(retracted.some(e=>e.type==='task'));
-  assert.deepEqual(degradedModels[0].tools.map(t=>t.name),['react_to_message','history_search']);
+  assert.deepEqual(degradedModels[0].tools.map(t=>t.name),['react_to_message','read_doc','history_search']);
   assert.match(degradedModels[0].system,/Task storage is temporarily unavailable/);
   assert.equal(degradedReports[0].event,'task_storage_unavailable');
   assert.equal(degradedReports[0].details.status,503);
@@ -270,7 +270,50 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await chat(async opts=>{failedModels.push(opts);return failedModels.length===1?{functionCalls:[{name:'web_search',args:{}}]}:{text:'Answered without the search.'};},
     {schemas:[searchSchema],tools:{web_search:{run:async()=>{throw new Error('A search query or URL is required.');}}}})
     .run({userId:'a',chatId:'chat',requestId:'search-fail',prompt:'Latest news?',onEvent:()=>{}});
-  assert.match(failedModels[1].history.at(-1).text,/web_search result \(untrusted\).*required/);
+  assert.match(failedModels[1].prompt,/web_search result \(untrusted\).*required/);
+  // Every chat turn carries the owner's local clock after the cached prefix, and
+  // the chat prompt names no worker-only tools.
+  const clockModels=[];
+  const {buildSystem}=require('../server/agents/vm-harness');
+  await chat(async opts=>{clockModels.push(opts);return {text:'Thursday.'};},{buildSystem,clock:({timeZone})=>`Current time: test clock in ${timeZone}.`})
+    .run({userId:'a',chatId:'chat',requestId:'clock',prompt:'What day is it?',context:{timeZone:'Europe/Stockholm'},onEvent:()=>{}});
+  assert.match(clockModels[0].prompt,/^Current time: test clock in Europe\/Stockholm\.\n\nUser message: What day is it\?/);
+  assert.doesNotMatch(clockModels[0].system,/browser_open|capability_search|shell\/code_run|vault_list/,'chat prompt lists only chat tools');
+  assert.match(clockModels[0].system,/never tell the owner you cannot browse/);
+  assert.equal(clockModels[0].maxOutputTokens,4096,'chat output is capped');
+  const {runtimeContext}=require('../server/agents/runner');
+  const fixed=runtimeContext({timeZone:'Europe/Stockholm',now:new Date('2026-09-24T20:05:00Z')});
+  assert.match(fixed,/Thursday, September 24, 2026, 22:05 in Europe\/Stockholm \(GMT\+2\)\. The year is 2026\./);
+  assert.match(fixed,/Fri, Sep 25; Sat, Sep 26/);
+  assert.match(runtimeContext({timeZone:'Not/AZone',now:new Date('2026-09-24T20:05:00Z')}),/20:05 in UTC/,'unknown zones fall back to UTC');
+  // With task storage, the final lookup round may still start a task, and a
+  // request that needs more lookups becomes a task instead of a dead end.
+  const handoff=setup(),handoffEvents=[],handoffChoices=[];
+  const withTasks=(model,extra={})=>createCoordinator({tasks:handoff.runtime,model,schemas:[searchSchema],tools:{web_search:{run:async()=>[{ok:true,text:'{"note":"No instant answer found for this query."}'}]}},
+    azure:handoff.d.azure,store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},
+    checkPrompt:handoff.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],...extra});
+  let searchModel=[];
+  await withTasks(async opts=>{handoffChoices.push(opts.toolChoice);searchModel.push(opts);return {functionCalls:[{name:'web_search',args:{query:'latest race'}}]};})
+    .run({userId:'a',chatId:'chat',requestId:'handoff',prompt:'Who won the latest race?',onEvent:e=>handoffEvents.push(e)});
+  assert.deepEqual(handoffChoices,['auto','auto','auto'],'the final round can still delegate');
+  assert.match(searchModel[1].prompt,/Start a task to check live sources/,'an empty search points to a task');
+  const handedOff=handoffEvents.find(e=>e.type==='task');
+  assert.ok(handedOff,'the request became a task');
+  assert.equal([...handoff.rows.values()].at(-1).state.instructions.split('\n')[0],'Who won the latest race?');
+  assert.doesNotMatch(handoffEvents.find(e=>e.type==='message').text,/could not complete/);
+  // A cut-off delegate_task call without a brief still starts the owner's request.
+  const cut=setup(),cutTaskEvents=[];
+  await createCoordinator({tasks:cut.runtime,model:async()=>({functionCalls:[{name:'delegate_task',args:{_raw:'{"title":"Rea'}}]}),schemas:[],tools:{},azure:cut.d.azure,
+    store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:cut.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[]})
+    .run({userId:'a',chatId:'chat',requestId:'cut-brief',prompt:'Read timewarpdev.com',onEvent:e=>cutTaskEvents.push(e)});
+  const cutRow=[...cut.rows.values()].at(-1);
+  assert.equal(cutRow.state.title,'Read timewarpdev.com');
+  assert.match(cutRow.state.instructions,/^Read timewarpdev\.com/);
+  // Workers see the same clock, in the owner's zone from the chat context.
+  const timed=setup();timed.d.clock=({timeZone})=>`Current time: worker clock in ${timeZone}.`;
+  const timedRow=await timed.runtime.create({userId:'a',chatId:'chat',requestKey:'timed',instructions:'Plan next weekend',context:{timeZone:'Europe/Stockholm'},history:[]});
+  await timed.runtime.step('a',timedRow.id);
+  assert.match(timed.calls.find(c=>c.model).model.prompt,/^Current time: worker clock in Europe\/Stockholm\.\n\nTeam snapshot/);
   // Tasks have no fixed round limit, and workers start with a small core.
   const schemaFor=name=>({name,description:name,parameters:{type:'object',properties:{}}});
   const runToEnd=async(h,id)=>{for(let i=0;i<60 && !['completed','partial','failed','needs_review','waiting_approval'].includes(h.rows.get(id).state.status);i++) await h.runtime.step('a',id);return h.rows.get(id).state;};

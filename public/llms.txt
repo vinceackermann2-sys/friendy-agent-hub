@@ -1,6 +1,6 @@
 # Belna
 
-> Belna builds Swedish safe AI agents. Arche 1.0 is a personal AI agent built on open Kimi K3 weights with an agentic harness designed for privacy and safety.
+> Belna is a personal AI agent for research, creating files, and managing work, with connected apps and controls for access and approvals.
 
 Public information on this site is available without signing in. Personal agent workspaces require an account.
 
@@ -8,7 +8,7 @@ Public information on this site is available without signing in. Personal agent 
 
 - [Belna home](https://belna.se/): Product overview and entry to the personal agent.
 - [Belna app](https://belna.se/app): Sign in and use your personal agent.
-- [Pricing](https://belna.se/pricing): Plans, credits, and billing information.
+- [Pricing](https://belna.se/pricing): Plans, monthly token allowances, token packs, and billing information.
 - [Security](https://belna.se/security): How the agent's vault, approvals, sandbox, and traces work.
 
 ## Research

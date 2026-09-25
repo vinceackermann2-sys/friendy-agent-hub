@@ -10,6 +10,7 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { pageMeta, SITE_DESCRIPTION, SITE_TITLE } from "../lib/seo";
 
 function NotFoundComponent() {
   return (
@@ -76,28 +77,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Belna — Swedish Safe AI Agents" },
-      {
-        name: "description",
-        content:
-          "Belna builds Swedish safe AI agents with privacy and safety at the core. Arche 1.0 is your personal AI agent.",
-      },
       { name: "author", content: "Belna" },
-      { property: "og:title", content: "Belna — Swedish Safe AI Agents" },
-      {
-        property: "og:description",
-        content:
-          "Belna builds Swedish safe AI agents with privacy and safety at the core. Arche 1.0 is your personal AI agent.",
-      },
-      { property: "og:type", content: "website" },
-      { property: "og:site_name", content: "Belna" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "Belna — Swedish Safe AI Agents" },
-      {
-        name: "twitter:description",
-        content:
-          "Belna builds Swedish safe AI agents with privacy and safety at the core. Arche 1.0 is your personal AI agent.",
-      },
+      ...pageMeta({
+        title: SITE_TITLE,
+        description: SITE_DESCRIPTION,
+      }),
     ],
     links: [
       { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },

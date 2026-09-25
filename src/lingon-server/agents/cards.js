@@ -127,10 +127,16 @@ function approvalView(name, args = {}, detail) {
     case 'shop_purchase': {
       const items = (Array.isArray(parsed.items) ? parsed.items : []).slice(0, 8).map((item) => ({
         title: str(item.title, 140) || 'Item', quantity: Number(item.quantity) || 1, price: money(item.price, parsed.currency) }));
-      return { kind: 'purchase', merchant: str(parsed.merchant || args.merchant, 120), items, total: money(parsed.amount, parsed.currency),
-        payment: 'Shop Pay', email: str(parsed.buyerEmail, 120), delivery: (Array.isArray(parsed.delivery) ? parsed.delivery : []).map((d) => str(d, 200)).slice(0, 2) };
+      return { kind: 'purchase', merchant: str(parsed.merchant || args.merchant, 120), website: str(`https://${parsed.merchant || args.merchant}`, 300), items, total: money(parsed.amount, parsed.currency),
+        payment: 'Shop Pay', email: str(parsed.buyerEmail, 120), delivery: (Array.isArray(parsed.delivery) ? parsed.delivery : []).map((d) => str(d, 200)).slice(0, 2), estimated:false };
     }
-    case 'browser_submit': case 'computer_submit':
+    case 'browser_submit':
+      if (parsed.paymentMethodId && args.purchase) return { kind:'purchase', merchant:str(parsed.merchant,120), website:str(parsed.website,500),
+        items:(parsed.items || []).slice(0,12).map((item)=>({title:str(item.title,140),quantity:Number(item.quantity)||1,price:money(item.price,parsed.currency)})),
+        total:money(parsed.amount,parsed.currency), payment:str(parsed.payment,80), delivery:[str(parsed.shippingAddress,300)], estimated:false,
+        checkoutExcerpt:str(parsed.pageExcerpt,650) };
+      return { kind:'submit', summary:str(args.summary,300), surface:'browser', action:str(args.type,30), website:str(parsed.website,500) };
+    case 'computer_submit':
       return { kind: 'submit', summary: str(args.summary, 300), surface: name === 'computer_submit' ? 'computer' : 'browser', action: str(args.type || args.action, 30) };
     case 'browser_fill_secret': case 'computer_fill_secret':
       return { kind: 'credential', summary: str(parsed.summary, 240), host: str(args.host, 120), window: str(args.window, 120) };

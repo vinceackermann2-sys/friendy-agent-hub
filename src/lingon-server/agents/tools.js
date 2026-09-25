@@ -17,6 +17,30 @@ import { generateImage } from '../foundry.js';
 import { PLANS } from '../plans.js';
 import { questionArgs, presentArgs, connectArgs } from './cards.js';
 import { PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave } from './personal-tools.js';
+import { forbiddenPaymentSecret, cardNumberIn } from './payment-safety.js';
+import { createPurchaseFlow } from './purchase.js';
+
+const privateBrowserSessions = new Set();
+const privateBrowserValues = new Map();
+const sessionKey = (userId, sessionId) => `${userId}:${sessionId}`;
+const liveForPurchase = {
+  forTool: async (userId, sessionId) => execInSandbox(userId, 'browser_action', { event:{type:'wait',ms:1,agent:true}, sessionId }),
+  content: async (session) => session,
+};
+const purchaseFlow = createPurchaseFlow({ store, live:liveForPurchase });
+function safeBrowserResult(out, ctx) {
+  const result = { ...(out || {}) };
+  const redact = (value) => {
+    let text = String(value || '');
+    for (const secret of privateBrowserValues.get(sessionKey(ctx.userId,ctx.sessionId)) || []) if (secret) text = text.split(secret).join('[protected]');
+    return text.replace(/(?:\d[ -]?){13,19}/g, (match) => cardNumberIn(match) ? '[payment card]' : match);
+  };
+  for (const key of ['url','title','text','dialog']) if (typeof result[key] === 'string') result[key] = redact(result[key]);
+  if (Array.isArray(result.elements)) result.elements = result.elements.map(redact);
+  if (Array.isArray(result.links)) result.links = result.links.map((link) => ({ ...link, t:redact(link.t), h:redact(link.h) }));
+  if (result.sensitivePresent || privateBrowserSessions.has(sessionKey(ctx.userId,ctx.sessionId))) delete result.screenshot;
+  return result;
+}
 
 // Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
 const foldText = (text) => String(text || '').toLowerCase().replace(/ø/g,'o').replace(/æ/g,'ae').replace(/ß/g,'ss').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
@@ -102,6 +126,7 @@ function browserEvent(args) {
     if (!event.text) throw badInput('click_text needs the visible text.');
   } else if (type === 'type') {
     event.text = String(args.text ?? '').slice(0, 1000);
+    if (cardNumberIn(event.text)) throw badInput('The agent cannot type a payment card number. Ask the owner to enter it in the merchant checkout.');
     if (!event.text && args.clear !== true) throw badInput('type needs text.');
     event.clear = args.clear === true;
     event.submit = args.submit === true;
@@ -143,12 +168,14 @@ async function vaultSecret(userId, ref) {
   if (!row) throw badInput(`No vault secret ${ref}. Use vault_list, or ask the user to save it with vault_request.`);
   const value = await store.revealSecret(userId, row.id);
   if (!value) throw badInput(`Vault secret ${ref} is empty.`);
+  if (forbiddenPaymentSecret(row.name, value)) throw badInput('Payment card numbers and security codes cannot be filled from the agent vault.');
   return { name: row.name, value };
 }
 const hostMatches = (url, host) => {
   try {
-    const current = new URL(url).hostname.toLowerCase(), want = String(host || '').toLowerCase().replace(/^www\./, '');
-    return !!want && (current === want || current.endsWith(`.${want}`) || current === `www.${want}`);
+    const page = new URL(url);
+    const current = page.hostname.toLowerCase().replace(/^www\./, ''), want = String(host || '').toLowerCase().replace(/^www\./, '');
+    return page.protocol === 'https:' && !!want && current === want;
   } catch { return false; }
 };
 const hostOf = (url) => { try { return new URL(url).hostname; } catch { return 'another page'; } };
@@ -158,9 +185,13 @@ const hostOf = (url) => { try { return new URL(url).hostname; } catch { return '
 function vaultRequestArgs(args = {}) {
   const name = String(args.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (!name) throw badInput('name is a short label for the credential, such as “GitHub password”.');
-  const host = String(args.host || '').trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/?#].*$/, '').slice(0, 120);
+  if (forbiddenPaymentSecret(name, '')) throw badInput('Payment and identity codes must stay with the merchant or identity app, not in the agent vault.');
+  const host = String(args.host || '').trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/?#].*$/, '').replace(/^www\./, '').slice(0, 120);
   const reason = String(args.reason || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-  return { name, host, reason };
+  const kind = args.kind || (host && /(?:password|log.?in|sign.?in)/i.test(name) ? 'login' : /(?:api.?key|token)/i.test(name) ? 'api_key' : 'secret');
+  if (!['login', 'api_key', 'secret'].includes(kind)) throw badInput('kind must be login, api_key, or secret.');
+  if (kind === 'login' && (!host || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host))) throw badInput('A website login needs a valid host, such as github.com.');
+  return { name, host, reason, kind };
 }
 async function secretApprovalDetail(args, { userId }) {
   let name = String(args.secret || '');
@@ -177,10 +208,15 @@ async function fillBrowserSecret(args, ctx) {
   // Check where the browser is before the value leaves the vault.
   const here = await execInSandbox(ctx.userId, 'browser_action', { event: { type: 'wait', ms: 1, agent: true }, sessionId: ctx.sessionId }, opts);
   if (!hostMatches(here?.url, host)) throw badInput(`The browser is on ${hostOf(here?.url)}, not ${host}. Nothing was typed.`);
-  const { value } = await vaultSecret(ctx.userId, ref);
+  const { name, value } = await vaultSecret(ctx.userId, ref);
+  const scoped = /^(.+\.[A-Za-z]{2,}) (?:username|password)$/i.exec(name);
+  if (scoped && !hostMatches(here.url, scoped[1])) throw badInput(`This saved login belongs to ${scoped[1]}, not the current site. Nothing was typed.`);
   const out = await execInSandbox(ctx.userId, 'browser_action', { event: { ...event, text: value, secret: true }, sessionId: ctx.sessionId }, opts);
+  privateBrowserSessions.add(sessionKey(ctx.userId,ctx.sessionId));
+  const values = privateBrowserValues.get(sessionKey(ctx.userId,ctx.sessionId)) || [];
+  values.push(value); privateBrowserValues.set(sessionKey(ctx.userId,ctx.sessionId), values);
   ctx.trace(entry('lock', `browser_fill_secret: ${ref} on ${host}`));
-  return out;
+  return safeBrowserResult(out, ctx);
 }
 
 const CAPABILITY_ALIASES = {
@@ -338,7 +374,7 @@ const TOOLS = {
       if (!isAzureConfigured()) throw Object.assign(new Error('browser tool unavailable until Azure VM is configured'), { code: 'DISABLED' });
       const out = await execInSandbox(ctx.userId, 'browser_open', { url: u, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_open: ${new URL(u).hostname} on ${out.vmName}`));
-      return out;
+      return safeBrowserResult(out, ctx);
     },
   },
   browser_action: {
@@ -346,20 +382,23 @@ const TOOLS = {
     description: 'Use the current browser page like a person: click, double_click, right_click, hover, type, key, scroll, select, drag, back, forward, reload, wait. Target elements by ref from the latest page state, or by x,y from the screenshot.',
     run: async (args, ctx) => {
       const event = browserEvent(args || {});
+      await purchaseFlow.beforeAction(args, ctx);
       const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_action: ${event.type} on ${out.vmName}`));
-      return out;
+      return safeBrowserResult(out, ctx);
     },
   },
   browser_submit: {
     name: 'browser_submit', type: 'browser', approval: true,
     description: 'The final click or key press that buys, pays, books, sends, posts, deletes or changes account settings on a website. Same arguments as browser_action plus a summary. REQUIRES owner approval.',
+    approvalDetail: purchaseFlow.approvalDetail,
     run: async (args, ctx) => {
       const event = browserEvent(args || {});
       if (!String(args.summary || '').trim()) throw badInput('browser_submit needs a summary of what the action will do.');
+      await purchaseFlow.beforeSubmit(args, ctx);
       const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_submit: ${event.type} on ${out.vmName}`));
-      return out;
+      return safeBrowserResult(out, ctx);
     },
   },
   vault_list: {
@@ -368,26 +407,32 @@ const TOOLS = {
     run: async (_, ctx) => {
       const secrets = await store.listSecrets(ctx.userId);
       ctx.trace(entry('lock', `vault_list: ${secrets.length}`));
-      return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })) };
+      return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })), paymentMethods: (await store.listPaymentMethods(ctx.userId)).map(({id,merchant,label})=>({id,merchant,label})) };
     },
   },
   vault_request: {
     name: 'vault_request', type: 'function', approval: true, sideEffects: false,
-    description: 'Ask the user to save a credential or payment detail that vault_list does not have yet (a password, username, API key, card number). The user types it into a secure card and it is encrypted in their vault; you get back only its ref for browser_fill_secret. Never ask for secret values in chat.',
+    description: 'Ask the user to save a website login (username and password), API key, or other credential. Use kind=login and the website host for sign-in. Never request card numbers, CVC, BankID codes or PINs.',
     approvalDetail: async (args) => {
-      const { name, host, reason } = vaultRequestArgs(args);
-      return JSON.stringify({ name, host, reason, summary: `Save “${name}” to your vault` });
+      const { name, host, reason, kind } = vaultRequestArgs(args);
+      return JSON.stringify({ name, host, reason, kind, summary: kind === 'login' ? `Save sign-in details for ${host}` : `Save “${name}” to your vault` });
     },
     approvalCard: (args) => {
-      const { name, host, reason } = vaultRequestArgs(args);
-      return { type: 'secret', suggest: name, host, note: reason };
+      const { name, host, reason, kind } = vaultRequestArgs(args);
+      return { type: 'secret', kind, suggest: name, host, note: reason };
     },
     run: async (args, ctx) => {
-      const { name } = vaultRequestArgs(args);
+      const { name, host, kind } = vaultRequestArgs(args);
       // listSecrets is newest first, so a re-saved name resolves to the new value.
-      const row = (await store.listSecrets(ctx.userId)).find((item) => item.name === name);
-      if (!row) throw badInput(`“${name}” was not saved to the vault. Ask the user before requesting it again.`);
+      const secrets = await store.listSecrets(ctx.userId);
+      const savedName = kind === 'login' ? `${host} password` : name;
+      const row = secrets.find((item) => item.name === savedName);
+      if (!row) throw badInput(`“${savedName}” was not saved to the vault. Ask the user before requesting it again.`);
       ctx.trace(entry('lock', `vault_request: saved as ${row.ref}`));
+      if (kind === 'login') {
+        const username = secrets.find((item) => item.name === `${host} username`);
+        return { ref: row.ref, usernameRef: username?.ref || null, name: row.name, saved: true };
+      }
       return { ref: row.ref, name: row.name, saved: true };
     },
   },
@@ -613,11 +658,12 @@ const TOOLS = {
     run: async (args, ctx) => {
       const input = normalizeSubAgent(args || {});
       const existing = await store.listSubAgents(ctx.userId);
-      if (existing.length >= 25) throw Object.assign(new Error('Sub-agent limit reached.'), { code: 'BAD_INPUT' });
+      if (existing.filter(agent => !agent.systemKind).length >= 25) throw Object.assign(new Error('Sub-agent limit reached.'), { code: 'BAD_INPUT' });
       if (input.trigger.type === 'subagent' && !existing.some((agent) => agent.id === input.trigger.sourceAgentId)) throw Object.assign(new Error('Source sub-agent not found.'), { code: 'BAD_INPUT' });
       if (input.trigger.type === 'app') {
         const ok = await composio.isToolkitConnected(ctx.userId, input.trigger.app);
         if (!ok) throw Object.assign(new Error('Connected app required — connect it under Apps first.'), { code: 'BAD_INPUT' });
+        await composio.ensureAppTrigger(ctx.userId, input.trigger.app, input.trigger.event, input.trigger.connectedAccountId);
       }
       const agent = await store.createSubAgent(ctx.userId, input, nextRunAt(input.trigger));
       ctx.trace(entry('clock', `trigger_create: ${agent.name}`));

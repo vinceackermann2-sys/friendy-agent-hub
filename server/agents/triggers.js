@@ -28,8 +28,10 @@ function normalizeTrigger(input, currentId) {
   if (type === 'app') {
     const app = text(input?.app, 40).toLowerCase();
     const event = text(input?.event, 80).toLowerCase();
+    const connectedAccountId = text(input?.connectedAccountId, 100);
     if (!/^[a-z0-9_-]+$/.test(app) || !/^[a-z0-9_.:-]+$/.test(event)) bad('Choose a valid connected-app event.');
-    return { type, app, event };
+    if (connectedAccountId && !/^ca_[A-Za-z0-9_-]+$/.test(connectedAccountId)) bad('Choose a valid connected account.');
+    return { type, app, event, ...(connectedAccountId ? {connectedAccountId} : {}) };
   }
 
   const sourceAgentId = text(input?.sourceAgentId, 100);
@@ -57,7 +59,7 @@ function nextRunAt(trigger, from = Date.now()) {
 
 function eventMatches(trigger, event) {
   if (!trigger || !event || trigger.type !== event.type) return false;
-  if (trigger.type === 'app') return trigger.app === event.app && (trigger.event === '*' || trigger.event === event.event);
+  if (trigger.type === 'app') return trigger.app === String(event.app || '').toLowerCase() && (trigger.event === '*' || trigger.event === String(event.event || '').toLowerCase()) && (!trigger.connectedAccountId || trigger.connectedAccountId === event.connectedAccountId);
   if (trigger.type === 'subagent') return trigger.sourceAgentId === event.sourceAgentId && event.event === 'completed';
   return false;
 }

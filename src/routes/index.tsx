@@ -1,35 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { LingonApp, lingonHeadLinks } from "@/components/LingonApp";
+import {
+  pageMeta,
+  SITE_DESCRIPTION,
+  SITE_ORIGIN,
+  SITE_TITLE,
+  SOCIAL_IMAGE,
+} from "@/lib/seo";
 
 export const Route = createFileRoute("/")({
   head: () => ({
-    meta: [
-      { title: "Belna — Swedish Safe AI Agents | Arche 1.0 Personal AI Agent" },
-      {
-        name: "description",
-        content:
-          "Belna builds Swedish safe AI agents. Arche 1.0 is built on the open-source Kimi K3 model with an agentic harness optimized for privacy and safety.",
-      },
-      { property: "og:title", content: "Belna — Swedish Safe AI Agents" },
-      {
-        property: "og:description",
-        content:
-          "Arche 1.0: Swedish safe AI agents built on open-source Kimi K3. Your personal AI agent — if you can think it, your agent can make it real.",
-      },
-      { property: "og:type", content: "website" },
-      { property: "og:url", content: "https://belna.se/" },
-      { property: "og:site_name", content: "Belna" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "Belna — Swedish Safe AI Agents" },
-      {
-        name: "twitter:description",
-        content:
-          "Arche 1.0 is your personal AI agent, built on open Kimi K3 weights with a harness designed for privacy and safety.",
-      },
-    ],
+    meta: pageMeta({ title: SITE_TITLE, description: SITE_DESCRIPTION, url: `${SITE_ORIGIN}/` }),
     links: [
       ...lingonHeadLinks,
-      { rel: "canonical", href: "https://belna.se/" },
+      { rel: "canonical", href: `${SITE_ORIGIN}/` },
     ],
     scripts: [
       {
@@ -39,25 +23,28 @@ export const Route = createFileRoute("/")({
           "@graph": [
             {
               "@type": "Organization",
-              "@id": "https://belna.se/#organization",
+              "@id": `${SITE_ORIGIN}/#organization`,
               name: "Belna",
-              url: "https://belna.se/",
-              slogan: "Swedish Safe AI Agents",
+              url: `${SITE_ORIGIN}/`,
+              slogan: "Your personal AI agent",
             },
             {
               "@type": "WebSite",
-              "@id": "https://belna.se/#website",
+              "@id": `${SITE_ORIGIN}/#website`,
               name: "Belna",
-              url: "https://belna.se/",
+              url: `${SITE_ORIGIN}/`,
+              description: SITE_DESCRIPTION,
               publisher: { "@id": "https://belna.se/#organization" },
             },
             {
               "@type": "SoftwareApplication",
-              name: "Arche 1.0",
-              url: "https://belna.se/app",
-              applicationCategory: "BusinessApplication",
+              name: "Belna",
+              alternateName: "Arche 1.0",
+              url: `${SITE_ORIGIN}/app`,
+              image: SOCIAL_IMAGE,
+              applicationCategory: "ProductivityApplication",
               operatingSystem: "Web",
-              description: "Personal AI agent built on open Kimi K3 weights with an agentic harness designed for privacy and safety.",
+              description: SITE_DESCRIPTION,
               publisher: { "@id": "https://belna.se/#organization" },
             },
           ],

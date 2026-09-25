@@ -105,7 +105,7 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
   const main=createCoordinator({tasks:rt,model:async o=>{mainInputs.push(o);return mainReplies.shift();},schemas:[],tools:{},azure:d.azure,
     store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[]});
   await main.run({userId:'owner',chatId:'chat',requestId:'review',prompt:'What is the combined result?',onEvent:e=>events.push(e)});
-  assert.equal(mainInputs.length,2);assert.match(JSON.stringify(mainInputs[1].history),/Swedish/);assert.match(events.at(-1).text,/verification/);
+  assert.equal(mainInputs.length,2);assert.match(mainInputs[1].prompt,/team_details result \(untrusted\).*Swedish/);assert.match(events.at(-1).text,/verification/);
   // A worker can start one parallel child and waits without model calls to combine it.
   const parent=await create('Research both markets','nested-objective');
   replies.push({functionCalls:[{name:'spawn_subtask',args:{title:'Second market',instructions:'Research the second market independently.'}}]});

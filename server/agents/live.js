@@ -158,6 +158,7 @@ function applyPage(s, out) {
   if (Array.isArray(out.elements)) s.elements = out.elements;
   if (Number.isFinite(out.scrollY)) s.scrollY = out.scrollY;
   if (Number.isFinite(out.pageHeight)) s.pageHeight = out.pageHeight;
+  if (typeof out.sensitivePresent === 'boolean') s.sensitivePresent = out.sensitivePresent;
   if (out.url || Array.isArray(out.elements)) s.dialog = out.dialog || '';
   if (Array.isArray(out.windows)) s.windows = out.windows;
 }
@@ -245,7 +246,7 @@ async function start({ userId, trace, kind = 'browser' }) {
   await azure.acquireLease(userId, { leaseId: id, kind });
   const s = {
     id, remote: true, userId, url: desktop ? '' : 'about:blank', title: '', text: '', links: [], elements: [], screenshot: '', lastFrame: null,
-    working: false, userControl: false, viewers: new Set(), lastActive: Date.now(), lastRenewedAt:Date.now(), fail: false,
+    working: false, userControl: false, ownerSensitive: false, sensitiveValues: [], viewers: new Set(), lastActive: Date.now(), lastRenewedAt:Date.now(), fail: false,
     relayToken: crypto.randomBytes(32).toString('base64url'), relay: null, relayReady: false, relayConnectedAt: 0,
     relayWaiters: [], pending: new Map(), transport: desktop ? 'x11-stream' : 'cdp-screencast', kind, windows: [],
   };
@@ -387,7 +388,12 @@ async function agentInput(s, ev, trace) {
     if (s.relay && s.relay.readyState === 1) {
       const frameAt = s.lastFrameAt || 0;
       const out = await sendRelayCommand(s, 'input', { event: ev || {} });
-      if (out) { await waitForFrame(s, frameAt, s.kind === 'desktop' ? 2000 : 1200); return updateFromRelay(s, out, trace); }
+      if (out) {
+        await waitForFrame(s, frameAt, s.kind === 'desktop' ? 2000 : 1200);
+        const updated = updateFromRelay(s, out, trace);
+        if (ev?.secret && ev.text) { s.sensitiveValues ||= []; s.sensitiveValues.push(String(ev.text)); }
+        return updated;
+      }
     }
     if (s.kind === 'desktop') throw Object.assign(new Error('The computer lost its connection. Try the action again.'), { code: 'AZURE_DESKTOP' });
     if (ev && ev.secret) throw Object.assign(new Error('The live browser relay is not connected, so the secret was not typed.'), { code: 'AZURE_BROWSER_RELAY' });
@@ -401,6 +407,7 @@ async function agentInput(s, ev, trace) {
 
 function takeOver(s, on) {
   s.userControl = !!on;
+  if (on) s.ownerSensitive = true;
   s.lastActive = Date.now();
   broadcast(s, { state: s.userControl ? 'user' : (s.working ? 'working' : 'idle') });
   return { userControl: s.userControl };

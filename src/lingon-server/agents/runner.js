@@ -18,6 +18,22 @@ import { fanOut } from './subagents.js';
 import { compactIfNeeded } from './sessions.js';
 import { realResearch } from '../research.js';
 
+// Chat and task turns see the owner's local time. The per-turn block goes after the
+// cached prompt prefix, so a changing clock never invalidates the cache.
+function userTimeZone(value) {
+  const zone = String(value || '').trim().slice(0, 64);
+  if (!zone) return 'UTC';
+  try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return zone; } catch { return 'UTC'; }
+}
+
+function runtimeContext({ timeZone, now = new Date() } = {}) {
+  const zone = userTimeZone(timeZone);
+  const format = (date, options) => new Intl.DateTimeFormat('en-US', { timeZone: zone, ...options }).format(date);
+  const offset = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'shortOffset' }).formatToParts(now).find((p) => p.type === 'timeZoneName')?.value || 'GMT';
+  const days = Array.from({ length: 14 }, (_, i) => format(new Date(now.getTime() + i * 864e5), { weekday: 'short', month: 'short', day: 'numeric' })).join('; ');
+  return `Current time: ${format(now, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${format(now, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} in ${zone} (${offset}). The year is ${format(now, { year: 'numeric' })}. Next 14 days: ${days}. Use this clock for every date, time and relative-date question ("today", "tomorrow", "next weekend") and write absolute dates in task briefs; never infer the date from training data.`;
+}
+
 function runtimeClock(now = new Date()) {
   const iso = now.toISOString();
   const date = new Intl.DateTimeFormat('en-US', {
@@ -53,9 +69,11 @@ async function ensureCredit(userId) {
   }
 }
 
-async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, signal, onDelta }) {
+async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, signal, onDelta, attachments }) {
   const direct = currentTimeAnswer(task);
   if (direct) {
+    // Keep streaming UX consistent even for instant clock answers:
+    // emit in small chunks so the bubble updates instead of popping in.
     if (typeof onDelta === 'function') {
       const parts = String(direct).match(/(\s+|[^\s]+)/g) || [direct];
       let full = '';
@@ -72,7 +90,7 @@ async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, 
   const replyContext = replyTo && replyTo.text
     ? `[The user is replying to this ${replyTo.role === 'user' ? 'user' : 'assistant'} message: ${String(replyTo.text).slice(0, 500)}]\n\n`
     : '';
-  const r = await callFoundry({ prompt: replyContext + task, system, history: h2, model, signal, onDelta });
+  const r = await callFoundry({ prompt: replyContext + task, system, history: h2, model, signal, onDelta, attachments });
   return { text: r.text, usage: r.usage, model: r.model || model, compacted, compactUsage: costUsage || null };
 }
 
@@ -97,4 +115,4 @@ async function runResearch({ userId, sessionId, query, trace, push, signal }) {
   return r;
 }
 
-export { ensureCredit, modelAnswer, logModelUsage, runResearch, fanOut, runtimeClock, currentTimeAnswer };
+export { ensureCredit, modelAnswer, logModelUsage, runResearch, fanOut, runtimeClock, runtimeContext, userTimeZone, currentTimeAnswer };

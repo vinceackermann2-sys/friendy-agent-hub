@@ -421,6 +421,7 @@ async function parseWebhook(raw, headers = {}) {
   const toolkit = String(account.toolkit?.slug || body.toolkit_slug || body.toolkit || body.app || '').toLowerCase();
   const trigger = String(metadata.trigger_slug || body.trigger_slug || body.trigger || body.event || '').toUpperCase();
   return {
+    id: String(body.id || ''),
     ownerId: accountUser.slice('belna:'.length),
     connectedAccountId: connectedId,
     toolkit,
@@ -546,6 +547,8 @@ async function listTriggerTypes(toolkit) {
       description: t.description,
       toolkit: String((t.toolkit && t.toolkit.slug) || s || '').toLowerCase(),
       logo: (t.toolkit && t.toolkit.logo) || '',
+      config: t.config || {},
+      requiresWebhookEndpointSetup: t.requires_webhook_endpoint_setup === true,
     }));
   triggerCache.set(key, items);
   setTimeout(() => triggerCache.delete(key), 10 * 60 * 1000).unref?.();
@@ -563,9 +566,9 @@ async function triggerOptionsForUser(belnaUserId) {
       const meta = await toolkitMeta(c.toolkit);
       let events = [];
       try {
-        events = (await listTriggerTypes(c.toolkit)).map((t) => t.slug);
+        events = (await listTriggerTypes(c.toolkit)).filter(t => !t.requiresWebhookEndpointSetup && !Object.values(t.config).some(field => field?.required)).map(t => t.slug);
       } catch {}
-      if (!events.length) events = ['new_activity'];
+      if (!events.length) continue;
       apps.push({
         id: c.toolkit,
         name: (meta && meta.name) || c.toolkit,
@@ -578,6 +581,26 @@ async function triggerOptionsForUser(belnaUserId) {
   } catch {
     return { schedules, apps: [] };
   }
+}
+
+async function ensureAppTrigger(belnaUserId, toolkit, slug, connectedAccountId) {
+  const event = String(slug || '').trim().toUpperCase();
+  const type = (await listTriggerTypes(toolkit)).find(item => item.slug?.toUpperCase() === event);
+  if (!type || type.toolkit !== String(toolkit).toLowerCase()) throw Object.assign(new Error('That connected-app event is unavailable.'), { code:'BAD_INPUT' });
+  if (type.requiresWebhookEndpointSetup || Object.values(type.config).some(field => field?.required)) throw Object.assign(new Error('That event needs additional setup and cannot be used here yet.'), { code:'BAD_INPUT' });
+  if (connectedAccountId) {
+    const account = await getConnectedAccount(connectedAccountId);
+    if (String(account.user_id) !== composioUserId(belnaUserId) || String(account.toolkit?.slug || '').toLowerCase() !== String(toolkit).toLowerCase() || String(account.status).toUpperCase() !== 'ACTIVE') {
+      throw Object.assign(new Error('That connected account is unavailable.'), {code:'BAD_INPUT'});
+    }
+  }
+  const subscriptions = await cfetch('/webhook_subscriptions');
+  const ready = (subscriptions.items || []).some(item => {
+    try { return new URL(item.webhook_url).pathname === '/api/composio/webhook' && item.enabled_events?.includes('composio.trigger.message'); }
+    catch { return false; }
+  });
+  if (!ready || !(await webhookSecret())) throw new Error('Connected-app event delivery is not configured on the server.');
+  return cfetch(`/trigger_instances/${encodeURIComponent(event)}/upsert`, { method:'POST', body:{ user_id:composioUserId(belnaUserId), ...(connectedAccountId ? {connected_account_id:connectedAccountId} : {}), trigger_config:{} } });
 }
 
 async function toolkitForUser(belnaUserId, toolkit) {
@@ -655,6 +678,7 @@ module.exports = {
   executeTool,
   listTriggerTypes,
   triggerOptionsForUser,
+  ensureAppTrigger,
   isToolkitConnected,
   toolkitForUser,
   setToolkitPermissions,

@@ -242,7 +242,7 @@ function inputItems(prompt, history, attachments, system = '', cache = false) {
   return input;
 }
 
-function responseBody({ prompt, system, history, model, json, tools, attachments, stream, reasoningEffort, toolChoice, cacheKey }) {
+function responseBody({ prompt, system, history, model, json, tools, attachments, stream, reasoningEffort, toolChoice, cacheKey, maxOutputTokens }) {
   const declarations = (Array.isArray(tools) ? tools : [])
     .filter((tool) => tool?.name && tool?.parameters)
     .map((tool) => ({
@@ -259,7 +259,8 @@ function responseBody({ prompt, system, history, model, json, tools, attachments
     model: model || MODEL_DEFAULT,
     input: inputItems(prompt, history, attachments, instructions, promptCache.enabled),
     reasoning: { effort: reasoningEffort || REASONING_EFFORT },
-    max_output_tokens: 32768,
+    // Callers that only need a short reply cap output so a runaway generation stays cheap and quick.
+    max_output_tokens: Math.min(32768, Math.max(256, Number(maxOutputTokens) || 32768)),
     store: false,
     stream: !!stream,
   };
@@ -369,6 +370,16 @@ async function attemptResponse(options, modelName) {
     const decoder = new TextDecoder();
     const doneItems = [];
     let buffer = '';
+    // A function call whose arguments outgrow maxArgumentChars is looping; the stream
+    // stops there and the call is returned with its partial arguments.
+    const argumentLimit = Number(options.maxArgumentChars) || 0;
+    const callArguments = new Map();
+    let runawayCall = null;
+    // A response that starts more function calls than the caller will run is flooding
+    // (hundreds of parallel searches); it stops there and keeps the calls finished so far.
+    const callLimit = Number(options.maxFunctionCalls) || 0;
+    let callsStarted = 0, tooManyCalls = false;
+    const stopped = () => runawayCall || tooManyCalls;
     const consume = (frame) => {
       const payload = String(frame).split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
       if (!payload || payload === '[DONE]') return;
@@ -379,6 +390,13 @@ async function attemptResponse(options, modelName) {
         try { options.onDelta?.(event.delta, streamedText); } catch {}
       } else if (event.type === 'response.output_item.done' && event.item) {
         doneItems.push(event.item);
+      } else if ((argumentLimit || callLimit) && event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
+        callsStarted++;
+        if (callLimit && callsStarted > callLimit) { tooManyCalls = true; return; }
+        if (argumentLimit) callArguments.set(event.item.id, { type: 'function_call', name: event.item.name, call_id: event.item.call_id, arguments: '' });
+      } else if (argumentLimit && event.type === 'response.function_call_arguments.delta') {
+        const call = callArguments.get(event.item_id);
+        if (call) { call.arguments += event.delta || ''; if (call.arguments.length > argumentLimit) runawayCall = call; }
       } else if ((event.type === 'response.completed' || event.type === 'response.incomplete') && event.response) {
         // An incomplete response still carries its output and billable usage.
         completed = event.response;
@@ -396,18 +414,19 @@ async function attemptResponse(options, modelName) {
         if (next.value) {
           buffer += decoder.decode(next.value, { stream: !next.done }).replace(/\r\n/g, '\n');
           let split;
-          while ((split = buffer.indexOf('\n\n')) >= 0) {
+          while (!stopped() && (split = buffer.indexOf('\n\n')) >= 0) {
             consume(buffer.slice(0, split));
             buffer = buffer.slice(split + 2);
           }
         }
+        if (stopped()) { try { await reader.cancel(); } catch {} break; }
         if (next.done) break;
       }
-      if (buffer.trim()) consume(buffer);
+      if (!stopped() && buffer.trim()) consume(buffer);
     } finally {
       try { reader.releaseLock(); } catch {}
     }
-    const data = completed || { output: doneItems, usage: null, model: modelName };
+    const data = completed || { output: runawayCall ? [...doneItems, runawayCall] : doneItems, usage: null, model: modelName };
     const out = extractResponse(data, modelName, { allowEmptyText: !!options.allowEmptyText, body });
     if (!streamedText && out.text) {
       try { options.onDelta?.(out.text, out.text); } catch {}

@@ -317,6 +317,8 @@ function browserKit() {
   async function snapshot(page, state = {}) {
     const read = () => page.evaluate((sensitivePattern) => {
       const sensitive = new RegExp(sensitivePattern, 'i');
+      const secretValues = [...document.querySelectorAll('[data-lingon-secret]')].map((el) => String(el.value || '')).filter(Boolean);
+      const scrub = (value) => secretValues.reduce((text, secret) => text.split(secret).join('[protected]'), String(value || ''));
       const SELECTOR = 'a[href],button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=switch],[role=combobox],[role=textbox],[role=searchbox],[contenteditable=""],[contenteditable=true],[onclick]';
       document.querySelectorAll('[data-lingon-ref]').forEach((el) => el.removeAttribute('data-lingon-ref'));
       const vw = innerWidth, vh = innerHeight, elements = [];
@@ -337,7 +339,7 @@ function browserKit() {
         // A label can wrap its control; only the label's own words name it.
         const label = el.labels && el.labels[0] ? el.labels[0].cloneNode(true) : null;
         if (label) label.querySelectorAll('select,input,textarea,button').forEach((node) => node.remove());
-        const name = (el.getAttribute('aria-label') || (label && label.textContent.trim()) || (tag === 'select' ? el.name : el.innerText) || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || (type === 'submit' || type === 'button' ? el.value : '') || '').trim().replace(/\s+/g, ' ').slice(0, 70);
+        const name = scrub((el.getAttribute('aria-label') || (label && label.textContent.trim()) || (tag === 'select' ? el.name : el.innerText) || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || (type === 'submit' || type === 'button' ? el.value : '') || '').trim().replace(/\s+/g, ' ')).slice(0, 70);
         const guarded = type === 'password' || sensitive.test(`${el.getAttribute('autocomplete') || ''} ${el.name || ''} ${el.id || ''}`);
         let line = `[${ref}] ${role} "${name}"`;
         // Values of password, payment and vault-filled fields never reach the model.
@@ -350,11 +352,13 @@ function browserKit() {
         elements.push(line);
         budget -= line.length;
       }
-      const links = [...document.querySelectorAll('a[href]')].slice(0, 5).map((a) => ({ t: (a.innerText || '').trim().slice(0, 60), h: a.href.slice(0, 160) }));
-      return { elements, links, scrollY: Math.round(scrollY), pageHeight: document.documentElement.scrollHeight, text: document.body ? document.body.innerText.slice(0, 3000) : '' };
+      const links = [...document.querySelectorAll('a[href]')].slice(0, 5).map((a) => ({ t: scrub((a.innerText || '').trim().slice(0, 60)), h: scrub(a.href.slice(0, 160)) }));
+      const sensitivePresent = [...document.querySelectorAll('input,textarea')].some((el) =>
+        el.hasAttribute('data-lingon-secret') || ((el.type === 'password' || sensitive.test(`${el.autocomplete || ''} ${el.name || ''} ${el.id || ''}`)) && !!el.value));
+      return { elements, links, scrollY: Math.round(scrollY), pageHeight: document.documentElement.scrollHeight, text: document.body ? scrub(document.body.innerText.slice(0, 3000)) : '', sensitivePresent };
     }, SENSITIVE);
     // A page that is still navigating has no document yet; try once more.
-    const data = await read().catch(() => sleep(700).then(read)).catch(() => ({ elements: [], links: [], text: '', scrollY: 0, pageHeight: 0 }));
+    const data = await read().catch(() => sleep(700).then(read)).catch(() => ({ elements: [], links: [], text: '', scrollY: 0, pageHeight: 0, sensitivePresent: true }));
     const out = { url: page.url(), title: await page.title().catch(() => ''), ...data };
     if (state.dialog) { out.dialog = state.dialog; state.dialog = ''; }
     return out;
@@ -506,6 +510,127 @@ function toolBrowserSessionId(userId, sessionId) {
   return `tool_${userHash(`${userId}:${sessionId || 'default'}`)}`;
 }
 
+// One Chromium profile belongs to this user's VM, while each live run keeps
+// its own tab and page-state file. Chrome stores website sessions in the
+// profile; passwords remain in the encrypted server vault and its password
+// manager stays disabled by policy. This function is serialized into both VM
+// browser runners, so it must not depend on module-scope imports.
+function browserProfileRuntime(root) {
+  const fs = require('fs');
+  const path = require('path');
+  const profile = path.join(root, 'profile');
+  const portFile = path.join(profile, 'debug-port');
+  const cookieFile = path.join(profile, 'lingon-session-cookies.json');
+  const launchLock = path.join(root, 'profile-launch.lock');
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const freePort = () => new Promise((resolve, reject) => {
+    const server = require('net').createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+  const connect = async (puppeteer) => {
+    const port = Number(fs.existsSync(portFile) ? fs.readFileSync(portFile, 'utf8') : 0);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    try {
+      const url = `http://127.0.0.1:${port}`;
+      const probe = await fetch(`${url}/json/version`, { signal: AbortSignal.timeout(1500) });
+      if (!probe.ok) return null;
+      return await puppeteer.connect({ browserURL: url });
+    } catch { return null; }
+  };
+  const cookieClient = async (browser) => {
+    const page = (await browser.pages())[0] || await browser.newPage();
+    return page.target().createCDPSession();
+  };
+  const saveCookies = async (browser) => {
+    const client = await cookieClient(browser);
+    try {
+      const { cookies } = await client.send('Storage.getCookies');
+      const temporary = `${cookieFile}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, JSON.stringify(cookies || []), { mode: 0o600 });
+      fs.renameSync(temporary, cookieFile);
+    } finally { await client.detach().catch(() => {}); }
+  };
+  const restoreCookies = async (browser) => {
+    if (!fs.existsSync(cookieFile)) return;
+    let saved;
+    try { saved = JSON.parse(fs.readFileSync(cookieFile, 'utf8')); } catch { return; }
+    if (!Array.isArray(saved) || !saved.length) return;
+    const cookies = saved.filter((item) => item && item.name && item.domain && item.value != null).map((item) => {
+      const cookie = { name:item.name, value:item.value, path:item.path || '/', secure:!!item.secure, httpOnly:!!item.httpOnly };
+      if (item.domain.startsWith('.')) cookie.domain = item.domain;
+      else cookie.url = `${item.secure ? 'https' : 'http'}://${item.domain}${cookie.path}`;
+      if (Number(item.expires) > 0) cookie.expires = Number(item.expires);
+      if (item.sameSite) cookie.sameSite = item.sameSite;
+      if (item.priority) cookie.priority = item.priority;
+      if (item.partitionKey) cookie.partitionKey = item.partitionKey;
+      return cookie;
+    });
+    if (!cookies.length) return;
+    const client = await cookieClient(browser);
+    try {
+      try { await client.send('Storage.setCookies', { cookies }); }
+      catch { for (const cookie of cookies) await client.send('Storage.setCookies', { cookies:[cookie] }).catch(() => {}); }
+    }
+    finally { await client.detach().catch(() => {}); }
+  };
+  const connectOrLaunch = async (puppeteer, executablePath) => {
+    fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
+    fs.chmodSync(profile, 0o700);
+    let browser = await connect(puppeteer);
+    if (browser) return browser;
+    let locked = false;
+    try { fs.mkdirSync(launchLock, { mode: 0o700 }); locked = true; }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    if (!locked) {
+      try {
+        if (Date.now() - fs.statSync(launchLock).mtimeMs > 30000) {
+          fs.rmdirSync(launchLock);
+          return connectOrLaunch(puppeteer, executablePath);
+        }
+      } catch {}
+      for (let i = 0; i < 100; i++) {
+        await sleep(200);
+        browser = await connect(puppeteer);
+        if (browser) return browser;
+      }
+      try {
+        if (Date.now() - fs.statSync(launchLock).mtimeMs > 30000) {
+          fs.rmdirSync(launchLock);
+          return connectOrLaunch(puppeteer, executablePath);
+        }
+      } catch {}
+      throw new Error('The browser profile is starting. Try again shortly.');
+    }
+    try {
+      browser = await connect(puppeteer);
+      if (browser) return browser;
+      const port = await freePort();
+      browser = await puppeteer.launch({ headless: true, executablePath, userDataDir: profile,
+        args: ['--disable-dev-shm-usage', '--window-size=1280,900', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port] });
+      fs.writeFileSync(portFile, String(port), { mode: 0o600 });
+      browser.process()?.unref?.();
+      await restoreCookies(browser).catch(() => {});
+      return browser;
+    } finally { try { fs.rmdirSync(launchLock); } catch {} }
+  };
+  const session = async (browser, sessionId) => {
+    const dir = path.join(root, sessionId);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const targetFile = path.join(dir, 'target-id');
+    const targetId = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, 'utf8').trim() : '';
+    let page = targetId ? (await browser.pages()).find((item) => item.target()._targetId === targetId) : null;
+    const reusedPage = !!page;
+    if (!page) page = await browser.newPage();
+    fs.writeFileSync(targetFile, page.target()._targetId, { mode: 0o600 });
+    return { page, reusedPage, stateFile: path.join(dir, 'state.json'), targetFile };
+  };
+  return { profile, connectOrLaunch, session, saveCookies };
+}
+
 function buildBrowserSessionScript(action, args = {}) {
   const sessionId = browserSessionId(args.sessionId);
   const kind = String(action || 'inspect');
@@ -536,32 +661,23 @@ function buildBrowserSessionScript(action, args = {}) {
     "const fs = require('fs');",
     "const path = require('path');",
     `const kit = (${browserKit.toString()})();`,
+    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions');`,
     "const payload = JSON.parse(Buffer.from(process.env.LINGON_BROWSER_PAYLOAD, 'base64').toString('utf8'));",
-    "const root = '/var/lib/lingon-browser/sessions';",
-    "const profile = path.join(root, payload.sessionId);",
-    "const stateFile = path.join(profile, 'state.json');",
-    "fs.mkdirSync(profile, { recursive: true });",
-    "const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { url: 'about:blank' };",
     "const findBrowser = () => ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p));",
     "const executablePath = findBrowser();",
     "if (!executablePath) throw new Error('Chromium is not installed yet (first boot is still running).');",
     "let puppeteer;",
     "try { puppeteer = require('/opt/lingon/node_modules/puppeteer-core'); } catch { throw new Error('VM browser runtime is not installed yet (first boot is still running).'); }",
     "(async () => {",
-    "  const portFile = path.join(profile, 'debug-port');",
-    "  const freePort = () => new Promise((resolve, reject) => { const server = require('net').createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); }); });",
-    "  let port = Number(fs.existsSync(portFile) ? fs.readFileSync(portFile, 'utf8') : 0) || 0;",
-    "  let browser; let reused = false;",
-    "  try { const probe = await fetch('http://127.0.0.1:' + port + '/json/version'); if (!probe.ok) throw new Error('not ready'); browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:' + port }); reused = true; }",
-    "  catch { port = await freePort(); fs.writeFileSync(portFile, String(port)); browser = await puppeteer.launch({ headless: true, executablePath, userDataDir: profile, args: ['--disable-dev-shm-usage', '--window-size=1280,900', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port] }); browser.process()?.unref?.(); }",
+    "  const browser = await profileRuntime.connectOrLaunch(puppeteer, executablePath);",
     "  try {",
-    "    const pages = await browser.pages();",
-    "    const page = pages[0] || await browser.newPage();",
+    "    const { page, reusedPage, stateFile } = await profileRuntime.session(browser, payload.sessionId);",
+    "    const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { url: 'about:blank' };",
     "    const pageState = {};",
     "    await kit.setupPage(page, pageState);",
     "    if (payload.action === 'navigate') await kit.open(page, payload.url);",
     "    else {",
-    "      if (!reused && state.url && state.url !== 'about:blank' && kit.allowedRequest(state.url)) { await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}); if (Number.isFinite(state.scrollY)) await page.evaluate((y) => window.scrollTo(0, y), state.scrollY).catch(() => {}); }",
+    "      if (!reusedPage && state.url && state.url !== 'about:blank' && kit.allowedRequest(state.url)) { await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}); if (Number.isFinite(state.scrollY)) await page.evaluate((y) => window.scrollTo(0, y), state.scrollY).catch(() => {}); }",
     "      if (payload.action === 'input' && payload.event && payload.event.secretUrl) {",
     "        const secretUrl = payload.event.secretUrl; delete payload.event.secretUrl;",
     `        const got = await fetch(secretUrl, { headers: { 'x-ms-version': '${BLOB_API}' } });`,
@@ -578,17 +694,19 @@ function buildBrowserSessionScript(action, args = {}) {
     "    if (!upload.ok) throw new Error('Screenshot upload failed: HTTP ' + upload.status + ' ' + (await upload.text()).slice(0, 300));",
     "    fs.writeFileSync(stateFile, JSON.stringify({ url: snap.url, title: snap.title, scrollY: snap.scrollY }));",
     "    process.stdout.write(JSON.stringify({ ok: true, ...snap, screenshotBytes: screenshot.length }));",
-    "  } finally { browser.disconnect(); }",
+    "  } finally { await profileRuntime.saveCookies(browser).catch(() => {}); browser.disconnect(); }",
     "})().catch((error) => { process.stdout.write(JSON.stringify({ ok: false, error: String(error.message || error) })); process.exitCode = 1; });",
   ].join('\n');
   const codeB64 = Buffer.from(runner, 'utf8').toString('base64');
   return [
-    'set +e',
+    'set -e',
     'id -u lingon-browser >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/lingon-browser --shell /usr/sbin/nologin lingon-browser',
     'install -d -m 700 -o lingon-browser -g lingon-browser /var/lib/lingon-browser /var/lib/lingon-browser/sessions',
+    ...CHROMIUM_POLICY_SETUP,
     ...BROWSER_NETWORK_GUARD,
     `echo '${codeB64}' | base64 -d > /tmp/lingon-browser-session.js`,
     'chown lingon-browser:lingon-browser /tmp/lingon-browser-session.js && chmod 600 /tmp/lingon-browser-session.js',
+    'set +e',
     `runuser -u lingon-browser -- env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /tmp/lingon-browser-session.js`,
     'EC=$?',
     'rm -f /tmp/lingon-browser-session.js',
@@ -710,38 +828,32 @@ function buildBrowserRelayScript(args = {}) {
     "const path = require('path');",
     "const WebSocket = require('/opt/lingon/node_modules/ws');",
     `const kit = (${browserKit.toString()})();`,
+    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions');`,
     "const payload = JSON.parse(Buffer.from(process.env.LINGON_BROWSER_RELAY_PAYLOAD, 'base64').toString('utf8'));",
-    "const root = '/var/lib/lingon-browser/sessions';",
-    "const profile = path.join(root, payload.sessionId);",
-    "const stateFile = path.join(profile, 'state.json');",
     "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
     "const findBrowser = () => ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p));",
     "const send = (socket, value) => { try { if (socket && socket.readyState === 1) socket.send(JSON.stringify(value)); } catch {} };",
     "const connect = () => new Promise((resolve, reject) => { const socket = new WebSocket(payload.relayUrl); const timer = setTimeout(() => { try { socket.terminate(); } catch {} reject(new Error('relay connection timed out')); }, 15000); socket.once('open', () => { clearTimeout(timer); resolve(socket); }); socket.once('error', (error) => { clearTimeout(timer); reject(error); }); });",
     "(async () => {",
-    "  fs.mkdirSync(profile, { recursive: true });",
-    "  const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { url: 'about:blank' };",
     "  const executablePath = findBrowser();",
     "  if (!executablePath) throw new Error('Chromium is not installed yet (first boot is still running).');",
     "  let puppeteer; try { puppeteer = require('/opt/lingon/node_modules/puppeteer-core'); } catch { throw new Error('VM browser runtime is not installed yet (first boot is still running).'); }",
-    "  const portFile = path.join(profile, 'debug-port');",
-    "  const freePort = () => new Promise((resolve, reject) => { const server = require('net').createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); }); });",
-    "  let port = Number(fs.existsSync(portFile) ? fs.readFileSync(portFile, 'utf8') : 0) || 0;",
-    "  let browser;",
-    "  try { const probe = await fetch('http://127.0.0.1:' + port + '/json/version'); if (!probe.ok) throw new Error('not ready'); browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:' + port }); }",
-    "  catch { port = await freePort(); fs.writeFileSync(portFile, String(port)); browser = await puppeteer.launch({ headless: true, executablePath, userDataDir: profile, args: ['--disable-dev-shm-usage', '--window-size=1280,900', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port] }); browser.process()?.unref?.(); }",
-    "  let socket = null; let stopping = false; let page;",
+    "  const browser = await profileRuntime.connectOrLaunch(puppeteer, executablePath);",
+    "  let socket = null; let stopping = false; let page; let cookieTimer;",
     "  try {",
-    "    const pages = await browser.pages(); page = pages[0] || await browser.newPage();",
+    "    const opened = await profileRuntime.session(browser, payload.sessionId); page = opened.page;",
+    "    const { stateFile, targetFile } = opened;",
+    "    const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { url: 'about:blank' };",
     "    const pageState = {};",
     "    await kit.setupPage(page, pageState);",
-    "    if (!state.url || state.url === 'about:blank') { await page.goto('about:blank').catch(() => {}); } else if (kit.allowedRequest(state.url)) { await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}); if (Number.isFinite(state.scrollY)) await page.evaluate((y) => window.scrollTo(0, y), state.scrollY).catch(() => {}); }",
+    "    if (!opened.reusedPage && state.url && state.url !== 'about:blank' && kit.allowedRequest(state.url)) { await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}); if (Number.isFinite(state.scrollY)) await page.evaluate((y) => window.scrollTo(0, y), state.scrollY).catch(() => {}); }",
     "    const cdp = await page.target().createCDPSession(); await cdp.send('Page.enable');",
     "    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 72, maxWidth: 1280, maxHeight: 900, everyNthFrame: 1 });",
     "    cdp.on('Page.screencastFrame', ({ data, sessionId: frameId }) => { try { if (socket && socket.readyState === 1 && socket.bufferedAmount < 4000000) socket.send(Buffer.from(data, 'base64')); } catch {} cdp.send('Page.screencastFrameAck', { sessionId: frameId }).catch(() => {}); });",
     // Agent actions and inspections return the full page state (text and numbered
     // elements); the user's own input in the live view only needs url and title.
-    "    const metadata = async (full) => { const s = full ? await kit.snapshot(page, pageState) : { url: page.url(), title: await page.title().catch(() => '') }; const scrollY = full ? s.scrollY : await page.evaluate(() => window.scrollY).catch(() => 0); fs.writeFileSync(stateFile, JSON.stringify({ url: s.url, title: s.title, scrollY })); return s; };",
+    "    const metadata = async (full) => { const s = full ? await kit.snapshot(page, pageState) : { url: page.url(), title: await page.title().catch(() => '') }; const scrollY = full ? s.scrollY : await page.evaluate(() => window.scrollY).catch(() => 0); fs.writeFileSync(stateFile, JSON.stringify({ url: s.url, title: s.title, scrollY })); await profileRuntime.saveCookies(browser).catch(() => {}); return s; };",
+    "    cookieTimer = setInterval(() => { profileRuntime.saveCookies(browser).catch(() => {}); }, 10000);",
     "    const dispatch = async (command) => { const action = String(command.action || 'inspect'); const ev = command.event || {}; if (action === 'navigate') await kit.open(page, String(command.url || '')); else if (action === 'input') { await kit.act(page, ev); if (ev.type === 'move') return { url: page.url() }; } else if (action === 'stop') { stopping = true; } else if (action !== 'inspect') throw new Error('Unsupported browser relay action.'); return metadata(action !== 'input' || ev.agent === true); };",
     "    while (!stopping) {",
     "      try { socket = await connect(); send(socket, { type: 'ready', sessionId: payload.sessionId }); send(socket, { type: 'meta', ...(await metadata(true)), state: 'idle' });",
@@ -749,8 +861,9 @@ function buildBrowserRelayScript(args = {}) {
     "      } catch (error) { if (!stopping) await sleep(1000); } finally { try { socket?.close(); } catch {} socket = null; }",
     "    }",
     "    await cdp.send('Page.stopScreencast').catch(() => {});",
-    "    await browser.close().catch(() => {});",
-    "  } finally { try { browser.disconnect(); } catch {} }",
+    "    await page.close().catch(() => {});",
+    "    fs.rmSync(targetFile, { force: true });",
+    "  } finally { clearInterval(cookieTimer); await profileRuntime.saveCookies(browser).catch(() => {}); try { browser.disconnect(); } catch {} }",
     "})().catch((error) => { process.stderr.write(String(error.message || error)); process.exitCode = 1; });",
   ].join('\n');
   const codeB64 = Buffer.from(runner, 'utf8').toString('base64');
@@ -759,6 +872,7 @@ function buildBrowserRelayScript(args = {}) {
     'set -eu',
     'id -u lingon-browser >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/lingon-browser --shell /usr/sbin/nologin lingon-browser',
     'if [ ! -d /opt/lingon/node_modules/ws ]; then npm install --prefix /opt/lingon ws@8.21.3; fi',
+    ...CHROMIUM_POLICY_SETUP,
     ...BROWSER_NETWORK_GUARD,
     `install -d -m 700 -o lingon-browser -g lingon-browser '${root}'`,
     `echo '${codeB64}' | base64 -d > '${root}/relay.js'`,
@@ -1112,7 +1226,7 @@ function buildRestoreStateScript(url) {
   return [
     'set -eu',
     'MARKER=/var/lib/lingon-state/restored-v1',
-    '[ -f "$MARKER" ] && exit 0',
+    'if [ -f "$MARKER" ]; then echo STATE_RESTORED; exit 0; fi',
     'install -d -m 700 /var/lib/lingon-state',
     'ARCHIVE=$(mktemp /tmp/lingon-state.XXXXXX.tar.gz)',
     'trap \'rm -f "$ARCHIVE"\' EXIT',
@@ -1132,6 +1246,7 @@ function buildRestoreStateScript(url) {
     'install -d -m 700 -o lingon-desktop -g lingon-desktop /home/lingon-desktop',
     'chown -R lingon-desktop:lingon-desktop /home/lingon-desktop',
     'date -u +%FT%TZ > "$MARKER"',
+    'echo STATE_RESTORED',
   ].join('\n');
 }
 
@@ -1150,9 +1265,11 @@ function buildSnapshotStateScript(url) {
     'ARCHIVE=$(mktemp /tmp/lingon-state.XXXXXX.tar.gz)',
     'trap \'rm -f "$ARCHIVE"\' EXIT',
     "tar --exclude='*/Cache/*' --exclude='*/Code Cache/*' --exclude='*/GPUCache/*' --exclude='home/lingon-desktop/.relay' --exclude='home/lingon-desktop/.run' --exclude='home/lingon-desktop/.cache' -czf \"$ARCHIVE\" -C / home/lingon/workspace var/lib/lingon-browser/sessions home/lingon-desktop",
+    'tar -tzf "$ARCHIVE" >/dev/null',
     `URL=$(echo '${encoded}' | base64 -d)`,
     `curl -fsS --retry 2 -X PUT -H 'x-ms-version: ${BLOB_API}' -H 'x-ms-blob-type: BlockBlob' -H 'content-type: application/gzip' --data-binary @"$ARCHIVE" "$URL"`,
     'date -u +%FT%TZ > /var/lib/lingon-state/restored-v1',
+    'echo STATE_SAVED',
   ].join('\n');
 }
 
@@ -1343,6 +1460,12 @@ function parseRunOutput(data, { maxStdout = 12000, maxStderr = 4000 } = {}) {
   }
   if (!stdout && !stderr && output) stdout = typeof output === 'string' ? output : JSON.stringify(output).slice(0, 12000);
   return { stdout: stdout.slice(0, maxStdout), stderr: stderr.slice(0, maxStderr) };
+}
+
+function assertStateCommandSucceeded(output, marker, code) {
+  if (output.stderr || !String(output.stdout || '').split(/\r?\n/).includes(marker)) {
+    throw Object.assign(new Error(output.stderr || 'VM state command did not confirm completion.'), { code });
+  }
 }
 
 function cloudInit(cfg) {
@@ -1655,7 +1778,7 @@ async function restoreDurableState(userId, { vmId } = {}) {
   if (vmId && restoredState.get(key) === vmId) return { restored: true, cached: true };
   const transfer = await createDurableStateTransfer(userId);
   const out = await runCommand(userId, buildRestoreStateScript(transfer.url), { maxStdout: 2000 });
-  if (out.stderr) throw Object.assign(new Error(out.stderr), { code: 'AZURE_STATE_RESTORE' });
+  assertStateCommandSucceeded(out, 'STATE_RESTORED', 'AZURE_STATE_RESTORE');
   if (vmId) restoredState.set(key, vmId);
   return { restored: true };
 }
@@ -1665,7 +1788,7 @@ async function snapshotDurableState(userId) {
   if (!cfg.durableState) return { saved: false, disabled: true };
   const transfer = await createDurableStateTransfer(userId);
   const out = await runCommand(userId, buildSnapshotStateScript(transfer.url), { maxStdout: 2000 });
-  if (out.stderr) throw Object.assign(new Error(out.stderr), { code: 'AZURE_STATE_SAVE' });
+  assertStateCommandSucceeded(out, 'STATE_SAVED', 'AZURE_STATE_SAVE');
   return { saved: true };
 }
 
@@ -1869,6 +1992,7 @@ export {
   buildRunScript,
   buildShellScript,
   browserKit,
+  browserProfileRuntime,
   desktopKit,
   buildDesktopRelayScript,
   buildDesktopRelayStopScript,
@@ -1880,6 +2004,7 @@ export {
   cloudInit,
   buildRestoreStateScript,
   buildSnapshotStateScript,
+  assertStateCommandSucceeded,
   getSandbox,
   statusForUser,
   execInSandbox,

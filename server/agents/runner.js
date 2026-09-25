@@ -16,6 +16,23 @@ const { entry, persistRun } = require('./tracing');
 const { pickTools } = require('./tools');
 const { fanOut } = require('./subagents');
 const { compactIfNeeded } = require('./sessions');
+const { realResearch } = require('../research');
+
+// Chat and task turns see the owner's local time. The per-turn block goes after the
+// cached prompt prefix, so a changing clock never invalidates the cache.
+function userTimeZone(value) {
+  const zone = String(value || '').trim().slice(0, 64);
+  if (!zone) return 'UTC';
+  try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return zone; } catch { return 'UTC'; }
+}
+
+function runtimeContext({ timeZone, now = new Date() } = {}) {
+  const zone = userTimeZone(timeZone);
+  const format = (date, options) => new Intl.DateTimeFormat('en-US', { timeZone: zone, ...options }).format(date);
+  const offset = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'shortOffset' }).formatToParts(now).find((p) => p.type === 'timeZoneName')?.value || 'GMT';
+  const days = Array.from({ length: 14 }, (_, i) => format(new Date(now.getTime() + i * 864e5), { weekday: 'short', month: 'short', day: 'numeric' })).join('; ');
+  return `Current time: ${format(now, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${format(now, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} in ${zone} (${offset}). The year is ${format(now, { year: 'numeric' })}. Next 14 days: ${days}. Use this clock for every date, time and relative-date question ("today", "tomorrow", "next weekend") and write absolute dates in task briefs; never infer the date from training data.`;
+}
 
 function runtimeClock(now = new Date()) {
   const iso = now.toISOString();
@@ -85,7 +102,6 @@ async function logModelUsage(userId, model, usages) {
 
 /* Research run: parallel subagent fetch (3 sources) + real browser open + summary. */
 async function runResearch({ userId, sessionId, query, trace, push, signal }) {
-  const { realResearch } = require('../research');
   push(entry('search', 'research task accepted'));
   const r = await realResearch(query, { userId, signal, onTrace: (e) => push(e) });
   push(entry('globe', `${r.sources.length} source groups checked`));
@@ -99,4 +115,4 @@ async function runResearch({ userId, sessionId, query, trace, push, signal }) {
   return r;
 }
 
-module.exports = { ensureCredit, modelAnswer, logModelUsage, runResearch, fanOut, runtimeClock, currentTimeAnswer };
+module.exports = { ensureCredit, modelAnswer, logModelUsage, runResearch, fanOut, runtimeClock, runtimeContext, userTimeZone, currentTimeAnswer };

@@ -33,5 +33,12 @@ const {maybeExtract,rankMemories}=require('../server/agents/memory');
   assert.equal(forgotten.saved.length,0);
   assert.equal(writes.length+updates.length,before,'forget request must not re-save a fact');
   assert.equal(rankMemories([{text:'User lives in Stockholm',status:'superseded',category:'user'}],'Where do I live?').length,0);
+  // Chat and task turns pass infer:false: an explicit "remember" still saves, but no
+  // extraction model runs (the agent's memory tools and hourly upkeep cover the rest).
+  const beforeInfer=modelCalls,writesBefore=writes.length;
+  const noInfer=await maybeExtract({userId:'u',prompt:'I just moved to Göteborg last week',answer:'Nice',existing:[],infer:false});
+  assert.equal(noInfer.saved.length,0);assert.equal(modelCalls,beforeInfer,'no extraction model call');
+  const explicitNoInfer=await maybeExtract({userId:'u',prompt:'Remember that I take my coffee black',answer:'Noted',existing:[],infer:false});
+  assert.equal(explicitNoInfer.saved.length,1);assert.equal(writes.length,writesBefore+1);assert.equal(modelCalls,beforeInfer);
   console.log('memory behavior: automatic correction, no 200 cap, secret and superseded guards: ok');
 })().catch(error=>{console.error(error);process.exitCode=1;});

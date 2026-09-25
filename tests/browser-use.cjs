@@ -22,6 +22,7 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
   await rejects('browser_action', { type: 'drag', ref: 3 }, /to_ref, or to_x and to_y/);
   await rejects('browser_action', { type: 'scroll', dy: 99999 }, /Invalid scroll distance/);
   await rejects('browser_action', { type: 'type', ref: 2 }, /type needs text/);
+  await rejects('browser_action', { type: 'type', ref: 2, text: '4111 1111 1111 1111' }, /cannot type a payment card/);
   await rejects('browser_submit', { type: 'click', ref: 4 }, /needs a summary/);
   // A valid action reaches the live session (none is open in this test).
   await rejects('browser_action', { type: 'click', ref: 4 }, /Open a browser page before/);
@@ -72,7 +73,7 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
   try {
     assert.equal(TOOLS.browser_fill_secret.approval, true);
     assert.equal(TOOLS.computer_fill_secret.approval, true);
-    assert.deepEqual(await TOOLS.vault_list.run({}, ctx), { secrets: [{ ref: 'sec_gh12', name: 'GitHub password' }, { ref: 'sec_card', name: 'Visa card number' }] });
+    assert.deepEqual(await TOOLS.vault_list.run({}, ctx), { secrets: [{ ref: 'sec_gh12', name: 'GitHub password' }, { ref: 'sec_card', name: 'Visa card number' }], paymentMethods: [] });
     const detail = JSON.parse(await TOOLS.browser_fill_secret.approvalDetail({ secret: 'sec_gh12', ref: 2, host: 'github.com' }, { userId: 'u' }));
     assert.equal(detail.summary, 'Type your saved “GitHub password” on github.com', 'the owner sees which secret goes where');
     await rejects('browser_fill_secret', { secret: 'sec_gh12', ref: 2, host: 'evil.example' }, /not evil\.example\. Nothing was typed/);
@@ -83,22 +84,28 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
     assert.deepEqual({ ...typed[0] }, { type: 'type', agent: true, ref: 2, text: 'hunter2-secret', clear: true, submit: true, secret: true });
     assert.ok(!JSON.stringify(out).includes('hunter2'), 'the value never comes back to the model');
     page.url = 'https://gist.github.com/';
-    await TOOLS.browser_fill_secret.run({ secret: 'sec_gh12', ref: 2, host: 'github.com' }, ctx);
-    assert.equal(typed.length, 2, 'subdomains of the approved site count');
+    await rejects('browser_fill_secret', { secret: 'sec_gh12', ref: 2, host: 'github.com' }, /not github\.com\. Nothing was typed/);
+    assert.equal(typed.length, 1, 'a related subdomain does not inherit a login');
     await rejects('computer_fill_secret', { secret: 'sec_card', x: 10, y: 10 }, /window is text/);
-    await TOOLS.computer_fill_secret.run({ secret: 'sec_card', x: 400, y: 300, window: 'Bank' }, ctx);
-    assert.equal(typed[2].expectTitle, 'Bank', 'the VM only types into the approved window');
-    assert.equal(typed[2].text, '4111111111111111');
+    await rejects('computer_fill_secret', { secret: 'sec_card', x: 400, y: 300, window: 'Bank' }, /cannot be filled/);
+    assert.equal(typed.length, 1, 'an old saved card number was never typed');
 
     // A missing credential is requested through a secure chat card; the model
     // only learns the ref of what the owner saved.
     assert.equal(TOOLS.vault_request.approval, true, 'the owner types the value, the model never does');
     assert.equal(TOOLS.vault_request.sideEffects, false, 'an unsaved request is not an unknown outcome');
     assert.deepEqual(TOOLS.vault_request.approvalCard({ name: '  GitHub   password ', host: 'https://github.com/login', reason: 'To sign in' }),
-      { type: 'secret', suggest: 'GitHub password', host: 'github.com', note: 'To sign in' });
+      { type: 'secret', kind: 'login', suggest: 'GitHub password', host: 'github.com', note: 'To sign in' });
+    assert.deepEqual(TOOLS.vault_request.approvalCard({ name: 'Service API key', kind: 'api_key', host: 'service.example' }),
+      { type: 'secret', kind: 'api_key', suggest: 'Service API key', host: 'service.example', note: '' });
     assert.throws(() => TOOLS.vault_request.approvalCard({ name: ' ' }), /short label/);
+    assert.throws(() => TOOLS.vault_request.approvalCard({ name: 'Visa card number' }), /must stay with the merchant/);
     assert.deepEqual(await TOOLS.vault_request.run({ name: 'GitHub password' }, ctx), { ref: 'sec_gh12', name: 'GitHub password', saved: true });
-    await rejects('vault_request', { name: 'Bank PIN' }, /was not saved/);
+    store.listSecrets = async () => [{ id:'sec_loginp', ref:'sec_pw12', name:'github.com password' }, { id:'sec_loginu', ref:'sec_un12', name:'github.com username' }];
+    assert.deepEqual(await TOOLS.vault_request.run({ name: 'GitHub password', host: 'https://www.github.com/login', kind:'login' }, ctx),
+      { ref:'sec_pw12', usernameRef:'sec_un12', name:'github.com password', saved:true }, 'the model receives only login refs');
+    assert.throws(() => TOOLS.vault_request.approvalCard({ name:'Login', kind:'login' }), /valid host/);
+    assert.throws(() => TOOLS.vault_request.approvalCard({ name: 'Bank PIN' }), /identity app/);
     assert.ok(require('../server/agents/tools').pickTools('log in to my bank').some((tool) => tool.name === 'vault_request'));
   } finally {
     Object.assign(store, { listSecrets: saved.listSecrets, revealSecret: saved.revealSecret });
@@ -146,6 +153,7 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
     await kit.act(page, { type: 'type', ref: ref('Name'), text: 'Ada Lovelace', clear: true, secret: true, agent: true });
     assert.equal(await page.$eval('#pw', (el) => el.value), 'hunter2-secret');
     const filled = await kit.snapshot(page, state);
+    assert.equal(filled.sensitivePresent, true, 'sensitive fields suppress model screenshots');
     assert.ok(filled.elements.some((line) => /input:password "Password" \(filled from the vault\)/.test(line)));
     assert.ok(filled.elements.some((line) => /"Name" \(filled from the vault\)/.test(line)), 'a vault value in an ordinary field is hidden too');
     assert.ok(!JSON.stringify(filled).includes('hunter2') && !JSON.stringify(filled).includes('4111') && !JSON.stringify(filled).includes('Lovelace'));

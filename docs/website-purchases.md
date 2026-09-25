@@ -1,0 +1,11 @@
+# Website purchases in the agent VM
+
+The agent can prepare a merchant checkout in its account-scoped VM browser. The final `browser_submit` action requires a fresh owner decision. A purchase approval shows the HTTPS website, line items, total and currency, delivery address, and masked card. The server binds the decision to the current page URL, visible checkout text and form elements, action target, and saved merchant payment method. If the page changes, execution stops for a new review.
+
+Under Settings → Secrets, owners can save website logins in the encrypted vault and register the **masked metadata** of cards already saved in merchant accounts. The payment-method table stores the merchant host, label, brand and last four digits only. The model receives its ID, merchant and label; the server adds brand and last four digits to the owner's approval card. Full PAN, CVC, expiry and card tokens are not stored in this feature. Card numbers and identity codes are rejected by the agent vault and fill tools.
+
+For BankID, passkeys, one-time codes and first-time card entry, `browser_auth_handoff` pauses the agent and gives the owner control of the live VM browser. The owner checks the merchant and the request in their own identity app, completes the challenge, then resumes the agent. The app does not act as a BankID relying party; each merchant handles its own BankID transaction. The agent receives no PIN or challenge response. Sites that cannot use an existing merchant card may require the owner to enter the card during this handoff and register its masked details before the agent submits the order.
+
+Deploy `supabase/migrations/20260925100000_merchant_payment_methods.sql` before using the new payment-method UI on a Supabase-backed installation. Browser handoff requires the existing live Azure VM relay and a configured `LINGON_PUBLIC_ORIGIN`. The generic edge VM path supports the structured purchase approval but does not expose the live handoff; deploy the Node live-browser host for BankID and similar challenges.
+
+Relevant PCI guidance: [PCI SSC FAQ 1574](https://www.pcisecuritystandards.org/faqs/1574/) says software and service-provider vaults must not retain card verification codes for future transactions, even with cardholder permission.

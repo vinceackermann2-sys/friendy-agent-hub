@@ -2,7 +2,8 @@
    Durable rows are unbounded; only relevant active entries enter a prompt.
    USER.md holds stable user facts, MEMORY.md curated long-term facts, and
    memory/YYYY-MM-DD.md daily context. Corrections supersede prior rows. */
-const { callFoundry } = require('../foundry');
+const { callFoundry, MODEL_FALLBACK, CHAT_REASONING_EFFORT } = require('../foundry');
+const store = require('../store');
 
 const STOP = new Set('the,a,an,and,or,but,for,with,from,that,this,these,those,you,your,they,them,their,there,here,what,when,where,which,who,how,why,not,are,was,were,have,has,can,will,just,like,know,think,please,thanks,thank,hello,okay'.split(','));
 const words=s=>String(s || '').toLowerCase().replace(/[^a-zåäö0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>3&&!STOP.has(w));
@@ -23,20 +24,22 @@ function looksSecret(text){return /(ghp_|github_pat_|sk-|bearer |password\s*[:=]
 function sameFact(a,b){const wa=new Set(words(a)),wb=new Set(words(b));if(!wa.size||!wb.size)return false;const n=[...wa].filter(w=>wb.has(w)).length;return n/Math.max(wa.size,wb.size)>.6;}
 function categoryFor(text){return /^(user |i |my |call me)|prefer|allerg|language|timezone|live|work as/i.test(String(text || ''))?'user':'long_term';}
 
-async function maybeExtract({userId,prompt,answer,existing}){
+// infer:false keeps only the free explicit path ("remember that ..."); inferred facts
+// then come from the agent's own memory tools and the hourly memory upkeep.
+async function maybeExtract({userId,prompt,answer,existing,infer=true}){
   if(/^\s*(?:please\s+)?(forget|delete|remove|stop remembering|don't remember|do not remember)\b/i.test(String(prompt || '')))return {saved:[],usage:null};
   if(!looksFactWorthy(prompt))return {saved:[],usage:null};
   const explicit=String(prompt || '').match(/(?:remember(?: that)?|keep in mind(?: that)?|my preference is)\s+(.{4,600})/i);
   if(explicit&&!/(actually|no longer|instead|changed|correction|now (live|work|prefer|use|have))/i.test(String(prompt))){
     const text=explicit[1].replace(/[.?!]+$/,'').trim();
     if(text&&!looksSecret(text)&&!(existing || []).some(m=>sameFact(m.text,text))){
-      try{const m=await require('../store').addMemory(userId,text,'explicit',{category:categoryFor(text),importance:2});return {saved:[m],usage:null,usedModel:null};}catch{}
+      try{const m=await store.addMemory(userId,text,'explicit',{category:categoryFor(text),importance:2});return {saved:[m],usage:null,usedModel:null};}catch{}
     }
     return {saved:[],usage:null,usedModel:null};
   }
+  if(!infer)return {saved:[],usage:null,usedModel:null};
   let facts=[],usage=null,usedModel=null;
   try{
-    const {MODEL_FALLBACK,CHAT_REASONING_EFFORT}=require('../foundry');
     const candidates=(existing || []).slice(0,20).map(m=>({id:m.id,text:m.text,category:m.category || 'long_term'}));
     const r=await callFoundry({model:MODEL_FALLBACK,json:true,reasoningEffort:CHAT_REASONING_EFFORT,
       system:'Extract durable facts stated by the user. Return ONLY JSON {"facts":[{"text":"...","category":"user|long_term|daily","importance":0,"supersedesId":null}]}. Max 3. user = stable profile or preference; long_term = durable project/relationship/standing fact; daily = useful current-session context likely to expire. importance 0-3. When the user corrects a listed fact, set supersedesId to that exact id. Omit assistant claims, guesses, transient chatter, secrets, credentials and one-off questions.',
@@ -45,7 +48,7 @@ async function maybeExtract({userId,prompt,answer,existing}){
     const parsed=JSON.parse(r.text.replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim());
     facts=(parsed.facts || []).map(f=>typeof f==='string'?{text:f}:f).filter(f=>f&&typeof f.text==='string').slice(0,3);
   }catch{return {saved:[],usage,usedModel};}
-  const store=require('../store'),saved=[];
+  const saved=[];
   for(const fact of facts){
     const text=fact.text.trim().slice(0,2000);if(!text||looksSecret(text))continue;
     const category=['user','long_term','daily'].includes(fact.category)?fact.category:categoryFor(text);

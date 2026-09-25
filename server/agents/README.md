@@ -85,6 +85,32 @@ run a separate Node worker with this flag unset, and point
 claim expires. The recovery schedule is infrastructure for ad-hoc tasks; it
 does not create user automations.
 
+### Automations in a hosted deployment
+
+Apply the sub-agent, upkeep, upkeep-worker, and `20260924140000_automation_recovery.sql`
+migrations. The named Supabase cron job calls the authenticated
+`/api/internal/automations-tick` endpoint when a schedule is due or a durable
+automation task needs reconciliation. Set the `VM_SWEEP_TOKEN` vault secret and,
+if the worker runs on another host, `AUTOMATION_WORKER_URL`. Keep the chat-task
+worker configured too: automation runs use its durable task state and approvals.
+The migration uses the lowercase Vault key `vm_sweep_token` for both cron pumps;
+the server reads that same key when checking the bearer token.
+
+Connected-app automations additionally need a Composio webhook subscription for
+`composio.trigger.message` pointing to `/api/composio/webhook`, plus the matching
+`COMPOSIO_WEBHOOK_SECRET` environment value or `composio_webhook_secret` server
+secret. Creating an app automation registers its trigger instance; the app only
+offers events that need no additional trigger fields. A missing webhook setup
+causes creation to fail with an error instead of leaving an inert automation.
+The worker also registers older enabled app automations and refreshes their
+registration hourly; registration errors appear in the Automations panel.
+
+After deployment, open Automations and use **Run now** on a built-in and a user
+automation. Check its last status/result, then check `automation_runs` and the
+automation chat. A scheduled run can remain `running` while the task worker owns
+it; the next automation tick reconciles its terminal result. Pending approvals
+pause that automation's next scheduled run until the decision is resolved.
+
 ### Verification and cost claims
 
 `npm test` covers a foreground reply during a held worker action, duplicate

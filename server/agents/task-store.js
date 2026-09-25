@@ -17,6 +17,7 @@ async function query(result) {
 }
 const first = async (request) => (await query(request))?.[0] || null;
 const get = (userId, id) => first(db().from('agent_chat_tasks').select('*').eq('user_id', userId).eq('id', id));
+const byRequestKey = (userId, requestKey) => first(db().from('agent_chat_tasks').select('*').eq('user_id', userId).eq('request_key', requestKey));
 const list = (userId, chatId, cursors={}, events=true) => query(db().rpc('list_chat_tasks', {p_user_id:userId,p_chat_id:chatId,p_cursors:cursors,p_events:events}));
 const due = async () => {
   try { return await query(db().rpc('due_chat_tasks')); }
@@ -35,4 +36,4 @@ const release = (userId,id,token) => query(db().rpc('release_chat_task', { p_id:
 const team = (userId,id) => query(db().rpc('chat_task_team',{p_user_id:userId,p_id:id}));
 const messagePeer = (userId,source,target,callId,version,message) => query(db().rpc('message_chat_task_peer',{p_user_id:userId,p_source:source,p_target:target,p_call_id:callId,p_version:version,p_message:message}));
 const steerTeam = (userId,id,version,instruction,requestId) => query(db().rpc('steer_chat_task_team',{p_user_id:userId,p_id:id,p_version:version,p_instruction:instruction,p_request_id:requestId}));
-module.exports = { get,list,due,create,claim,write,release,team,messagePeer,steerTeam };
+module.exports = { get,byRequestKey,list,due,create,claim,write,release,team,messagePeer,steerTeam };

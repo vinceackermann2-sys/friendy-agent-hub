@@ -136,6 +136,11 @@
     }
   }
 
+  // The agent answers dates and times in the owner's own zone.
+  function localTimeZone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; }
+  }
+
   async function run(rt, prompt) {
     const request = (requests.get(rt.chat.id) || 0) + 1;
     requests.set(rt.chat.id, request);
@@ -149,13 +154,14 @@
       lines:(card.lines || []).slice(-8),agents:card.agents,
     }));
     return stream(rt, '/api/agent/conversation', { prompt, requestId: crypto.randomUUID(), history,
-      context: { agent: { name: rt.agent.name, pers: rt.agent.pers }, replyTo: last?.replyTo,
+      context: { agent: { name: rt.agent.name, pers: rt.agent.pers }, replyTo: last?.replyTo, timeZone: localTimeZone(),
         userMessageId: last?.id, artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, type:f.type, size:f.size, dataUrl:f.dataUrl })) } });
   }
   async function cancelCurrent(rt, replacing = false) {
     const current = active.get(rt.chat.id);
     if (current) current.controller.abort();
-    const cancellation = current ? api('/api/agent/conversation/cancel', { chatId: rt.chat.id, requestId: current.requestId }) : Promise.resolve();
+    // A replacement keeps the unanswered message so the next turn can answer both.
+    const cancellation = current ? api('/api/agent/conversation/cancel', { chatId: rt.chat.id, requestId: current.requestId, replacing }) : Promise.resolve();
     if (replacing) cancellation.catch(() => {});
     else {
       try { await cancellation; }
@@ -191,5 +197,8 @@
   window.Engine = { ...legacy, managed: true, isRunning: (chatId) => !!(active.get(chatId) && !active.get(chatId).answerReady), run, runTask: run, respondWhileWorking: run,
     isTask: () => false, taskKind: () => null, routeMessage: () => 'respond',
     recoverTasks, controlTask,
-    resume: (rt, decision) => stream(rt, '/api/agent/resume', { decision }), stop, download };
+    // Chats saved by the retired single-loop agent may still show Reconnect or an old
+    // approval card; background tasks are the only work that can still be running.
+    resume: async (rt) => { if (rt.chat.managedStatus === 'paused') rt.chat.managedStatus = 'completed'; await recoverTasks(rt, true); },
+    stop, download };
 })();

@@ -13,10 +13,20 @@ const { chromium } = require('playwright');
     });
     const posted=[];
     const deleted=[];
+    const cards=[];
     await context.route('**/api/**',async route => {
       const url=new URL(route.request().url());
       let body={};
-      if(url.pathname==='/api/secrets' && route.request().method()==='POST'){
+      if(url.pathname==='/api/payment-methods' && route.request().method()==='POST'){
+        const input=JSON.parse(route.request().postData() || '{}');
+        const method={id:`pm_${cards.length+1}`,...input,at:Date.now()};
+        cards.push(method);body={method};
+      }else if(url.pathname==='/api/payment-methods')body={methods:cards};
+      else if(url.pathname.startsWith('/api/payment-methods/') && route.request().method()==='DELETE'){
+        const id=url.pathname.split('/').pop();
+        const i=cards.findIndex(card=>card.id===id);if(i>=0)cards.splice(i,1);
+        body={ok:true};
+      }else if(url.pathname==='/api/secrets' && route.request().method()==='POST'){
         const {name,value}=JSON.parse(route.request().postData() || '{}');
         posted.push({name,value});
         const ref=`sec_t${posted.length}`;
@@ -36,6 +46,15 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('.vault-hero, .vault-steps').count(),0,'intro block is gone');
     assert.equal(await page.locator('.vault-kind').count(),3);
     assert.equal(await page.locator('[data-act="vault-kind"][data-k="card"]').count(),0);
+    await page.locator('[data-pm="merchant"]').fill('shop.example');
+    await page.locator('[data-pm="label"]').fill('Everyday card');
+    await page.locator('[data-pm="brand"]').fill('Visa');
+    await page.locator('[data-pm="last4"]').fill('4242');
+    assert.match(await page.locator('.vault-payment-preview').textContent(),/4242/);
+    await page.locator('[data-act="save-merchant-card"]').click();
+    await page.locator('.vault-payment-saved').first().waitFor();
+    assert.equal(cards[0].last4,'4242');
+    assert.match(await page.locator('.vault-payment-saved').first().textContent(),/Visa •••• 4242/);
 
     // Login → "<site> username" + "<site> password"
     await page.locator('[data-vf="site"]').fill('https://www.github.com/login');
@@ -70,7 +89,7 @@ const { chromium } = require('playwright');
     await page.locator('.vault-item').nth(2).waitFor();
     assert.equal(await page.locator('.vault-item-type').first().textContent(),'Other');
     if(process.env.VAULT_SCREENSHOT){
-      await page.locator('.vault-list').scrollIntoViewIfNeeded();
+      await page.locator('.vault-payment').scrollIntoViewIfNeeded();
       await page.waitForTimeout(1800);
       await page.screenshot({path:process.env.VAULT_SCREENSHOT,fullPage:true});
     }

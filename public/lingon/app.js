@@ -462,6 +462,7 @@ const fresh = () => ({
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
   composioApps:[], composioLoading:false, appQuery:'', appFilter:'all', appOpen:null, appDetails:{},
   shopPay:null, shopPayLoading:false, shopPayOrders:[],
+  merchantPaymentMethods:[],
   // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'approvals'
   agentEdit:false, mailTab:'inbox',
   // settings / apps rework
@@ -607,6 +608,7 @@ async function syncFromBackend(force = false) {
     backendSyncOwner = owner;
     backendSyncedAt = 0;
     backendSyncPending = null;
+    state.merchantPaymentMethods = [];
   }
   if (backendSyncPending) {
     if (!force) return backendSyncPending;
@@ -614,11 +616,12 @@ async function syncFromBackend(force = false) {
   }
   if (!force && Date.now() - backendSyncedAt < BACKEND_SYNC_MS) return false;
   const request = (async () => {
-    const [memories, secrets, automationChats, agentContext] = await Promise.allSettled([
+    const [memories, secrets, automationChats, agentContext, paymentMethods] = await Promise.allSettled([
       window.LingonAuth.api('/api/memories?limit=1000'),
       window.LingonAuth.api('/api/secrets'),
       window.LingonAuth.api('/api/automation-chats'),
       window.LingonAuth.api('/api/agent-context'),
+      window.LingonAuth.api('/api/payment-methods'),
     ]);
     if (owner !== billingIdentity()) return false;
     const value = (result) => result.status === 'fulfilled' ? result.value : null;
@@ -628,6 +631,9 @@ async function syncFromBackend(force = false) {
       state.memoryTotal=Number(m.total ?? state.memory.length);
     }
     const s = value(secrets);
+    const payments = value(paymentMethods);
+    const paymentBefore = (state.merchantPaymentMethods || []).map((item)=>item.id).join();
+    if (payments) state.merchantPaymentMethods = payments.methods || [];
     const vaultBefore = state.vault.secrets.map((item) => item.id).join() + '|' + state.vault.encrypted;
     if (s) {
       const remote=(s.secrets || []).map((r)=>({id:r.id,ref:r.ref,name:r.name,at:r.at,backend:true}));
@@ -675,7 +681,7 @@ async function syncFromBackend(force = false) {
     // Settings pages that show the vault repaint once it arrives, unless the
     // user is typing there (a repaint would drop their input).
     const vaultAfter = state.vault.secrets.map((item) => item.id).join() + '|' + state.vault.encrypted;
-    if (owner === billingIdentity() && vaultAfter !== vaultBefore && state.view === 'settings' && ['secrets','browser'].includes(state.settingsTab)) {
+    if (owner === billingIdentity() && (vaultAfter !== vaultBefore || paymentBefore !== (state.merchantPaymentMethods || []).map((item)=>item.id).join()) && state.view === 'settings' && ['secrets','browser'].includes(state.settingsTab)) {
       const main = $('#main');
       if (main && !(main.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))) paintSettings(main);
     }
@@ -1538,9 +1544,12 @@ function tokenPackPickerHtml(b){
   const packs = Array.isArray(b && b.tokenPacks) ? b.tokenPacks : [];
   if (!packs.length) return '<p class="billing-fine">Token packs aren’t available right now.</p>';
   return `<div class="billing-topup">
-    <label class="billing-label" for="buypack">Token pack</label>
+    <span class="billing-label" id="billing-pack-label">Token pack</span>
     <div class="billing-topup-row">
-      <span class="billing-select"><select class="field" id="buypack">${packs.map((t, i) => `<option value="${esc(t.tokens)}" data-rate="${esc(tokenPackRate(t))}"${i === 0 ? ' selected' : ''}>${esc(t.millions)}M tokens — $${fmtC(t.usd)}</option>`).join('')}</select>${icon('chev',15)}</span>
+      <details class="billing-select"><summary class="billing-select-trigger" aria-labelledby="billing-pack-label buypack-value"><span id="buypack-value">${esc(packs[0].millions)}M tokens — $${fmtC(packs[0].usd)}</span>${icon('chev',15)}</summary>
+        <div class="billing-select-menu" aria-label="Token packs">${packs.map((t, i) => `<button type="button" class="billing-select-option${i === 0 ? ' is-selected' : ''}" data-act="select-pack" data-pack="${esc(t.tokens)}" data-rate="${esc(tokenPackRate(t))}" aria-pressed="${i === 0}"><span>${esc(t.millions)}M tokens — $${fmtC(t.usd)}</span>${icon('check',15)}</button>`).join('')}</div>
+        <input type="hidden" id="buypack" value="${esc(packs[0].tokens)}">
+      </details>
       <button class="btn billing-primary" data-act="buycredits">${icon('card',14)} Continue to checkout</button>
     </div>
     <span class="billing-fine" id="buypack-rate">${esc(tokenPackRate(packs[0]))} · secure checkout</span>
@@ -2635,6 +2644,7 @@ function setMobileNav(open, opts = {}){
   if (!app){ return; }
   // In-place class toggle preserves the .side element so the slide animates.
   syncShellClasses();
+  if (mobileNavOpen && workspaceIntroStartedAt === null) paintSide();
   if (mobileNavOpen && opts.focus !== false){
     const first = app.querySelector('#side .sitem, #side .btn, #side .sidebrand');
     if (first && window.matchMedia('(max-width: 760px)').matches){ try { first.focus({ preventScroll:true }); } catch {} }
@@ -3344,9 +3354,15 @@ function saveGoalChange(id, request){
     .catch(error => { toast(error.message || 'Could not save that change.'); refreshGoals(); });
 }
 
+let workspaceIntroStartedAt = null;
 function paintSide(){
   const a = state.agent;
   if (!a) return;
+  const sidebarVisible = mobileNavOpen || !window.matchMedia('(max-width: 760px)').matches;
+  if (workspaceIntroStartedAt === null && sidebarVisible) workspaceIntroStartedAt = performance.now();
+  const introElapsed = workspaceIntroStartedAt === null ? Infinity : performance.now() - workspaceIntroStartedAt;
+  const workspaceIntroClass = introElapsed < 1500 ? ' is-entering' : '';
+  const workspaceIntroStyle = introElapsed < 1500 ? ` style="--workspace-intro-delay:-${Math.round(introElapsed)}ms"` : '';
   const chatScrollTop = $('#side .chatlist')?.scrollTop || 0;
   const u = currentUser();
   const initials = esc((u.name || 'U').slice(0, 1).toUpperCase());
@@ -3358,14 +3374,14 @@ function paintSide(){
   $('#side').innerHTML = `
     <button class="sidebrand" data-act="nav" data-view="chat" title="Belna — back to chat">${Mascot.logo(28)}<span>belna</span></button>
     <button class="btn" style="margin:8px 4px 4px" data-act="newchat">${icon('plus',15)} New chat</button>
-    <div class="side-workspace">
+    <div class="side-workspace${workspaceIntroClass}"${workspaceIntroStyle}>
       <div class="slabel">Workspace</div>
       <button class="sitem navitem${libOn ? ' on' : ''}" data-act="open-library" title="Open your file library">
         <span class="sicon sicon-lib">${icon('library',15)}</span><span>Library</span>
         ${libCount ? `<span class="cnt">${libCount}</span>` : ''}
       </button>
       <button class="sitem navitem${goalsOn ? ' on' : ''}" data-act="open-goals" title="Set goals and check them off as you go">
-        <span class="sicon sicon-goal">${icon('target',15)}</span><span>Goals</span>
+        <span class="sicon sicon-goal"><svg class="ic goal-mark" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle class="goal-ring-outer" cx="12" cy="12" r="9"/><circle class="goal-ring-inner" cx="12" cy="12" r="5"/><circle class="goal-center" cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span><span>Goals</span>
         ${gc.total ? `<span class="cnt">${gc.active}/${gc.total}</span>` : ''}
       </button>
     </div>
@@ -3374,7 +3390,7 @@ function paintSide(){
       <div class="chatlist" role="region" aria-label="Chats" tabindex="0">
         ${state.chats.map(c => `
           <button class="sitem chatitem ${c.id === state.activeChat && state.view === 'chat' ? 'on' : ''}" data-act="openchat" data-id="${c.id}">
-            ${icon(c.source === 'automation' ? 'clock' : 'chatb',14)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span>
+            <span class="chat-bullet" aria-hidden="true"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span>
             <span class="when">${fmtWhen(c.createdAt)}</span>
             <span class="del" data-act="delchat" data-id="${c.id}" title="Delete chat">${icon('trash',13)}</span>
           </button>`).join('') || '<div class="empty" style="padding:20px">No chats yet</div>'}
@@ -3605,7 +3621,7 @@ function paintChat(M){
     <div class="floathead${fv.working ? ' working' : ''}"><div class="fav">${Mascot.head(state.agent.color,44)}</div><div class="pill" role="status" aria-live="polite">${esc(state.agent.name)}<span class="st" id="floatstatus">${esc(fv.text)}</span></div></div>
     <div class="chathead">
       <span class="ttl">${esc(c.title)}</span>
-      ${c.source === 'automation' ? `<span class="chip">${icon('clock',12)} sub-agent</span>` : ''}
+      ${c.source === 'automation' ? `<span class="chip">${icon('clock',12)} ${String(c.id).startsWith('updates_') ? 'updates' : 'sub-agent'}</span>` : ''}
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
       <span class="sp"></span>
       ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
@@ -3908,10 +3924,11 @@ function cvOrderHTML(c, v){
       <div class="cv-line-main"><b>${esc(it.title)}</b><small>${esc([v.merchant, it.quantity > 1 ? `Qty ${it.quantity}` : ''].filter(Boolean).join(' · '))}</small></div>
       ${it.price ? `<span class="cv-price">${esc(it.price)}</span>` : ''}</div>`;
   }).join('');
-  return `<div class="cv-order">${items}
+  return `<div class="cv-order">${v.website ? `<div class="cv-kvs">${cvRow('Website', esc(v.website))}</div>` : ''}${items}
     ${v.payment ? `<div class="cv-pay">${icon('card',16)}<div><b>${esc(v.payment)}</b>${v.email ? `<small>${esc(v.email)}</small>` : ''}</div></div>` : ''}
     ${(v.delivery || []).length ? `<div class="cv-kvs">${cvRow('Deliver to', esc(v.delivery.join(' · ')))}</div>` : ''}
     ${v.total ? `<div class="cv-total"><span>${v.estimated === false ? 'Total' : 'Estimated total'}</span><b>${esc(v.total)}</b></div>` : ''}
+    ${v.checkoutExcerpt ? `<p class="cv-fine">Live checkout text: ${esc(v.checkoutExcerpt)}</p>` : ''}
   </div>`;
 }
 const APPROVAL_TILES = { email:'mail', message:'chatb', event:'clock', app_action:'box', purchase:'card', submit:'check', credential:'key', website:'globe', search:'websearch', web_action:'globe', automation:'clock', generic:'shieldcheck' };
@@ -3923,7 +3940,7 @@ function cvApprovalBody(c, cd){
     case 'message': return `<div class="cv-kvs">${cvRow('Where', esc(v.to || ''))}</div>${v.body ? cvClamp(`<div class="cv-bubble">${esc(v.body)}</div>`, '', cvLong(v.body)) : ''}`;
     case 'event': return `<div class="cv-event"><b>${esc(v.title || 'Event')}</b><div class="cv-kvs">${cvRow('Starts', esc(v.start))}${cvRow('Ends', esc(v.end))}${cvRow('Where', esc(v.location))}</div>${(v.attendees || []).length ? `<div class="cv-chips">${cvChips(v.attendees)}</div>` : ''}</div>`;
     case 'app_action': return (v.fields || []).length ? `<div class="cv-kvs">${v.fields.map(f => cvRow(esc(f.k), esc(f.v))).join('')}</div>` : '';
-    case 'purchase': return cvOrderHTML(c, v) + `<p class="cv-fine">Check the order details and the merchant’s terms before you approve.</p>`;
+    case 'purchase': return cvOrderHTML(c, v) + `<p class="cv-fine">Compare these details with the live merchant checkout before approving.</p>`;
     case 'submit': return `<div class="cv-callout">${icon(v.surface === 'computer' ? 'laptop' : 'globe',16)}<span>${esc(v.summary || 'Final step on the website')}</span></div><p class="cv-fine">This is the final click. It may not be reversible.</p>`;
     case 'credential': return `<div class="cv-callout">${icon('key',16)}<span>${esc(v.summary || 'Type a saved credential')}</span></div><p class="cv-fine">${esc(state.agent.name)} never sees the value. It is typed only while ${esc(v.host || v.window || 'that page')} is open.</p>`;
     case 'website': return `<div class="cv-site">${icon('globe',16)}<div><b>${esc(v.host || 'Website')}</b><small>${esc(v.url || '')}</small></div></div>`;
@@ -4196,6 +4213,11 @@ function cardNode(c, m){
   const pending = cd.status === 'pending';
 
   if (cd.type === 'memory') return '';
+  if (cd.type === 'auth_handoff') return `<div class="acard cv-card cv-approval ${pending ? 'is-pending' : ''}">
+    ${cvHead(cvTile('shieldcheck'), esc(cd.method || 'Identity check'), esc(cd.website || 'Secure website'), cvDecisionChip(cd.status))}
+    <div class="bd"><p>Complete this sign-in in the live browser. For BankID, check the website and request shown in your BankID app before approving. Your code and PIN stay with you.</p></div>
+    ${pending ? `<div class="cv-actions"><button class="btn ghost" data-act="watchlive">Open live browser</button><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Cancel</button><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">I’ve finished</button></div>` : ''}
+  </div>`;
   if (cd.type === 'approval' && cd.managedCallId) return approvalCardHTML(c, m);
   if (cd.type === 'question' && !cd.onboarding && !cd.mascotColors && !cd.customName) return questionCardHTML(c, m);
   if (cd.type === 'connect') return connectCardHTML(c, m);
@@ -4249,14 +4271,17 @@ function cardNode(c, m){
     const requested = !!cd.managedCallId;
     const saved = cd.status === 'saved' || cd.status === 'approved';
     const status = saved ? STCHIP.saved : cd.status === 'denied' ? STCHIP.skipped : stChip(cd);
-    const title = requested ? `${esc(state.agent.name)} needs “${esc(cd.suggest || 'a credential')}”` : 'Save a secret to your vault';
+    const login = requested && cd.kind === 'login';
+    const title = login ? `${esc(cd.host)} sign-in` : requested ? `${esc(state.agent.name)} needs “${esc(cd.suggest || 'a credential')}”` : 'Save a secret to your vault';
     return `<div class="acard secret-card">
     <div class="hd"><div class="tile" style="background:var(--acc-soft);color:var(--acc)">${icon('key',20)}</div><div><b>${title}</b><div class="sub">${cd.host ? `For ${esc(cd.host)} · ` : ''}encrypted in your vault</div></div><div class="st">${status}</div></div>
     <div class="bd">
       ${requested && cd.note ? `<p class="secret-card-reason">${esc(cd.note)}</p>` : ''}
       ${pending ? `<div class="secret-card-fields">
+        ${login ? `<label class="secret-card-label">Email or username<input class="field" data-f="username" type="text" aria-label="Email or username" placeholder="Enter email or username" autocomplete="off" spellcheck="false"></label>
+        <label class="secret-card-label">Password<input class="field mono" data-f="password" type="password" aria-label="Password" placeholder="Enter password" autocomplete="new-password" spellcheck="false"></label>` : `
         ${requested ? `<span class="secret-card-name">${icon('lock',13)} ${esc(cd.suggest || '')}</span>` : `<input class="field" data-f="name" aria-label="Secret name" placeholder="Name, e.g. GitHub password" value="${esc(cd.nameVal || cd.suggest || '')}">`}
-        <input class="field mono" data-f="val" type="password" aria-label="Secret value" placeholder="Paste or type the value" autocomplete="off" spellcheck="false">
+        <input class="field mono" data-f="val" type="password" aria-label="${cd.kind === 'api_key' ? 'API key' : 'Secret value'}" placeholder="${cd.kind === 'api_key' ? 'Paste API key' : 'Paste or type the value'}" autocomplete="off" spellcheck="false">`}
       </div>
       <div class="secnote">${icon('shieldcheck',14)} ${requested ? `${esc(state.agent.name)} only gets a reference, never the value. You approve each time it is typed into a site.` : 'The value is never shown in chat, logs or activity history.'}</div>` : ''}
     </div>
@@ -5028,7 +5053,7 @@ function automationItemHtml(agent){
   const open = state.automationOpenId === agent.id;
   const trigger = agent.trigger || {};
   const ic = agent.systemKind ? (UPKEEP_ICONS[agent.systemKind] || 'clock') : trigger.type === 'app' ? 'box' : trigger.type === 'subagent' ? 'spark' : 'clock';
-  const status = !agent.enabled ? 'Paused' : agent.lastError ? 'Last run failed' : agent.lastStatus === 'running' ? 'Running now' : '';
+  const status = !agent.enabled ? 'Paused' : agent.triggerSyncError ? 'App event unavailable' : agent.lastError ? 'Last run failed' : ({waiting_approval:'Waiting for approval',partial:'Work limit reached',idle:'No new signal',done:'Completed',running:'Running now'})[agent.lastStatus] || '';
   const ran = agent.lastRunAt ? 'Last ran ' + fmtAgo(new Date(agent.lastRunAt).getTime()) : 'Not run yet';
   return `<article class="appr-item${open ? ' open' : ''}${agent.enabled ? '' : ' paused'}" data-id="${esc(agent.id)}">
     <button type="button" class="appr-row" data-act="appr-toggle" data-key="automation" data-id="${esc(agent.id)}" aria-expanded="${open ? 'true' : 'false'}">
@@ -5042,6 +5067,8 @@ function automationItemHtml(agent){
     </button>
     <div class="appr-more">
       ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
+      ${agent.triggerSyncError ? `<div class="trigger-error">${esc(agent.triggerSyncError)}</div>` : ''}
+      ${agent.lastResult ? `<div class="trigger-result">${esc(agent.lastResult)}</div>` : ''}
       <button class="btn ghost small" data-act="open-subagent" data-id="${agent.id}">Open chat</button>
       <button class="btn ghost small" data-act="run-subagent" data-id="${agent.id}" ${agent.enabled ? '' : 'disabled'}>${icon('up',13)} Run now</button>
       <button class="btn ghost small" data-act="toggle-subagent" data-id="${agent.id}">${agent.enabled ? 'Pause' : 'Enable'}</button>
@@ -5062,7 +5089,7 @@ function subAgentsTabContent(){
   const triggerFields = kind === 'schedule'
     ? `<label class="alabel">Run every</label><select class="field" id="subinterval">${scheduleOptions.map((minutes) => `<option value="${minutes}" ${Number(state.subAgentDraftInterval || 60) === Number(minutes) ? 'selected' : ''}>${minutes === 1440 ? 'Day' : minutes === 10080 ? 'Week' : minutes === 60 ? '1 hour' : minutes >= 60 ? (minutes / 60) + ' hours' : minutes + ' minutes'}</option>`).join('')}</select>`
     : kind === 'app'
-      ? (apps.length ? `<label class="alabel">Connected app event (via Composio)</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} No connected apps yet. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
+      ? (apps.length ? `<label class="alabel">Connected app event (via Composio)</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}" data-account="${esc(app.connectedAccountId || '')}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} No ready connected-app events. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
       : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${customAgents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
   return `<div class="appr-panel">
     <div class="appr-toolbar"><h3 class="appr-heading">Automations</h3><button class="btn ${state.subAgentComposer ? 'ghost ' : ''}small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close' : 'New'}</button></div>
@@ -5866,6 +5893,20 @@ function settingsSecretsBody(v){
         </div>
       </div>`; }).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Add a credential above, or ${agentName} will ask when a task needs one.</p></div></div>`}
     </div>
+    <div class="vault-payment">
+      <div class="vault-section-head"><h3>Cards saved on websites</h3><span>Masked details for purchase review</span></div>
+      <p class="vault-payment-note">First save your card in the merchant’s own account. Add its visible details here so each purchase approval can name the card. Full card numbers and security codes stay out of the agent vault.</p>
+      <form class="vault-payment-form" autocomplete="off" onsubmit="return false">
+        <div class="vault-payment-preview">${icon('card',22)}<span>Card on file</span><strong>•••• <span data-pm-preview>••••</span></strong></div>
+        <label>Website<input class="field" data-pm="merchant" placeholder="shop.example" autocomplete="url" spellcheck="false"></label>
+        <label>Card name<input class="field" data-pm="label" placeholder="My everyday card" maxlength="60" autocomplete="off"></label>
+        <label>Brand<input class="field" data-pm="brand" placeholder="Visa" maxlength="32" autocomplete="cc-type"></label>
+        <label>Last four digits<input class="field" data-pm="last4" placeholder="1234" maxlength="4" inputmode="numeric" autocomplete="off"></label>
+        <button class="btn" data-act="save-merchant-card">${icon('plus',14)} Add masked card</button>
+      </form>
+      <div class="vault-payment-list">${(state.merchantPaymentMethods || []).map(method=>`<div class="vault-payment-saved"><span class="vault-item-icon">${icon('card',16)}</span><div><b>${esc(method.label)}</b><small>${esc(method.brand)} •••• ${esc(method.last4)} · ${esc(method.merchant)}</small></div><button class="iconbtn" data-act="delete-merchant-card" data-id="${esc(method.id)}" aria-label="Delete ${esc(method.label)}">${icon('trash',14)}</button></div>`).join('') || '<p class="vault-payment-empty">No masked cards added yet.</p>'}</div>
+      <p class="vault-payment-note">For BankID or a similar login, take over the live browser and approve the request in your own identity app. Your agent never needs your PIN or security code.</p>
+    </div>
   </section>`;
 }
 function settingsBrowserBody(){
@@ -5877,6 +5918,7 @@ function settingsBrowserBody(){
     <article class="browser-settings-card">
       <div class="browser-settings-heading"><span class="browser-card-icon">${icon('user',17)}</span><div><h2>Browser profile</h2><p>Your agent’s profile and memory</p></div></div>
       <div class="browser-profile-identity"><div class="browser-profile-avatar">${Mascot.svg(a.color,'happy',76,'mascot-bob')}</div><div><b>${esc(a.name)}</b><span>${esc(profileStatus)}</span></div></div>
+      <p class="browser-settings-note">Website sessions stay in your private VM browser profile across tasks. Passwords and API keys stay in Secrets and are used only with your approval.</p>
       <label class="alabel" for="browser-agent-name">Agent name</label>
       <input class="field browser-name-input" id="browser-agent-name" value="${esc(a.name)}" maxlength="18" autocomplete="off">
       <div class="browser-profile-actions"><button class="btn soft small" data-act="browser-reset-agent">${icon('clock',14)} Reset agent</button><button class="btn soft small" data-act="import-memory">${icon('book',14)} Import memory</button><input id="browser-memory-file" type="file" accept=".txt,.md,.json,text/plain,text/markdown,application/json" hidden></div>
@@ -6323,6 +6365,10 @@ document.addEventListener('submit', async e => {
   answerOnboarding(c, m, form.elements.agentName.value);
 });
 document.addEventListener('input', e => {
+  if (e.target.matches('[data-pm="last4"]')) {
+    const preview = e.target.closest('.vault-payment-form')?.querySelector('[data-pm-preview]');
+    if (preview) preview.textContent = (e.target.value.replace(/\D/g,'').slice(0,4) || '••••');
+  }
   const form = e.target.closest('[data-onboarding-name]');
   if (!form) return;
   const c = state.chats.find(c => c.id === form.dataset.chat);
@@ -6336,14 +6382,22 @@ document.addEventListener('change', (e) => {
     state.subAgentTriggerType = e.target.value;
     save(); paintCanvas();
   }
-  if (e.target && e.target.id === 'buypack') {
-    const rate = $('#buypack-rate'), opt = e.target.selectedOptions[0];
-    if (rate && opt) rate.textContent = `${opt.dataset.rate} · secure checkout`;
-  }
   if (e.target && e.target.id === 'subinterval') {
     state.subAgentDraftInterval = Number(e.target.value || 60);
     save();
   }
+});
+document.addEventListener('click', e => {
+  document.querySelectorAll('.billing-select[open]').forEach(menu => {
+    if (!menu.contains(e.target)) menu.open = false;
+  });
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const menu = document.querySelector('.billing-select[open]');
+  if (!menu) return;
+  menu.open = false;
+  menu.querySelector('summary')?.focus();
 });
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-act]');
@@ -6358,6 +6412,22 @@ document.addEventListener('click', async e => {
 
   if (signedIn() && needsOnboarding() && !['qopt','open-passport','togglemenu','usermenu','signout','voice'].includes(act)) {
     e.preventDefault(); toast('Finish setting up your agent first.'); return;
+  }
+  if (act === 'select-pack'){
+    const picker = b.closest('.billing-select');
+    if (!picker) return;
+    picker.querySelector('#buypack').value = b.dataset.pack;
+    picker.querySelector('#buypack-value').textContent = b.querySelector('span').textContent;
+    picker.querySelectorAll('.billing-select-option').forEach(option => {
+      const selected = option === b;
+      option.classList.toggle('is-selected', selected);
+      option.setAttribute('aria-pressed', String(selected));
+    });
+    const rate = $('#buypack-rate');
+    if (rate) rate.textContent = `${b.dataset.rate} · secure checkout`;
+    picker.open = false;
+    picker.querySelector('summary').focus();
+    return;
   }
   if (act === 'qopt' && m?.card?.onboarding) { answerOnboarding(c, m, b.dataset.o); return; }
   if (act === 'life-ask'){
@@ -6636,7 +6706,8 @@ document.addEventListener('click', async e => {
     if (type === 'schedule') trigger = { type, intervalMinutes:Number((($('#subinterval') || {}).value) || 60) };
     if (type === 'app') {
       const _ae = String((($('#subappevent') || {}).value) || ''); const _ci = _ae.indexOf(':'); const app = _ci >= 0 ? _ae.slice(0, _ci) : _ae; const event = _ci >= 0 ? _ae.slice(_ci + 1) : '';
-      trigger = { type, app, event };
+      const connectedAccountId = ($('#subappevent')?.selectedOptions?.[0]?.dataset.account) || '';
+      trigger = { type, app, event, connectedAccountId };
     }
     if (type === 'subagent') trigger = { type, sourceAgentId:(($('#subsource') || {}).value) || '' };
     if (!name || !prompt){ toast('Name and automation task are required.'); return; }
@@ -6666,12 +6737,12 @@ document.addEventListener('click', async e => {
       await refreshSubAgents(false);
       if (agent.systemKind) {
         save(); paintCanvas();
-        toast(result.skipped ? (result.reason || `${agent.name} found no new signal.`) : `${agent.name} completed.`);
+        toast(result.skipped ? (result.reason || `${agent.name} found no new signal.`) : result.status === 'running' ? `${agent.name} is running.` : result.status === 'waiting_approval' ? `${agent.name} needs your approval.` : `${agent.name} completed.`);
         return;
       }
       await syncFromBackend(true);
       state.activeChat = result.chatId || agent.chatId; state.view = 'chat'; save(); renderApp();
-      toast(`${agent.name} completed its run.`);
+      toast(result.status === 'running' ? `${agent.name} is running.` : result.status === 'waiting_approval' ? `${agent.name} needs your approval.` : result.status === 'partial' ? `${agent.name} reached its work limit.` : `${agent.name} completed its run.`);
     } catch (err) { b.disabled = false; toast(err.message); }
     return;
   }
@@ -6999,15 +7070,33 @@ document.addEventListener('click', async e => {
     try {
       // Save first so the agent's vault_request finds the name when it resumes.
       // A retry after a failed resume reuses the already-saved secret.
-      if (allow && !m.card.ref) {
+      if (allow && m.card.kind === 'login' && !m.card.ref) {
+        const node = document.querySelector(`[data-mid="${m.id}"]`);
+        const username = node?.querySelector('[data-f="username"]');
+        const password = node?.querySelector('[data-f="password"]');
+        if ((!m.card.usernameRef && !username?.value?.trim()) || !password?.value) { toast('Enter the username and password to save.'); return; }
+        const saveField = async (name, value) => {
+          const added = await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name,value})});
+          if (!added?.secret?.ref) throw new Error('Could not save that credential.');
+          state.vault.secrets = [{ ...added.secret, backend:true }, ...state.vault.secrets.filter(s => s.id !== added.secret.id)];
+          return added.secret.ref;
+        };
+        if (!m.card.usernameRef) {
+          m.card.usernameRef = await saveField(`${m.card.host} username`, username.value.trim());
+          username.value = '';
+          save();
+        }
+        m.card.ref = await saveField(`${m.card.host} password`, password.value);
+        password.value = '';
+        save();
+      } else if (allow && !m.card.ref) {
         const input = document.querySelector(`[data-mid="${m.id}"] [data-f="val"]`);
         if (!input?.value) { toast('Enter the value to save.'); return; }
         const added = await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name:m.card.suggest,value:input.value})});
+        if (!added?.secret?.ref) throw new Error('Could not save that secret.');
         input.value = '';
-        if (added?.secret) {
-          state.vault.secrets = [{ ...added.secret, backend:true }, ...state.vault.secrets.filter(s => s.id !== added.secret.id)];
-          m.card.ref = added.secret.ref;
-        }
+        state.vault.secrets = [{ ...added.secret, backend:true }, ...state.vault.secrets.filter(s => s.id !== added.secret.id)];
+        m.card.ref = added.secret.ref;
       }
       if (m.card.taskId) await Engine.controlTask(makeRT(c), m.card.taskId, 'decide', { callId:m.card.managedCallId, allow, version:m.card.taskVersion });
       else await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow });
@@ -7047,6 +7136,10 @@ document.addEventListener('click', async e => {
     b.disabled = true;
     const allow = act !== 'managed-deny';
     try {
+      if(m.card.type === 'auth_handoff' && m.card.liveId){
+        await window.LingonAuth.api('/api/live/takeover',{method:'POST',body:JSON.stringify({liveId:m.card.liveId,on:false})});
+        liveControl = false;
+      }
       if(m.card.taskId) await Engine.controlTask(makeRT(c),m.card.taskId,'decide',{callId:m.card.managedCallId,allow,version:m.card.taskVersion});
       else await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow, answer:act === 'qopt' ? b.dataset.o : undefined });
     }catch(error){toast(error.message);}
@@ -7163,6 +7256,32 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'vault-kind'){ state.vaultKind = b.dataset.k; save(); repaintSettings(); return; }
+  if (act === 'save-merchant-card'){
+    if (!signedIn()){ renderAuth(); return; }
+    const form = b.closest('.vault-payment-form');
+    if (!form) return;
+    const data = {};
+    form.querySelectorAll('[data-pm]').forEach(input => { data[input.dataset.pm] = input.value.trim(); });
+    if (!data.merchant || !data.label || !data.brand || !/^\d{4}$/.test(data.last4 || '')){ toast('Enter the website, card name, brand and last four digits.'); return; }
+    b.disabled = true;
+    try {
+      const added = await window.LingonAuth.api('/api/payment-methods',{method:'POST',body:JSON.stringify(data)});
+      state.merchantPaymentMethods = [added.method,...(state.merchantPaymentMethods || [])];
+      save(); repaintSettings(); toast('Masked card added for purchase approvals.');
+    } catch(err){ toast(err.message || 'Could not add that card.'); b.disabled = false; }
+    return;
+  }
+  if (act === 'delete-merchant-card'){
+    const method = (state.merchantPaymentMethods || []).find(item=>item.id===b.dataset.id);
+    if (!method || !window.confirm(`Remove “${method.label}” from purchase approvals?`)) return;
+    b.disabled = true;
+    try {
+      await window.LingonAuth.api('/api/payment-methods/'+encodeURIComponent(method.id),{method:'DELETE'});
+      state.merchantPaymentMethods = state.merchantPaymentMethods.filter(item=>item.id!==method.id);
+      save(); repaintSettings(); toast('Masked card removed.');
+    } catch(err){ toast(err.message || 'Could not remove that card.'); b.disabled = false; }
+    return;
+  }
   if (act === 'addsecret'){
     // Secrets live only in the encrypted server vault the agent reads from,
     // never in this browser's storage.

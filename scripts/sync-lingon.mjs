@@ -126,16 +126,25 @@ syncStripeProvider();
   writeFileSync(join(root, 'src/lingon-server/support.js'), esm, 'utf8');
 }
 
+// Merchant payment metadata is shared; full card data never enters this store.
+{
+  const src = readFileSync(join(root, 'server/payment-methods.js'), 'utf8');
+  const esm = src.replace('module.exports = { createPaymentMethods };', 'export { createPaymentMethods };');
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted payment methods module');
+  writeFileSync(join(root, 'src/lingon-server/payment-methods.js'), esm, 'utf8');
+}
+
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'personal-tools', 'cards']) {
+for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
+  if (name === 'automations') src = "import { tasks } from './conversation.js';\n" + src.replace(/^[ \t]*const \{ tasks \} = require\('\.\/conversation'\);\r?\n/gm, '');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);
   src = src.replace(/const (\w+) = require\('([^']+)'\);/g, (_, binding, spec) =>
     spec === 'crypto' ? `import ${binding} from 'node:crypto';` : spec === 'path' ? `import path from 'node:path';` : `import * as ${binding} from '${spec}.js';`);
-  src = src.replace('module.exports={createCoordinator,handle:coordinator.handle,tasks,startWorker};',
-    'const handle=coordinator.handle;\nexport {createCoordinator,handle,tasks,startWorker};');
+  src = src.replace('module.exports={createCoordinator,updateChatSummary,handle:coordinator.handle,tasks,startWorker};',
+    'const handle=coordinator.handle;\nexport {createCoordinator,updateChatSummary,handle,tasks,startWorker};');
   src = src.replace(/module\.exports\s*=\s*\{/g, 'export {');
   if (/require\(|module\.exports/.test(src)) throw new Error(`Unconverted CommonJS in ${name}`);
   writeFileSync(join(root, `src/lingon-server/agents/${name}.js`), src, 'utf8');
@@ -144,7 +153,7 @@ for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-run
 // Backend confidentiality policy must match between server/ (Node) and
 // src/lingon-server/ (edge port) so chat + research behave the same way.
 for (const [srcFile, edgeFile, marker] of [
-  ['server/index.js', 'src/lingon-server/index.js', 'INTERNAL CONFIDENTIALITY'],
+  ['server/agents/vm-harness.js', 'src/lingon-server/agents/vm-harness.js', 'INTERNAL CONFIDENTIALITY'],
   ['server/research.js', 'src/lingon-server/research.js', 'Never discuss internal implementation'],
 ]) {
   const src = readFileSync(join(root, srcFile), 'utf8');

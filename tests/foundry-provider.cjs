@@ -181,6 +181,25 @@ global.fetch = async (url, options = {}) => {
   assert.equal(image.model, 'gpt-image-2');
 
   for (const call of calls) assert.equal(call.options.headers['api-key'], process.env.AZURE_FOUNDRY_API_KEY);
+  // A looping function call is cut off at maxArgumentChars and returned with its
+  // partial arguments; maxOutputTokens caps the request.
+  const looping = [{ type: 'response.output_item.added', item: { type: 'function_call', id: 'fc_loop', call_id: 'call_loop', name: 'delegate_task' } },
+    ...Array.from({ length: 40 }, () => ({ type: 'response.function_call_arguments.delta', item_id: 'fc_loop', delta: 'x'.repeat(100) }))];
+  queued.push(() => sse(looping));
+  const loopCut = await provider.callFoundryWithTools({ prompt: 'Plan it', tools: [{ name: 'delegate_task', parameters: { type: 'object', properties: {} } }],
+    maxArgumentChars: 1000, maxOutputTokens: 4096 });
+  assert.equal(loopCut.functionCalls[0].name, 'delegate_task');
+  assert.ok(loopCut.functionCalls[0].args._raw.length > 1000 && loopCut.functionCalls[0].args._raw.length < 1200, 'the stream stops soon after the limit');
+  assert.equal(JSON.parse(calls.at(-1).options.body).max_output_tokens, 4096);
+  // A flood of parallel calls stops after maxFunctionCalls; finished calls are kept.
+  const flood = Array.from({ length: 50 }, (_, i) => [
+    { type: 'response.output_item.added', item: { type: 'function_call', id: `fc_${i}`, call_id: `call_${i}`, name: 'web_search' } },
+    { type: 'response.output_item.done', item: { type: 'function_call', id: `fc_${i}`, call_id: `call_${i}`, name: 'web_search', arguments: `{"query":"q${i}"}` } },
+  ]).flat();
+  queued.push(() => sse(flood));
+  const flooded = await provider.callFoundryWithTools({ prompt: 'Research', tools: [{ name: 'web_search', parameters: { type: 'object', properties: {} } }], maxFunctionCalls: 6 });
+  assert.equal(flooded.functionCalls.length, 6);
+  assert.deepEqual(flooded.functionCalls.map((c) => c.args.query), ['q0', 'q1', 'q2', 'q3', 'q4', 'q5']);
   console.log('foundry provider: responses, tools, transcription, and images ok');
 })().catch((error) => {
   console.error(error);

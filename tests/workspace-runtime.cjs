@@ -64,10 +64,17 @@ async function main() {
   assert.match(restore, /tar -xzf/);
   assert.match(restore, /home\/lingon\/workspace/);
   assert.match(restore, /var\/lib\/lingon-browser\/sessions/);
+  assert.match(restore, /echo STATE_RESTORED/);
   assert.match(snapshot, /x-ms-blob-type: BlockBlob/);
   assert.match(snapshot, /home\/lingon\/workspace var\/lib\/lingon-browser\/sessions/);
+  assert.match(snapshot, /home\/lingon-desktop/);
+  assert.match(snapshot, /tar -tzf "\$ARCHIVE"/);
+  assert.match(snapshot, /echo STATE_SAVED/);
   assert.doesNotMatch(snapshot, /sig=test/, 'short-lived SAS stays encoded inside the VM script');
   assert.throws(() => azure.buildRestoreStateScript('https://evil.example/state.tar.gz'), /private workspace transfer/);
+  assert.doesNotThrow(() => azure.assertStateCommandSucceeded({ stdout: 'STATE_SAVED', stderr: '' }, 'STATE_SAVED', 'AZURE_STATE_SAVE'));
+  assert.throws(() => azure.assertStateCommandSucceeded({ stdout: '', stderr: '' }, 'STATE_SAVED', 'AZURE_STATE_SAVE'), { code: 'AZURE_STATE_SAVE' });
+  assert.throws(() => azure.assertStateCommandSucceeded({ stdout: 'STATE_SAVED', stderr: 'upload failed' }, 'STATE_SAVED', 'AZURE_STATE_SAVE'), { code: 'AZURE_STATE_SAVE' });
 
   const system = await buildSystem({ agent:{agent:{name:'Mira',pers:'Calm',color:'blue'},documents:{}}, memories:[], sandbox:{mode:'azure',vmName:'private-vm',location:'swedencentral',vmSize:'B2',durableState:true} });
   assert.match(system, /Name: Mira/);
