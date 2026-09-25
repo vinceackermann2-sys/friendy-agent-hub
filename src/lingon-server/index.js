@@ -187,6 +187,8 @@ app.get('/api/health', (req, res) => {
     azure: isAzureConfigured(),
     durableVmLeases: isLeaseStoreConfigured(),
     supabase: store.supaConfigured(),
+    // The live browser view needs the project's public Realtime key (see /api/live/realtime).
+    liveView: !!liveRealtimeConfig(),
     google: googleConfigured(),
     composio: composio.configured(),
     shopPay: shoppay.configured(),
