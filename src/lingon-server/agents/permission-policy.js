@@ -20,15 +20,16 @@ async function permissionDecision(userId, name, args = {}, tool = {}) {
   }
   if(tool.approval)return {required:true};
   if(p.web==='always_ask')return {required:true,detail:`Web action: ${name} ${JSON.stringify(args).slice(0,1400)}`};
+  // "Ask for some" opens and reads any public page without asking, like a person browsing;
+  // the tools themselves refuse private and local addresses. Typing, clicking to submit,
+  // sign-ins and purchases still ask. "Always ask" (above) asks for every web step.
   if(name==='browser_open' || name==='computer_screenshot'){
     const host=hostOf(args.url);
-    return {required:!host || !p.knownHosts.includes(host),detail:`Open ${host || String(args.url || 'this website')}`};
+    return {required:!host,detail:`Open ${host || String(args.url || 'this website')}`};
   }
   if(name==='web_search'){
-    const unfamiliar=(Array.isArray(args.urls)?args.urls:[]).map(hostOf).filter(host=>!host || !p.knownHosts.includes(host));
-    // A search only reads, so the default mode runs it without asking; Always ask still asks.
-    // Reading an unfamiliar site by URL still asks.
-    return {required:unfamiliar.length>0,detail:`Read unfamiliar site: ${unfamiliar.join(', ')}`};
+    const invalid=(Array.isArray(args.urls)?args.urls:[]).filter(url=>!hostOf(url));
+    return {required:invalid.length>0,detail:`Read: ${invalid.join(', ')}`};
   }
   if(name==='browser_action' || name==='computer_action'){
     const action=String(args.type || args.action || '').toLowerCase();

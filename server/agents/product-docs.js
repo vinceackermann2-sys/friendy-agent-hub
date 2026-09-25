@@ -12,7 +12,7 @@ The agent cannot make phone calls or send SMS, and never types passwords or card
   approvals: {
     title: 'Approvals and permissions',
     text: `Settings > Browser has two modes for websites and for connected apps: "Ask for some" (default) and "Always ask".
-Websites: with "Ask for some", web searches and pages on sites the agent has already visited run without asking; a new site, and any click or typing on a page, asks first. "Always ask" asks for every web step.
+Websites: with "Ask for some" (the default), web searches and opening or reading any public page run without asking; clicking or typing on a page, signing in and anything that submits asks first. "Always ask" asks for every web step.
 Connected apps: with "Ask for some", listing apps and reading data in them (mail, calendar, files, messages) runs without asking; every write (send, create, change, delete) asks first. "Always ask" asks for everything, reads included.
 Final steps that buy, pay, book, send, post, delete or change account settings always need a one-time approval that shows the exact action. Approvals never carry over to a later action.`,
   },

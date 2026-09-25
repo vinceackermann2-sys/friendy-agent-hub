@@ -6025,7 +6025,7 @@ function settingsBrowserBody(){
     </article>
     <article class="browser-settings-card">
       <div class="browser-settings-heading"><span class="browser-card-icon">${icon('globe',17)}</span><div><h2>Web access</h2><p>Choose when your agent asks before using websites</p></div></div>
-      ${modeOptions('web',permissions.web,[['ask_some','Ask for some actions','Search freely. Ask when a website is unfamiliar or an action types or submits something.'],['always_ask','Always ask','Ask before accessing any website or taking a web action.']])}
+      ${modeOptions('web',permissions.web,[['ask_some','Ask for some actions','Search, open and read public pages freely. Ask before typing, submitting, signing in or buying.'],['always_ask','Always ask','Ask before accessing any website or taking a web action.']])}
     </article>
     <article class="browser-settings-card">
       <div class="browser-settings-heading"><span class="browser-card-icon">${icon('box',17)}</span><div><h2>Connected apps</h2><p>Choose when your agent asks before using a connection</p></div></div>
