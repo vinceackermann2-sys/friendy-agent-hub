@@ -655,8 +655,9 @@ function liveRealtimeArgs(live) {
 function liveStreamer(kit, profileRuntime, cfg) {
   const fs = require('fs');
   const path = require('path');
-  const WebSocket = require('/opt/lingon/node_modules/ws');
-  const puppeteer = require('/opt/lingon/node_modules/puppeteer-core');
+  const vmModules = '/opt/lingon/node_modules/';
+  const WebSocket = require(vmModules + 'ws');
+  const puppeteer = require(vmModules + 'puppeteer-core');
   const dir = path.join('/var/lib/lingon-browser/sessions', cfg.sessionId);
   const takeoverFile = path.join(dir, 'takeover');
   const topic = `realtime:${cfg.topic}`;
