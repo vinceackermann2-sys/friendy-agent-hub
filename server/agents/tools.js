@@ -410,7 +410,7 @@ const TOOLS = {
       const out = await composio.executeTool(ctx.userId, { tool: slug, args: args || {}, connectedAccountId });
       if (out && out.successful === false) throw new Error(String(out.error || 'App action failed.').slice(0, 400));
       ctx.trace(entry('box', `composio_execute: ${slug} done`));
-      return out.data || out;
+      return composio.compactResult(out.data || out);
     },
   },
   shell: {

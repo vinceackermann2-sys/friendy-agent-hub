@@ -525,6 +525,40 @@ function compactParams(schema = {}) {
   }
   return out;
 }
+// App results (a page of emails, events or files) can run to tens of thousands of
+// characters; cut off in the agent's prompt, the worker paged through them round after
+// round. They are shrunk to fit: transport noise and encoded blobs dropped, long text and
+// long lists shortened step by step until the result fits the budget.
+const RESULT_NOISE = new Set(['payload', 'raw', 'html', 'htmlBody', 'html_body', 'attachmentData', 'historyId', 'internalDate', 'sizeEstimate', 'etag', 'iconLink', 'thumbnailLink']);
+function shrinkResult(value, text, items, depth) {
+  if (typeof value === 'string') return value.length > text ? `${value.slice(0, text)}…` : value;
+  if (Array.isArray(value)) {
+    const out = value.slice(0, items).map((item) => shrinkResult(item, text, items, depth + 1));
+    if (value.length > items) out.push(`…${value.length - items} more`);
+    return out;
+  }
+  if (value && typeof value === 'object') {
+    if (depth > 6) return '[nested]';
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (RESULT_NOISE.has(key) || item == null || item === '') continue;
+      if (typeof item === 'string' && item.length > 400 && /^[A-Za-z0-9+/=_-]+$/.test(item)) continue;
+      out[key] = shrinkResult(item, text, items, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+function compactResult(value, budget = 6500) {
+  if (JSON.stringify(value ?? null).length <= budget) return value;
+  const note = 'Long text and lists are shortened here and this is all of this result. For one item in full, fetch that item by its id.';
+  for (const [text, items] of [[1500, 50], [700, 40], [350, 30], [180, 25], [90, 20]]) {
+    const out = shrinkResult(value, text, items, 0);
+    if (JSON.stringify(out).length <= budget) return { note, result: out };
+  }
+  return { note, result: shrinkResult(value, 60, 12, 0) };
+}
+
 async function getTool(toolSlug) {
   return cfetch(`/tools/${encodeURIComponent(String(toolSlug).toUpperCase())}`);
 }
@@ -721,6 +755,7 @@ module.exports = {
   listTools,
   findTools,
   compactParams,
+  compactResult,
   getTool,
   executeTool,
   listTriggerTypes,
