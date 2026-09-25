@@ -21,7 +21,7 @@ store.rememberBrowserHost = async (_, host) => { remembered = host; };
   assert.equal((await permissionDecision('u','web_search',{urls:['https://unknown.example/page']},{approval:false})).required,true);
   assert.equal((await permissionDecision('u','web_search',{urls:['https://example.com/a']},{approval:false})).required,false);
   assert.equal((await permissionDecision('u','composio_execute',{tool:'GITHUB_LIST_REPOS'},{approval:true})).required,false);
-  assert.equal((await permissionDecision('u','composio_execute',{tool:'GMAIL_FETCH_EMAILS'},{approval:true})).required,true);
+  assert.equal((await permissionDecision('u','composio_execute',{tool:'GMAIL_FETCH_EMAILS'},{approval:true})).required,false);
   assert.equal((await permissionDecision('u','composio_execute',{tool:'GMAIL_SEND_EMAIL'},{approval:true})).required,true);
   assert.equal((await permissionDecision('u','composio_execute',{tool:'GITHUB_GET_OR_CREATE_REPO'},{approval:true})).required,true);
   await recordSuccessfulWeb('u','browser_open',{url:'https://example.com/path'},{url:'https://example.com/path'});

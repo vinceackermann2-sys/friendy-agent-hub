@@ -2,8 +2,9 @@ import { createClient } from '@supabase/supabase-js';
 let client;
 function db() {
   if (client) return client;
-  const url = process.env.SUPABASE_URL || process.env.LINGON_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.LINGON_SUPABASE_SECRET_KEY;
+  // The same server-key names store.js accepts; task functions are service-only, so no anon key.
+  const url = (process.env.SUPABASE_URL || process.env.LINGON_SUPABASE_URL || '').trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.LINGON_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.LINGON_SUPABASE_SECRET_KEY || '').trim();
   if (!url || !key) throw Object.assign(new Error('Task storage is not configured.'), { status:503, code:'TASK_STORE_NOT_CONFIGURED' });
   return (client = createClient(url, key, { auth:{ persistSession:false, autoRefreshToken:false } }));
 }

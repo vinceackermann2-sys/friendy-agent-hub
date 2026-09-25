@@ -114,8 +114,11 @@ export function createApp() {
     use(...args) {
       const path = typeof args[0] === 'string' ? args[0] : '*';
       const handlers = args.filter((a) => typeof a === 'function');
-      const { rx, keys } = compile(path === '*' ? '*' : path + '*');
-      layers.push({ method: null, rx, keys, handlers, isMiddleware: true });
+      // Like Express, a mount path matches whole segments: '/api/agent' covers
+      // '/api/agent/tasks' but not '/api/agent-context'.
+      const compiled = compile(path === '*' ? '*' : path);
+      const rx = path === '*' ? compiled.rx : new RegExp(compiled.rx.source.replace(/\$$/, '(?:/.*)?$'));
+      layers.push({ method: null, rx, keys: compiled.keys, handlers, isMiddleware: true });
     },
     get(path, ...h) {
       add('GET', path, h);

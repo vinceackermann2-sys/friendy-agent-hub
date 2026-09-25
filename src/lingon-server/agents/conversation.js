@@ -11,7 +11,7 @@ import * as store from '../store.js';
 import * as azure from './azure-vm.js';
 import { prepareAttachments } from './attachments.js';
 import { QUICK_PERSONAL_TOOLS, personalResultCard } from './personal-tools.js';
-import { questionArgs, presentArgs, connectArgs, cardFromMarkdown } from './cards.js';
+import { questionArgs, presentArgs, connectArgs, cardFromMarkdown, resultCard } from './cards.js';
 import { permissionDecision } from './permission-policy.js';
 import { READ_DOC_SCHEMA, READ_DOC_TOOL, readDoc } from './product-docs.js';
 
@@ -76,7 +76,7 @@ function directWorkerRequest(raw) {
     || /^how\s+(?:do i|can i|to)\s+(?:connect|use|enable|set up)\b/.test(text)
     || /^(?:what|which)\s+(?:tools?|apps?|capabilities|integrations?)\b/.test(text)
     || /^(?:can|could|do) you\s+(?:use|access|connect to|work with)\b/.test(text)) return null;
-  const action=/\b(?:check|read|list|search|find|show|summari[sz]e|organize|send|reply|forward|draft|delete|archive|move|label|schedule|book|buy|purchase|pay|order|track|create|update|edit|upload|download|fetch|browse|open|use|access|connect|add|remove|research|investigate|build|design|generate|run|execute|fix|debug|review|analy[sz]e|transcribe|remind|monitor)\b/.test(text);
+  const action=/\b(?:check|read|list|search|find|show|summari[sz]e|organize|send|reply|forward|draft|delete|archive|move|label|schedule|book|buy|purchase|pay|order|track|create|make|code|update|edit|upload|download|fetch|browse|open|use|access|connect|add|remove|research|investigate|build|design|generate|run|execute|fix|debug|review|analy[sz]e|transcribe|remind|monitor)\b/.test(text);
   // Shop Pay status and orders are chat lookups; Gmail and calendar reads need approval in a task.
   const personalQuestion=/^(?:how many|what(?:'s| is| are| did)|where(?:'s| is)|when(?:'s| is)|show me|tell me)\b.*\b(?:my|our)\b.*\b(?:gmail|inbox|emails?|calendar|events?)\b/.test(text);
   if(/^(?:why|how|what|which|when|where)\b/.test(text) && !personalQuestion) return null;
@@ -86,7 +86,7 @@ function directWorkerRequest(raw) {
   const mailAction=/\b(?:send|reply|forward|draft|archive|delete|read|check|summari[sz]e)\b.*\b(?:emails?|inbox|mailbox|messages?)\b/.test(text);
   const purchase=/\b(?:buy|purchase|pay|checkout|order)\b.*\b(?:product|item|cart|shop|store|merchant)\b/.test(text);
   const browser=/\b(?:browse|open|use|fill|submit)\b.*\b(?:website|web page|browser|site|form)\b/.test(text);
-  const artifact=/\b(?:build|create|design|generate|draw)\b.*\b(?:website|webpage|landing page|dashboard|app|image|picture|photo|logo|illustration)\b/.test(text);
+  const artifact=/\b(?:build|create|make|code|design|generate|draw)\b.*\b(?:website|webpage|web page|landing page|dashboard|app|game|image|picture|photo|logo|illustration|spreadsheet|presentation|slide deck|calculator)\b/.test(text);
   const workspace=/\b(?:run|execute|debug|fix|build|edit)\b.*\b(?:code|script|terminal|workspace|project|repository)\b/.test(text);
   const deepWork=/^(?:please\s+)?(?:research|investigate|analy[sz]e)\b/.test(text);
   const automation=/\b(?:remind me|schedule (?:a |an )?(?:reminder|automation)|every (?:day|week|month)|monitor|keep an eye on)\b/.test(text);
@@ -271,9 +271,9 @@ function createCoordinator(d) {
           let connected=false;
           try {connected=!!(await d.tools.connect_app.run(a,{userId,sessionId:chatId,signal,trace:()=>{}})).connected;}
           catch(e) {if(signal?.aborted) throw e;}
-          emit({type:'card',id:`connect_${requestId}_${round}_${i}`,card:{...card,chat:true,status:connected?'connected':'pending'}});
+          // An app that is already connected needs no card; the model goes on to the work.
           if(connected) out={toolkit:card.toolkit,connected:true,note:'Already connected. Delegate the app work as a task.'};
-          else asked=`Connect ${card.name} to continue.`;
+          else {emit({type:'card',id:`connect_${requestId}_${round}_${i}`,card:{...card,chat:true,status:'pending'}});asked=`Connect ${card.name} to continue.`;}
         } else if(call.name==='delegate_task' && delegated.some(prev=>sameTask(prev,a))) {
           out={skipped:true,note:'A task for this request was already started in this reply.'};
         } else if(call.name==='delegate_task') await startTask(a,`${round}:${i}`);
@@ -309,6 +309,10 @@ function createCoordinator(d) {
           else {
             try {out=await d.tools[call.name].run(a,{userId,sessionId:chatId,chatId,signal,trace:()=>{},quick:true});}
             catch(e) {if(signal?.aborted) throw e;out={error:String(e.message).slice(0,300),next:'Say in one sentence what failed, or start a task if the owner still needs this.'};}
+            // Mail and orders show as the same cards a task shows; the reply then adds only what matters.
+            const card=!out?.error && !presented && ((call.name==='mail_list' && out?.length) || call.name==='shop_order') ? resultCard(call.name,out,a) : null;
+            if(card) {emit({type:'card',id:`${call.name}_${requestId}_${round}_${i}`,card});presented=true;
+              out={result:out,note:'The owner already sees this as a card. Reply in one or two sentences: what stands out, without repeating the list.'};}
           }
         }
         else if(COORDINATOR_TOOLS.has(call.name) || call.name.startsWith('memory_')){
@@ -424,7 +428,9 @@ function createCoordinator(d) {
       if(e.code==='BAD_INPUT')e.status=400;
       const message=e.status && e.status<500?e.message:e.code==='NO_CREDIT'?e.message:e.name==='AbortError'?'Response interrupted. Your tasks continue.':'The conversation could not complete. Please retry.';
       if(res.headersSent || res._sent) {send({type:'error',error:message});return res.end();}
-      return res.status(e.status || (e.code==='NO_CREDIT'?402:502)).json({error:message});
+      // A task-storage failure names its cause (not configured, missing migration) so it can be diagnosed.
+      const code=/^TASK_STORE_/.test(String(e.code || ''))?String(e.code):undefined;
+      return res.status(e.status || (e.code==='NO_CREDIT'?402:502)).json({error:message,code});
     }
   }
   return {run,handle};

@@ -4,7 +4,6 @@ const WEB_TOOLS = new Set(['web_search','browser_open','browser_action','browser
 const CONNECTOR_TOOLS = new Set(['composio_apps','composio_tools','composio_execute']);
 const READ_PREFIX = /(?:^|_)(?:LIST|GET|FETCH|SEARCH|READ|DOWNLOAD|EXPORT|LOOKUP|FIND)(?:_|$)/;
 const WRITE_VERB = /(?:^|_)(?:SEND|CREATE|UPDATE|DELETE|POST|WRITE|INSERT|REMOVE|TRASH|ARCHIVE|MODIFY|REPLY|FORWARD|UPLOAD|PUBLISH|INVITE|EDIT|PATCH|MOVE|RENAME|SHARE|MERGE|APPROVE|CANCEL|SCHEDULE|BOOK|PAY|CHARGE|TRANSFER|SET)(?:_|$)/;
-const PRIVATE_READ = /(?:^|_)(?:GMAIL|MAIL|EMAILS?|MESSAGES?|CONTACTS?|FILES?|DOCUMENTS?|CALENDAR|EVENTS?|DRIVE|ACCOUNTS?|PROFILES?|PAYMENTS?|CUSTOMERS?|ORDERS?|INVOICES?|BALANCE|TRANSACTIONS?|CONVERSATIONS?|CHANNELS?|HISTORY|THREADS?|USERS?|MEMBERS?|ISSUES?|PROJECTS?)(?:_|$)/;
 function hostOf(url){try {const u=new URL(String(url || ''));return /^https?:$/.test(u.protocol)?u.hostname.toLowerCase():'';}catch{return '';}}
 function connectorRead(slug){const value=String(slug || '').toUpperCase();return READ_PREFIX.test(value) && !WRITE_VERB.test(value);}
 async function permissionDecision(userId, name, args = {}, tool = {}) {
@@ -15,7 +14,9 @@ async function permissionDecision(userId, name, args = {}, tool = {}) {
     if(name!=='composio_execute')return {required:false};
     const slug=String(args.tool || '').toUpperCase();
     const read=connectorRead(slug);
-    return {required:!read || PRIVATE_READ.test(slug),detail:`${read?'Read from':'Write to'} a connected app with ${slug}: ${JSON.stringify(args.args || {}).slice(0,1200)}`};
+    // "Ask for some" reads the owner's apps when asked (mail, calendar, files) and asks before
+    // every write. Reads reveal nothing outside the account; sends and changes stay gated.
+    return {required:!read,detail:`${read?'Read from':'Write to'} a connected app with ${slug}: ${JSON.stringify(args.args || {}).slice(0,1200)}`};
   }
   if(tool.approval)return {required:true};
   if(p.web==='always_ask')return {required:true,detail:`Web action: ${name} ${JSON.stringify(args).slice(0,1400)}`};

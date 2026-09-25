@@ -79,8 +79,9 @@ const CASES = [
     check: r => /3[\s,.]?750/.test(r.text) && r.fns.includes('shop_status') ? '' : `wrong budget: ${r.text}` },
   { id: 'app.mailbox', prompt: 'Did you get any new email?', expect: 'answer',
     tools: { mail_status: () => ({ address: 'everest@mail.belna.se', unread: 1, sendReady: true }),
-      mail_list: () => ({ folder: 'inbox', messages: [{ id: 'mail_1', from: 'Anna Berg <anna@studio.se>', subject: 'Moodboard for the launch', receivedAt: '2026-09-25T07:12:00Z', unread: true, preview: 'Hi! Here is the moodboard we talked about.' }] }) },
-    check: r => /anna/i.test(r.text) && /moodboard/i.test(r.text) ? '' : `missed the email: ${r.text}` },
+      // The real tool returns the rows as an array.
+      mail_list: () => ([{ id: 'mail_1', from: 'anna@studio.se', fromName: 'Anna Berg', subject: 'Moodboard for the launch', receivedAt: '2026-09-25T07:12:00Z', isRead: false, preview: 'Hi! Here is the moodboard we talked about.' }]) },
+    check: r => r.cards.includes('present') && /anna|moodboard/i.test(r.text) ? '' : `missed the email or its card: ${r.text}` },
   { id: 'app.connected', prompt: 'Which apps have I connected?', expect: 'answer',
     tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE' }, { toolkit: 'googlecalendar', status: 'ACTIVE' }]) },
     check: r => /gmail/i.test(r.text) && /calendar/i.test(r.text) ? '' : `missed connected apps: ${r.text}` },
@@ -105,6 +106,20 @@ const CASES = [
     // A clarifying question about the restaurant is fine, but it must be in English.
     check: r => { const all = `${r.text} ${r.instructions}`; if (r.route === 'ask') return /bella/i.test(all) && !/\b(vilken|eller|gäller)\b/i.test(all) ? '' : `bad question: ${all}`;
       return /bella/i.test(all) && /\b(4|four)\b/i.test(all) ? '' : `dropped part of the request: ${all}`; } },
+  // Cards: comparisons and picks are shown, not written as bullet lists; plain answers carry none.
+  { id: 'card.compare', prompt: 'Compare iPhone 17 Pro vs Pixel 11 Pro vs Galaxy S26 Ultra', expect: 'any',
+    check: r => r.route === 'task' || r.cards.includes('present') ? '' : `no comparison card: ${r.text.slice(0, 200)}` },
+  { id: 'card.pick', prompt: 'Help me pick a laptop for video editing under 20000 kr', expect: 'any',
+    check: r => r.route !== 'answer' || r.cards.includes('present') ? '' : `no picks card: ${r.text.slice(0, 200)}` },
+  { id: 'card.none', prompt: 'Why is the sky blue? One short paragraph.', expect: 'answer',
+    check: r => !r.cards.length ? '' : `needless card: ${r.cards.join(',')}` },
+  // Connectors: a connected app goes straight to work; a missing one gets a connect card.
+  { id: 'app.gmail.connected', prompt: 'Check my Gmail for anything important today', expect: 'task',
+    tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE' }]), connect_app: () => ({ toolkit: 'gmail', connected: true }) },
+    check: r => !r.cards.includes('connect') ? '' : 'connect card for a connected app' },
+  { id: 'app.slack.missing', prompt: 'Post "Standup moved to 10" in our Slack #general channel', expect: 'any',
+    tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE' }]), connect_app: () => ({ toolkit: 'slack', connected: false }) },
+    check: r => r.cards.includes('connect') || r.route === 'task' ? '' : `neither connect card nor task: ${r.text.slice(0, 200)}` },
   // The owner writes in English from a Swedish time zone: the reply stays in English.
   { id: 'chat.language', prompt: 'Any tips for a rainy Sunday?', expect: 'answer',
     check: r => /\b(the|and|you)\b/i.test(r.text) && !/\b(och|du|att)\b/i.test(r.text) ? '' : `wrong language: ${r.text}` },
@@ -168,7 +183,7 @@ async function runCase(c, variant) {
   } catch (e) { error = e.message; }
   const final = events.filter(e => e.type === 'message').at(-1);
   const route = calls.task ? 'task' : events.some(e => e.card?.ask) ? 'ask' : 'answer';
-  const result = { id: c.id, route, text: final?.text || events.find(e => e.card?.ask)?.card.q || '', instructions: calls.task?.instructions || '', searched: (calls.fns || []).includes('web_search'),
+  const result = { id: c.id, route, text: final?.text || events.find(e => e.card?.ask)?.card.q || '', instructions: calls.task?.instructions || '', cards: events.filter(e => e.type === 'card').map(e => e.card.type), searched: (calls.fns || []).includes('web_search'),
     ms: Date.now() - started, firstTokenMs: timing.firstTokenMs ?? null, modelCalls: calls.model, input: calls.input, cached: calls.cached, output: calls.output, fns: calls.fns || [], error };
   const problems = [];
   if (error) problems.push(`error: ${error}`);
@@ -196,7 +211,7 @@ async function runCase(c, variant) {
       const [c, i] = jobs[next++];
       const r = await runCase(c, i);
       results.push(r);
-      console.log(`${r.pass ? 'PASS' : 'FAIL'} ${r.id} [${r.route}] ${r.ms}ms calls=${r.modelCalls} fns=${r.fns.join(',') || '-'}${r.pass ? '' : '\n     ' + r.problems.join('\n     ')}`);
+      console.log(`${r.pass ? 'PASS' : 'FAIL'} ${r.id} [${r.route}] ${r.ms}ms calls=${r.modelCalls} fns=${r.fns.join(',') || '-'} cards=${r.cards.join(',') || '-'}${r.pass ? '' : '\n     ' + r.problems.join('\n     ')}`);
     }
   }));
   const sum = (k) => results.reduce((a, r) => a + (r[k] || 0), 0);

@@ -5930,7 +5930,7 @@ function settingsBrowserBody(){
     </article>
     <article class="browser-settings-card">
       <div class="browser-settings-heading"><span class="browser-card-icon">${icon('box',17)}</span><div><h2>Connected apps</h2><p>Choose when your agent asks before using a connection</p></div></div>
-      ${modeOptions('connectors',permissions.connectors,[['ask_some','Ask for some actions','Ask before every write and sensitive read action.'],['always_ask','Always ask','Ask before every connected app action.']])}
+      ${modeOptions('connectors',permissions.connectors,[['ask_some','Ask for some actions','Read connected apps when asked; ask before every write action.'],['always_ask','Always ask','Ask before every connected app action.']])}
     </article>
   </section>`;
 }
