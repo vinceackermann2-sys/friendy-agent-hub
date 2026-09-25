@@ -90,7 +90,7 @@ async function main() {
     'connected-app discovery must preserve the action argument schema');
   const { TOOLS } = require('../server/agents/tools');
   const discovered = await TOOLS.composio_tools.run({ toolkit: 'gmail', query: 'send' }, { userId: 'user-a', trace: () => {} });
-  assert.equal(discovered[0].parameters.recipient_email.required, true,
+  assert.match(discovered.actions[0].arguments.recipient_email, /required/,
     'the agent must receive the required action arguments');
 
   const fs = require('node:fs');

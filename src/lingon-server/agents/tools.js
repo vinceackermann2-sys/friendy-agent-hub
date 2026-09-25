@@ -317,7 +317,7 @@ const TOOLS = {
   composio_tools: {
     name:'composio_tools',type:'function',approval:false,
     description:'Discover exact enabled tool names and argument schemas for one connected app.',
-    run:async({toolkit,query},ctx)=>{const slug=String(toolkit || '').toLowerCase().trim();if(!/^[a-z0-9_-]{2,60}$/.test(slug))throw Object.assign(new Error('Valid toolkit required.'),{code:'BAD_INPUT'});const connected=await composio.listConnected(ctx.userId);if(!connected.some(item=>String(item.toolkit || item.slug || '').toLowerCase()===slug&&String(item.status).toUpperCase()==='ACTIVE'))throw Object.assign(new Error('Connect this app under Apps first.'),{code:'BAD_INPUT'});const tools=await composio.listTools(slug,{limit:20,query:String(query || '').slice(0,100)});ctx.trace(entry('box',`composio_tools: ${slug} ${tools.length}`));return tools.map(tool=>({name:tool.slug || tool.name,description:String(tool.description || '').slice(0,240),parameters:tool.input_parameters || tool.parameters || {}}));},
+    run:async({toolkit,query},ctx)=>{const slug=String(toolkit || '').toLowerCase().trim();if(!/^[a-z0-9_-]{2,60}$/.test(slug))throw Object.assign(new Error('Valid toolkit required.'),{code:'BAD_INPUT'});const connected=await composio.listConnected(ctx.userId);if(!connected.some(item=>String(item.toolkit || item.slug || '').toLowerCase()===slug&&String(item.status).toUpperCase()==='ACTIVE'))throw Object.assign(new Error('Connect this app under Apps first.'),{code:'BAD_INPUT'});const tools=await composio.findTools(slug,String(query || '').slice(0,100),12);ctx.trace(entry('box',`composio_tools: ${slug} ${tools.length}`));return {actions:tools.map((tool,i)=>({name:tool.slug || tool.name,kind:tool.kind,description:String(tool.description || '').split(/(?<=\.)\s/)[0].slice(0,200),...(i<3?{arguments:composio.compactParams(tool.input_parameters || tool.parameters || {})}:{})})),note:'Call composio_execute with one of these names. For arguments of an action not shown here, query composio_tools with its exact name.'};},
   },
   composio_execute: {
     name: 'composio_execute', type: 'function', approval: true,
@@ -514,6 +514,8 @@ const TOOLS = {
   connect_app: {
     name: 'connect_app', type: 'function', approval: true, sideEffects: false,
     description: 'Ask the owner to connect an app (e.g. gmail, googlecalendar, slack, github, notion) with secure OAuth when a request needs it and it is not connected. Waits until they connect or decline.',
+    // An app that is already connected needs no card; the call returns at once.
+    needsApproval: async (args, ctx) => !(await composio.isToolkitConnected(ctx.userId, connectArgs(args).toolkit).catch(() => false)),
     run: async (args, ctx) => {
       const { toolkit, name } = connectArgs(args);
       if (!/^[a-z0-9_-]{2,60}$/.test(toolkit)) throw badInput('Valid toolkit required.');
@@ -681,7 +683,7 @@ const TOOL_KEYWORDS = {
   memory:/(remember|memory|memories|forget|forgot|correct that|actually|used to|no longer|kom ihag|minns|minne|glom|husk|glem|merk dir|erinner|vergiss|gedachtnis|souviens|rappelle-toi|oublie|memoire|recuerda|olvida|memoria)/,
   apps: /(gmail|slack|calendar|kalender|calendrier|calendario|agenda|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket|arende|outlook|teams|linear|dropbox|sharepoint|microsoft 365|connected app)/,
   mail: /(email|e-mail|e-post|epost|inbox|inkorg|innboks|indbakke|posteingang|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl|courriel|boite de reception|correo)/,
-  page: /(build|landing|page|site|website|dashboard|bygg|webbsida|hemsida|landningssida|nettside|hjemmeside|webseite|pagina|sitio)/,
+  page: /(build|landing|page|site|website|dashboard|game|\bapp\b|calculator|quiz|widget|\bhtml\b|\bspel|\bspill\b|\bspiel\b|\bjeu\b|juego|bygg|webbsida|hemsida|landningssida|nettside|hjemmeside|webseite|pagina|sitio)/,
   image: /(generate|create|make|draw|design|skapa|gor|rita|generera|designa|lag|tegn|erstell|zeichne|generier|genere|cree|creer|dessine|crea|dibuja|genera).{0,30}(image|picture|photo|illustration|artwork|logo|bild|foto|logga|logotyp|bilde|billede|dessin|imagen|dibujo|ilustracion)|\b(image|picture|photo|illustration)\s+(?:of|for)\b/,
   browser: /(browse|browser|website|web page|fill|form|book|reservation|sign in|log in|surfa|webblasare|webbsida|hemsida|fyll i|formular|boka|reserv|logga in|nettleser|nettside|hjemmeside|skjema|bestill|logg inn|log ind|webseite|ausfull|buchen|anmeld|einlogg|navigat|site web|formulaire|rempli|connecte|connexion|naveg|sitio web|pagina web|formulario|rellen|inicia sesion|inicie sesion)/,
   code: /(code|script|terminal|shell|file|workspace|python|javascript|debug|compile|install|kod|skript|fil\b|filen|filer|datei|programm|fichier|codigo|archivo|instala)/,

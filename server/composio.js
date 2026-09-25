@@ -480,6 +480,51 @@ async function listToolkitTools(toolkit, cap = 200) {
   return all;
 }
 
+// The catalog search matches keywords, not requests: "recent emails from this week" finds
+// nothing, and "send an email" misses the send action. The app's full action list (cached
+// per app) is ranked by the query's words together with the catalog's own hits.
+const actionListCache = new Map();
+const ACTION_LIST_TTL = 10 * 60 * 1000;
+const READ_WORDS = /\b(read|check|find|search|list|get|fetch|show|look|see|summari[sz]e|recent|latest|new|important|unread|what|when|agenda|schedule)\b/;
+async function findTools(toolkit, query = '', limit = 12) {
+  const slug = String(toolkit || '').toLowerCase();
+  const q = String(query || '').slice(0, 120);
+  let cached = actionListCache.get(slug);
+  const [direct, all] = await Promise.all([
+    q ? listTools(slug, { limit: 20, query: q }).catch(() => []) : [],
+    cached && Date.now() - cached.at < ACTION_LIST_TTL ? cached.tools : listToolkitTools(slug, 200),
+  ]);
+  if (!cached || cached.tools !== all) actionListCache.set(slug, { at: cached && cached.tools === all ? cached.at : Date.now(), tools: all });
+  // The app's own name (calendar, gmail) is in every action name and says nothing.
+  const own = slug.replace(/^google/, '');
+  const words = q.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !slug.includes(w) && !own.includes(w)).map((w) => w.replace(/(?:ies|es|s)$/, ''));
+  // Time questions (this week, tomorrow, my agenda) are about events.
+  if (/\b(today|tomorrow|tonight|week|month|upcoming|agenda|schedule|meetings?|busy|free)\b/i.test(q)) words.push('event');
+  const reading = READ_WORDS.test(q.toLowerCase());
+  const hits = new Set(direct.map((t) => t.slug));
+  const score = (t) => {
+    const name = String(t.slug).toLowerCase().slice(slug.length + 1), hay = `${name} ${t.name} ${t.description}`.toLowerCase();
+    return words.reduce((n, w) => n + (name.includes(w) ? 3 : hay.includes(w) ? 1 : 0), 0) + (hits.has(t.slug) ? 1 : 0) + (t.slug === q.trim().toUpperCase() ? 100 : 0) + (reading && t.kind === 'read' ? 1 : 0) + (reading && /(?:^|_)(?:list|fetch|find|search)(?:_|$)/.test(name) ? 2 : 0);
+  };
+  const unique = [...new Map([...direct, ...all].map((t) => [t.slug, t])).values()];
+  return unique.map((t, i) => [score(t), i, t]).sort((a, b) => b[0] - a[0] || a[1] - b[1]).map(([, , t]) => t).slice(0, limit);
+}
+// Full action schemas run to thousands of characters each and were cut off in the agent's
+// prompt, so it kept looking them up. This keeps each argument to one line.
+function compactParams(schema = {}) {
+  // A JSON Schema, or a flat map of argument name to spec.
+  const props = schema.properties || (schema.type ? {} : schema);
+  const required = new Set(schema.required || []);
+  const out = {};
+  for (const [name, p] of Object.entries(props).slice(0, 20)) {
+    const type = p.type || (p.anyOf || []).map((x) => x.type).filter((x) => x && x !== 'null').join('|') || 'any';
+    const extra = [required.has(name) || p.required === true ? 'required' : '', p.default !== undefined && p.default !== null ? `default ${JSON.stringify(p.default).slice(0, 30)}` : '',
+      Array.isArray(p.enum) ? `one of ${p.enum.slice(0, 8).join('|')}` : ''].filter(Boolean).join(', ');
+    const about = String(p.description || p.title || '').split(/(?<=\.)\s/)[0].slice(0, 160);
+    out[name] = `${type}${extra ? ` (${extra})` : ''}${about ? ` — ${about}` : ''}`;
+  }
+  return out;
+}
 async function getTool(toolSlug) {
   return cfetch(`/tools/${encodeURIComponent(String(toolSlug).toUpperCase())}`);
 }
@@ -674,6 +719,8 @@ module.exports = {
   verifyWebhook,
   parseWebhook,
   listTools,
+  findTools,
+  compactParams,
   getTool,
   executeTool,
   listTriggerTypes,

@@ -47,6 +47,24 @@ const CASES = [
     check: (r) => /tap|faucet/i.test(r.result) && !r.calls.includes('mail_send') ? '' : 'missing draft or tried to send' },
   { id: 'browser-down', instructions: 'Open timewarpdev.com in the browser and tell me the main headline on the page.',
     check: (r) => (r.calls.filter((n) => n === 'browser_open').length <= 2 ? '' : `retried the broken browser ${r.calls.filter((n) => n === 'browser_open').length} times`) },
+  // A build finishes soon after the page is published, without extra rounds.
+  { id: 'build', instructions: 'Make me a tic tac toe game',
+    tools: { build_page: (a) => ({ ok: true, html: String(a.html || ''), libraryId: 'lib_eval' }) },
+    check: (r) => (r.calls.includes('build_page') ? '' : 'no page built') + (r.rounds > 3 ? ` ${r.rounds} rounds for one page` : '') },
+  // A connected app is used straight away: the real action lookup, then a read without approval.
+  { id: 'gmail', instructions: 'Check my Gmail for anything important from the last few days',
+    tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE', connected: true }]),
+      // The real action lookup; only the owner's connection is stubbed.
+      composio_tools: (a) => { const composio = require('../server/composio'); composio.listConnected = async () => [{ toolkit: 'gmail', status: 'ACTIVE' }]; return TOOLS.composio_tools.run(a, { userId: 'eval', trace: () => {} }); },
+      composio_execute: (a) => (/FETCH_EMAILS|LIST_MESSAGES|LIST_THREADS/.test(a.tool) ? { successful: true, data: { messages: [
+        { messageId: 'm1', sender: 'Skatteverket <no-reply@skatteverket.se>', subject: 'Din deklaration: komplettering behövs senast 30 september', messageTimestamp: '2026-09-24T08:10:00Z', preview: 'Vi behöver fler uppgifter om din deklaration senast den 30 september.' },
+        { messageId: 'm2', sender: 'Spotify <no-reply@spotify.com>', subject: 'New releases for you', messageTimestamp: '2026-09-24T18:00:00Z', preview: 'Fresh music picked for you.' },
+        { messageId: 'm3', sender: 'Anna Berg <anna@studio.se>', subject: 'Contract for the launch — please sign by Friday', messageTimestamp: '2026-09-23T12:30:00Z', preview: 'Hi! Attached is the contract. Could you sign by Friday?' }] } }
+        : /FETCH_MESSAGE_BY/.test(a.tool) ? { successful: true, data: { messageId: a.args?.message_id, messageText: { m1: 'Hej! Vi behöver kvitton för avdrag för resor till arbetet. Skicka in dem via e-tjänsten senast 30 september.', m2: 'Fresh music picked for you.', m3: 'Hi! Attached is the launch contract. Could you sign by Friday so we can book the venue?' }[a.args?.message_id] || 'Message not found.' } }
+        : { successful: false, error: 'Unexpected action in eval.' }),
+      connect_app: () => ({ toolkit: 'gmail', connected: true }) },
+    check: (r) => (r.calls.includes('composio_execute') ? '' : 'never read the mailbox') + (r.denied ? ` asked for approval ${r.denied} times` : '')
+      + (/skatteverket|deklaration/i.test(r.result) && /anna|contract/i.test(r.result) ? '' : ' missed the important mail') },
   // Heartbeat: the daily goal study tells the owner about a concrete next step once, and
   // stays silent when there is no active goal.
   { id: 'heartbeat-goal', upkeep: 'study', signal: ['I really need to book a hut for the Abisko hike in October', 'Budget is 6000 kr for three nights'],
