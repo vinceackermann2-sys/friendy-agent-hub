@@ -38,7 +38,7 @@ const QUIET_TOOLS=new Set(['memory_write','memory_update','react_to_message']);
 // owner answers, a connect card waits for OAuth, present shows data inline.
 const CARD_TOOLS=new Set(['ask_user','present','connect_app']);
 const CARD_POLICY=' Show, do not just tell. When a choice or confirmation decides what to do next, call ask_user with 2-6 short options (add https images when the owner picks between visuals) instead of asking in text; it ends your turn and the answer arrives as the next message. Never answer with a markdown table, checklist or list of more than four items: use present for lists, product picks, comparisons, dashboards, tables and step checklists. Call it once, then add one or two sentences without repeating its contents. For a comparison that needs current facts, search once, then present the comparison as a table. When a request needs an app that is not connected, call connect_app.';
-const LOOKUP_POLICY=' Speed matters most: answer from your own knowledge whenever it is reliable. Call web_search only when the answer depends on current or specific facts you cannot state reliably, such as news, results, prices, schedules, recent releases or a named source. Run at most one search, then answer with what the sources say and name the source; do not pad the reply with caveats about what you could not verify. If the search does not give a complete answer to what was asked, start a task instead of answering partly or saying you could not find it.';
+const LOOKUP_POLICY=' Speed matters most: answer from your own knowledge whenever it is reliable. Call web_search only when the answer depends on current or specific facts you cannot state reliably, such as news, results, prices, schedules, recent releases or a named source. Run at most one search; when the answer sits on a result page whose text is cut short, read that page once (web_search with its url). Then answer with what the sources say and name the source; do not pad the reply with caveats about what you could not verify. If the search does not give a complete answer to what was asked, start a task instead of answering partly or saying you could not find it.';
 // A quick search answered when some result carries page text or an instant answer.
 const searchAnswered=out=>(Array.isArray(out)?out:[out]).some(x=>x?.ok && x.text && !/"note":"No (?:instant answer|results)/.test(x.text));
 // The chat agent's standing instructions, in fixed sections so they stay part of the
@@ -150,7 +150,8 @@ function createCoordinator(d) {
       cards:(context.cards || []).slice(-8),attachments:preparedAttachments.metadata};
     const userMessageId=typeof context.userMessageId==='string' && /^[a-z0-9_-]{1,100}$/i.test(context.userMessageId) ? context.userMessageId : null;
     let text='';
-    let changed=false,memoryHandled=false,reacted=false,asked='',presented=false,searched=false;
+    let changed=false,memoryHandled=false,reacted=false,asked='',presented=false;
+    const searched=new Set();
     const delegated=[];
     const usageLogs=[];
     timing.prepMs=Date.now()-started;
@@ -316,9 +317,11 @@ function createCoordinator(d) {
           }
         }
         else if(COORDINATOR_TOOLS.has(call.name) || call.name.startsWith('memory_')){
-          if(call.name==='web_search' && searched) out={error:`Already searched in this reply. Answer from the results now${taskStorageAvailable?', or start a task if they are not enough':''}; use present for a comparison or list.`};
+          // One search and one read of pages it found (web_search with urls) per reply.
+          const lookup=call.name==='web_search' ? (Array.isArray(a.urls) && a.urls.length && !a.query ? 'read' : 'search') : '';
+          if(lookup && searched.has(lookup)) out={error:`Already ${lookup==='read'?'read pages':'searched'} in this reply. Answer from the results now${taskStorageAvailable?', or start a task if they are not enough':''}; use present for a comparison or list.`};
           else {
-            if(call.name==='web_search') {searched=true;emit({type:'progress',stage:'tool',label:'Checking live sources'});}
+            if(lookup) {searched.add(lookup);emit({type:'progress',stage:'tool',label:lookup==='read'?'Reading the source':'Checking live sources'});}
             // A failed lookup is reported to the model, which can still answer.
             try {out=await d.tools[call.name].run(a,{userId,sessionId:chatId,signal,trace:()=>{},quick:true});}
             catch(e) {if(signal?.aborted || call.name!=='web_search') throw e;out={error:String(e.message).slice(0,300)};}

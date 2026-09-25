@@ -79,10 +79,17 @@ const decodeEntities = (s) => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) 
   const n = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
   return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
 });
+// The page's main content when it marks one (<main>, <article>); headers, menus and
+// contact blocks would otherwise fill the reading budget.
+function mainContent(html) {
+  const blocks = [...html.matchAll(/<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map((m) => m[2]);
+  const best = blocks.sort((x, y) => y.length - x.length)[0] || '';
+  return best.replace(/<[^>]+>/g, '').trim().length > 400 ? best : html;
+}
 function htmlToText(html) {
   const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
-  const body = html
-    .replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer)\b[\s\S]*?<\/\1>/gi, ' ')
+  const body = mainContent(html)
+    .replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|header|aside|form)\b[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<li\b[^>]*>/gi, '\n- ')
     .replace(/<(br|\/p|\/div|\/h[1-6]|\/tr|\/section|\/article|\/ul|\/ol|\/table|\/blockquote)\b[^>]*>/gi, '\n')
@@ -107,4 +114,19 @@ async function readPage(url, { signal, timeoutMs, maxChars = 12000 } = {}) {
   throw new Error(`unsupported content type ${type.split(';')[0] || 'unknown'} at ${new URL(page.url).hostname}`);
 }
 
-export { publicUrlProblem, fetchPublic, readPage, htmlToText };
+// Free web search from DuckDuckGo's HTML results: titles, links and snippets. Used when
+// Firecrawl is not configured or fails; the caller reads the top pages itself.
+async function searchDuckDuckGo(query, { signal, limit = 8 } = {}) {
+  const page = await fetchPublic(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(String(query).slice(0, 300))}`, { signal, timeoutMs: 8000 });
+  const html = decodeBody(page.body, page.contentType);
+  const clean = (s) => decodeEntities(String(s || '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+  const snippets = [...html.matchAll(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => clean(m[1]));
+  const seen = new Set();
+  return [...html.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m, i) => {
+    let url = decodeEntities(m[1]);
+    try { const u = new URL(url, 'https://duckduckgo.com'); url = u.searchParams.get('uddg') || u.href; } catch { url = ''; }
+    return { title: clean(m[2]).slice(0, 200), url, snippet: (snippets[i] || '').slice(0, 400) };
+  }).filter((r) => /^https?:\/\//.test(r.url) && !/(^|\.)duckduckgo\.com$/.test(new URL(r.url).hostname) && !seen.has(r.url) && seen.add(r.url)).slice(0, limit);
+}
+
+export { publicUrlProblem, fetchPublic, readPage, htmlToText, searchDuckDuckGo };

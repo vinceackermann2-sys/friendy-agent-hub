@@ -278,6 +278,12 @@ async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, fa
   if (page) return page;
   throw failure;
 }
+const PAGE_BUDGET = 8000;
+function pageSlice(page, from, size) {
+  const text = page.text.slice(from, from + size);
+  const nextOffset = page.text.length > from + size ? from + size : undefined;
+  return { url: page.url, ok: true, title: page.title, text, note: page.note, ...(nextOffset ? { nextOffset, more: 'This page continues: read the rest with the same url and offset nextOffset.' } : {}) };
+}
 async function searchWeb(query, { country } = {}, ctx) {
   const q = String(query).slice(0, 400);
   if (!firecrawlKey()) {
@@ -348,7 +354,7 @@ const TOOLS = {
   web_search: {
     name: 'web_search', type: 'web_search', approval: false,
     description: 'Search the public web (top results include page text) or read up to 4 public URLs as text.',
-    run: async ({ query, urls = [], country }, ctx) => {
+    run: async ({ query, urls = [], country, offset }, ctx) => {
       if (query) {
         const t0 = Date.now();
         try {
@@ -361,13 +367,17 @@ const TOOLS = {
         }
       }
       if (!urls.length) throw Object.assign(new Error('A search query or URL is required.'), { code:'BAD_INPUT' });
-      // Any public page can be read; private and internal addresses are refused.
+      // Any public page can be read; private and internal addresses are refused. One call reads
+      // up to PAGE_BUDGET characters, split across its pages, so the worker sees all of it;
+      // nextOffset continues a longer page.
+      const from = Math.max(0, Math.floor(Number(offset) || 0));
+      const size = Math.floor(PAGE_BUDGET / Math.min(4, urls.length));
       return Promise.all(urls.slice(0, 4).map(async (u) => {
         const t0 = Date.now();
         try {
-          const page = await readWebPage(u, { signal: ctx.signal, maxChars: 12000 });
+          const page = await readWebPage(u, { signal: ctx.signal, maxChars: from + size + 1 });
           ctx.trace(entry('globe', `web_search: ${new URL(page.url).hostname} · ${Date.now() - t0}ms`));
-          return { url: page.url, ok: true, title: page.title, text: page.text, note: page.note };
+          return pageSlice(page, from, size);
         } catch (e) {
           ctx.trace(entry('alert', `web_search failed: ${e.message}`));
           return { url: u, ok: false, error: e.message };

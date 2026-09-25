@@ -6,7 +6,7 @@
 */
 import { fetchAllowlisted } from './sandbox.js';
 import { entry } from './tracing.js';
-import { publicUrlProblem, readPage } from './public-web.js';
+import { publicUrlProblem, readPage, searchDuckDuckGo } from './public-web.js';
 import * as store from '../store.js';
 import { normalizeSubAgent, nextRunAt } from './triggers.js';
 import * as composio from '../composio.js';
@@ -88,13 +88,32 @@ const firecrawlHeaders = () => {
   }
   return h;
 };
+const PAGE_BUDGET = 8000;
+function pageSlice(page, from, size) {
+  const text = page.text.slice(from, from + size);
+  const nextOffset = page.text.length > from + size ? from + size : undefined;
+  return { url: page.url, ok: true, title: page.title, text, ...(nextOffset ? { nextOffset, more: 'This page continues: read the rest with the same url and offset nextOffset.' } : {}) };
+}
 async function searchWeb(query, { country } = {}, ctx) {
   const q = String(query).slice(0, 400);
-  if (!firecrawlKey()) {
-    const u = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(q.slice(0, 300)) + '&format=json&no_html=1&skip_disambig=1';
-    const r = await fetchAllowlisted(u, { signal: ctx.signal });
-    return { url: u, provider: 'duckduckgo', text: instantAnswer(await r.text()) };
+  let results = null, provider = 'firecrawl', failure = null;
+  if (firecrawlKey()) {
+    try { results = await firecrawlSearch(q, country, ctx); }
+    catch (error) { if (ctx.signal?.aborted) throw error; failure = error; }
   }
+  // Without Firecrawl, or when it fails, a free web search and direct page reads stand in.
+  if (!results) {
+    try { results = await searchDuckDuckGo(q, { signal: ctx.signal }); provider = 'duckduckgo'; }
+    catch (error) { throw failure || error; }
+  }
+  // The top pages are read directly (free): a chat answer reads two, a task three.
+  await Promise.all(results.slice(0, ctx.quick ? 2 : 3).filter((item) => !item.text).map(async (item) => {
+    try { item.text = (await readPage(item.url, { signal: ctx.signal, timeoutMs: ctx.quick ? 4000 : 7000, maxChars: 1800 })).text || undefined; } catch {}
+  }));
+  const text = results.length ? JSON.stringify({ results }) : JSON.stringify({ note: 'No results found for this query.' });
+  return { url: 'search:' + q, provider, text };
+}
+async function firecrawlSearch(q, country, ctx) {
   const body = { query: q, limit: ctx.quick ? 8 : 5, sources: ['web'] };
   if (!ctx.quick) body.scrapeOptions = { formats: ['markdown'], onlyMainContent: true };
   const cc = String(country || '').toUpperCase();
@@ -108,13 +127,8 @@ async function searchWeb(query, { country } = {}, ctx) {
   const json = await r.json().catch(() => ({}));
   if (!r.ok || json.success === false) throw new Error('Firecrawl search failed: ' + String(json.error || 'HTTP ' + r.status).slice(0, 200));
   const seen = new Set();
-  const results = (json.data?.web || []).filter((item) => item.url && !seen.has(item.url) && seen.add(item.url)).slice(0, 8)
+  return (json.data?.web || []).filter((item) => item.url && !seen.has(item.url) && seen.add(item.url)).slice(0, 8)
     .map((item) => ({ title: String(item.title || '').slice(0, 200), url: item.url, snippet: String(item.description || '').slice(0, 400), text: item.markdown ? String(item.markdown).slice(0, 1800) : undefined }));
-  if (ctx.quick) await Promise.all(results.slice(0, 2).map(async (item) => {
-    try { item.text = (await readPage(item.url, { signal: ctx.signal, timeoutMs: 4000, maxChars: 1800 })).text || undefined; } catch {}
-  }));
-  const text = results.length ? JSON.stringify({ results }) : JSON.stringify({ note: 'No results found for this query.' });
-  return { url: 'search:' + q, provider: 'firecrawl', text };
 }
 async function scrapePage(url, signal, timeoutMs = 20000) {
   const timeout = AbortSignal.timeout(timeoutMs + 5000);
@@ -143,16 +157,6 @@ async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000 } =
   throw failure;
 }
 
-// DuckDuckGo instant answers arrive as verbose JSON; keep only what a model can use.
-function instantAnswer(raw) {
-  let json;
-  try { json = JSON.parse(raw); } catch { return raw; }
-  const topics = (json.RelatedTopics || []).flatMap((t) => t.Topics || [t]).filter((t) => t.Text).slice(0, 8);
-  const out = { heading:json.Heading || undefined, answer:json.Answer || undefined, abstract:json.AbstractText || undefined,
-    source:json.AbstractURL || undefined, definition:json.Definition || undefined, related:topics.map((t) => ({ text:t.Text, url:t.FirstURL })) };
-  if (!out.answer && !out.abstract && !out.definition && !topics.length) return JSON.stringify({ note:'No instant answer found for this query.' });
-  return JSON.stringify(out);
-}
 
 const BROWSER_ACTIONS = new Set(['click', 'double_click', 'right_click', 'click_text', 'hover', 'type', 'key', 'scroll', 'select', 'drag', 'back', 'forward', 'reload', 'wait']);
 const badInput = (message) => Object.assign(new Error(message), { code: 'BAD_INPUT' });
@@ -307,7 +311,7 @@ const TOOLS = {
   web_search: {
     name: 'web_search', type: 'web_search', approval: false,
     description: 'Search the public web (top results include page text) or read up to 4 public URLs as text.',
-    run: async ({ query, urls = [], country, language }, ctx) => {
+    run: async ({ query, urls = [], country, language, offset }, ctx) => {
       if (query) {
         const t0 = Date.now();
         try {
@@ -320,13 +324,17 @@ const TOOLS = {
         }
       }
       if (!urls.length) throw Object.assign(new Error('A search query or URL is required.'), { code:'BAD_INPUT' });
-      // Any public page can be read; private and internal addresses are refused.
+      // Any public page can be read; private and internal addresses are refused. One call reads
+      // up to PAGE_BUDGET characters, split across its pages, so the worker sees all of it;
+      // nextOffset continues a longer page.
+      const from = Math.max(0, Math.floor(Number(offset) || 0));
+      const size = Math.floor(PAGE_BUDGET / Math.min(4, urls.length));
       return Promise.all(urls.slice(0, 4).map(async (u) => {
         const t0 = Date.now();
         try {
-          const page = await readWebPage(u, { signal: ctx.signal, maxChars: 12000 });
+          const page = await readWebPage(u, { signal: ctx.signal, maxChars: from + size + 1 });
           ctx.trace(entry('globe', `web_search: ${new URL(page.url).hostname} · ${Date.now() - t0}ms`));
-          return { url: page.url, ok: true, title: page.title, text: page.text };
+          return pageSlice(page, from, size);
         } catch (e) {
           ctx.trace(entry('alert', `web_search failed: ${e.message}`));
           return { url: u, ok: false, error: e.message };

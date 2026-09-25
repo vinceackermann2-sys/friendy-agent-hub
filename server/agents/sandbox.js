@@ -116,10 +116,17 @@ const decodeEntities = (s) => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) 
   return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
 });
 
+// The page's main content when it marks one (<main>, <article>); headers, menus and
+// contact blocks would otherwise fill the reading budget.
+function mainContent(html) {
+  const blocks = [...html.matchAll(/<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map((m) => m[2]);
+  const best = blocks.sort((x, y) => y.length - x.length)[0] || '';
+  return best.replace(/<[^>]+>/g, '').trim().length > 400 ? best : html;
+}
 function htmlToText(html) {
   const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
-  const body = html
-    .replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer)\b[\s\S]*?<\/\1>/gi, ' ')
+  const body = mainContent(html)
+    .replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|header|aside|form)\b[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<li\b[^>]*>/gi, '\n- ')
     .replace(/<(br|\/p|\/div|\/h[1-6]|\/tr|\/section|\/article|\/ul|\/ol|\/table|\/blockquote)\b[^>]*>/gi, '\n')
