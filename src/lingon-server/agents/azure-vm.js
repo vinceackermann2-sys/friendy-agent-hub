@@ -539,6 +539,7 @@ function browserProfileRuntime(root, load) {
   const path = load('path');
   const profile = path.join(root, 'profile');
   const portFile = path.join(profile, 'debug-port');
+  const pidFile = path.join(profile, 'browser-pid');
   const cookieFile = path.join(profile, 'lingon-session-cookies.json');
   const launchLock = path.join(root, 'profile-launch.lock');
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -627,18 +628,43 @@ function browserProfileRuntime(root, load) {
     try {
       browser = await connect(puppeteer);
       if (browser) return browser;
+      // A browser that no longer answers still holds the profile, so a new one could not start.
+      const stale = Number(fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8') : 0);
+      const ours = (pid) => { try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(profile); } catch { return process.platform !== 'linux'; } };
+      if (stale > 0 && ours(stale)) {
+        try { process.kill(-stale, 'SIGKILL'); } catch { try { process.kill(stale, 'SIGKILL'); } catch {} }
+        await sleep(1000);
+      }
       const port = await freePort();
-      // Chrome's standalone headless build runs in "shell" mode. Where the kernel has no
-      // usable sandbox for this user, it runs without one, still as the locked-down user.
-      const options = { headless: /headless-shell/.test(executablePath) ? 'shell' : true, executablePath, userDataDir: profile,
-        args: ['--disable-dev-shm-usage', '--window-size=1280,900', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port] };
-      try { browser = await puppeteer.launch(options); }
-      catch (error) {
-        if (!/sandbox/i.test(String(error && error.message))) throw error;
-        browser = await puppeteer.launch({ ...options, args: [...options.args, '--no-sandbox'] });
+      // Chrome runs on its own, not as a child of this step: puppeteer.launch holds its pipes
+      // (the step's process never ends, and the VM runs one command at a time) and kills it
+      // when the step ends. Chrome's standalone headless build runs in "shell" mode.
+      const url = `http://127.0.0.1:${port}`;
+      const args = await puppeteer.defaultArgs({ browser: 'chrome', headless: /headless-shell/.test(executablePath) ? 'shell' : true, userDataDir: profile,
+        args: ['--disable-dev-shm-usage', '--window-size=1280,900', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port] });
+      const logFile = path.join(root, 'chrome.log');
+      const start = async (extra) => {
+        const log = fs.openSync(logFile, 'w', 0o600);
+        const child = load('child_process').spawn(executablePath, [...extra, ...args], { detached: true, stdio: ['ignore', log, log], windowsHide: true });
+        fs.closeSync(log);
+        let exited = false;
+        child.once('exit', () => { exited = true; });
+        child.once('error', () => { exited = true; });
+        child.unref();
+        for (let i = 0; i < 150 && !exited; i++) {
+          try { if ((await fetch(`${url}/json/version`, { signal: AbortSignal.timeout(1000) })).ok) { fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 }); return true; } } catch {}
+          await sleep(100);
+        }
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+        return false;
+      };
+      // Where the kernel has no usable sandbox for this user, it runs without one, still as the locked-down user.
+      const tail = () => { try { return fs.readFileSync(logFile, 'utf8').slice(-400).trim(); } catch { return ''; } };
+      if (!(await start([])) && !(/sandbox/i.test(tail()) && await start(['--no-sandbox']))) {
+        throw new Error(`Failed to launch the browser process. ${tail()}`.trim());
       }
       fs.writeFileSync(portFile, String(port), { mode: 0o600 });
-      browser.process()?.unref?.();
+      browser = await puppeteer.connect({ browserURL: url });
       await restoreCookies(browser).catch(() => {});
       return browser;
     } finally { try { fs.rmdirSync(launchLock); } catch {} }
@@ -654,7 +680,7 @@ function browserProfileRuntime(root, load) {
     fs.writeFileSync(targetFile, page.target()._targetId, { mode: 0o600 });
     return { page, reusedPage, stateFile: path.join(dir, 'state.json'), targetFile };
   };
-  return { profile, connectOrLaunch, connectExisting: connect, session, saveCookies };
+  return { profile, pidFile, connectOrLaunch, connectExisting: connect, session, saveCookies };
 }
 
 /*
@@ -830,7 +856,9 @@ function buildBrowserSessionScript(action, args = {}) {
     "    fs.writeFileSync(stateFile, JSON.stringify({ url: snap.url, title: snap.title, scrollY: snap.scrollY }));",
     "    process.stdout.write(JSON.stringify({ ok: true, ...snap, screenshotBytes: screenshot.length }));",
     "  } finally { await profileRuntime.saveCookies(browser).catch(() => {}); browser.disconnect(); }",
-    "})().catch((error) => { process.stdout.write(JSON.stringify({ ok: false, error: String(error.message || error) })); process.exitCode = 1; });",
+    "})().catch((error) => { process.stdout.write(JSON.stringify({ ok: false, error: String(error.message || error) })); process.exitCode = 1; })",
+    // A handle left open must not keep the step, and so the VM's one command slot, busy.
+    "  .finally(() => setTimeout(() => process.exit(), 1500).unref());",
   ].join('\n');
   const codeB64 = Buffer.from(runner, 'utf8').toString('base64');
   return [
@@ -843,9 +871,12 @@ function buildBrowserSessionScript(action, args = {}) {
     `echo '${codeB64}' | base64 -d > /tmp/lingon-browser-session.js`,
     'chown lingon-browser:lingon-browser /tmp/lingon-browser-session.js && chmod 600 /tmp/lingon-browser-session.js',
     'set +e',
-    `runuser -u lingon-browser -- env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /tmp/lingon-browser-session.js`,
+    // Bounded, so a hung page can never hold the VM's one command slot.
+    'OUT=$(mktemp)',
+    `runuser -u lingon-browser -- timeout -k 5 170 env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /tmp/lingon-browser-session.js > "$OUT"`,
     'EC=$?',
-    'rm -f /tmp/lingon-browser-session.js',
+    `if [ -s "$OUT" ]; then cat "$OUT"; elif [ "$EC" = 124 ] || [ "$EC" = 137 ]; then echo '{"ok":false,"error":"The browser step took too long and was stopped. Try again, or open a simpler page."}'; fi`,
+    'rm -f "$OUT" /tmp/lingon-browser-session.js',
     ...(live ? liveStreamerLaunch(sessionId, live) : []),
     'exit $EC',
   ].join('\n');
@@ -1389,9 +1420,9 @@ function buildRestoreStateScript(url) {
     'ARCHIVE=$(mktemp /tmp/lingon-state.XXXXXX.tar.gz)',
     'trap \'rm -f "$ARCHIVE"\' EXIT',
     `URL=$(echo '${encoded}' | base64 -d)`,
-    `CODE=$(curl -sS --retry 2 -w '%{http_code}' -o "$ARCHIVE" -H 'x-ms-version: ${BLOB_API}' "$URL")`,
+    `CODE=$(curl -sS --retry 2 --max-time 180 -w '%{http_code}' -o "$ARCHIVE" -H 'x-ms-version: ${BLOB_API}' "$URL")`,
     'if [ "$CODE" = 200 ]; then',
-    '  tar -xzf "$ARCHIVE" -C /',
+    '  timeout 150 tar -xzf "$ARCHIVE" -C /',
     'elif [ "$CODE" != 404 ]; then',
     '  echo "Workspace restore failed with HTTP $CODE" >&2; exit 1',
     'fi',
@@ -1914,14 +1945,34 @@ function startIdleWatcher() {
   if (idleTimer.unref) idleTimer.unref();
 }
 
-// True when the VM's Run Command extension has been busy for over ten minutes: longer than
-// any command of ours takes, so it is stuck rather than working.
-async function stuckRunCommand(cfg, name) {
-  const view = await arm(cfg, 'GET', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/instanceView`, undefined, COMPUTE_API);
-  const extension = (view.extensions || []).find((item) => /runcommand/i.test(`${item.name || ''} ${item.type || ''}`));
-  const status = (extension?.statuses || []).find((item) => /transitioning|in progress/i.test(`${item.code || ''} ${item.displayStatus || ''} ${item.message || ''}`));
-  const since = Date.parse(status?.time || '');
-  return !!status && Number.isFinite(since) && Date.now() - since > 10 * 60 * 1000;
+// Ends the running command when it has run for over ten minutes, longer than any command
+// of ours takes, so it is stuck rather than working. Azure shows no status for it and only
+// ends it after 90 minutes; a managed Run Command runs alongside it and ends its processes.
+const UNSTICK_SCRIPT = [
+  "P=$(pgrep -of '/var/lib/waagent/run-command/download/[0-9]+/script.sh')",
+  '[ -n "$P" ] || { echo IDLE; exit 0; }',
+  'AGE=$(ps -o etimes= -p "$P" | tr -d " ")',
+  'if [ "${AGE:-0}" -lt 600 ]; then echo "BUSY $AGE"; exit 0; fi',
+  'tree() { for C in $(pgrep -P "$1"); do tree "$C"; done; echo "$1"; }',
+  'kill -KILL $(tree "$P") 2>/dev/null',
+  'echo CLEARED',
+].join('\n');
+
+async function clearStuckRunCommand(cfg, name) {
+  const vmPath = `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}`;
+  const vm = await arm(cfg, 'GET', vmPath, undefined, COMPUTE_API);
+  await arm(cfg, 'PUT', `${vmPath}/runCommands/lingon-unstick`, {
+    location: vm.location,
+    // The time makes each request a new run rather than a repeat of the last one.
+    properties: { source: { script: `${UNSTICK_SCRIPT}\n# ${Date.now()}` }, asyncExecution: false, timeoutInSeconds: 60 },
+  }, COMPUTE_API);
+  for (let i = 0; i < 30; i++) {
+    const view = await arm(cfg, 'GET', `${vmPath}/runCommands/lingon-unstick?$expand=instanceView`, undefined, COMPUTE_API);
+    const iv = view.properties?.instanceView;
+    if (/succeeded|failed|timed|cancel/i.test(iv?.executionState || '')) return /\bCLEARED\b/.test(String(iv.output || ''));
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  return false;
 }
 
 async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
@@ -1931,9 +1982,9 @@ async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
   // Azure runs one command per VM at a time. Another one (a workspace restore right after
   // the VM starts, a backup) makes a new command fail at once; it waits its turn instead.
   // A command stuck for longer than any of ours runs (Azure only ends it after 90 minutes)
-  // would block every tool, so the VM restarts once to clear it; files stay on disk.
+  // would block every tool, so it is ended once (see clearStuckRunCommand).
   const busy = (error) => /run command extension execution is in progress|another operation is in progress|conflict/i.test(String(error && error.message));
-  let restarted = false;
+  let cleared = false;
   for (let attempt = 0; ; attempt++) {
     try {
       const data = await arm(cfg, 'POST', path_, { commandId: 'RunShellScript', script: [script] }, COMPUTE_API);
@@ -1941,10 +1992,9 @@ async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
     } catch (error) {
       if (!busy(error)) throw error;
       if (attempt >= 36) {
-        if (restarted || !(await stuckRunCommand(cfg, name).catch(() => false))) throw error;
-        restarted = true;
-        await arm(cfg, 'POST', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/restart`, undefined, COMPUTE_API);
-        attempt = 30; // a few more tries once the VM is back
+        if (cleared || !(await clearStuckRunCommand(cfg, name).catch(() => false))) throw error;
+        cleared = true;
+        attempt = 30; // a few more tries once the slot is free
         continue;
       }
       await new Promise((resolve) => setTimeout(resolve, 5000));

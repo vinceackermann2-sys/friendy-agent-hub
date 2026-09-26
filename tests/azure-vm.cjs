@@ -52,10 +52,14 @@ const sessionBrowser = azure.buildBrowserSessionScript('navigate', { sessionId:'
 const browserRunner = Buffer.from(sessionBrowser.match(/echo '([^']+)' \| base64 -d/)[1], 'base64').toString('utf8');
 assert.match(browserRunner, /--remote-debugging-port/);
 assert.match(browserRunner, /puppeteer\.connect/);
-assert.match(browserRunner, /browser\.process\(\)\?\.unref/);
+// Chrome runs on its own and the step ends by itself, within a time limit: the VM runs one
+// command at a time, so a step that never ends would block every later one.
+assert.match(browserRunner, /detached: true, stdio: \['ignore', log, log\]/);
+assert.doesNotMatch(browserRunner, /puppeteer\.launch\(/);
+assert.match(browserRunner, /setTimeout\(\(\) => process\.exit\(\), 1500\)\.unref\(\)/);
 assert.match(browserRunner, /request\.abort/);
 assert.match(sessionBrowser, /install -d -m 700 -o lingon-browser/);
-assert.match(sessionBrowser, /runuser -u lingon-browser -- env .* node \/tmp\/lingon-browser-session\.js/);
+assert.match(sessionBrowser, /runuser -u lingon-browser -- timeout -k 5 170 env .* node \/tmp\/lingon-browser-session\.js/);
 // Any public web page may load; the firewall for the browser user is set up before it starts.
 assert.match(browserRunner, /const kit = \(function browserKit/);
 assert.ok(sessionBrowser.indexOf('iptables -C OUTPUT -m owner --uid-owner lingon-browser') < sessionBrowser.indexOf('runuser -u lingon-browser'));

@@ -35,8 +35,30 @@ const { browserProfileRuntime, buildBrowserSessionScript, buildBrowserRelayScrip
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}/`;
+  // The browser runs on its own. On Windows its helper processes outlive a close and keep the
+  // profile locked, so the whole tree ends there, as puppeteer does.
+  const close = async (target) => {
+    const pid = fs.existsSync(runtime.pidFile) ? fs.readFileSync(runtime.pidFile, 'utf8').trim() : '';
+    if (process.platform !== 'win32' || !pid) return target.close();
+    await target.disconnect();
+    const run = (cmd, args) => { try { return require('node:child_process').execFileSync(cmd, args, { encoding: 'utf8' }); } catch { return ''; } };
+    run('taskkill', ['/pid', pid, '/T', '/F']);
+    for (let i = 0; i < 120 && run('tasklist', ['/FI', `PID eq ${pid}`, '/NH']).includes(` ${pid} `); i++) await new Promise((resolve) => setTimeout(resolve, 500));
+  };
   let browser;
   try {
+    // A browser step's process ends by itself once its work is done and leaves the browser
+    // running for the next step: the VM runs one command at a time, so a step that never
+    // ends blocks every later one.
+    const step = require('node:child_process').spawnSync(process.execPath, ['-e', [
+      `const runtime = require(${JSON.stringify(require.resolve('../server/agents/azure-vm'))}).browserProfileRuntime(${JSON.stringify(root)}, require);`,
+      `runtime.connectOrLaunch(require('puppeteer-core'), ${JSON.stringify(chrome)}).then((b) => b.disconnect());`,
+    ].join('\n')], { cwd: path.resolve(__dirname, '..'), timeout: 40000, encoding: 'utf8' });
+    assert.equal(step.error, undefined, 'a browser step ends by itself');
+    assert.equal(step.status, 0, step.stderr);
+    browser = await runtime.connectExisting(puppeteer);
+    assert.ok(browser, 'the browser keeps running after the step ends');
+    await close(browser); browser = null;
     browser = await runtime.connectOrLaunch(puppeteer, chrome);
     const first = await runtime.session(browser, 'live_first');
     await first.page.goto(`${url}login`);
@@ -47,18 +69,19 @@ const { browserProfileRuntime, buildBrowserSessionScript, buildBrowserRelayScrip
     await second.page.goto(url);
     assert.match(await second.page.evaluate(() => document.body.innerText), /Signed in/, 'the account profile shares website login state');
     assert.equal((await runtime.session(browser, 'live_first')).reusedPage, true);
-    await browser.close(); browser = null;
+    await close(browser); browser = null;
     browser = await runtime.connectOrLaunch(puppeteer, chrome);
     const later = await runtime.session(browser, 'live_later');
     await later.page.goto(url);
     assert.match(await later.page.evaluate(() => document.body.innerText), /Signed in/, 'website login state survives a browser restart');
     console.log('browser profile: cookies persist across tasks and browser restarts, with isolated tabs');
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    if (browser) await close(browser).catch(() => {});
     const closed = new Promise((resolve) => server.close(resolve));
     server.closeAllConnections();
     await closed;
     const safe = root.startsWith(tempRoot + path.sep) && path.basename(root).startsWith('profile-test-');
-    if (safe) fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    // A killed browser can take a while to let go of its files on Windows.
+    if (safe) fs.rmSync(root, { recursive: true, force: true, maxRetries: process.platform === 'win32' ? 80 : 8, retryDelay: 500 });
   }
 })().catch((error) => { console.error(error); process.exit(1); });
