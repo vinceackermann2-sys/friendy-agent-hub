@@ -5323,6 +5323,9 @@ function paintLive(body, c, selectedId){
         <button class="btn ghost small" data-act="canvas-back">Back</button>
       </div>
     </div>`;
+  // The address shows at once from the newest card; the stream updates it as the page changes.
+  const shownUrl = [...(c.messages || [])].reverse().find(m => m.card?.type === 'browser' && m.card.liveId === id && m.card.url)?.card.url;
+  if (shownUrl && !desktop) $('#liveurl').textContent = shownUrl;
   liveConnect(id);
   if (liveCardFrame?.id === id) drawLiveFrame(liveCardFrame.url);
   else if (poster) drawLiveFrame(poster);
@@ -5415,7 +5418,7 @@ function liveConnectRealtime(id){
   }).catch(() => { if (st()) st().textContent = 'live view unavailable'; });
 }
 function liveConnect(id){
-  if (liveWS && liveIdShown === id){ bindLiveInput(liveWS); liveState(liveControl ? 'user' : 'idle'); pcConnect(); return; }
+  if (liveWS && liveIdShown === id){ bindLiveInput(liveWS); liveState(liveControl ? 'user' : String(id).startsWith('rt:') ? 'live' : 'idle'); pcConnect(); return; }
   if (String(id).startsWith('rt:')) { liveConnectRealtime(id); return; }
   liveClose();
   const sess = window.LingonAuth && window.LingonAuth.get();
