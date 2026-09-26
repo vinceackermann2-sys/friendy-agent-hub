@@ -111,6 +111,13 @@ const CASES = [
     check: r => r.route === 'task' || r.cards.includes('present') ? '' : `no comparison card: ${r.text.slice(0, 200)}` },
   { id: 'card.pick', prompt: 'Help me pick a laptop for video editing under 20000 kr', expect: 'any',
     check: r => r.route !== 'answer' || r.cards.includes('present') ? '' : `no picks card: ${r.text.slice(0, 200)}` },
+  { id: 'card.list', prompt: 'Top 5 things to do in Lisbon?', expect: 'answer',
+    check: r => r.cards.includes('present') ? '' : `five picks without a list card: ${r.text.slice(0, 160)}` },
+  { id: 'card.table', prompt: 'Compare a Kindle Paperwhite and a Kobo Clara BW for reading in bed.', expect: 'any',
+    check: r => r.route === 'task' || r.cards.includes('present') ? '' : `comparison without a table: ${r.text.slice(0, 160)}` },
+  { id: 'card.connect', prompt: 'Connect my Google Calendar.', expect: 'answer',
+    tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE' }]), connect_app: () => ({ toolkit: 'googlecalendar', connected: false }) },
+    check: r => r.cards.includes('connect') ? '' : `no connect card: ${r.text.slice(0, 160)}` },
   { id: 'card.none', prompt: 'Why is the sky blue? One short paragraph.', expect: 'answer',
     check: r => !r.cards.length ? '' : `needless card: ${r.cards.join(',')}` },
   // Connectors: a connected app goes straight to work; a missing one gets a connect card.

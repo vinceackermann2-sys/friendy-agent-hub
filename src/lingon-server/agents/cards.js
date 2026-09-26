@@ -254,6 +254,19 @@ function cardFromMarkdown(text) {
     const rest = lines.filter((line, index) => !used.has(index) && line !== heading && !/^#{1,4}\s+/.test(line) && !/^\s*\*\*[^*]+\*\*:?\s*$/.test(line)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
     return { card: presentArgs({ kind: 'steps', title: heading ? heading.replace(/^#+\s*/, '') : 'Checklist', items }), rest };
   }
+  // A numbered list of named picks ("1. **Wander Alfama** — …") is a list card. Only items
+  // that each lead with a bold name count, so ordinary numbered instructions stay text.
+  const picks = lines.map((line, index) => ({ index, m: line.match(/^\s*\d+[.)]\s+\*\*([^*]{2,120})\*\*\s*(?:[—–:-]\s*)?(.*)$/) })).filter((row) => row.m);
+  if (picks.length >= 4) {
+    const first = picks[0].index;
+    const intro = lines.slice(0, first).map((line, index) => ({ line, index })).filter(({ line }) => line.trim()).at(-1);
+    const titleLine = intro && (/^#{1,4}\s+/.test(intro.line) || /:\s*$/.test(intro.line)) ? intro : null;
+    const title = titleLine ? titleLine.line.replace(/^#+\s*/, '').replace(/[*:]+/g, '').trim() : 'List';
+    const items = picks.map(({ m }) => ({ title: m[1].replace(/[.:]+$/, '').trim(), subtitle: m[2].replace(/\*\*/g, '').trim() || undefined }));
+    const used = new Set([...picks.map((row) => row.index), ...(titleLine ? [titleLine.index] : [])]);
+    const rest = lines.filter((line, index) => !used.has(index)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    return { card: presentArgs({ kind: 'list', title: title.slice(0, 120) || 'List', items }), rest };
+  }
   return null;
 }
 
