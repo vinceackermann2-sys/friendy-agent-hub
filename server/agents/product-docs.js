@@ -36,8 +36,8 @@ This is separate from the owner's own email; the owner's Gmail or Outlook is a c
   },
   'privacy-and-credentials': {
     title: 'Privacy, credentials and the vault',
-    text: `Passwords, card numbers, API keys and one-time codes are never typed into chat. The agent asks for them with a secure vault request; the owner saves them in Settings, and the agent uses them only by reference (sec_••••) with approval, without seeing the value.
-For website purchases the agent uses a card already saved in the merchant account and shows only masked details.
+    text: `Passwords, API keys and one-time codes are never typed into chat. The agent asks for logins and keys with a secure vault request; the owner saves them in Settings, and the agent uses them only by reference (sec_••••) with approval, without seeing the value.
+Card details are never saved in Belna, not even masked. For website purchases the agent signs in to the merchant and pays with Shop Pay or a card the owner already saved in that merchant account; the owner approves each order first.
 Each account's chats, memory, files and tasks are private to that account.`,
   },
   'memory-and-files': {

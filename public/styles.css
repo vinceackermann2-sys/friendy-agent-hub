@@ -1966,20 +1966,6 @@ footer.afooter{ max-width:none; margin-left:0; margin-right:0; display:block; }
 .vault-item-actions .iconbtn{ width:32px; height:32px; }
 .vault-empty b{ font-size:13.5px; }
 .vault-empty p{ margin-top:3px; font-size:12px; color:var(--mut); line-height:1.5; }
-.vault-payment{ padding:18px; border:1px solid var(--line); border-radius:18px; background:#fff; box-shadow:var(--shadow); }
-.vault-payment-note{ margin:9px 0 0; max-width:680px; color:var(--mut); font-size:12px; line-height:1.5; }
-.vault-payment-form{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:end; margin-top:16px; }
-.vault-payment-form label{ display:flex; flex-direction:column; gap:6px; min-width:0; color:var(--mut); font-size:11.5px; font-weight:700; }
-.vault-payment-form .btn{ justify-self:start; }
-.vault-payment-preview{ display:flex; flex-direction:column; justify-content:space-between; min-height:150px; grid-row:span 2; padding:18px; border-radius:15px; color:#fff; background:linear-gradient(130deg,#233f3b,#526e68); box-shadow:0 10px 28px rgba(19,51,45,.18); }
-.vault-payment-preview span{ font-size:12px; opacity:.8; }
-.vault-payment-preview strong{ align-self:flex-end; letter-spacing:.13em; font-size:17px; }
-.vault-payment-list{ display:flex; flex-direction:column; gap:8px; margin-top:18px; }
-.vault-payment-saved{ display:flex; align-items:center; gap:11px; padding:10px 12px; border:1px solid var(--line2); border-radius:12px; }
-.vault-payment-saved > div{ flex:1; min-width:0; }
-.vault-payment-saved b,.vault-payment-saved small{ display:block; overflow-wrap:anywhere; }
-.vault-payment-saved b{ font-size:13px; }.vault-payment-saved small,.vault-payment-empty{ color:var(--mut); font-size:11.5px; }
-@media(max-width:650px){ .vault-payment-form{ grid-template-columns:1fr; }.vault-payment-preview{ grid-row:auto; min-height:135px; } }
 .secret-card-reason{ margin-bottom:10px; font-size:13px; color:var(--mut); line-height:1.5; }
 .secret-card-fields{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .secret-card-fields .field{ flex:1.4 1 180px; min-width:0; }

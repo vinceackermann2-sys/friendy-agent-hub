@@ -73,7 +73,7 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
   try {
     assert.equal(TOOLS.browser_fill_secret.approval, true);
     assert.equal(TOOLS.computer_fill_secret.approval, true);
-    assert.deepEqual(await TOOLS.vault_list.run({}, ctx), { secrets: [{ ref: 'sec_gh12', name: 'GitHub password' }, { ref: 'sec_card', name: 'Visa card number' }], paymentMethods: [] });
+    assert.deepEqual(await TOOLS.vault_list.run({}, ctx), { secrets: [{ ref: 'sec_gh12', name: 'GitHub password' }, { ref: 'sec_card', name: 'Visa card number' }] });
     const detail = JSON.parse(await TOOLS.browser_fill_secret.approvalDetail({ secret: 'sec_gh12', ref: 2, host: 'github.com' }, { userId: 'u' }));
     assert.equal(detail.summary, 'Type your saved “GitHub password” on github.com', 'the owner sees which secret goes where');
     await rejects('browser_fill_secret', { secret: 'sec_gh12', ref: 2, host: 'evil.example' }, /not evil\.example\. Nothing was typed/);

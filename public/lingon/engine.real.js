@@ -226,7 +226,7 @@ window.Engine = (() => {
 
   /* ---------------- greeting ---------------- */
   async function greet(rt) {
-    await rt.say('Hej! What would you like to work on?', { mood: 'happy' });
+    await rt.say('Hi! What would you like to work on?', { mood: 'happy' });
   }
 
   /* ---------------- REAL research ---------------- */

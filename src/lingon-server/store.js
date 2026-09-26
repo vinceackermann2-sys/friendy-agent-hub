@@ -8,10 +8,10 @@ import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { upkeepRows } from './agents/upkeep.js';
 import { forbiddenPaymentSecret } from './agents/payment-safety.js';
-import { createPaymentMethods } from './payment-methods.js';
 import { creditsForCost, PLANS, REFERRAL_TOKENS_EACH } from './plans.js';
 import { createTokenWallet } from './token-wallet.js';
 import { createPersonalStore } from './personal-store.js';
+import { createClientStateStore } from './client-state.js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
@@ -182,7 +182,7 @@ async function listSecrets(userId) {
   return d.secrets.filter((x) => x.userId === userId).map(({ value, userId: _owner, ...rest }) => rest);
 }
 async function addSecret(userId, name, value) {
-  if (forbiddenPaymentSecret(name, value)) throw vaultError('Payment card details and identity codes cannot be saved in the agent vault. Save a card with the merchant and add only its masked details under Payment methods.', 'BAD_INPUT');
+  if (forbiddenPaymentSecret(name, value)) throw vaultError('Payment card details and identity codes cannot be saved in the agent vault. For purchases, keep the card saved in your merchant account or Shop Pay; the agent selects it at checkout without seeing it.', 'BAD_INPUT');
   if (!secretsEncrypted()) throw vaultError('The vault is locked: ENCRYPTION_KEY is not set on the server, so nothing was saved.', 'NOT_ENCRYPTED');
   const ref = 'sec_' + uid().slice(0, 4);
   const id = ref + '_' + uid();
@@ -1634,7 +1634,6 @@ async function updateShopPayOrder(userId, id, patch) {
 
 function sealSecret(plain) { return encryptValue(plain); }
 function openSecret(obj) { return decryptValue(obj); }
-const { listPaymentMethods, getPaymentMethod, addPaymentMethod, deletePaymentMethod } = createPaymentMethods({ supa, loadLocal, saveLocal, ensureProfile, uid });
 const signupDates = new Map();
 async function getSignupAt(userId) {
   if (signupDates.has(userId)) return signupDates.get(userId);
@@ -1654,6 +1653,8 @@ const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfil
 const { addTokenGrant, ensureMonthlyTokens, tokenWallet: getTokenWallet,
   claimTokenDaily, releaseTokenDaily, chargeRawTokens, freePeriod } = tokenWallet;
 const { GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal, LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem } = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
+const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureProfile, listChatMessages, durableOnly:true });
+const { list: listClientState, save: saveClientState, removeChat: deleteClientChat } = clientState;
 
 export {
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
@@ -1661,7 +1662,6 @@ export {
   LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,
   listMemories, memoryStats, searchMemories, getMemory, addMemory, updateMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret, secretsEncrypted,
-  listPaymentMethods, getPaymentMethod, addPaymentMethod, deletePaymentMethod,
   supaConfigured,
   getSubscription, setSubscription, findUserByStripeCustomer,
   logUsage, usageTotal, creditsUsed, billingTotals, creditsForUsageUsd, creditsForGift,
@@ -1672,6 +1672,7 @@ export {
   createGift, findGiftByFrom, listPurchasedGifts, redeemGift, giftsCredit, getReferralCode, referralStats, redeemReferral, requestUpgrade,
   logToolRun,
   saveTurn, searchTurns, listChatMessages, latestChatSummary, listAutomationChats,
+  listClientState, saveClientState, deleteClientChat,
   listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent, ensureSystemSubAgents,
   listDueSubAgents, listAppSubAgentsForSync, markAppTriggerSync, markSubAgentRun, listUpkeepSignals, beginAutomationRun, getAutomationRunByDedupeKey, attachAutomationTask, listPendingAutomationRuns, finishAutomationRun, listAutomationRuns,
   getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,

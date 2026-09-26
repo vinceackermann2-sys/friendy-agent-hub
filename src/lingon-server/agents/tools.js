@@ -27,7 +27,7 @@ const liveForPurchase = {
   forTool: async (userId, sessionId) => execInSandbox(userId, 'browser_action', { event:{type:'wait',ms:1,agent:true}, sessionId }),
   content: async (session) => session,
 };
-const purchaseFlow = createPurchaseFlow({ store, live:liveForPurchase });
+const purchaseFlow = createPurchaseFlow({ live:liveForPurchase });
 function safeBrowserResult(out, ctx) {
   const result = { ...(out || {}) };
   const redact = (value) => {
@@ -480,7 +480,7 @@ const TOOLS = {
     run: async (_, ctx) => {
       const secrets = await store.listSecrets(ctx.userId);
       ctx.trace(entry('lock', `vault_list: ${secrets.length}`));
-      return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })), paymentMethods: (await store.listPaymentMethods(ctx.userId)).map(({id,merchant,label})=>({id,merchant,label})) };
+      return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })) };
     },
   },
   vault_request: {

@@ -12,7 +12,7 @@ The agent cannot make phone calls or send SMS, and never types passwords or card
   approvals: {
     title: 'Approvals and permissions',
     text: `Settings > Browser has two modes for websites and for connected apps: "Ask for some" (default) and "Always ask".
-Websites: with "Ask for some" (the default), web searches and opening or reading any public page run without asking; clicking or typing on a page, signing in and anything that submits asks first. "Always ask" asks for every web step.
+Websites: with "Ask for some" (the default), web searches and using any public page (opening, reading, clicking, typing) run without asking; signing in with a saved login and the final step that buys, pays, books, sends, posts or deletes ask first. "Always ask" asks for every web step.
 Connected apps: with "Ask for some", listing apps and reading data in them (mail, calendar, files, messages) runs without asking; every write (send, create, change, delete) asks first. "Always ask" asks for everything, reads included.
 Final steps that buy, pay, book, send, post, delete or change account settings always need a one-time approval that shows the exact action. Approvals never carry over to a later action.`,
   },
@@ -36,8 +36,8 @@ This is separate from the owner's own email; the owner's Gmail or Outlook is a c
   },
   'privacy-and-credentials': {
     title: 'Privacy, credentials and the vault',
-    text: `Passwords, card numbers, API keys and one-time codes are never typed into chat. The agent asks for them with a secure vault request; the owner saves them in Settings, and the agent uses them only by reference (sec_••••) with approval, without seeing the value.
-For website purchases the agent uses a card already saved in the merchant account and shows only masked details.
+    text: `Passwords, API keys and one-time codes are never typed into chat. The agent asks for logins and keys with a secure vault request; the owner saves them in Settings, and the agent uses them only by reference (sec_••••) with approval, without seeing the value.
+Card details are never saved in Belna, not even masked. For website purchases the agent signs in to the merchant and pays with Shop Pay or a card the owner already saved in that merchant account; the owner approves each order first.
 Each account's chats, memory, files and tasks are private to that account.`,
   },
   'memory-and-files': {

@@ -53,10 +53,12 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
         await page.click('[data-act="pw-mode"]');
         if (mode === 'signup') await page.click('[data-act="auth-mode"]');
         await page.fill('#apass', 'test-password');
+        await page.check('#authlegal');
         await page.click('#pwgo');
       }
       await page.waitForSelector('[data-onboarding-name]');
       assert.deepEqual(await page.locator('button.qopt').allTextContents().then(items => items.map(s=>s.trim())), ['Alex','Rosa','Tao']);
+      assert.match(await page.locator('#thread').innerText(), /Hi! (?:I’ve saved your request|Let’s set up your personal agent)/);
       assert.equal(runs.length, 0);
       const chatId = (await readState(page)).activeChat;
       await page.click('[data-act="newchat"]');
@@ -79,21 +81,27 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       assert.equal((await readState(page)).activeChat, chatId, 'answer must not create a new chat');
       await page.reload();
       await page.waitForSelector('[data-o="Rosehip"]');
+      assert.equal((await readState(page)).onboarded, false);
+      assert.equal(runs.length, 0, 'request waits until the name and color are chosen');
       await page.click('[data-o="Rosehip"]');
-      await page.waitForSelector('[data-act="open-passport"]');
+      await page.waitForSelector('.canvas-tabs [data-t="canvas"].on');
       await page.waitForFunction(() => /own secure computer/.test(document.querySelector('#thread')?.innerText || ''));
       assert.match(await page.locator('#thread').innerText(), /own secure computer/);
       assert.equal(await page.locator('button.qopt').count(), 0, 'no expression/personality step');
-      assert.equal((await readState(page)).onboarded, false);
-      assert.equal(runs.length, 0, 'request waits for the setup handoff');
-      await page.reload();
-      await page.click('[data-act="open-passport"]');
-      await page.waitForSelector('.canvas-tabs [data-t="canvas"].on');
+      assert.equal(await page.locator('[data-act="open-passport"]').count(), 0, 'no start chatting card');
+      assert.doesNotMatch(await page.locator('#thread').innerText(), /Start chatting|\bHej\b/);
       const final = await readState(page);
       assert.equal(final.onboarded, true);
       assert.equal(final.agent.name, mode === 'oauth' ? 'Rosa' : 'Sora');
       assert.equal(final.agent.color, 'rose');
       assert.equal(final.canvasTab, 'canvas');
+      if (mode === 'signin') assert.equal(runs.length, 0, 'setup without a saved request stays ready for chat');
+      else {
+        await page.waitForFunction(() => JSON.parse(localStorage.getItem('lingon.v1')).chats.some(c=>c.managedStatus === 'completed'));
+        assert.equal(runs.length, 1, 'saved request starts when color is chosen');
+        assert.equal(runs[0].prompt, 'Research electric bikes');
+        assert.match(await page.locator('#thread').innerText(), /getting started on your request now/);
+      }
       assert.equal(await page.locator('.canvas-tabs [data-t="passport"]').count(), 0);
       assert.equal(await page.locator('.canvas-tabs [data-t="library"]').count(), 0);
       await page.waitForFunction(() => {
@@ -104,17 +112,12 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       await page.click('[data-act="nav"][data-view="settings"]');
       assert.equal(await page.locator('[data-act="stab"][data-t="library"]').count(), 0);
       assert.equal(await page.locator('[data-act="stab"][data-t="theme"]').count(), 0);
-      assert.match(await page.locator('.psec').allInnerTexts().then(items => items.join('\n')), /Theme[\s\S]*Accent color/);
+      assert.match(await page.locator('.psec').allInnerTexts().then(items => items.join('\n')), /Theme[\s\S]*Chat color/);
       await page.click('[data-act="open-library"]');
       await page.waitForSelector('.lib-head h1');
       assert.equal(await page.locator('.lib-head h1').innerText(), 'All artifacts');
       assert.equal(await page.locator('[data-act="libcat"][data-cat="memory"]').count(), 0, 'memory lives under System files only');
       await page.click('[data-act="nav"][data-view="chat"]');
-      if (mode !== 'signin') {
-        await page.waitForFunction(() => JSON.parse(localStorage.getItem('lingon.v1')).chats.some(c=>c.managedStatus === 'completed'));
-        assert.equal(runs.length, 1);
-        assert.equal(runs[0].prompt, 'Research electric bikes');
-      }
       // A React route remount replaces the host without re-executing scripts.
       await page.evaluate(async () => {
         const next = document.createElement('div'); next.id = 'root';

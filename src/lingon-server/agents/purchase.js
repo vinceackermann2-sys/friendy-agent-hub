@@ -1,12 +1,14 @@
 // The final browser click is bound to the current checkout page and to the
-// owner's exact review card. The card details are agent-reported and must be
-// checked against the live merchant checkout by the owner.
+// owner's exact review card. Payment is always Shop Pay or a card the owner
+// already saved in the merchant account; the merchant shows it masked and no
+// card data is stored or typed by the agent.
 import crypto from 'node:crypto';
 import { cardNumberIn } from './payment-safety.js';
-function createPurchaseFlow({ store, live }) {
+function createPurchaseFlow({ live }) {
   const bad = (message) => Object.assign(new Error(message), { code: 'BAD_INPUT' });
   const purchaseWords = /\b(?:buy|purchase|checkout|place order|pay now|confirm order|köp|kassa|betala|bekräfta köp|beställ)\b/i;
   const checkoutContext = /\b(?:checkout|order total|payment method|shipping address|place order|your basket|your cart|kassa|ordersumma|betalningssätt|leveransadress|slutför köp|beställning)\b/i;
+  const flat = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const pageHost = (url) => { try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } };
   const pageKey = (session, args) => {
     const selected = args.ref ? (session.elements || []).find((line) => line.startsWith(`[${args.ref}]`)) || '' : '';
@@ -38,7 +40,7 @@ function createPurchaseFlow({ store, live }) {
     if (!host || !session.url.startsWith('https://')) throw bad('Purchases require an HTTPS merchant page.');
     const input = args.purchase;
     if (!input || typeof input !== 'object') {
-      if (purchaseWords.test(`${args.summary || ''} ${targetLine(session, args)}`) || checkoutContext.test(session.text || '')) throw bad('A purchase needs the items, total, shipping address and saved merchant payment method before approval.');
+      if (purchaseWords.test(`${args.summary || ''} ${targetLine(session, args)}`) || checkoutContext.test(session.text || '')) throw bad('A purchase needs the items, total, shipping address and the Shop Pay or saved merchant card selected at checkout before approval.');
       return null;
     }
     const merchant = pageHost(input.website || `https://${host}`);
@@ -53,10 +55,13 @@ function createPurchaseFlow({ store, live }) {
     const currency = String(input.currency || '').toUpperCase();
     const shippingAddress = String(input.shippingAddress || '').replace(/\s+/g, ' ').trim().slice(0, 300);
     if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000 || !/^[A-Z]{3}$/.test(currency) || shippingAddress.length < 8) throw bad('Purchase needs a valid total, currency and delivery address.');
-    const method = await store.getPaymentMethod(userId, String(input.paymentMethodId || ''));
-    if (!method || method.merchant !== host) throw bad('Choose a saved payment method for this merchant.');
+    const paymentMethod = ['shop_pay', 'saved_card'].includes(input.payment?.method) ? input.payment.method : '';
+    const payment = String(input.payment?.label || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!paymentMethod) throw bad('Pay with Shop Pay or a card already saved in the merchant account. Never enter card details.');
+    if (!payment || /\d{5,}/.test(payment.replace(/[ -]/g, '')) || cardNumberIn(payment)) throw bad('Copy the payment method as the checkout shows it, for example "Shop Pay" or "Visa ending in 1234". Never include a full card number.');
+    if (!flat(`${session.text || ''}\n${(session.elements || []).join('\n')}`).includes(flat(payment))) throw bad('Select Shop Pay or the saved card on the checkout page first, then copy its label exactly as shown.');
     return { merchant: host, website: session.url, items, amount, currency, shippingAddress,
-      payment: `${method.brand} •••• ${method.last4}`, paymentMethodId: method.id,
+      payment, paymentMethod,
       checkoutKey: pageKey(session, args), target: targetLine(session, args).slice(0, 200),
       pageExcerpt: safeExcerpt(session) };
   }
@@ -76,7 +81,7 @@ function createPurchaseFlow({ store, live }) {
     if (approved.website !== session.url || approved.checkoutKey !== pageKey(session, args)) throw bad('Checkout changed after approval. Review the updated page and approve again.');
     const current = await details(args, ctx.userId, session);
     if (current && JSON.stringify({ ...current, pageExcerpt: '' }) !== JSON.stringify({ ...approved, pageExcerpt: '' })) throw bad('Purchase details changed after approval. Review again.');
-    if (!!current !== !!approved.paymentMethodId) throw bad('Purchase approval type changed. Review again.');
+    if (!!current !== !!approved.paymentMethod) throw bad('Purchase approval type changed. Review again.');
   }
   return { approvalDetail, beforeSubmit, beforeAction };
 }

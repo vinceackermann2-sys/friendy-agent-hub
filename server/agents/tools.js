@@ -18,7 +18,7 @@ const { PLANS } = require('../plans');
 const { questionArgs, presentArgs, connectArgs } = require('./cards');
 const { forbiddenPaymentSecret, cardNumberIn } = require('./payment-safety');
 const { createPurchaseFlow } = require('./purchase');
-const purchaseFlow = createPurchaseFlow({ store, live });
+const purchaseFlow = createPurchaseFlow({ live });
 const safePageText = (value, s) => {
   let out = String(value || '');
   for (const secret of s.sensitiveValues || []) if (secret) out = out.split(secret).join('[protected]');
@@ -470,11 +470,11 @@ const TOOLS = {
   },
   vault_list: {
     name: 'vault_list', type: 'function', approval: false,
-    description: 'List credential refs and masked cards already saved with merchants. Values are never shown.',
+    description: 'List saved credential refs. Values are never shown.',
     run: async (_, ctx) => {
       const secrets = await store.listSecrets(ctx.userId);
       ctx.trace(entry('lock', `vault_list: ${secrets.length}`));
-      return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })), paymentMethods: (await store.listPaymentMethods(ctx.userId)).map(({id,merchant,label})=>({id,merchant,label})) };
+      return { secrets: secrets.map((item) => ({ ref: item.ref, name: item.name })) };
     },
   },
   vault_request: {

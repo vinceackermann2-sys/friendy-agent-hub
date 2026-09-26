@@ -209,9 +209,11 @@ function hydrateStoredFiles(){
     ...(Array.isArray(state.pendingPromptFiles) ? state.pendingPromptFiles : []),
     ...(state.chats || []).flatMap(c => (c.messages || []).flatMap(m => m.files || [])),
   ];
-  return Promise.all(files.filter(f => f.storageId && !f.dataUrl).map(async f => {
-    try { f.dataUrl = await storedFile('readonly', store => store.get(f.storageId)) || ''; }
-    catch { f.dataUrl = ''; }
+  return Promise.all(files.filter(f => f.storageId).map(async f => {
+    try {
+      if (f.dataUrl) await storedFile('readwrite', store => store.put(f.dataUrl, f.storageId));
+      else f.dataUrl = await storedFile('readonly', store => store.get(f.storageId)) || '';
+    } catch { if (!f.dataUrl) f.dataUrl = ''; }
   }));
 }
 function fileBucketKey(form){ return form?.id === 'cform' ? `cform:${state.activeChat || ''}` : form?.id || ''; }
@@ -468,7 +470,6 @@ const fresh = () => ({
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
   composioApps:[], composioLoading:false, appQuery:'', appFilter:'all', appOpen:null, appDetails:{},
   shopPay:null, shopPayLoading:false, shopPayOrders:[],
-  merchantPaymentMethods:[],
   // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'approvals'
   agentEdit:false, mailTab:'inbox',
   // settings / apps rework
@@ -480,6 +481,8 @@ const fresh = () => ({
   libraryUploads:[], libraryServer:[], systemFile:null, systemManifest:null,
   // goals — user-created life goals with sub-goals, tracked per account.
   goals:[], goalFilter:'all',
+  deletedChatIds:[],
+  syncedChatIds:[],
 });
 let state;
 let mobileNavOpen = false;
@@ -527,6 +530,8 @@ state.composioLoading = false;
   if (!Array.isArray(state.libraryUploads)) state.libraryUploads = [];
   if (!Array.isArray(state.libraryServer)) state.libraryServer = [];
   if (!Array.isArray(state.goals)) state.goals = [];
+  if (!Array.isArray(state.deletedChatIds)) state.deletedChatIds = [];
+  if (!Array.isArray(state.syncedChatIds)) state.syncedChatIds = [];
   if (!state.goalFilter) state.goalFilter = 'all';
   // migrate legacy goals shape
   state.goals.forEach(g => {
@@ -541,10 +546,206 @@ state.composioLoading = false;
   if (state.systemFile !== null && typeof state.systemFile !== 'string') state.systemFile = null;
   // Honest apps: no fake OAuth connections exist — always empty.
   state.vault.apps = [];
+  const clientChatFields = ['id','title','messages','trace','artifact','createdAt','updatedAt','onboarding','onboardingAnswers',
+    'onboardingWelcomed','managedTasks','managedStatus','managedProgress','activeTask','busy','source','subAgentId',
+    'canvasSelectedMessageId','canvasSelectedFileIndex','replyingTo','taskReply','taskReplyScope','coordinatorRuns'];
+  const clientProfile = () => ({
+    onboarded:!!state.onboarded,
+    agent:state.agent ? { name:state.agent.name, color:state.agent.color, pers:state.agent.pers,
+      provisional:!!state.agent.provisional, claimedAt:state.agent.claimedAt || null } : null,
+    theme:state.theme || 'grey',
+    userProfile:state.userProfile ? {name:state.userProfile.name || ''} : null,
+    activeChat:state.activeChat || null,
+    vaultMode:state.vault?.mode || 'default',
+    vaultApprovals:(state.vault?.approvals || []).filter(Boolean).map(({id,key,label,at}) => ({id,key,label,at})),
+    updatedAt:Number(state.profileUpdatedAt) || 0,
+  });
+  const clientChat = c => {
+    const source=Object.fromEntries(clientChatFields.filter(key => Object.hasOwn(c,key)).map(key => [key,c[key]]));
+    const serialize=(omitFiles=false) => JSON.stringify(source,(key,value) =>
+      key === 'previewUrl' || (omitFiles && key === 'dataUrl') ? undefined : value);
+    const full=serialize();
+    // A large attachment must not prevent the rest of a conversation from
+    // syncing. Its local IndexedDB copy still survives refresh on this device.
+    return JSON.parse(full.length > 11 * 1024 * 1024 ? serialize(true) : full);
+  };
+  const fingerprint = value => JSON.stringify(value);
+  const withoutTime = value => { const copy={...value}; delete copy.updatedAt; return fingerprint(copy); };
+  let profileFingerprint = withoutTime(clientProfile());
+  const chatFingerprints = new Map((state.chats || []).filter(c => c.source !== 'automation').map(c => [c.id,withoutTime(clientChat(c))]));
+  const clientUploaded = new Map();
+  const clientQueued = new Map();
+  const clientPending = new Map();
+  let clientReadyOwner = null, clientSyncTimer = null, clientFlushPromise = null, clientSyncWarning = false;
+  function resetClientSync(){
+    if (clientSyncTimer) clearTimeout(clientSyncTimer);
+    clientSyncTimer=null; clientReadyOwner=null; clientFlushPromise=null; clientSyncWarning=false;
+    clientUploaded.clear(); clientQueued.clear(); clientPending.clear();
+    profileFingerprint=withoutTime(clientProfile());
+    chatFingerprints.clear();
+    for (const c of state.chats || []) if (c.source !== 'automation') chatFingerprints.set(c.id,withoutTime(clientChat(c)));
+  }
+  function updateClientTimes(){
+    const profile = clientProfile();
+    const nextProfile = withoutTime(profile);
+    if (nextProfile !== profileFingerprint) { state.profileUpdatedAt = Date.now(); profileFingerprint = nextProfile; }
+    const active = new Set();
+    for (const c of state.chats || []) {
+      if (c.source === 'automation') continue;
+      active.add(c.id);
+      const next = withoutTime(clientChat(c));
+      if (next !== chatFingerprints.get(c.id)) { c.updatedAt = Date.now(); chatFingerprints.set(c.id,next); }
+    }
+    for (const id of chatFingerprints.keys()) if (!active.has(id)) chatFingerprints.delete(id);
+  }
+  function queueClientState(){
+    const owner = window.LingonAuth?.get()?.user?.id;
+    if (!owner || owner !== state.ownerId || owner !== clientReadyOwner) return;
+    const entries = [['profile',clientProfile()],...(state.chats || []).filter(c => c.source !== 'automation').map(c => ['chat:'+c.id,clientChat(c)])];
+    for (const [key,value] of entries) {
+      const json = fingerprint(value);
+      if (json === clientUploaded.get(key) || json === clientQueued.get(key)) continue;
+      clientQueued.set(key,json);
+      clientPending.set(key,json);
+    }
+    if (clientPending.size && !clientSyncTimer) clientSyncTimer = setTimeout(() => { clientSyncTimer=null; void flushClientState(); }, 200);
+  }
+  async function accountStateRequest(owner,path,method,value){
+    for (let attempt=0; attempt<2; attempt++) {
+      const session=window.LingonAuth?.get();
+      if (session?.user?.id !== owner || !session.access_token) throw new Error('Account changed.');
+      const response=await fetch((window.LingonConfig.apiBase || '')+path,{
+        method,
+        headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.access_token},
+        ...(value === undefined ? {} : {body:JSON.stringify({value})}),
+      });
+      if (response.status === 401 && attempt === 0) {
+        await window.LingonAuth.api('/api/auth/me');
+        continue;
+      }
+      const result=await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      return result;
+    }
+  }
+  async function flushClientState(){
+    if (clientFlushPromise) {
+      await clientFlushPromise;
+      return clientPending.size && !clientSyncWarning ? flushClientState() : undefined;
+    }
+    const owner = window.LingonAuth?.get()?.user?.id;
+    if (!owner || owner !== clientReadyOwner || !clientPending.size) return;
+    const batch = [...clientPending]; clientPending.clear();
+    const request = (async () => {
+      for (let i=0; i<batch.length; i++) {
+        const [key,json]=batch[i];
+        if (owner !== window.LingonAuth?.get()?.user?.id || owner !== clientReadyOwner) break;
+        try {
+          await accountStateRequest(owner,'/api/client-state/'+encodeURIComponent(key),'PUT',JSON.parse(json));
+          if (owner !== window.LingonAuth?.get()?.user?.id || owner !== clientReadyOwner) break;
+          clientUploaded.set(key,json);
+          if (key.startsWith('chat:') && !state.syncedChatIds.includes(key.slice(5))) {
+            state.syncedChatIds.push(key.slice(5));
+            save();
+          }
+          clientSyncWarning = false;
+        } catch(error) {
+          if (clientQueued.get(key) === json) clientQueued.delete(key);
+          if (!clientPending.has(key)) clientPending.set(key,json);
+          for (const [laterKey,laterJson] of batch.slice(i+1)) if (!clientPending.has(laterKey)) clientPending.set(laterKey,laterJson);
+          if (!clientSyncWarning && owner === window.LingonAuth?.get()?.user?.id) {
+            clientSyncWarning = true;
+            toast('Your changes are on this device, but account sync is unavailable.');
+          }
+          console.warn('Account state sync failed:',error);
+          break;
+        }
+      }
+    })().finally(() => {
+      if (clientFlushPromise === request) clientFlushPromise = null;
+      if (clientPending.size && !clientSyncTimer && owner === clientReadyOwner && !clientSyncWarning)
+        clientSyncTimer=setTimeout(() => { clientSyncTimer=null; void flushClientState(); }, 200);
+    });
+    clientFlushPromise=request;
+    return request;
+  }
+  async function loadClientState(){
+    const owner = window.LingonAuth?.get()?.user?.id;
+    if (!owner || owner !== state.ownerId) return false;
+    let remote;
+    try { remote = await window.LingonAuth.api('/api/client-state'); }
+    catch(error) { console.warn('Account state restore failed:',error); return false; }
+    if (owner !== window.LingonAuth?.get()?.user?.id || owner !== state.ownerId) return false;
+    const remoteProfile = remote.profile;
+    if (remoteProfile) {
+      clientUploaded.set('profile',fingerprint(remoteProfile));
+      if (Number(remoteProfile.updatedAt || 0) > Number(state.profileUpdatedAt || 0) || (!state.agent && remoteProfile.agent) || (!state.onboarded && remoteProfile.onboarded)) {
+        state.onboarded=!!remoteProfile.onboarded;
+        state.agent=remoteProfile.agent ? {...state.agent,...remoteProfile.agent} : state.agent;
+        state.theme=remoteProfile.theme || state.theme;
+        state.userProfile=remoteProfile.userProfile || state.userProfile;
+        state.activeChat=remoteProfile.activeChat || state.activeChat;
+        state.vault.mode=remoteProfile.vaultMode || state.vault.mode;
+        if (Array.isArray(remoteProfile.vaultApprovals)) state.vault.approvals=remoteProfile.vaultApprovals;
+        state.profileUpdatedAt=Number(remoteProfile.updatedAt) || 0;
+      }
+    }
+    const remoteIds=new Set((remote.chats || []).map(c => c.id));
+    const locals = new Map((state.chats || []).filter(c => c.source === 'automation' || !remoteProfile ||
+      !state.syncedChatIds.includes(c.id) || remoteIds.has(c.id)).map(c => [c.id,c]));
+    for (const remoteChat of remote.chats || []) {
+      if (!remoteChat?.id || !Array.isArray(remoteChat.messages)) continue;
+      if (state.deletedChatIds?.includes(remoteChat.id)) continue;
+      const key='chat:'+remoteChat.id;
+      if (!state.syncedChatIds.includes(remoteChat.id)) state.syncedChatIds.push(remoteChat.id);
+      if (!remoteChat.legacy) clientUploaded.set(key,fingerprint(clientChat(remoteChat)));
+      const local=locals.get(remoteChat.id);
+      if (!local || (!remoteChat.legacy && Number(remoteChat.updatedAt || 0) > Number(local.updatedAt || local.createdAt || 0)))
+        locals.set(remoteChat.id,remoteChat);
+    }
+    state.chats=[...locals.values()].sort((a,b)=>Number(b.updatedAt || b.createdAt || 0)-Number(a.updatedAt || a.createdAt || 0));
+    if (!state.chats.some(c => c.id === state.activeChat)) state.activeChat=state.chats[0]?.id || null;
+    profileFingerprint=withoutTime(clientProfile());
+    chatFingerprints.clear();
+    for (const c of state.chats) if (c.source !== 'automation') chatFingerprints.set(c.id,withoutTime(clientChat(c)));
+    clientReadyOwner=remote.durable === false ? null : owner;
+    await hydrateStoredFiles();
+    save();
+    queueClientState();
+    void flushDeletedChats();
+    if (remote.durable === false && !clientSyncWarning) {
+      clientSyncWarning=true;
+      toast('Account sync is unavailable. Your changes are staying on this device.');
+    }
+    return true;
+  }
+  async function flushDeletedChats(){
+    const owner=currentUserId();
+    if (!owner || owner !== clientReadyOwner) return;
+    for (const id of [...(state.deletedChatIds || [])]) {
+      try {
+        await clientFlushPromise;
+        if (owner !== currentUserId() || owner !== clientReadyOwner) return;
+        await accountStateRequest(owner,'/api/client-state/chats/'+encodeURIComponent(id),'DELETE');
+        if (owner !== currentUserId()) return;
+        state.deletedChatIds=state.deletedChatIds.filter(item => item !== id);
+        save();
+      } catch(error) { console.warn('Chat deletion sync failed:',error); return; }
+    }
+  }
   const save = () => {
+    updateClientTimes();
     const persisted=JSON.parse(JSON.stringify(state, function(key, value){ return key === 'dataUrl' && this?.storageId ? undefined : value; }));
     if(persisted.vault?.secrets)persisted.vault.secrets=persisted.vault.secrets.map((secret)=>secret.backend?{id:secret.id,ref:secret.ref,name:secret.name,at:secret.at,backend:true}:secret);
-    localStorage.setItem(LS,JSON.stringify(persisted));
+    let localSaved=true;
+    try {
+      const json=JSON.stringify(persisted);
+      localStorage.setItem(LS,json);
+      if (state.ownerId && window.LingonAuth?.get()?.user?.id === state.ownerId) localStorage.setItem(LS+'.'+state.ownerId,json);
+    }
+    catch(error) { localSaved=false; console.warn('Browser state save failed:',error); }
+    queueClientState();
+    if (!localSaved) void flushClientState();
   };
 const taskRuns = new Map();
 
@@ -554,6 +755,11 @@ const neutralInternalReply = `I can't provide or speculate about internal implem
 let scrubbedLegacyChat = false;
 for (const c of state.chats || []) {
   c.messages = c.messages || [];
+  const withoutOldSetupCard = c.messages.filter(m => m.card?.type !== 'passport');
+  if (withoutOldSetupCard.length !== c.messages.length) {
+    c.messages = withoutOldSetupCard;
+    scrubbedLegacyChat = true;
+  }
   const wasCompleted = c.managedStatus === 'completed';
   if (c.managedStatus === 'running' || c.managedProgress) {
     if (c.managedStatus === 'running') c.managedStatus = 'interrupted';
@@ -614,7 +820,6 @@ async function syncFromBackend(force = false) {
     backendSyncOwner = owner;
     backendSyncedAt = 0;
     backendSyncPending = null;
-    state.merchantPaymentMethods = [];
   }
   if (backendSyncPending) {
     if (!force) return backendSyncPending;
@@ -622,12 +827,11 @@ async function syncFromBackend(force = false) {
   }
   if (!force && Date.now() - backendSyncedAt < BACKEND_SYNC_MS) return false;
   const request = (async () => {
-    const [memories, secrets, automationChats, agentContext, paymentMethods] = await Promise.allSettled([
+    const [memories, secrets, automationChats, agentContext] = await Promise.allSettled([
       window.LingonAuth.api('/api/memories?limit=1000'),
       window.LingonAuth.api('/api/secrets'),
       window.LingonAuth.api('/api/automation-chats'),
       window.LingonAuth.api('/api/agent-context'),
-      window.LingonAuth.api('/api/payment-methods'),
     ]);
     if (owner !== billingIdentity()) return false;
     const value = (result) => result.status === 'fulfilled' ? result.value : null;
@@ -637,9 +841,6 @@ async function syncFromBackend(force = false) {
       state.memoryTotal=Number(m.total ?? state.memory.length);
     }
     const s = value(secrets);
-    const payments = value(paymentMethods);
-    const paymentBefore = (state.merchantPaymentMethods || []).map((item)=>item.id).join();
-    if (payments) state.merchantPaymentMethods = payments.methods || [];
     const vaultBefore = state.vault.secrets.map((item) => item.id).join() + '|' + state.vault.encrypted;
     if (s) {
       const remote=(s.secrets || []).map((r)=>({id:r.id,ref:r.ref,name:r.name,at:r.at,backend:true}));
@@ -657,7 +858,11 @@ async function syncFromBackend(force = false) {
     const ac = value(agentContext);
     if (ac) {
       state.agentContext = ac;
-      if (ac.revision > 0 && ac.agent) state.agent = { ...state.agent, ...ac.agent, name:publicAgentName(ac.agent.name) || 'Your agent' };
+      if (ac.revision > 0 && ac.agent) {
+        state.agent = { ...state.agent, ...ac.agent, name:publicAgentName(ac.agent.name) || 'Your agent' };
+        state.onboarded = true;
+        delete state.agent.provisional;
+      }
     }
     for (const remote of (value(automationChats)?.chats || [])) {
       const messages = (remote.messages || []).map((m) => ({
@@ -682,12 +887,12 @@ async function syncFromBackend(force = false) {
       else state.chats.unshift(mapped);
     }
     state.chats.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
-    await ensureMailbox();
+    void ensureMailbox().catch(() => {});
     if (owner === billingIdentity()) save();
     // Settings pages that show the vault repaint once it arrives, unless the
     // user is typing there (a repaint would drop their input).
     const vaultAfter = state.vault.secrets.map((item) => item.id).join() + '|' + state.vault.encrypted;
-    if (owner === billingIdentity() && (vaultAfter !== vaultBefore || paymentBefore !== (state.merchantPaymentMethods || []).map((item)=>item.id).join()) && state.view === 'settings' && ['secrets','browser'].includes(state.settingsTab)) {
+    if (owner === billingIdentity() && vaultAfter !== vaultBefore && state.view === 'settings' && ['secrets','browser'].includes(state.settingsTab)) {
       const main = $('#main');
       if (main && !(main.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))) paintSettings(main);
     }
@@ -1159,11 +1364,13 @@ function ensureOwnerScope(){
     const theme = state.theme;
     const pending = state.pendingPrompt;
     const pendingFiles = state.pendingPromptFiles;
-    for (const c of state.chats || []) for (const m of c.messages || []) for (const file of m.files || []) {
-      if (file.storageId) void storedFile('readwrite', store => store.delete(file.storageId)).catch(() => {});
-    }
     pendingFilesByForm.clear();
-    state = Object.assign(fresh(), { theme, pendingPrompt: pending || null, pendingPromptFiles: pendingFiles || [], ownerId: uid });
+    let cached=null;
+    try { cached=JSON.parse(localStorage.getItem(LS+'.'+uid) || 'null'); } catch {}
+    state = Object.assign(fresh(), cached?.ownerId === uid ? cached : {}, { theme:cached?.theme || theme,
+      pendingPrompt:pending || cached?.pendingPrompt || null,
+      pendingPromptFiles:pendingFiles?.length ? pendingFiles : cached?.pendingPromptFiles || [], ownerId:uid });
+    resetClientSync();
     save();
   }
 }
@@ -1382,7 +1589,7 @@ async function doAuth(kind){
    - Scopes local state to the signed-in user (no cross-account leakage).
    - If a homepage prompt is pending and the account is new (not onboarded),
      the message is placed into the agent chat FIRST, then in-chat onboarding
-     (name / color / passport) runs BEFORE the agent starts the task.
+     (name / color) runs BEFORE the agent starts the task.
    - Otherwise normal render. */
 async function afterSignIn(user){
   try {
@@ -1390,10 +1597,9 @@ async function afterSignIn(user){
     if (user && user.id && state.ownerId !== user.id){ state.ownerId = user.id; }
     state.view = 'chat';
     save();
-    const owner = billingIdentity();
-    syncFromBackend(true).then(() => {
-      if (owner === billingIdentity() && $('#side')) paintSide();
-    }).catch(() => {});
+    await hydrateStoredFiles();
+    await loadClientState();
+    await syncFromBackend(true);
     if (state.pendingPrompt && (!state.onboarded || !state.agent || state.agent.provisional)){
       const p = state.pendingPrompt;
       toast('Signed in as ' + (user.email || 'you'));
@@ -2470,6 +2676,7 @@ function startPendingPromptFlow(pendingOverride){
   mobileNavOpen = false;
   runInChatOnboarding(c);
   save(); renderApp();
+  if (c.onboardingAnswers?.name && c.onboardingAnswers?.color) void completeOnboarding(c);
 }
 
 function pendingQuestion(c){
@@ -2478,6 +2685,11 @@ function pendingQuestion(c){
 
 function runInChatOnboarding(c){
   c.busy = false;
+  // Older sessions may still contain the former final "Start chatting" card.
+  c.messages = c.messages.filter(m => m.card?.type !== 'passport');
+  for (const m of c.messages) {
+    if (m.role === 'agent' && typeof m.text === 'string') m.text = m.text.replace(/^Hej(?=\b|!)/, 'Hi');
+  }
   // Migrate interrupted setup from the previous question flow.
   if (!c.onboardingAnswers) {
     c.onboardingAnswers = {};
@@ -2496,21 +2708,17 @@ function runInChatOnboarding(c){
   const card = data => c.messages.push({ id:uid(), kind:'card', card:{...data, onboarding:true, status:'pending'} });
   if (!answers.name) {
     if (!c.onboardingWelcomed) {
-      say(state.pendingPrompt ? 'Hej! I’ve saved your request. Let’s make your agent yours before I get started.' : 'Hej! Let’s set up your personal agent. First, give me a name.');
+      say(state.pendingPrompt ? 'Hi! I’ve saved your request. Let’s make your agent yours before I get started.' : 'Hi! Let’s set up your personal agent. First, give me a name.');
       c.onboardingWelcomed = true;
     }
     card({ type:'question', step:'name', q:'What should I call myself?', options:['Alex','Rosa','Tao'], customName:true });
   } else if (!answers.color) {
     state.agent.name = publicAgentName(answers.name);
     card({ type:'question', step:'color', q:'Pick a color for ' + state.agent.name, options:Mascot.keys.map(k => Mascot.PALETTE[k].name), mascotColors:true });
-  } else {
-    state.agent.name = publicAgentName(answers.name); state.agent.color = answers.color;
-    say('Hej ' + currentUser().name + '! I’m ' + state.agent.name + ', your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. Tell me what you want done, and I’ll take it from there. I’ll ask for access or approval when needed.');
-    card({ type:'passport', title:'Your agent is ready', note:'Finish setup and start chatting.' });
   }
 }
 
-function answerOnboarding(c, m, value){
+async function answerOnboarding(c, m, value){
   if (!signedIn() || !needsOnboarding() || !c?.onboarding || !m?.card?.onboarding || m.card.status !== 'pending' || m.card.type !== 'question') return;
   const choice = String(value || '').trim().slice(0, m.card.step === 'name' ? 18 : 60);
   if (!choice) { toast('Type a name or choose a suggestion.'); return; }
@@ -2520,21 +2728,32 @@ function answerOnboarding(c, m, value){
     c.onboardingAnswers.color = key;
   } else c.onboardingAnswers.name = choice;
   m.card.choice = choice; m.card.status = 'answered';
-  runInChatOnboarding(c); save(); renderApp();
+  runInChatOnboarding(c);
+  if (c.onboardingAnswers.name && c.onboardingAnswers.color) await completeOnboarding(c);
+  else { save(); renderApp(); }
 }
 
-async function openOnboardingPassport(c, m){
-  if (!signedIn() || !c?.onboarding || m?.card?.type !== 'passport' || m.card.status !== 'pending') return;
+async function completeOnboarding(c){
+  if (!signedIn() || !c?.onboarding || state.onboarded) return;
   const answers = c.onboardingAnswers;
   if (!answers?.name || !Mascot.PALETTE[answers.color]) return;
   const ownerId = currentUserId();
   state.agent = { name:publicAgentName(answers.name), color:answers.color, pers:'Playful', ownerId, claimedAt:Date.now() };
-  state.onboarded = true; c.onboarding = false; c.busy = false; m.card.status = 'done';
   const pending = state.pendingPrompt;
+  const intro = `Hi ${currentUser().name}! I’m ${state.agent.name}, your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. ${pending ? 'I’m getting started on your request now.' : 'Tell me what you want done, and I’ll take it from there.'} I’ll ask for access or approval when needed.`;
+  const priorIntro = c.messages.find(m => m.role === 'agent' && /own secure computer/.test(m.text || ''));
+  if (priorIntro) priorIntro.text = intro;
+  else c.messages.push({ id:uid(), role:'agent', kind:'text', text:intro, mood:'happy' });
+  c.messages = c.messages.filter(m => m.card?.type !== 'passport');
+  state.onboarded = true; c.onboarding = false; c.busy = false;
   state.pendingPrompt = null;
   state.pendingPromptFiles = [];
   state.canvasOpen = true; state.canvasTab = 'canvas';
   save(); renderApp();
+  await Promise.all([
+    persistAgentContext().catch(error => toast(error.message || 'Could not save agent setup to your account.')),
+    flushClientState(),
+  ]);
   ensureMailbox(answers.name).catch(() => {});
   if (pending) await runAgentOn(c, pending);
 }
@@ -4397,11 +4616,6 @@ function cardNode(c, m){
       : saved ? `<div class="ft"><span class="note mono">${cd.ref ? esc(cd.ref) + ' · ' : ''}••••••••</span><button class="btn ghost small" data-act="nav" data-view="vault">Open vault</button></div>` : ''}</div>`;
   }
 
-  if (cd.type === 'passport') return `<div class="acard">
-    ${hd(icon('user',20),'var(--acc-soft)','var(--acc)','Your agent is ready',state.agent.name)}
-    <div class="bd">${esc(cd.note)}</div>
-    <div class="stack"><button class="btn" data-act="open-passport" data-chat="${k}" data-msg="${mid}">Start chatting ${icon('aur',15)}</button></div></div>`;
-
   if (cd.type === 'question') return `<div class="acard">
     ${hd(icon('spark',20),'var(--acc-soft)','var(--acc)','Question', state.agent.name + ' is asking')}
     <div class="bd"><b>${esc(cd.q)}</b>
@@ -4890,8 +5104,8 @@ async function sendPrompt(text, files){
   if (needsOnboarding()) {
     if (c?.onboarding) {
       const pq = pendingQuestion(c);
-      if (pq) answerOnboarding(c, pq.m, text);
-      else toast('Finish setup from the agent card.');
+      if (pq) await answerOnboarding(c, pq.m, text);
+      else toast('Finish setup by choosing your agent’s name and color.');
     } else startPendingPromptFlow(text);
     return;
   }
@@ -6128,20 +6342,6 @@ function settingsSecretsBody(v){
         </div>
       </div>`; }).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Add a credential above, or ${agentName} will ask when a task needs one.</p></div></div>`}
     </div>
-    <div class="vault-payment">
-      <div class="vault-section-head"><h3>Cards saved on websites</h3><span>Masked details for purchase review</span></div>
-      <p class="vault-payment-note">First save your card in the merchant’s own account. Add its visible details here so each purchase approval can name the card. Full card numbers and security codes stay out of the agent vault.</p>
-      <form class="vault-payment-form" autocomplete="off" onsubmit="return false">
-        <div class="vault-payment-preview">${icon('card',22)}<span>Card on file</span><strong>•••• <span data-pm-preview>••••</span></strong></div>
-        <label>Website<input class="field" data-pm="merchant" placeholder="shop.example" autocomplete="url" spellcheck="false"></label>
-        <label>Card name<input class="field" data-pm="label" placeholder="My everyday card" maxlength="60" autocomplete="off"></label>
-        <label>Brand<input class="field" data-pm="brand" placeholder="Visa" maxlength="32" autocomplete="cc-type"></label>
-        <label>Last four digits<input class="field" data-pm="last4" placeholder="1234" maxlength="4" inputmode="numeric" autocomplete="off"></label>
-        <button class="btn" data-act="save-merchant-card">${icon('plus',14)} Add masked card</button>
-      </form>
-      <div class="vault-payment-list">${(state.merchantPaymentMethods || []).map(method=>`<div class="vault-payment-saved"><span class="vault-item-icon">${icon('card',16)}</span><div><b>${esc(method.label)}</b><small>${esc(method.brand)} •••• ${esc(method.last4)} · ${esc(method.merchant)}</small></div><button class="iconbtn" data-act="delete-merchant-card" data-id="${esc(method.id)}" aria-label="Delete ${esc(method.label)}">${icon('trash',14)}</button></div>`).join('') || '<p class="vault-payment-empty">No masked cards added yet.</p>'}</div>
-      <p class="vault-payment-note">For BankID or a similar login, take over the live browser and approve the request in your own identity app. Your agent never needs your PIN or security code.</p>
-    </div>
   </section>`;
 }
 function settingsBrowserBody(){
@@ -6546,6 +6746,9 @@ window.addEventListener('resize', () => {
 });
 window.addEventListener('focus', () => {
   startWorkspacePresence();
+  if (signedIn() && !clientReadyOwner) loadClientState().catch(() => {});
+  else if (signedIn() && clientPending.size) void flushClientState();
+  if (signedIn() && state.deletedChatIds?.length) void flushDeletedChats();
   if (signedIn() && state.onboarded) syncFromBackend().then((updated) => { if (updated && $('#side')) paintSide(); });
   if (signedIn() && state.canvasOpen && state.canvasTab === 'payments') refreshComposioApps(true);
   // Returning from the OAuth tab: pull the fresh account list so the newly
@@ -6555,10 +6758,10 @@ window.addEventListener('focus', () => {
   }
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') stopWorkspacePresence();
+  if (document.visibilityState === 'hidden') { stopWorkspacePresence(); void flushClientState(); }
   else startWorkspacePresence();
 });
-window.addEventListener('pagehide', () => { stopVoice(); stopWorkspacePresence(); });
+window.addEventListener('pagehide', () => { stopVoice(); stopWorkspacePresence(); void flushClientState(); });
 document.addEventListener('submit', async e => {
   const supportForm=e.target.closest('[data-support-kind]');
   if(supportForm){
@@ -6597,13 +6800,9 @@ document.addEventListener('submit', async e => {
   e.preventDefault();
   const c = state.chats.find(c => c.id === form.dataset.chat);
   const m = c?.messages.find(m => m.id === form.dataset.msg);
-  answerOnboarding(c, m, form.elements.agentName.value);
+  await answerOnboarding(c, m, form.elements.agentName.value);
 });
 document.addEventListener('input', e => {
-  if (e.target.matches('[data-pm="last4"]')) {
-    const preview = e.target.closest('.vault-payment-form')?.querySelector('[data-pm-preview]');
-    if (preview) preview.textContent = (e.target.value.replace(/\D/g,'').slice(0,4) || '••••');
-  }
   const form = e.target.closest('[data-onboarding-name]');
   if (!form) return;
   const c = state.chats.find(c => c.id === form.dataset.chat);
@@ -6646,7 +6845,7 @@ document.addEventListener('click', async e => {
   const c = state.chats.find(x => x.id === b.dataset.chat);
   const m = c && c.messages.find(x => x.id === b.dataset.msg);
 
-  if (signedIn() && needsOnboarding() && !['qopt','open-passport','togglemenu','usermenu','signout','voice'].includes(act)) {
+  if (signedIn() && needsOnboarding() && !['qopt','togglemenu','usermenu','signout','voice'].includes(act)) {
     e.preventDefault(); toast('Finish setting up your agent first.'); return;
   }
   if (act === 'select-pack'){
@@ -6665,7 +6864,7 @@ document.addEventListener('click', async e => {
     picker.querySelector('summary').focus();
     return;
   }
-  if (act === 'qopt' && m?.card?.onboarding) { answerOnboarding(c, m, b.dataset.o); return; }
+  if (act === 'qopt' && m?.card?.onboarding) { await answerOnboarding(c, m, b.dataset.o); return; }
   if (act === 'life-ask'){
     e.preventDefault();
     const prompt = (b.dataset.prompt || '').trim();
@@ -6688,12 +6887,6 @@ document.addEventListener('click', async e => {
     });
     return;
   }
-  if (act === 'open-passport') {
-    if (!signedIn()) { renderAuth(); return; }
-    if (needsOnboarding()) { await openOnboardingPassport(c, m); return; }
-    state.canvasOpen = false; state.view = 'settings'; state.settingsTab = 'profiles'; save(); renderApp(); return;
-  }
-
   if (act === 'rmfile'){ e.preventDefault(); removeFile(+b.dataset.idx, b.closest('form')); return; }
   if (act === 'scroll'){ e.preventDefault(); const t = $(b.dataset.t); if (t) t.scrollIntoView({ behavior:'smooth' }); return; }
   if (act === 'open-app'){
@@ -7013,8 +7206,13 @@ document.addEventListener('click', async e => {
     }
     pendingFilesByForm.delete(`cform:${b.dataset.id}`);
     state.chats = state.chats.filter(x => x.id !== b.dataset.id);
+    const deletedId=b.dataset.id;
+    clientPending.delete('chat:'+deletedId);
+    clientQueued.delete('chat:'+deletedId);
+    clientUploaded.delete('chat:'+deletedId);
+    state.deletedChatIds=[...(state.deletedChatIds || []).filter(id => id !== deletedId),deletedId].slice(-500);
     if (state.activeChat === b.dataset.id) state.activeChat = state.chats[0] ? state.chats[0].id : null;
-    save(); renderApp(); return;
+    save(); void flushDeletedChats(); renderApp(); return;
   }
   if (act === 'togglecanvas'){ setCanvasOpen(!canvasShouldShow()); return; }
   if (act === 'ctab'){
@@ -7510,32 +7708,6 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'vault-kind'){ state.vaultKind = b.dataset.k; save(); repaintSettings(); return; }
-  if (act === 'save-merchant-card'){
-    if (!signedIn()){ renderAuth(); return; }
-    const form = b.closest('.vault-payment-form');
-    if (!form) return;
-    const data = {};
-    form.querySelectorAll('[data-pm]').forEach(input => { data[input.dataset.pm] = input.value.trim(); });
-    if (!data.merchant || !data.label || !data.brand || !/^\d{4}$/.test(data.last4 || '')){ toast('Enter the website, card name, brand and last four digits.'); return; }
-    b.disabled = true;
-    try {
-      const added = await window.LingonAuth.api('/api/payment-methods',{method:'POST',body:JSON.stringify(data)});
-      state.merchantPaymentMethods = [added.method,...(state.merchantPaymentMethods || [])];
-      save(); repaintSettings(); toast('Masked card added for purchase approvals.');
-    } catch(err){ toast(err.message || 'Could not add that card.'); b.disabled = false; }
-    return;
-  }
-  if (act === 'delete-merchant-card'){
-    const method = (state.merchantPaymentMethods || []).find(item=>item.id===b.dataset.id);
-    if (!method || !window.confirm(`Remove “${method.label}” from purchase approvals?`)) return;
-    b.disabled = true;
-    try {
-      await window.LingonAuth.api('/api/payment-methods/'+encodeURIComponent(method.id),{method:'DELETE'});
-      state.merchantPaymentMethods = state.merchantPaymentMethods.filter(item=>item.id!==method.id);
-      save(); repaintSettings(); toast('Masked card removed.');
-    } catch(err){ toast(err.message || 'Could not remove that card.'); b.disabled = false; }
-    return;
-  }
   if (act === 'addsecret'){
     // Secrets live only in the encrypted server vault the agent reads from,
     // never in this browser's storage.
@@ -7579,7 +7751,10 @@ document.addEventListener('click', async e => {
     stopWorkspacePresence();
     closeGift();
     giftCache = null;
+    await flushClientState();
+    await flushDeletedChats();
     window.LingonAuth.set(null);
+    resetClientSync();
     state.view = 'chat';
     render();
     return;
@@ -7752,10 +7927,6 @@ async function bootHash(){
         try { window.LingonConfig.userId = me.user.id; localStorage.setItem('belna.lastProvider', 'google'); } catch {}
         // Scope persisted state before the background sync can merge remote data.
         try { ensureOwnerScope(); if (me.user && me.user.id) { state.ownerId = me.user.id; state.view = 'chat'; save(); } } catch {}
-        const owner = billingIdentity();
-        syncFromBackend(true).then(() => {
-          if (owner === billingIdentity() && $('#side')) paintSide();
-        }).catch(() => {});
         setTimeout(() => toast('Signed in as ' + me.user.email), 400);
         return 'google';
       } catch {
@@ -7766,7 +7937,7 @@ async function bootHash(){
   } catch {}
   return 'none';
 }
-const bootReady = hydrateStoredFiles().then(() => bootHash()).then((st) => {
+const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) => {
   expirePending();
   applyTheme();
   // Navigation can remove the React host while the scripts/auth are loading.
@@ -7781,6 +7952,12 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then((st) => {
     if (m) m.textContent = 'Sign-in failed: ' + msg;
     else setTimeout(() => toast('Sign-in failed: ' + msg), 400);
     return;
+  }
+  if (signedIn()) {
+    ensureOwnerScope();
+    await hydrateStoredFiles();
+    await loadClientState();
+    await syncFromBackend(true).catch(error => console.warn('Account data restore failed:',error));
   }
   if (signedIn() && state.pendingPrompt && !needsOnboarding()) {
     void landingRun(state.pendingPrompt, state.pendingPromptFiles || []).catch(error => { console.error(error); render(); });

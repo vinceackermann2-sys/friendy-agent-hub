@@ -118,6 +118,13 @@ syncStripeProvider();
   if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted personal store');
   writeFileSync(join(root, 'src/lingon-server/personal-store.js'), esm, 'utf8');
 }
+// Account-scoped chat UI snapshots use the same store in both runtimes.
+{
+  const src = readFileSync(join(root, 'server/client-state.js'), 'utf8');
+  const esm = src.replace('module.exports = { createClientStateStore };', 'export { createClientStateStore };');
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted client state store');
+  writeFileSync(join(root, 'src/lingon-server/client-state.js'), esm, 'utf8');
+}
 // Support form validation and storage are shared by both API runtimes.
 {
   const src = readFileSync(join(root, 'server/support.js'), 'utf8');
@@ -126,13 +133,6 @@ syncStripeProvider();
   writeFileSync(join(root, 'src/lingon-server/support.js'), esm, 'utf8');
 }
 
-// Merchant payment metadata is shared; full card data never enters this store.
-{
-  const src = readFileSync(join(root, 'server/payment-methods.js'), 'utf8');
-  const esm = src.replace('module.exports = { createPaymentMethods };', 'export { createPaymentMethods };');
-  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted payment methods module');
-  writeFileSync(join(root, 'src/lingon-server/payment-methods.js'), esm, 'utf8');
-}
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.

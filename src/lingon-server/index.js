@@ -1085,6 +1085,20 @@ app.post('/api/mail/webhook', async (req, res) => {
 });
 
 // ---------- transcript search (auth-derived user) ----------
+app.get('/api/client-state', requireAuth(async (req, res) => {
+  try { res.setHeader('Cache-Control', 'private, no-store'); res.json(await store.listClientState(req.user.id)); }
+  catch (e) { res.status(503).json({ error:e.message }); }
+}));
+app.put('/api/client-state/:key', rateLimit(180, 60000), requireAuth(async (req, res) => {
+  try { res.json({ value:await store.saveClientState(req.user.id, req.params.key, req.body?.value) }); }
+  catch (e) { res.status(e.code === 'BAD_INPUT' ? 400 : 503).json({ error:e.message }); }
+}));
+app.delete('/api/client-state/chats/:id', requireAuth(async (req, res) => {
+  try { await store.deleteClientChat(req.user.id, req.params.id); res.json({ ok:true }); }
+  catch (e) { res.status(e.code === 'BAD_INPUT' ? 400 : 503).json({ error:e.message }); }
+}));
+
+// ---------- transcript search (auth-derived user) ----------
 app.get('/api/history/search', requireAuth(async (req, res) => {
   const q = String(req.query.q || '').slice(0, 200);
   if (!q) return res.status(400).json({ error: 'q required' });
@@ -1211,18 +1225,6 @@ app.delete('/api/memories/:id', requireAuth(async (req, res) => {
 }));
 
 // ---------- vault secrets ----------
-app.get('/api/payment-methods', requireAuth(async (req, res) => {
-  try { res.setHeader('Cache-Control', 'private, no-store'); res.json({ methods: await store.listPaymentMethods(req.user.id) }); }
-  catch (e) { res.status(503).json({ error: e.message }); }
-}));
-app.post('/api/payment-methods', requireAuth(async (req, res) => {
-  try { res.setHeader('Cache-Control', 'private, no-store'); res.json({ method: await store.addPaymentMethod(req.user.id, req.body || {}) }); }
-  catch (e) { res.status(e.code === 'BAD_INPUT' ? 400 : 503).json({ error: e.message }); }
-}));
-app.delete('/api/payment-methods/:id', requireAuth(async (req, res) => {
-  try { await store.deletePaymentMethod(req.user.id, req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(503).json({ error: e.message }); }
-}));
 const vaultFailure = (res, e) => res.status(e.code === 'NOT_ENCRYPTED' || e.code === 'PERSISTENCE' ? 503 : 400).json({ error: e.message || 'Vault request failed.' });
 app.get('/api/secrets', requireAuth(async (req, res) => {
   try { res.json({ secrets: await store.listSecrets(req.user.id), encrypted: store.secretsEncrypted() }); }
