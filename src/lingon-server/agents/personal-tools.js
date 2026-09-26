@@ -186,16 +186,27 @@ function pickPersonalTools(foldedTask) {
 // Pages, Canvas files and generated images are real artifacts: keep a copy in
 // the Library and tag the result so its chat card links to that Library item.
 // A Library failure never fails the tool that produced the artifact.
+// Library names say what a file is: a page's own title, an image's subject.
+function libraryName(text, ext, fallback) {
+  const clean = String(text || '').replace(/<[^>]+>/g, ' ').replace(/[\\/:*?"<>|#\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 70).trim();
+  return `${clean || fallback}.${ext}`;
+}
+function imageSubject(prompt) {
+  const text = String(prompt || '').replace(/\s+/g, ' ').trim();
+  const subject = /^(?:please\s+)?(?:create|generate|make|draw|design|render|paint|produce)\b[^.]*?\b(?:of|showing|depicting|featuring)\s+(.+)/i.exec(text)?.[1] || text;
+  const words = subject.split(/[.,;:]/)[0].split(' ').slice(0, 8).join(' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : '';
+}
 function withLibraryAutosave(tools) {
   const capture = {
-    build_page: (out) => out?.html && { title: 'your-page.html', mime: 'text/html', kind: 'web', content: out.html },
+    build_page: (out) => out?.html && { title: libraryName(/<title[^>]*>([^<]{2,120})<\/title>/i.exec(out.html)?.[1] || /<h1[^>]*>([\s\S]{2,200}?)<\/h1>/i.exec(out.html)?.[1], 'html', 'Web page'), mime: 'text/html', kind: 'web', content: out.html },
     canvas_show: (out) => {
       if (!out?.title || !out.content) return null;
       const ext = { md: 'md', html: 'html', json: 'json', csv: 'csv', svg: 'svg' }[out.format] || 'txt';
       const [mime, kind] = LIBRARY_FORMATS[ext];
       return { title: /\.[a-z0-9]{2,5}$/i.test(out.title) ? out.title : `${out.title}.${ext}`, mime, kind, content: out.content };
     },
-    image_generate: (out) => out?.dataUrl && { title: out.name || 'generated.png', mime: out.mimeType || 'image/png', kind: 'image', content: out.dataUrl },
+    image_generate: (out, args) => out?.dataUrl && { title: libraryName(imageSubject(args?.prompt), 'png', out.name ? out.name.replace(/\.png$/i, '') : 'Image'), mime: out.mimeType || 'image/png', kind: 'image', content: out.dataUrl },
   };
   for (const [name, toItem] of Object.entries(capture)) {
     const tool = tools[name];
@@ -203,7 +214,7 @@ function withLibraryAutosave(tools) {
     const run = tool.run;
     tools[name] = { ...tool, libraryAutosave: true, run: async (args, ctx) => {
       const out = await run(args, ctx);
-      const item = toItem(out);
+      const item = toItem(out, args);
       if (!item) return out;
       try {
         const saved = await store.saveLibraryItem(ctx.userId, { ...item, source: 'agent', chatId: ctx.chatId || ctx.sessionId });

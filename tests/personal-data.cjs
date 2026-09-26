@@ -99,7 +99,7 @@ const ctx = (userId) => ({ userId, sessionId: 'task1', chatId: 'chat1', trace: (
   const image = await tools.image_generate.run({}, ctx('u3'));
   const report = await tools.canvas_show.run({}, ctx('u3'));
   assert.ok(page.libraryId && image.libraryId && report.libraryId, 'artifacts are tagged with their Library id');
-  assert.deepEqual((await personal.listLibrary('u3')).map((item) => [item.title, item.kind]).sort(), [['Report.md', 'document'], ['cat.png', 'image'], ['your-page.html', 'web']]);
+  assert.deepEqual((await personal.listLibrary('u3')).map((item) => [item.title, item.kind]).sort(), [['Hi.html', 'web'], ['Report.md', 'document'], ['cat.png', 'image']]);
   assert.equal(withLibraryAutosave(tools).build_page, tools.build_page, 'wrapping is idempotent');
 
   // Cards, coordinator subset and keyword gating.
