@@ -13,7 +13,7 @@ const WORKER_MAX_CALLS = 6;
 // VM tools that only look: their failure leaves nothing changed.
 const VIEW_ONLY = new Set(['browser_open','computer_screenshot']);
 // Failures raised before a tool did anything.
-const NOTHING_RAN = /\b(WORKER_NOT_READY|DISABLED|BAD_INPUT|HOST_BLOCKED|NO_CREDIT)\b|Failed to launch the browser process|not installed yet|browser profile is starting|worker container could not be prepared|did not become ready|taken over this browser|Action skipped because the task changed/i;
+const NOTHING_RAN = /\b(WORKER_NOT_READY|DISABLED|BAD_INPUT|HOST_BLOCKED|NO_CREDIT)\b|Failed to launch the browser process|not installed yet|browser profile is starting|worker container could not be prepared|did not become ready|taken over this browser|Action skipped because the task changed|run command extension execution is in progress/i;
 // Tools whose result is a screen the model should see.
 const VISUAL = new Set([...BROWSER,...DESKTOP]);
 const MILESTONE = { name:'report_milestone', description:'In longer work, report a useful finding or blocker the owner should see before you finish. Only after evidence exists. Skip it when your next reply is the final answer: the final answer already reports the result. Never narrate tools, context loading, thinking, or VM stages. Do not repeat an earlier milestone.', parameters:{ type:'object', properties:{ summary:{type:'string',maxLength:240}, evidenceIds:{type:'array',items:{type:'string'},minItems:1,maxItems:5} }, required:['summary','evidenceIds'] } };

@@ -1911,8 +1911,17 @@ async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
   const cfg = azureConfig();
   const name = vmNameForUser(userId);
   const path_ = `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/runCommand`;
-  const data = await arm(cfg, 'POST', path_, { commandId: 'RunShellScript', script: [script] }, COMPUTE_API);
-  return parseRunOutput(data, { maxStdout });
+  // Azure runs one command per VM at a time. Another one (a workspace restore right after
+  // the VM starts, a backup) makes a new command fail at once; it waits its turn instead.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const data = await arm(cfg, 'POST', path_, { commandId: 'RunShellScript', script: [script] }, COMPUTE_API);
+      return parseRunOutput(data, { maxStdout });
+    } catch (error) {
+      if (attempt >= 36 || !/run command extension execution is in progress|another operation is in progress|conflict/i.test(String(error && error.message))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
 }
 
 async function waitWorkerReady(userId) {
