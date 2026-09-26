@@ -22,7 +22,11 @@ function normalizeTrigger(input, currentId) {
     if (!Number.isFinite(intervalMinutes) || intervalMinutes < MIN_INTERVAL_MINUTES || intervalMinutes > MAX_INTERVAL_MINUTES) {
       bad(`Schedule interval must be between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES} minutes.`);
     }
-    return { type, intervalMinutes };
+    // A first run time anchors the schedule: "every Monday at 9:00" is a weekly interval
+    // starting next Monday 09:00, and later runs stay on that time.
+    const startAt = input?.startAt ? Date.parse(String(input.startAt)) : NaN;
+    if (input?.startAt && (!Number.isFinite(startAt) || startAt > Date.now() + 400 * 864e5)) bad('Give the first run as a date and time within the next year.');
+    return Number.isFinite(startAt) ? { type, intervalMinutes, startAt: new Date(startAt).toISOString() } : { type, intervalMinutes };
   }
 
   if (type === 'app') {
@@ -54,8 +58,15 @@ function normalizeSubAgent(input, currentId) {
 
 function nextRunAt(trigger, from = Date.now()) {
   if (trigger?.type !== 'schedule') return null;
-  return new Date(from + trigger.intervalMinutes * 60 * 1000).toISOString();
+  const step = trigger.intervalMinutes * 60 * 1000;
+  const anchor = trigger.startAt ? Date.parse(trigger.startAt) : NaN;
+  if (!Number.isFinite(anchor)) return new Date(from + step).toISOString();
+  if (from < anchor) return new Date(anchor).toISOString();
+  return new Date(anchor + (Math.floor((from - anchor) / step) + 1) * step).toISOString();
 }
+const everyText = (minutes) => minutes % 10080 === 0 ? (minutes === 10080 ? 'Every week' : `Every ${minutes / 10080} weeks`)
+  : minutes % 1440 === 0 ? (minutes === 1440 ? 'Every day' : `Every ${minutes / 1440} days`)
+  : minutes % 60 === 0 ? (minutes === 60 ? 'Every hour' : `Every ${minutes / 60} hours`) : `Every ${minutes} minutes`;
 
 function eventMatches(trigger, event) {
   if (!trigger || !event || trigger.type !== event.type) return false;
@@ -65,7 +76,7 @@ function eventMatches(trigger, event) {
 }
 
 function triggerLabel(trigger) {
-  if (trigger?.type === 'schedule') return `Every ${trigger.intervalMinutes} minutes`;
+  if (trigger?.type === 'schedule') return everyText(trigger.intervalMinutes) + (trigger.startAt ? `, from ${trigger.startAt.slice(0, 16).replace('T', ' ')} UTC` : '');
   if (trigger?.type === 'app') return `${trigger.app}: ${trigger.event}`;
   if (trigger?.type === 'subagent') return 'After another sub-agent completes';
   return 'Unknown trigger';

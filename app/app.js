@@ -1015,11 +1015,15 @@ function subAgentTriggerLabel(subAgent) {
   const trigger = subAgent?.trigger || {};
   if (trigger.type === 'schedule') {
     const minutes = Number(trigger.intervalMinutes || 0);
-    if (minutes === 1440) return 'Every day';
-    if (minutes === 10080) return 'Every week';
-    if (minutes === 60) return 'Every hour';
-    if (minutes > 60 && minutes % 60 === 0) return `Every ${minutes / 60} hours`;
-    return `Every ${minutes} minutes`;
+    const every = minutes === 1440 ? 'Every day' : minutes === 10080 ? 'Every week' : minutes === 60 ? 'Every hour'
+      : minutes > 60 && minutes % 60 === 0 ? `Every ${minutes / 60} hours` : `Every ${minutes} minutes`;
+    // An anchored schedule shows when it runs, in the viewer's own time.
+    const at = trigger.startAt ? new Date(trigger.startAt) : null;
+    if (!at || Number.isNaN(at.getTime())) return every;
+    const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (minutes === 10080) return `Every ${at.toLocaleDateString([], { weekday: 'long' })} at ${time}`;
+    if (minutes === 1440) return `Every day at ${time}`;
+    return `${every}, from ${at.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`;
   }
   if (trigger.type === 'app') {
     const opt = (state.triggerOptions?.apps || []).find((a) => a.id === trigger.app);
@@ -3090,7 +3094,7 @@ async function moveDeviceUploads(){
     } catch {}
   }
 }
-function libraryItemContent(id){
+function libraryItemContent(id, onReady){
   const owner = currentUserId();
   if (owner !== libraryContentOwner) { libraryContent.clear(); libraryContentOwner = owner; }
   if (libraryContent.has(id)) return libraryContent.get(id);
@@ -3098,7 +3102,7 @@ function libraryItemContent(id){
   window.LingonAuth.api('/api/library/' + encodeURIComponent(id))
     .then(out => { if (owner === currentUserId()) libraryContent.set(id, { content:String(out.item?.content || '') }); })
     .catch(error => { if (owner === currentUserId()) libraryContent.set(id, { error:error.message || 'Could not load this file.' }); })
-    .finally(() => { if (state.view === 'library' && $('#main')) paintLibrary($('#main')); });
+    .finally(() => { if (state.view === 'library' && $('#main')) paintLibrary($('#main')); try { onReady && onReady(); } catch {} });
   return libraryContent.get(id);
 }
 function addLibraryUploads(fileList){
@@ -4236,7 +4240,8 @@ function fileCardHTML(c, m){
   const cd = m.card, k = c.id, mid = m.id;
   const name = String(cd.name || 'file');
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-  const data = String(cd.dataUrl || (String(cd.content || '').startsWith('data:') ? cd.content : ''));
+  const fromLibrary = cd.fromLibrary && cd.libraryId ? libraryItemContent(cd.libraryId, () => replaceNode(c, m)) : null;
+  const data = String(cd.dataUrl || (String(cd.content || '').startsWith('data:') ? cd.content : '') || (fromLibrary?.content || ''));
   const isImage = /^image\//.test(cd.mime || '') || CV_IMAGE_EXT.includes(ext);
   const img = isImage ? safeImg(data) : '';
   const video = /^data:video\/(mp4|webm|ogg);base64,/.test(data) ? data : '';
@@ -5644,11 +5649,14 @@ function paintMail(body){
   if (!m) getMail(true, tab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
 }
 
+// Files the agent saved to the Library (generated images) arrive as a reference and load
+// on demand through libraryItemContent; they are not kept in the chat's local copy.
 const canvasFileCache = new Map();
 function canvasFileContent(c, m){
   const card = m.card;
   if (typeof card.content === 'string') return card.content;
   if (card.dataUrl) return card.dataUrl;
+  if (card.libraryId && card.fromLibrary) return libraryItemContent(card.libraryId, () => { if (state.activeChat === c.id && c.canvasSelectedMessageId === m.id && state.canvasOpen) paintCanvas(); });
   if (!card.managedArtifactId) return '';
   const key = `${c.id}:${card.managedArtifactId}`;
   if (!canvasFileCache.has(key)) {
@@ -7336,6 +7344,14 @@ document.addEventListener('click', async e => {
   if (act === 'qopt' && m){ if (!signedIn()){ renderAuth(); return; } m.card.choice = b.dataset.o; resolveCard(c, m, { choice: b.dataset.o }, 'answered'); return; }
   if (act === 'download' && m){
     if (m.card.managedArtifactId) { try { await Engine.download(c.id, m.card); } catch (err) { toast(err.message); } }
+    else if (m.card.fromLibrary && m.card.libraryId) {
+      // A Library file loads first; its data is a data: URL (images) or text.
+      let got = libraryItemContent(m.card.libraryId);
+      for (let i = 0; got?.loading && i < 100; i++) { await sleep(150); got = libraryContent.get(m.card.libraryId); }
+      if (got?.error) toast(got.error);
+      else if (String(got?.content || '').startsWith('data:')) downloadDataUrl(m.card.name, got.content);
+      else dl(m.card.name, got?.content || '');
+    }
     else dl(m.card.name, m.card.content);
     return;
   }

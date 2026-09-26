@@ -82,6 +82,15 @@ const withoutScreenshot = (out) => {
 };
 const jpegData = (value) => typeof value==='string' && /^data:image\/jpeg;base64,/.test(value) ? value.slice(value.indexOf(',')+1) : '';
 const fault = (message,status=409) => Object.assign(new Error(message),{status});
+// A generated image or large file saved to the Library travels as a reference: the task
+// state is rewritten on every step, and megabytes of image data made those writes fail.
+// The app loads the file from the Library when it shows the card.
+const leanCard = (e) => {
+  const card = e?.type==='card' ? e.card : null;
+  if(!card || card.type!=='file' || !card.libraryId || String(card.dataUrl || '').length+String(card.content || '').length<100000) return e;
+  const {dataUrl,content,...rest} = card;
+  return {...e,card:{...rest,fromLibrary:true}};
+};
 
 function createTaskRuntime(d) {
   const records = d.records;
@@ -349,7 +358,7 @@ function createTaskRuntime(d) {
           const repeatCard=e=>e.type==='card' && ['present','order','email'].includes(e.card?.type) && s.events.some(x=>x.type==='card' && JSON.stringify(x.card)===JSON.stringify(e.card));
           // A revised card with the same title updates the earlier one in place instead of stacking.
           const earlier=e=>e.type==='card' && e.card?.type==='present' ? s.events.findLast(x=>x.type==='card' && x.card?.type==='present' && x.card.kind===e.card.kind && x.card.title===e.card.title) : null;
-          if(!failure) d.emitResultCard(e=>{if(repeatCard(e))return;const prev=earlier(e);event(s,prev?{...e,id:prev.id}:e);},call.name,call.id,out,call.args);
+          if(!failure) d.emitResultCard(e=>{e=leanCard(e);if(repeatCard(e))return;const prev=earlier(e);event(s,prev?{...e,id:prev.id}:e);},call.name,call.id,out,call.args);
           if(failure && (VISUAL.has(call.name) || ['shell','code_run'].includes(call.name))) {
             const browser=VISUAL.has(call.name);
             event(s,{type:'card',id:call.id,card:browser?{type:'browser',desktop:DESKTOP.has(call.name) || undefined,surface:'canvas',url:DESKTOP.has(call.name)?'Virtual computer':String(call.args.url || ''),note:String(failure).slice(0,200),status:'failed'}:{type:'computer',surface:'canvas',managed:true,lines:[{t:String(failure).slice(0,500)}],status:'failed'}});

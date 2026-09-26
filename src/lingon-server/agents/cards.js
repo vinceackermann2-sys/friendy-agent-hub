@@ -119,6 +119,18 @@ function appActionView(slug, input = {}) {
     .map(([key, value]) => ({ k: humanize(key), v: str(typeof value === 'object' ? JSON.stringify(value) : value, 600) }));
   return { kind: 'app_action', app: toolkit, appName: toolkitName(toolkit), action: humanize(upper.replace(new RegExp(`^${toolkit.toUpperCase()}_`), '')), fields };
 }
+// "Every week, first Mon 28 Sep 09:00": the first run as the agent wrote it, in the owner's time.
+function scheduleText(trigger) {
+  const minutes = Number(trigger.intervalMinutes) || 60;
+  const every = minutes % 10080 === 0 ? (minutes === 10080 ? 'Every week' : `Every ${minutes / 10080} weeks`)
+    : minutes % 1440 === 0 ? (minutes === 1440 ? 'Every day' : `Every ${minutes / 1440} days`)
+    : minutes % 60 === 0 ? (minutes === 60 ? 'Every hour' : `Every ${minutes / 60} hours`) : `Every ${minutes} min`;
+  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(String(trigger.startAt || ''));
+  if (!m) return every;
+  const day = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  const label = day.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  return `${every}, first ${label} ${m[4]}:${m[5]}`;
+}
 function approvalView(name, args = {}, detail) {
   const parsed = parse(detail) || {};
   switch (name) {
@@ -148,7 +160,7 @@ function approvalView(name, args = {}, detail) {
       return { kind: 'web_action', action: str(args.type || args.action, 30), text: str(args.text || args.key || args.value, 200), surface: name === 'computer_action' ? 'computer' : 'browser' };
     case 'trigger_create': {
       const trigger = args.trigger || {};
-      const when = trigger.type === 'schedule' ? `Every ${Number(trigger.intervalMinutes) >= 60 ? `${Math.round(Number(trigger.intervalMinutes) / 60)} h` : `${Number(trigger.intervalMinutes) || 60} min`}`
+      const when = trigger.type === 'schedule' ? scheduleText(trigger)
         : trigger.type === 'app' ? `When ${toolkitName(trigger.app)} has new activity` : trigger.type === 'subagent' ? 'After another automation runs' : '';
       return { kind: 'automation', name: str(args.name, 120), prompt: str(args.prompt, 600), when };
     }
