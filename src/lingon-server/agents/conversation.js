@@ -167,7 +167,9 @@ function createCoordinator(d) {
       timing.answerMs=Date.now()-started;
       timing.route='direct_worker';
       d.reportTiming?.(timing);
-      await Promise.allSettled([d.store.saveTurn(userId,chatId,'user',prompt,{metadata:{attachments:preparedAttachments.metadata}}),d.store.saveTurn(userId,chatId,'agent',reply)]);
+      // In order: the first message of a chat creates it, and the history must read in order.
+      await d.store.saveTurn(userId,chatId,'user',prompt,{metadata:{attachments:preparedAttachments.metadata}}).catch(()=>{});
+      await d.store.saveTurn(userId,chatId,'agent',reply).catch(()=>{});
       return reply;
     }
     // Prompt-cache layout: the system prompt and the saved history stay identical
@@ -351,7 +353,8 @@ function createCoordinator(d) {
     await Promise.all(usageLogs);
     // The interrupted message is saved first so the history reads in order.
     const earlier=interrupted?d.store.saveTurn(userId,chatId,'user',interrupted).catch(()=>{}):Promise.resolve();
-    const persistence=earlier.then(()=>Promise.allSettled([d.store.saveTurn(userId,chatId,'user',prompt,{metadata:{attachments:preparedAttachments.metadata}}),d.store.saveTurn(userId,chatId,'agent',text || asked)]));
+    // Saved in order: your message first (it creates a new chat), then the reply.
+    const persistence=earlier.then(()=>d.store.saveTurn(userId,chatId,'user',prompt,{metadata:{attachments:preparedAttachments.metadata}}).catch(()=>{})).then(()=>d.store.saveTurn(userId,chatId,'agent',text || asked).catch(()=>{}));
     if(!changed&&!memoryHandled&&!asked) await d.finishMemory(userId,prompt,text,memories,emit).catch(()=>{});
     await persistence;
     // After the reply: fold messages that left the recent window into the summary.

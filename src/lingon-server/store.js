@@ -761,7 +761,11 @@ async function saveTurn(userId, chatId, role, text, options = {}) {
       if (existing && existing.user_id !== userId) throw Object.assign(new Error('Chat belongs to another account.'), { code: 'FORBIDDEN' });
       if (!existing) {
         const { error: chatError } = await s.from('chats').insert({ id: row.chat_id, user_id: userId, title: String(options.title || row.chat_id).slice(0, 60), source: options.source || 'user', sub_agent_id: options.subAgentId || null, updated_at: new Date().toISOString() });
-        if (chatError) throw chatError;
+        // Two saves for a new chat race to create it; the loser checks the owner and saves its message.
+        if (chatError && chatError.code === '23505') {
+          const { data: raced } = await s.from('chats').select('user_id').eq('id', row.chat_id).maybeSingle();
+          if (!raced || raced.user_id !== userId) throw Object.assign(new Error('Chat belongs to another account.'), { code: 'FORBIDDEN' });
+        } else if (chatError) throw chatError;
       } else {
         const chatPatch = { updated_at: new Date().toISOString() };
         if (options.title) chatPatch.title = String(options.title).slice(0, 60);
