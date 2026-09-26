@@ -12,6 +12,8 @@ const DESKTOP = new Set(['computer_action','computer_submit','computer_fill_secr
 const WORKER_MAX_CALLS = 6;
 // VM tools that only look: their failure leaves nothing changed.
 const VIEW_ONLY = new Set(['browser_open','computer_screenshot']);
+// Failures raised before a tool did anything.
+const NOTHING_RAN = /\b(WORKER_NOT_READY|DISABLED|BAD_INPUT|HOST_BLOCKED|NO_CREDIT)\b|Failed to launch the browser process|not installed yet|browser profile is starting|worker container could not be prepared|did not become ready|taken over this browser|Action skipped because the task changed/i;
 // Tools whose result is a screen the model should see.
 const VISUAL = new Set([...BROWSER,...DESKTOP]);
 const MILESTONE = { name:'report_milestone', description:'In longer work, report a useful finding or blocker the owner should see before you finish. Only after evidence exists. Skip it when your next reply is the final answer: the final answer already reports the result. Never narrate tools, context loading, thinking, or VM stages. Do not repeat an earlier milestone.', parameters:{ type:'object', properties:{ summary:{type:'string',maxLength:240}, evidenceIds:{type:'array',items:{type:'string'},minItems:1,maxItems:5} }, required:['summary','evidenceIds'] } };
@@ -510,7 +512,9 @@ function createTaskRuntime(d) {
       try { const out=await tool.run(call.args,{userId,sessionId:taskId,chatId:latest.chat_id,taskId,vmReady:lease,approvedDetail:call.approvedDetail,answer:call.answer,signal:interruptible?signal:undefined,trace:()=>{}});await recordSuccessfulWeb(userId,call.name,call.args,out).catch(()=>{});return out; }
       // Opening a page or taking a screenshot changes nothing, so its failure is an ordinary
       // result the worker can work around; other VM actions may have acted before failing.
-      catch(e) { if((tool.approval && tool.sideEffects!==false) || (VM.has(call.name) && !VIEW_ONLY.has(call.name))) e.outcomeUnknown=true;throw e; }
+      // A tool that failed before acting (not ready, refused, did not start) changed nothing:
+      // an ordinary failure the worker can work around, not an outcome to check.
+      catch(e) { if(((tool.approval && tool.sideEffects!==false) || (VM.has(call.name) && !VIEW_ONLY.has(call.name))) && !NOTHING_RAN.test(`${e.code || ''} ${e.message || ''}`)) e.outcomeUnknown=true;throw e; }
     } finally {
       if(renew) clearInterval(renew);
       if(lease) await d.azure.releaseLease(userId,{leaseId});

@@ -497,6 +497,23 @@ function networkGuard(user) {
   ];
 }
 const BROWSER_NETWORK_GUARD = networkGuard('lingon-browser');
+// Snap Chromium refuses to start from a service's cgroup, which is where Azure Run Command
+// runs ("... is not a snap cgroup"), so browser steps use Chrome's standalone headless
+// build instead: installed once per VM into /opt/lingon/chrome with the libraries it needs.
+const CHROME_LIBS = 'libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 fonts-liberation';
+const BROWSER_INSTALL = [
+  // A VM whose first boot did not finish gets Node and the browser library here too.
+  'command -v node >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; (curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y -q nodejs) >/dev/null 2>&1; }',
+  '[ -d /opt/lingon/node_modules/puppeteer-core ] || { mkdir -p /opt/lingon && npm install --prefix /opt/lingon puppeteer-core@25.11.0 ws@8.21.3 >/dev/null 2>&1; } || true',
+  'if [ ! -x /opt/lingon/chrome/chrome-headless-shell ]; then',
+  '  export DEBIAN_FRONTEND=noninteractive',
+  `  apt-get install -y -q ${CHROME_LIBS} >/dev/null 2>&1 || { apt-get update -q >/dev/null 2>&1; for P in ${CHROME_LIBS} libasound2t64; do apt-get install -y -q "$P" >/dev/null 2>&1 || true; done; }`,
+  '  mkdir -p /opt/lingon/browsers /opt/lingon/chrome',
+  '  (cd /opt/lingon && npx -y @puppeteer/browsers@2 install chrome-headless-shell@stable --path /opt/lingon/browsers) >/tmp/lingon-chrome-install.log 2>&1 || true',
+  '  BIN=$(find /opt/lingon/browsers -type f -name chrome-headless-shell -perm -u+x 2>/dev/null | head -n1)',
+  '  if [ -n "$BIN" ]; then chmod -R a+rX /opt/lingon/browsers && ln -sf "$BIN" /opt/lingon/chrome/chrome-headless-shell; fi',
+  'fi',
+];
 
 function browserSessionId(value) {
   const id = String(value || '');
@@ -611,8 +628,15 @@ function browserProfileRuntime(root, load) {
       browser = await connect(puppeteer);
       if (browser) return browser;
       const port = await freePort();
-      browser = await puppeteer.launch({ headless: true, executablePath, userDataDir: profile,
-        args: ['--disable-dev-shm-usage', '--window-size=1280,900', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port] });
+      // Chrome's standalone headless build runs in "shell" mode. Where the kernel has no
+      // usable sandbox for this user, it runs without one, still as the locked-down user.
+      const options = { headless: /headless-shell/.test(executablePath) ? 'shell' : true, executablePath, userDataDir: profile,
+        args: ['--disable-dev-shm-usage', '--window-size=1280,900', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + port] };
+      try { browser = await puppeteer.launch(options); }
+      catch (error) {
+        if (!/sandbox/i.test(String(error && error.message))) throw error;
+        browser = await puppeteer.launch({ ...options, args: [...options.args, '--no-sandbox'] });
+      }
       fs.writeFileSync(portFile, String(port), { mode: 0o600 });
       browser.process()?.unref?.();
       await restoreCookies(browser).catch(() => {});
@@ -774,7 +798,7 @@ function buildBrowserSessionScript(action, args = {}) {
     // refreshes the file every 10 s, so a stale file (streamer gone) no longer blocks.
     "const takeoverFile = path.join('/var/lib/lingon-browser/sessions', payload.sessionId, 'takeover');",
     "try { if (Date.now() - fs.statSync(takeoverFile).mtimeMs < 45000) { process.stdout.write(JSON.stringify({ ok: false, error: 'The owner has taken over this browser in the live view. Wait until they hand it back, then continue.' })); process.exit(1); } } catch {}",
-    "const findBrowser = () => ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p));",
+    "const findBrowser = () => ['/opt/lingon/chrome/chrome-headless-shell', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'].find((p) => fs.existsSync(p));",
     "const executablePath = findBrowser();",
     "if (!executablePath) throw new Error('Chromium is not installed yet (first boot is still running).');",
     "let puppeteer;",
@@ -814,6 +838,7 @@ function buildBrowserSessionScript(action, args = {}) {
     'id -u lingon-browser >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/lingon-browser --shell /usr/sbin/nologin lingon-browser',
     'install -d -m 700 -o lingon-browser -g lingon-browser /var/lib/lingon-browser /var/lib/lingon-browser/sessions',
     ...CHROMIUM_POLICY_SETUP,
+    ...BROWSER_INSTALL,
     ...BROWSER_NETWORK_GUARD,
     `echo '${codeB64}' | base64 -d > /tmp/lingon-browser-session.js`,
     'chown lingon-browser:lingon-browser /tmp/lingon-browser-session.js && chmod 600 /tmp/lingon-browser-session.js',
@@ -964,7 +989,7 @@ function buildBrowserRelayScript(args = {}) {
     `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions', require);`,
     "const payload = JSON.parse(Buffer.from(process.env.LINGON_BROWSER_RELAY_PAYLOAD, 'base64').toString('utf8'));",
     "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
-    "const findBrowser = () => ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p));",
+    "const findBrowser = () => ['/opt/lingon/chrome/chrome-headless-shell', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'].find((p) => fs.existsSync(p));",
     "const send = (socket, value) => { try { if (socket && socket.readyState === 1) socket.send(JSON.stringify(value)); } catch {} };",
     "const connect = () => new Promise((resolve, reject) => { const socket = new WebSocket(payload.relayUrl); const timer = setTimeout(() => { try { socket.terminate(); } catch {} reject(new Error('relay connection timed out')); }, 15000); socket.once('open', () => { clearTimeout(timer); resolve(socket); }); socket.once('error', (error) => { clearTimeout(timer); reject(error); }); });",
     "(async () => {",
@@ -1601,15 +1626,19 @@ function assertStateCommandSucceeded(output, marker, code) {
   }
 }
 
-function cloudInit(cfg) {
-  const user = cfg.adminUsername || 'lingon';
-  const image = workerImage(cfg);
-  const workerContainerfile = Buffer.from([
+// The worker image recipe, used at first boot and when a VM repairs a failed bootstrap.
+function workerContainerfileB64() {
+  return Buffer.from([
     'FROM docker.io/library/node:22-bookworm-slim',
     'ENV DEBIAN_FRONTEND=noninteractive',
     'RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates coreutils python3 && rm -rf /var/lib/apt/lists/*',
     'WORKDIR /workspace',
   ].join('\n'), 'utf8').toString('base64');
+}
+function cloudInit(cfg) {
+  const user = cfg.adminUsername || 'lingon';
+  const image = workerImage(cfg);
+  const workerContainerfile = workerContainerfileB64();
   const yaml = [
     '#cloud-config',
     'package_update: true',
@@ -1636,6 +1665,8 @@ function cloudInit(cfg) {
     '  - snap install chromium || apt-get install -y chromium-browser || apt-get install -y chromium || true',
     '  - mkdir -p /opt/lingon && chown -R ' + user + ':' + user + ' /opt/lingon',
     '  - su - ' + user + ' -c "npm install --prefix /opt/lingon puppeteer-core@25.11.0 ws@8.21.3" || true',
+    // One runcmd entry: each entry runs on its own, and the install is one if-block.
+    `  - ${JSON.stringify(BROWSER_INSTALL.join('\n'))}`,
     '  - install -d -m 700 /opt/lingon/worker /var/lib/lingon-worker',
     `  - echo '${workerContainerfile}' | base64 -d > /opt/lingon/worker/Containerfile`,
     `  - podman image exists ${shellQuote(image)} || (podman pull ${shellQuote(image)} || podman build --pull=missing -t ${shellQuote(image)} /opt/lingon/worker)`,
@@ -1887,13 +1918,23 @@ async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
 async function waitWorkerReady(userId) {
   const key = String(userId);
   if (workerReadyState.has(key)) return true;
+  // Waits while first boot is still running; once it has finished without the worker
+  // (a failed bootstrap), prepares the container image here instead of failing every time.
+  const image = shellQuote(workerImage());
   const out = await runCommand(userId, [
     'set +e',
     'for i in $(seq 1 90); do',
     '  if [ -f /var/lib/lingon-worker/ready ]; then echo READY; exit 0; fi',
+    '  cloud-init status 2>/dev/null | grep -q running || break',
     '  sleep 2',
     'done',
-    'echo "Worker container did not become ready during VM bootstrap." >&2',
+    'export DEBIAN_FRONTEND=noninteractive',
+    'command -v podman >/dev/null 2>&1 || { apt-get update -q >/dev/null 2>&1; apt-get install -y -q podman uidmap slirp4netns fuse-overlayfs >/dev/null 2>&1; }',
+    'install -d -m 700 /opt/lingon/worker /var/lib/lingon-worker',
+    `echo '${workerContainerfileB64()}' | base64 -d > /opt/lingon/worker/Containerfile`,
+    `podman image exists ${image} || podman pull ${image} >/tmp/lingon-worker-build.log 2>&1 || podman build --pull=missing -t ${image} /opt/lingon/worker >>/tmp/lingon-worker-build.log 2>&1`,
+    `if podman image exists ${image}; then touch /var/lib/lingon-worker/ready; echo READY; exit 0; fi`,
+    'echo "The worker container could not be prepared: $(tail -n 3 /tmp/lingon-worker-build.log 2>/dev/null | tr \'\\n\' \' \')" >&2',
     'exit 125',
   ].join('\n'), { maxStdout: 1000, maxStderr: 2000 });
   if (!/\bREADY\b/.test(out.stdout)) {
