@@ -1417,15 +1417,18 @@ function buildSnapshotStateScript(url) {
     'install -d -m 700 -o lingon-browser -g lingon-browser /var/lib/lingon-browser/sessions',
     'id -u lingon-desktop >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/lingon-desktop --shell /usr/sbin/nologin lingon-desktop',
     'install -d -m 700 -o lingon-desktop -g lingon-desktop /home/lingon-desktop',
-    'pkill -u lingon-browser chromium 2>/dev/null || true',
-    'pkill -u lingon-desktop chromium 2>/dev/null || true',
+    // Everything the browser users run (Chrome, the live streamer) stops, so the profile is
+    // saved whole; the next browser step starts them again.
+    'pkill -u lingon-browser 2>/dev/null || true',
+    'pkill -u lingon-desktop 2>/dev/null || true',
     'sleep 1',
     'ARCHIVE=$(mktemp /tmp/lingon-state.XXXXXX.tar.gz)',
     'trap \'rm -f "$ARCHIVE"\' EXIT',
-    "tar --exclude='*/Cache/*' --exclude='*/Code Cache/*' --exclude='*/GPUCache/*' --exclude='home/lingon-desktop/.relay' --exclude='home/lingon-desktop/.run' --exclude='home/lingon-desktop/.cache' -czf \"$ARCHIVE\" -C / home/lingon/workspace var/lib/lingon-browser/sessions home/lingon-desktop",
+    // Time-bounded, so a backup can never hold the VM's one command slot for long.
+    "timeout 150 tar --exclude='*/Cache/*' --exclude='*/Code Cache/*' --exclude='*/GPUCache/*' --exclude='*/Service Worker/CacheStorage/*' --exclude='*/Service Worker/ScriptCache/*' --exclude='*/GrShaderCache/*' --exclude='*/ShaderCache/*' --exclude='*/Crashpad/*' --exclude='*/component_crx_cache/*' --exclude='home/lingon-desktop/.relay' --exclude='home/lingon-desktop/.run' --exclude='home/lingon-desktop/.cache' -czf \"$ARCHIVE\" -C / home/lingon/workspace var/lib/lingon-browser/sessions home/lingon-desktop",
     'tar -tzf "$ARCHIVE" >/dev/null',
     `URL=$(echo '${encoded}' | base64 -d)`,
-    `curl -fsS --retry 2 -X PUT -H 'x-ms-version: ${BLOB_API}' -H 'x-ms-blob-type: BlockBlob' -H 'content-type: application/gzip' --data-binary @"$ARCHIVE" "$URL"`,
+    `curl -fsS --retry 2 --max-time 180 -X PUT -H 'x-ms-version: ${BLOB_API}' -H 'x-ms-blob-type: BlockBlob' -H 'content-type: application/gzip' --data-binary @"$ARCHIVE" "$URL"`,
     'date -u +%FT%TZ > /var/lib/lingon-state/restored-v1',
     'echo STATE_SAVED',
   ].join('\n');
@@ -1765,7 +1768,9 @@ async function acquireLease(userId, { leaseId, kind = 'app' } = {}) {
   await requireVmTokens(userId);
   const expiresAt = Date.now() + LEASE_TTL_MS;
   let acquired = false;
-  for (let attempt = 0; attempt < 100 && !acquired; attempt++) {
+  // A shutdown in progress counts as stale after five minutes (see acquire_agent_vm_lease), so
+  // new work waits a little longer than that rather than failing while the VM stops.
+  for (let attempt = 0; attempt < 220 && !acquired; attempt++) {
     const result = await supabaseRpc('acquire_agent_vm_lease', {
       p_user_id: String(userId),
       p_lease_id: id,
@@ -1867,7 +1872,9 @@ async function sweepLeases({ limit = 20 } = {}) {
     const results = [];
     for (const row of rows) {
       let success = false;
-      try { await snapshotDurableState(row.user_id); await deallocateVm(row.user_id); await meterVm(row.user_id, true); success = true; }
+      // Deallocating keeps the OS disk, so a failed backup does not keep an idle VM running;
+      // the files stay on the disk and the next backup includes them.
+      try { await snapshotDurableState(row.user_id).catch((error) => results.push({ vmName: row.vm_name, snapshot: false, error: error.code || 'AZURE_STATE' })); await deallocateVm(row.user_id); await meterVm(row.user_id, true); success = true; }
       catch (error) { results.push({ vmName: row.vm_name, stopped: false, error: error.code || 'AZURE_ARM' }); }
       finally {
         await supabaseRpc('finish_agent_vm_stop', {
