@@ -4174,7 +4174,7 @@ function browserCardHTML(c, m){
     ${cvHead(`<div class="tile cv-tile ${cd.status === 'failed' ? '' : 'green'}">${icon(cd.desktop ? 'laptop' : 'globe',20)}</div>`, cd.desktop ? 'Computer' : 'Browser', `${word}${cd.note ? ` · ${esc(cd.note)}` : ''}`, '')}
     <button type="button" class="cv-shot" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="${label}">
       ${shot ? `<img src="${esc(shot)}" alt="${live ? 'Live view' : 'Screenshot'} of ${esc(host)}"${live ? ` class="cv-live" data-live="${esc(cd.liveId)}"` : ' loading="lazy"'}>` : `<span class="cv-shot-empty">${running ? '<span class="tdots"><i></i><i></i><i></i></span>' : icon(cd.desktop ? 'laptop' : 'globe',26)}</span>${live ? `<img alt="Live view of ${esc(host)}" class="cv-live" data-live="${esc(cd.liveId)}" hidden>` : ''}`}
-      ${live ? '<span class="cv-live-badge"><i></i>Live</span>' : ''}
+      ${live ? `<span class="cv-live-badge"><i></i>Live</span>${agentPointerHTML(cd.liveId, true)}` : ''}
       <span class="cv-shot-url">${icon(cd.desktop ? 'laptop' : 'globe',12)} ${esc(host)}</span>
     </button>
     <div class="stack"><button class="btn ghost" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${label}</button></div>
@@ -5240,13 +5240,6 @@ function liveIdFor(c){
   }
   return null;
 }
-function computerLinesFor(c){
-  const out = [];
-  (c && c.messages || []).forEach(m => {
-    if (m.kind === 'card' && m.card.type === 'computer') (m.card.lines || []).forEach(L => out.push(L));
-  });
-  return out.slice(-14);
-}
 function pcIdFor(c){
   if (!c) return null;
   for (let i = (c.messages || []).length - 1; i >= 0; i--){
@@ -5287,6 +5280,39 @@ function paintCardFrame(frame){
   });
   if (old?.url?.startsWith('blob:') && old.url !== url) setTimeout(() => URL.revokeObjectURL(old.url), 2000);
 }
+/* The agent's pointer over the live stream: a big cursor that moves to where the agent acts
+   and a badge with the mascot saying what it is doing, so people can follow it. The VM
+   announces position and action (page coordinates of a 1280×900 view); page text in the
+   badge is shown as text only. Hidden while the owner drives. */
+var liveAgent = null; // { id, x, y, text, pressed }
+function agentPointerHTML(id, compact){
+  const a = liveAgent?.id === id ? liveAgent : null;
+  const place = a ? ` style="--ax:${a.x / 1280};--ay:${a.y / 900}"` : '';
+  const cls = `agent-ptr${compact ? ' compact' : ''}${a?.pressed ? ' pressed' : ''}${a && a.x > 1280 * 0.62 ? ' flip' : ''}`;
+  return `<span class="${cls}" data-live="${esc(id)}" aria-hidden="true"${place}${a && !liveControl ? '' : ' hidden'}>
+    <svg class="agent-arrow" viewBox="0 0 24 24"><path d="M3 2l7.6 19.2 2.7-8.1 8.2-2.7z" fill="#0b0c0f" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    <span class="agent-badge">${Mascot.svg(state.agent.color, 'idle', compact ? 16 : 20)}<span class="agent-text">${esc(a?.text || '')}</span></span>
+  </span>`;
+}
+function placeAgentPointer(el){
+  const a = liveAgent;
+  if (!a || a.id !== el.dataset.live || liveControl) { el.hidden = true; return; }
+  el.hidden = false;
+  el.style.setProperty('--ax', String(a.x / 1280));
+  el.style.setProperty('--ay', String(a.y / 900));
+  el.classList.toggle('pressed', !!a.pressed);
+  el.classList.toggle('flip', a.x > 1280 * 0.62);
+  const text = el.querySelector('.agent-text');
+  if (text && text.textContent !== a.text) text.textContent = a.text;
+}
+function liveAgentUpdate(info){
+  const id = liveIdShown;
+  if (!id || !info) return;
+  const num = (v, max, fallback) => (Number.isFinite(Number(v)) ? Math.min(max, Math.max(0, Number(v))) : fallback);
+  const prev = liveAgent?.id === id ? liveAgent : { x:640, y:360, text:'' };
+  liveAgent = { id, x:num(info.x, 1280, prev.x), y:num(info.y, 900, prev.y), text:String(info.text || prev.text || 'Working in the browser').slice(0, 80), pressed:!!info.pressed };
+  document.querySelectorAll('.agent-ptr').forEach(placeAgentPointer);
+}
 function liveClose(){
   try { liveWS && liveWS.close(); } catch {}
   try { pcWS && pcWS.close(); } catch {}
@@ -5294,7 +5320,6 @@ function liveClose(){
 }
 function paintLive(body, c, selectedId){
   const id = selectedId || liveIdFor(c);
-  const terms = computerLinesFor(c);
   if (!id){
     if (liveIdShown) liveClose();
     body.innerHTML = `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">No live session</div><div class="mut2">Ask for research and the agent's real browser appears here — watch it, take over, hand back.</div></div>`;
@@ -5312,10 +5337,9 @@ function paintLive(body, c, selectedId){
       <div class="liveview" id="liveview" tabindex="0" aria-label="Live ${surface} workspace">
         <canvas id="livecanvas" width="1280" height="900" aria-label="Live ${surface} stream"></canvas>
         <img id="liveimg" alt="${desktop ? 'Computer' : 'Browser'} preview" hidden${poster ? ` src="${poster}"` : ''}>
+        ${browserCards.some(m => m.card?.liveId === id && cardStreams(c, m.card)) ? agentPointerHTML(id) : ''}
         <div class="bigcursor" id="bigcursor"></div>
       </div>
-      <div class="pctitle">${icon('term',13)} Read-only tool output</div>
-      <div class="term mini" id="pcout" style="margin-top:6px">${terms.length ? terms.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('') : '<div class="mut">No runs yet in this chat.</div>'}</div>
       <div class="controlbar">
         <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
         <div class="cinfo"><b id="livestatus">Agent ${surface}</b><div class="sub" id="livesub">${desktop ? 'live virtual computer' : 'live interactive stream'} — the agent is connected to the VM</div></div>
@@ -5411,6 +5435,7 @@ function liveConnectRealtime(id){
         if (st() && /connecting/.test(st().textContent)) liveState(liveControl ? 'user' : 'live');
       }
       if (m.payload.event === 'state') liveState(liveControl ? 'user' : (data.state === 'user' ? 'user' : 'live'), { ...data, transport:'realtime' });
+      if (m.payload.event === 'agent') liveAgentUpdate(data);
     };
     // A dropped connection reconnects while a chat card still streams this task.
     ws.onclose = () => { clearInterval(beat); if (liveWS !== adapter) return; liveWS = null; if (st()) st().textContent = 'session ended'; setTimeout(() => syncCardLive(chat()), 3000); };
@@ -5498,6 +5523,7 @@ function liveState(s, m){
   if (m && m.title && $('#livesub') && !liveControl) sub.textContent = m.title;
   if (m && m.transport && sub && !liveControl) sub.textContent = m.transport === 'x11-stream' ? 'live virtual computer — the agent is connected to the VM' : m.transport === 'cdp-screencast' || m.transport === 'realtime' ? 'live interactive stream — the agent is connected to the VM' : 'compatibility preview — live relay is not connected';
   if (wrap) wrap.classList.toggle('working', s === 'working' && !liveControl);
+  document.querySelectorAll('.agent-ptr').forEach(placeAgentPointer);
   if (st) st.textContent = liveControl ? 'you drive' : s;
   if (btn) btn.textContent = liveControl ? 'Give back' : 'Take over';
   if (sub && liveControl) sub.textContent = 'you hold the mouse & keyboard — agent waits';
@@ -5514,7 +5540,7 @@ async function liveTakeover(){
     } else await window.LingonAuth.api('/api/live/takeover', { method: 'POST', body: JSON.stringify({ liveId: id, on: want }) });
     liveControl = want;
     pcConnect();
-    liveState(want ? 'user' : 'idle');
+    liveState(want ? 'user' : String(id).startsWith('rt:') ? 'live' : 'idle');
     toast(want ? 'You drive the browser — the agent waits.' : 'Agent drives again.');
   } catch (e) { toast(e.message); }
 }

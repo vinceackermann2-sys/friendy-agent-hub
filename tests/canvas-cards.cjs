@@ -56,6 +56,7 @@ const cardsContext = vm.createContext({
   mailCache: null,
   liveCardFrame: null,
   syncCardLive: () => { cardsContext.synced = (cardsContext.synced || 0) + 1; },
+  agentPointerHTML: (id, compact) => `<span class="agent-ptr${compact ? ' compact' : ''}" data-live="${id}"></span>`,
   setTimeout: (fn) => fn(),
 });
 vm.runInContext(source.slice(cardsStart, cardsEnd), cardsContext);
@@ -72,11 +73,14 @@ const liveBrowser = { id:'browser-2', card:{ type:'browser', liveId:'rt:live-abc
 const liveCard = cardsContext.cardNode(liveChat, liveBrowser);
 assert.match(liveCard, /class="cv-live" data-live="rt:live-abc"/, 'a working task streams live in its chat card');
 assert.match(liveCard, /cv-live-badge/);
+assert.match(liveCard, /class="agent-ptr compact" data-live="rt:live-abc"/, 'the live card shows where the agent works');
 assert.match(liveCard, /Working/);
 assert.equal(cardsContext.synced, 1, 'rendering a live card connects its stream');
 liveChat.managedTasks.t1.status = 'completed';
 const doneCard = cardsContext.cardNode(liveChat, liveBrowser);
 assert.doesNotMatch(doneCard, /cv-live/, 'a finished task keeps its last screenshot');
+assert.doesNotMatch(doneCard, /agent-ptr/);
+assert.doesNotMatch(source, /No runs yet in this chat|class="pctitle"/, 'the live view has no tool-output terminal');
 assert.match(doneCard, /<img src="data:image\/jpeg;base64,AA=="/);
 const unsafeShot = cardsContext.cardNode(chat, { ...browser, card:{...browser.card,screenshot:'javascript:alert(1)'} });
 assert.doesNotMatch(unsafeShot, /javascript:/, 'only https or data images render');

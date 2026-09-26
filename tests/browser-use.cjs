@@ -122,6 +122,8 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
     return;
   }
   const kit = browserKit();
+  const told = [];
+  kit.setAnnouncer((pointer) => told.push({ ...pointer }));
   const browser = await puppeteer.launch({ headless: true, executablePath: chrome });
   try {
     const page = (await browser.pages())[0];
@@ -145,13 +147,20 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
     await kit.act(page, { type: 'select', ref: ref('Size'), value: 'Large', agent: true });
     await kit.act(page, { type: 'click', ref: ref('Continue'), agent: true });
     assert.equal(await page.$eval('#out', (el) => el.textContent), 'Ada l');
-    assert.equal(await page.$eval('#__lingon_pointer', (el) => !!el), true, 'the agent pointer is visible in the live view');
+    // People watching see where the agent points and what it does; nothing is drawn into the page.
+    assert.ok(told.some((p) => p.text === 'Typing “Ada”'), 'the live view says what the agent types');
+    assert.ok(told.some((p) => p.text === 'Clicking “Continue”' && Number.isFinite(p.x) && Number.isFinite(p.y)), 'and where it clicks');
+    assert.ok(told.some((p) => p.text === 'Clicking “Continue”' && p.pressed === true), 'a click shows as a press');
+    assert.equal(await page.$('#__lingon_pointer'), null, 'the page the agent reads stays clean');
+    told.length = 0;
     snap = await kit.snapshot(page, state);
     // Credentials are typed from the vault; their values never return in the page state.
     await kit.act(page, { type: 'type', ref: ref('Password'), text: 'hunter2-secret', clear: true, secret: true, agent: true });
     await kit.act(page, { type: 'type', ref: ref('Card'), text: '4111111111111111', clear: true, secret: true, agent: true });
     await kit.act(page, { type: 'type', ref: ref('Name'), text: 'Ada Lovelace', clear: true, secret: true, agent: true });
     assert.equal(await page.$eval('#pw', (el) => el.value), 'hunter2-secret');
+    assert.ok(told.some((p) => p.text === 'Filling in a saved value'), 'a vault fill is described, not shown');
+    assert.ok(!JSON.stringify(told).includes('hunter2') && !JSON.stringify(told).includes('4111') && !JSON.stringify(told).includes('Lovelace'), 'the live view never shows a vault value');
     const filled = await kit.snapshot(page, state);
     assert.equal(filled.sensitivePresent, true, 'sensitive fields suppress model screenshots');
     assert.ok(filled.elements.some((line) => /input:password "Password" \(filled from the vault\)/.test(line)));
@@ -159,6 +168,7 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
     assert.ok(!JSON.stringify(filled).includes('hunter2') && !JSON.stringify(filled).includes('4111') && !JSON.stringify(filled).includes('Lovelace'));
     await kit.act(page, { type: 'type', ref: ref('Password'), text: 'typed by the user', clear: true });
     assert.equal(await page.$eval('#pw', (el) => el.value), 'typed by the user', 'the user can type in any field after taking over');
+    assert.ok(!JSON.stringify(told).includes('typed by the user'), 'the owner’s own input is not announced');
     await kit.act(page, { type: 'click', ref: ref('Delete'), agent: true });
     snap = await kit.snapshot(page, state);
     assert.equal(snap.dialog, 'confirm: Delete everything?');

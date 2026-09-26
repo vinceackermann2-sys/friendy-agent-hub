@@ -296,21 +296,36 @@ function browserKit() {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await settle(page);
   }
-  // A visible pointer, so people watching the live view can follow the agent.
+  // Where the agent points and what it is doing, so people watching the live view can follow
+  // it. The app draws both over the stream; nothing is drawn into the page the agent reads.
+  let pointer = {};
+  let announce = () => {};
+  const tell = (info) => { pointer = { ...pointer, ...info }; try { announce(pointer); } catch {} };
+  const setAnnouncer = (fn) => { announce = typeof fn === 'function' ? fn : () => {}; };
+  const note = (text) => tell({ text: String(text || '').slice(0, 80), pressed: false });
   async function showPointer(page, x, y, pressed) {
-    await page.evaluate((px, py, down) => {
-      let dot = document.getElementById('__lingon_pointer');
-      if (!dot) {
-        dot = document.createElement('div');
-        dot.id = '__lingon_pointer';
-        dot.setAttribute('aria-hidden', 'true');
-        dot.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:rgba(255,99,71,.35);border:2px solid #ff6347;transition:transform .12s;left:0;top:0';
-        (document.body || document.documentElement).appendChild(dot);
-      }
-      dot.style.left = `${px}px`;
-      dot.style.top = `${py}px`;
-      dot.style.transform = down ? 'scale(.65)' : 'scale(1)';
-    }, x, y, !!pressed).catch(() => {});
+    tell({ x: Math.round(x), y: Math.round(y), pressed: !!pressed });
+  }
+  const quoted = (value) => { const t = String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 40); return t ? ` “${t}”` : ''; };
+  // A short description of an agent action; typed text never shows for a protected field.
+  function describe(ev, at, guarded) {
+    const label = at && !at.guarded ? at.label : '';
+    switch (String(ev.type || '')) {
+      case 'click': case 'click_text': return `Clicking${quoted(label || ev.text)}`;
+      case 'double_click': return `Double-clicking${quoted(label)}`;
+      case 'right_click': return `Right-clicking${quoted(label)}`;
+      case 'hover': return `Pointing at${quoted(label)}`;
+      case 'type': return ev.secret ? 'Filling in a saved value' : guarded || (at && at.guarded) ? 'Typing in a protected field' : `Typing${quoted(ev.text)}`;
+      case 'key': return `Pressing ${String(ev.key || 'a key').slice(0, 30)}`;
+      case 'scroll': return at ? `Scrolling to${quoted(label)}` : Number(ev.dy) < 0 ? 'Scrolling up' : 'Scrolling down';
+      case 'select': return `Choosing${quoted(ev.value ?? ev.text)}`;
+      case 'drag': return 'Dragging';
+      case 'back': return 'Going back';
+      case 'forward': return 'Going forward';
+      case 'reload': return 'Reloading the page';
+      case 'wait': return ev.text ? `Waiting for${quoted(ev.text)}` : 'Waiting for the page';
+      default: return 'Working in the browser';
+    }
   }
   // Numbers every visible interactive element that is not covered by another
   // element, and lists them as "[ref] role "name" @x,y" for the model.
@@ -371,7 +386,8 @@ function browserKit() {
         el.scrollIntoView({ block: 'center', inline: 'center' });
         const r = el.getBoundingClientRect();
         const guarded = el.type === 'password' || new RegExp(sensitivePattern, 'i').test(`${el.getAttribute('autocomplete') || ''} ${el.name || ''} ${el.id || ''}`);
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, guarded, select: el.tagName === 'SELECT' };
+        const label = guarded ? '' : (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || '').trim().slice(0, 60);
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, guarded, label, select: el.tagName === 'SELECT' };
       }, Number(ev.ref), SENSITIVE);
       if (!found) throw new Error(`Element [${ev.ref}] is no longer on the page. Use a ref from the latest page state.`);
       return found;
@@ -386,7 +402,7 @@ function browserKit() {
         if (!el) return null;
         el.scrollIntoView({ block: 'center', inline: 'center' });
         const r = el.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, label: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 60) };
       }, String(ev.text));
       if (!found) throw new Error('No visible link or button has that text.');
       return found;
@@ -413,8 +429,19 @@ function browserKit() {
     const need = async () => {
       const at = await locate(page, ev);
       if (!at) throw new Error('Give a ref, x and y, or text for this action.');
+      if (agent) tell({ text: describe(ev, at), x: Math.round(at.x), y: Math.round(at.y), pressed: false });
       return at;
     };
+    // An action without a place on the page says what it does up front (a quick check does not).
+    const placed = ['click', 'double_click', 'right_click', 'click_text', 'hover', 'select', 'drag'].includes(type)
+      || (['type', 'scroll'].includes(type) && ((ev.ref != null && ev.ref !== '') || Number.isFinite(ev.x)));
+    if (agent && !placed && !(type === 'wait' && !ev.text && (Number(ev.ms) || 1000) < 300)) {
+      const guarded = type === 'type' && !ev.secret ? await page.evaluate((pattern) => {
+        const el = document.activeElement;
+        return !!el && (el.type === 'password' || new RegExp(pattern, 'i').test(`${el.getAttribute('autocomplete') || ''} ${el.name || ''} ${el.id || ''}`));
+      }, SENSITIVE).catch(() => true) : false;
+      note(describe(ev, null, guarded));
+    }
     if (type === 'move') { await page.mouse.move(Number(ev.x) || 0, Number(ev.y) || 0); return; }
     if (['click', 'double_click', 'right_click', 'click_text'].includes(type)) {
       const at = await need();
@@ -483,7 +510,7 @@ function browserKit() {
     if (agent) await settle(page, type === 'wait' ? 500 : 2500);
     else await sleep(35);
   }
-  return { allowedRequest, setupPage, open, snapshot, act, settle };
+  return { allowedRequest, setupPage, open, snapshot, act, settle, setAnnouncer, note };
 }
 
 // Shell lines, run as root before a browser or desktop starts: the given user
@@ -742,9 +769,23 @@ function liveStreamer(kit, profileRuntime, cfg, load) {
     takeover = !!on;
     if (takeover) fs.writeFileSync(takeoverFile, String(Date.now()), { mode: 0o600 }); else fs.rmSync(takeoverFile, { force: true });
   };
+  // The agent's pointer and current action, written by each browser step, go to viewers as
+  // they change; a viewer who joins gets the latest.
+  const agentFile = path.join(dir, 'agent.json');
+  let agentSeen = 0, agentNow = null;
+  setInterval(() => {
+    try {
+      const changed = fs.statSync(agentFile).mtimeMs;
+      if (changed === agentSeen) return;
+      agentSeen = changed;
+      agentNow = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+      lastActivity = Date.now();
+      if (Date.now() - lastViewer < VIEWER_MS) send('agent', agentNow);
+    } catch {}
+  }, 150).unref?.();
   const onBroadcast = (event, p) => {
     lastActivity = Date.now();
-    if (event === 'watch') { lastViewer = Date.now(); startCast(); meta(); }
+    if (event === 'watch') { lastViewer = Date.now(); startCast(); meta(); if (agentNow) send('agent', agentNow); }
     else if (event === 'control') { setTakeover(p.takeover === true); meta(); }
     else if (event === 'input' && takeover && p.ev && typeof p.ev === 'object') {
       const ev = { ...p.ev, agent: false };
@@ -829,6 +870,9 @@ function buildBrowserSessionScript(action, args = {}) {
     // While the owner drives the live view, the agent's browser steps wait. The streamer
     // refreshes the file every 10 s, so a stale file (streamer gone) no longer blocks.
     "const takeoverFile = path.join('/var/lib/lingon-browser/sessions', payload.sessionId, 'takeover');",
+    // What the agent does goes to a file the live streamer shows to people watching.
+    "const agentFile = path.join('/var/lib/lingon-browser/sessions', payload.sessionId, 'agent.json');",
+    "kit.setAnnouncer((info) => { try { fs.writeFileSync(agentFile + '.tmp', JSON.stringify({ ...info, at: Date.now() }), { mode: 0o600 }); fs.renameSync(agentFile + '.tmp', agentFile); } catch {} });",
     "try { if (Date.now() - fs.statSync(takeoverFile).mtimeMs < 45000) { process.stdout.write(JSON.stringify({ ok: false, error: 'The owner has taken over this browser in the live view. Wait until they hand it back, then continue.' })); process.exit(1); } } catch {}",
     "const findBrowser = () => ['/opt/lingon/chrome/chrome-headless-shell', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'].find((p) => fs.existsSync(p));",
     "const executablePath = findBrowser();",
@@ -842,7 +886,7 @@ function buildBrowserSessionScript(action, args = {}) {
     "    const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { url: 'about:blank' };",
     "    const pageState = {};",
     "    await kit.setupPage(page, pageState);",
-    "    if (payload.action === 'navigate') await kit.open(page, payload.url);",
+    "    if (payload.action === 'navigate') { const host = new URL(payload.url).hostname; kit.note('Opening ' + (host.startsWith('www.') ? host.slice(4) : host)); await kit.open(page, payload.url); }",
     "    else {",
     "      if (!reusedPage && state.url && state.url !== 'about:blank' && kit.allowedRequest(state.url)) { await page.goto(state.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}); if (Number.isFinite(state.scrollY)) await page.evaluate((y) => window.scrollTo(0, y), state.scrollY).catch(() => {}); }",
     "      if (payload.action === 'input' && payload.event && payload.event.secretUrl) {",
@@ -856,6 +900,7 @@ function buildBrowserSessionScript(action, args = {}) {
     "      if (payload.action === 'input') await kit.act(page, payload.event || {});",
     "    }",
     "    const snap = await kit.snapshot(page, pageState);",
+    "    kit.note('Looking at the page');",
     "    const screenshot = await page.screenshot({ type: 'jpeg', quality: 60 });",
     "    const upload = await fetch(payload.uploadUrl, { method: 'PUT', headers: { 'content-type': 'image/jpeg', 'x-ms-blob-type': 'BlockBlob' }, body: screenshot });",
     "    if (!upload.ok) throw new Error('Screenshot upload failed: HTTP ' + upload.status + ' ' + (await upload.text()).slice(0, 300));",
