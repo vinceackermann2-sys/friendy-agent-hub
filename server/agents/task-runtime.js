@@ -317,10 +317,12 @@ function createTaskRuntime(d) {
             event(s,{type:'card',id:`approval_${call.id}`,callId:call.id,card:approvalCard(call.name,call.args,detail,tool,call.id)});
           });
         }
+        // The live view can open while the step works, not only once it is done.
+        const liveId=BROWSER.has(call.name) && tool.liveId ? await tool.liveId({userId,sessionId:id}).catch(()=>null) : null;
         row=await update(s=>{
           if(s.version!==version || s.pending[0]?.id!==call.id || !['queued','running'].includes(s.status)) return;
           s.inflight={...call,kind:'tool',version};
-          if(BROWSER.has(call.name)) event(s,{type:'card',id:call.id,card:{type:'browser',surface:'canvas',url:String(call.args.url || ''),note:'Opening browser…',status:'running'}});
+          if(BROWSER.has(call.name)) event(s,{type:'card',id:call.id,card:{type:'browser',surface:'canvas',url:String(call.args.url || ''),note:call.name==='browser_open'?'Opening browser…':'Working in the browser…',status:'running',...(liveId?{liveId,transport:'realtime'}:{})}});
           if(DESKTOP.has(call.name)) event(s,{type:'card',id:call.id,card:{type:'browser',desktop:true,surface:'canvas',url:'Virtual computer',note:'Using the computer…',status:'running'}});
           if(['shell','code_run'].includes(call.name)) event(s,{type:'card',id:call.id,card:{type:'computer',surface:'canvas',managed:true,lines:[],status:'running'}});
         });

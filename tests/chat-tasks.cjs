@@ -367,7 +367,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   // After a browser step the model sees the page as an image; the base64 stays
   // out of the observation text and the task state.
   const seer=setup();seer.d.schemas=[schemaFor('browser_open'),schemaFor('web_search')];seer.d.selectSchemas=()=>[];
-  seer.d.tools.browser_open={run:async a=>({url:a.url,title:'Shop',elements:['[1] button "Buy" @640,450'],screenshot:'data:image/jpeg;base64,SU1BR0U='})};
+  seer.d.tools.browser_open={liveId:async ctx=>`rt:live-${ctx.sessionId}`,run:async a=>({url:a.url,title:'Shop',elements:['[1] button "Buy" @640,450'],screenshot:'data:image/jpeg;base64,SU1BR0U='})};
   seer.d.tools.web_search={run:async()=>[{ok:true,text:'results'}]};
   seer.answers.push({functionCalls:[{name:'browser_open',args:{url:'https://shop.example/'}}]},{functionCalls:[{name:'web_search',args:{query:'reviews'}}]},{text:'Done.'});
   const seerState=await runToEnd(seer,(await seer.create()).id);
@@ -377,6 +377,9 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   assert.match(seerModels[1].prompt,/current screen/);
   assert.equal(seerModels[2].attachments,undefined,'the image is only sent right after a browser step');
   assert.ok(!JSON.stringify(seerState).includes('SU1BR0U='),'screenshots are not stored in task state');
+  // The browser card carries the task's live channel while the step still runs.
+  const liveCard=seerState.events.find(e=>e.card?.type==='browser' && e.card.status==='running');
+  assert.match(String(liveCard?.card.liveId),/^rt:live-[0-9a-f-]{36}$/,'the live view can open while a browser step works');
   assert.match(seerState.observations[0].text,/\[1\] button \\"Buy\\"/);
   // Only the newest screen card keeps its screenshot in the stored task history.
   const cards=setup();cards.d.schemas=[schemaFor('browser_action')];cards.d.selectSchemas=()=>[];

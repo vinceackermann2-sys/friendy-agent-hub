@@ -54,13 +54,30 @@ const cardsContext = vm.createContext({
   appLogoHtml: () => '',
   GMAIL_MARK: '<svg></svg>',
   mailCache: null,
+  liveCardFrame: null,
+  syncCardLive: () => { cardsContext.synced = (cardsContext.synced || 0) + 1; },
+  setTimeout: (fn) => fn(),
 });
 vm.runInContext(source.slice(cardsStart, cardsEnd), cardsContext);
+vm.runInContext(source.match(/const liveTaskIds = \(c\) => .*\n/)[0].replace('const ', 'var '), cardsContext);
+vm.runInContext(source.match(/function cardStreams\(c, cd\)\{[\s\S]*?\n\}/)[0], cardsContext);
 const browserCard = cardsContext.cardNode(chat, { ...browser, card:{...browser.card,screenshot:'data:image/jpeg;base64,AA=='} });
 // Chat cards preview their work; the full live view still opens in Canvas on request.
 assert.match(browserCard, /<img src="data:image\/jpeg;base64,AA=="/, 'browser card previews its screenshot');
 assert.match(browserCard, /data-act="canvas-card" data-chat="chat-1" data-msg="browser-1"/);
 assert.match(browserCard, /Open live view/);
+// While its task works, the chat card plays the task's live browser instead of the last screenshot.
+const liveChat = { id:'chat-1', messages:[], managedTasks:{ t1:{ status:'running' } } };
+const liveBrowser = { id:'browser-2', card:{ type:'browser', liveId:'rt:live-abc', taskId:'t1', url:'https://example.com', status:'done', screenshot:'data:image/jpeg;base64,AA==' } };
+const liveCard = cardsContext.cardNode(liveChat, liveBrowser);
+assert.match(liveCard, /class="cv-live" data-live="rt:live-abc"/, 'a working task streams live in its chat card');
+assert.match(liveCard, /cv-live-badge/);
+assert.match(liveCard, /Working/);
+assert.equal(cardsContext.synced, 1, 'rendering a live card connects its stream');
+liveChat.managedTasks.t1.status = 'completed';
+const doneCard = cardsContext.cardNode(liveChat, liveBrowser);
+assert.doesNotMatch(doneCard, /cv-live/, 'a finished task keeps its last screenshot');
+assert.match(doneCard, /<img src="data:image\/jpeg;base64,AA=="/);
 const unsafeShot = cardsContext.cardNode(chat, { ...browser, card:{...browser.card,screenshot:'javascript:alert(1)'} });
 assert.doesNotMatch(unsafeShot, /javascript:/, 'only https or data images render');
 const computerCard = cardsContext.cardNode(chat, { id:'computer-1', card:{ type:'computer', managed:true, status:'done', lines:[{t:'private output'}] } });

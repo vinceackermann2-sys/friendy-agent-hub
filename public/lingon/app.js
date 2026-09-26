@@ -3559,7 +3559,7 @@ function paintGoals(M){
 function paintMain(){
   const M = $('#main');
   if (state.view !== 'chat') stopVoice();
-  if (state.view === 'chat') return paintChat(M);
+  if (state.view === 'chat') { setTimeout(() => syncCardLive(chat()), 0); return paintChat(M); }
   if (state.view === 'settings') return paintSettings(M);
   if (state.view === 'library') return paintLibrary(M);
   if (state.view === 'apps') return paintApps(M);
@@ -4162,15 +4162,19 @@ function emailCardHTML(c, m){
 
 function browserCardHTML(c, m){
   const cd = m.card, k = c.id, mid = m.id;
-  const running = cd.status === 'running';
+  // While its task works, the card plays the agent's browser live (see syncCardLive).
+  const live = cardStreams(c, cd);
+  const running = cd.status === 'running' || live;
   const word = running ? 'Working' : cd.status === 'failed' ? 'Stopped' : cd.status === 'interrupted' ? 'Interrupted' : 'Completed';
-  const shot = safeImg(cd.screenshot);
+  const shot = (live && liveCardFrame?.id === cd.liveId && liveCardFrame.url) || safeImg(cd.screenshot);
   const host = cd.desktop ? 'Virtual computer' : hostName(cd.url) || cd.url || 'Browser';
   const label = cd.liveId || running ? 'Open live view' : 'Open preview';
+  if (live) setTimeout(() => syncCardLive(c), 0);
   return `<div class="acard cv-card cv-browser ${running ? 'is-running' : ''}">
     ${cvHead(`<div class="tile cv-tile ${cd.status === 'failed' ? '' : 'green'}">${icon(cd.desktop ? 'laptop' : 'globe',20)}</div>`, cd.desktop ? 'Computer' : 'Browser', `${word}${cd.note ? ` · ${esc(cd.note)}` : ''}`, '')}
     <button type="button" class="cv-shot" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="${label}">
-      ${shot ? `<img src="${esc(shot)}" alt="Screenshot of ${esc(host)}" loading="lazy">` : `<span class="cv-shot-empty">${running ? '<span class="tdots"><i></i><i></i><i></i></span>' : icon(cd.desktop ? 'laptop' : 'globe',26)}</span>`}
+      ${shot ? `<img src="${esc(shot)}" alt="${live ? 'Live view' : 'Screenshot'} of ${esc(host)}"${live ? ` class="cv-live" data-live="${esc(cd.liveId)}"` : ' loading="lazy"'}>` : `<span class="cv-shot-empty">${running ? '<span class="tdots"><i></i><i></i><i></i></span>' : icon(cd.desktop ? 'laptop' : 'globe',26)}</span>${live ? `<img alt="Live view of ${esc(host)}" class="cv-live" data-live="${esc(cd.liveId)}" hidden>` : ''}`}
+      ${live ? '<span class="cv-live-badge"><i></i>Live</span>' : ''}
       <span class="cv-shot-url">${icon(cd.desktop ? 'laptop' : 'globe',12)} ${esc(host)}</span>
     </button>
     <div class="stack"><button class="btn ghost" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${label}</button></div>
@@ -4519,6 +4523,12 @@ function makeRT(c){
         rt.managedEvent(event,{id:task.id,version:event.version || task.version});sequence=event.seq;
       }
       snapshot.sequence=sequence;c.managedTasks[task.id]=snapshot;
+      // The task's browser card streams live only while the task works.
+      if(previous?.status!==snapshot.status) {
+        const browser=c.messages.find(x=>x.kind==='card' && x.card?.type==='browser' && x.card.taskId===task.id);
+        if(browser) replaceNode(c,browser);
+        if(active()) syncCardLive(c);
+      }
       let m=c.messages.find(x=>x.managedId===`task_${task.id}`);
       const card={type:'task',taskId:task.id,title:snapshot.title,status:snapshot.status,summary:snapshot.summary};
       if(!m) {m={id:uid(),managedId:`task_${task.id}`,kind:'card',card};c.messages.push(m);append(msgNode(c,m));}
@@ -4604,6 +4614,14 @@ function makeRT(c){
       if (event.type === 'card') {
         let m = c.messages.find(x => x.managedId === event.id);
         const card = { ...event.card, managedCallId:event.callId, taskId:task?.id, taskVersion:task?.version };
+        // A task's browser is one card that follows it step by step (and streams live while it
+        // works), not a new card for every click; it keeps the last page and picture meanwhile.
+        const browserOf = !m && task && card.type === 'browser' && !card.desktop ? c.messages.find(x => x.kind === 'card' && x.card?.type === 'browser' && !x.card.desktop && x.card.taskId === task.id) : null;
+        if (browserOf) {
+          m = browserOf; m.managedId = event.id;
+          if (!card.url) card.url = m.card.url;
+          if (!card.screenshot && card.status === 'running') card.screenshot = m.card.screenshot;
+        }
         if (!m) { m = { id:uid(), managedId:event.id, kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
         else { m.card = card; replaceNode(c,m); }
         if (card.type === 'goal') refreshGoals();
@@ -5242,6 +5260,33 @@ function pcIdFor(c){
    messages drive the blue working glow; input forwards only in takeover. */
 let liveWS = null, liveIdShown = null, liveControl = false;
 let pcWS = null, pcIdShown = null;
+var liveCardFrame = null; // { id, url } of the newest live frame, for chat cards that repaint
+// A browser card streams live while its task works, over the task's Realtime channel.
+function cardStreams(c, cd){
+  return !!(cd && cd.type === 'browser' && !cd.desktop && String(cd.liveId || '').startsWith('rt:') && cd.taskId && liveTaskIds(c).includes(cd.taskId));
+}
+// The chat card and the Canvas live view share one connection; the Canvas view wins when open.
+function syncCardLive(c){
+  if (!c || c !== chat()) return;
+  const want = [...(c.messages || [])].reverse().find(m => m.kind === 'card' && cardStreams(c, m.card))?.card.liveId || null;
+  const selected = (c.messages || []).find(m => m.id === c.canvasSelectedMessageId);
+  const canvasLive = state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && (state._showLiveInCanvas || !!selected?.card?.liveId);
+  if (want && (!liveWS || (liveIdShown !== want && !canvasLive))) liveConnectRealtime(want);
+  else if (!want && liveWS && !canvasLive && String(liveIdShown || '').startsWith('rt:')) liveClose();
+}
+function paintCardFrame(frame){
+  const id = liveIdShown;
+  if (!id) return;
+  const url = typeof frame === 'string' ? frame : URL.createObjectURL(frame instanceof Blob ? frame : new Blob([frame], { type:'image/jpeg' }));
+  const old = liveCardFrame;
+  liveCardFrame = { id, url };
+  document.querySelectorAll('img.cv-live').forEach((img) => {
+    if (img.dataset.live !== id) return;
+    img.src = url; img.hidden = false;
+    img.parentElement?.querySelector('.cv-shot-empty')?.remove();
+  });
+  if (old?.url?.startsWith('blob:') && old.url !== url) setTimeout(() => URL.revokeObjectURL(old.url), 2000);
+}
 function liveClose(){
   try { liveWS && liveWS.close(); } catch {}
   try { pcWS && pcWS.close(); } catch {}
@@ -5279,10 +5324,12 @@ function paintLive(body, c, selectedId){
       </div>
     </div>`;
   liveConnect(id);
-  if (poster) drawLiveFrame(poster);
+  if (liveCardFrame?.id === id) drawLiveFrame(liveCardFrame.url);
+  else if (poster) drawLiveFrame(poster);
 }
 let liveFrameBusy = false, liveFramePending = null;
 function drawLiveFrame(data){
+  paintCardFrame(data);
   liveFramePending = data;
   if (liveFrameBusy) return;
   liveFrameBusy = true;
@@ -5305,7 +5352,7 @@ function drawLiveFrame(data){
       } catch {}
       finish();
     };
-    if (typeof frame === 'string' && frame.startsWith('data:')) {
+    if (typeof frame === 'string') {
       const image = new Image();
       image.onload = () => draw(image);
       image.onerror = finish;
@@ -5362,7 +5409,8 @@ function liveConnectRealtime(id){
       }
       if (m.payload.event === 'state') liveState(liveControl ? 'user' : (data.state === 'user' ? 'user' : 'live'), { ...data, transport:'realtime' });
     };
-    ws.onclose = () => { clearInterval(beat); if (liveWS === adapter && st()) st().textContent = 'session ended'; };
+    // A dropped connection reconnects while a chat card still streams this task.
+    ws.onclose = () => { clearInterval(beat); if (liveWS !== adapter) return; liveWS = null; if (st()) st().textContent = 'session ended'; setTimeout(() => syncCardLive(chat()), 3000); };
     bindLiveInput(adapter);
   }).catch(() => { if (st()) st().textContent = 'live view unavailable'; });
 }
@@ -5747,7 +5795,9 @@ function paintCanvas(){
   const c = chat();
   const top = state.canvasTab || 'canvas';
   const selected = c && (c.messages || []).find(m => m.id === c.canvasSelectedMessageId);
-  if (!(top === 'canvas' && (state._showLiveInCanvas || selected?.card?.liveId)) && (liveWS || pcWS)) liveClose();
+  // A chat card still streaming its task's browser keeps the connection.
+  const cardLive = [...(c?.messages || [])].reverse().find(m => m.kind === 'card' && cardStreams(c, m.card))?.card.liveId;
+  if (!(top === 'canvas' && (state._showLiveInCanvas || selected?.card?.liveId)) && (liveWS || pcWS) && !(cardLive && cardLive === liveIdShown)) liveClose();
   const liveId = liveIdFor(c);
   cv.innerHTML = `
     <div class="canvas-resize" id="canvasResize"></div>

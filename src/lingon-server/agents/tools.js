@@ -63,6 +63,8 @@ async function liveChannel(ctx) {
   ctx.liveTopic = topic;
   return { url, key, topic };
 }
+// The task's live channel, known before a step runs, so the live view can open while it works.
+const liveIdFor = async (ctx) => { const live = await liveChannel({ ...ctx }); return live ? `rt:${live.topic}` : null; };
 const liveRealtimeConfig = () => (liveRealtimeUrl() && liveKey() ? { url: liveRealtimeUrl(), key: liveKey() } : null);
 
 // Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
@@ -420,6 +422,7 @@ const TOOLS = {
   },
   computer_screenshot: {
     name: 'computer_screenshot', type: 'browser', approval: false,
+    liveId: liveIdFor,
     description: 'Open a public page in the user Azure VM browser and take a screenshot.',
     run: async ({ url }, ctx) => {
       const u = String(url || '');
@@ -432,6 +435,7 @@ const TOOLS = {
   },
   browser_open: {
     name: 'browser_open', type: 'browser', approval: false,
+    liveId: liveIdFor,
     description: 'Open any public http or https page in the user Azure VM browser (Chromium). Returns the page text, numbered interactive elements and a screenshot.',
     run: async ({ url }, ctx) => {
       const u = String(url || '');
@@ -446,6 +450,7 @@ const TOOLS = {
   },
   browser_action: {
     name: 'browser_action', type: 'browser', approval: false,
+    liveId: liveIdFor,
     description: 'Use the current browser page like a person: click, double_click, right_click, hover, type, key, scroll, select, drag, back, forward, reload, wait. Target elements by ref from the latest page state, or by x,y from the screenshot.',
     run: async (args, ctx) => {
       const event = browserEvent(args || {});
@@ -457,6 +462,7 @@ const TOOLS = {
   },
   browser_submit: {
     name: 'browser_submit', type: 'browser', approval: true,
+    liveId: liveIdFor,
     description: 'The final click or key press that buys, pays, books, sends, posts, deletes or changes account settings on a website. Same arguments as browser_action plus a summary. REQUIRES owner approval.',
     approvalDetail: purchaseFlow.approvalDetail,
     run: async (args, ctx) => {
@@ -505,6 +511,7 @@ const TOOLS = {
   },
   browser_fill_secret: {
     name: 'browser_fill_secret', type: 'browser', approval: true,
+    liveId: liveIdFor,
     description: 'Type a saved vault secret (password, username, API key, card number, expiry, CVC) into a field of the current browser page. Give the field by ref or x,y and host, the site it is for. REQUIRES owner approval; only types when the page is on that host.',
     approvalDetail: secretApprovalDetail,
     run: async (args, ctx) => fillBrowserSecret(args, ctx),

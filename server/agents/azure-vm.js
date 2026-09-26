@@ -942,7 +942,7 @@ async function pollAsync(cfg, url, timeoutMs = 240000) {
   throw Object.assign(new Error('Azure operation timed out.'), { code: 'AZURE_TIMEOUT' });
 }
 
-async function arm(cfg, method, urlPath, body, apiVersion) {
+async function arm(cfg, method, urlPath, body, apiVersion, { wait = true } = {}) {
   const token = await azureToken(cfg);
   const url = urlPath.startsWith('http')
     ? urlPath
@@ -954,7 +954,7 @@ async function arm(cfg, method, urlPath, body, apiVersion) {
   });
   if (r.status === 204) return { status: 204 };
   const loc = r.headers.get('azure-asyncoperation') || r.headers.get('location');
-  if ((r.status === 201 || r.status === 202) && loc) return pollAsync(cfg, loc);
+  if ((r.status === 201 || r.status === 202) && loc) return wait ? pollAsync(cfg, loc) : { status: r.status };
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const e = new Error(data?.error?.message || `Azure ARM HTTP ${r.status}`);
@@ -1961,15 +1961,23 @@ const UNSTICK_SCRIPT = [
 async function clearStuckRunCommand(cfg, name) {
   const vmPath = `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}`;
   const vm = await arm(cfg, 'GET', vmPath, undefined, COMPUTE_API);
+  // Azure queues requests on a busy VM; while an earlier one is still pending, another would
+  // only queue behind it.
+  const current = await arm(cfg, 'GET', `${vmPath}/runCommands/lingon-unstick`, undefined, COMPUTE_API).catch(() => null);
+  if (current && !/succeeded|failed|canceled/i.test(current.properties?.provisioningState || '')) return false;
+  // The marker makes each request a new run, and tells this run's output from the last one's.
+  const run = `RUN_${Date.now()}`;
   await arm(cfg, 'PUT', `${vmPath}/runCommands/lingon-unstick`, {
     location: vm.location,
-    // The time makes each request a new run rather than a repeat of the last one.
-    properties: { source: { script: `${UNSTICK_SCRIPT}\n# ${Date.now()}` }, asyncExecution: false, timeoutInSeconds: 60 },
-  }, COMPUTE_API);
+    properties: { source: { script: `echo ${run}\n${UNSTICK_SCRIPT}` }, asyncExecution: false, timeoutInSeconds: 60 },
+  // Azure completes this request only once the stuck command has ended; the script's own
+  // status (below) reports sooner.
+  }, COMPUTE_API, { wait: false });
   for (let i = 0; i < 30; i++) {
     const view = await arm(cfg, 'GET', `${vmPath}/runCommands/lingon-unstick?$expand=instanceView`, undefined, COMPUTE_API);
-    const iv = view.properties?.instanceView;
-    if (/succeeded|failed|timed|cancel/i.test(iv?.executionState || '')) return /\bCLEARED\b/.test(String(iv.output || ''));
+    const iv = view.properties?.instanceView || {};
+    const output = String(iv.output || '');
+    if (output.includes(run) && /succeeded|failed|timed|cancel/i.test(iv.executionState || '')) return /\bCLEARED\b/.test(output);
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   return false;
