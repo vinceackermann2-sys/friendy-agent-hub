@@ -17,7 +17,11 @@ store.rememberBrowserHost = async (_, host) => { remembered = host; };
   current.knownHosts=['example.com'];
   assert.equal((await permissionDecision('u','browser_open',{url:'https://example.com'},{approval:false})).required,false);
   assert.equal((await permissionDecision('u','browser_action',{type:'scroll'},{approval:false})).required,false);
-  assert.equal((await permissionDecision('u','browser_action',{type:'type',text:'hello'},{approval:false})).required,true);
+  // Using a page is browsing; the final step and the desktop computer still ask.
+  assert.equal((await permissionDecision('u','browser_action',{type:'type',text:'hello'},{approval:false})).required,false);
+  assert.equal((await permissionDecision('u','browser_action',{type:'click',x:10,y:10},{approval:false})).required,false);
+  assert.equal((await permissionDecision('u','browser_submit',{type:'click',summary:'Place order'},{approval:true})).required,true);
+  assert.equal((await permissionDecision('u','computer_action',{action:'type',text:'hello'},{approval:false})).required,true);
   // Searches and reading public pages by URL only read: the default mode runs them without asking.
   assert.equal((await permissionDecision('u','web_search',{query:'weather today'},{approval:false})).required,false);
   assert.equal((await permissionDecision('u','web_search',{urls:['https://unknown.example/page']},{approval:false})).required,false);

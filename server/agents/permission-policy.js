@@ -31,7 +31,11 @@ async function permissionDecision(userId, name, args = {}, tool = {}) {
     const invalid=(Array.isArray(args.urls)?args.urls:[]).filter(url=>!hostOf(url));
     return {required:invalid.length>0,detail:`Read: ${invalid.join(', ')}`};
   }
-  if(name==='browser_action' || name==='computer_action'){
+  // Using a public page (click, type, scroll, keys) is browsing too; the final step that
+  // buys, pays, books, sends, posts or deletes is browser_submit, which always asks, and
+  // signing in with a saved login asks. The desktop computer still asks per action.
+  if(name==='browser_action') return {required:false};
+  if(name==='computer_action'){
     const action=String(args.type || args.action || '').toLowerCase();
     const interactive=!['screenshot','scroll','hover','move','wait','back','reload'].includes(action);
     return {required:interactive,detail:`Interact with a website: ${action} ${JSON.stringify(args).slice(0,1000)}`};
