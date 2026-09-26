@@ -497,6 +497,10 @@ function networkGuard(user) {
   ];
 }
 const BROWSER_NETWORK_GUARD = networkGuard('lingon-browser');
+// Azure's command runner ends every process a command started shortly after the command
+// finishes. The browser, the live streamer and the relays keep running between steps, so
+// they start in their own systemd scope, outside the runner's cleanup.
+const OWN_SCOPE = 'SCOPE=""; command -v systemd-run >/dev/null 2>&1 && SCOPE="systemd-run --scope --quiet --collect --"';
 // Snap Chromium refuses to start from a service's cgroup, which is where Azure Run Command
 // runs ("... is not a snap cgroup"), so browser steps use Chrome's standalone headless
 // build instead: installed once per VM into /opt/lingon/chrome with the libraries it needs.
@@ -535,6 +539,7 @@ function toolBrowserSessionId(userId, sessionId) {
 // Serialized to the VM with toString(): Node's require arrives as `load`, because a bundler
 // rewrites calls to the global require inside this module (to __require, absent on the VM).
 function browserProfileRuntime(root, load) {
+  const proc = load('process');
   const fs = load('fs');
   const path = load('path');
   const profile = path.join(root, 'profile');
@@ -569,7 +574,7 @@ function browserProfileRuntime(root, load) {
     const client = await cookieClient(browser);
     try {
       const { cookies } = await client.send('Storage.getCookies');
-      const temporary = `${cookieFile}.${process.pid}.tmp`;
+      const temporary = `${cookieFile}.${proc.pid}.tmp`;
       fs.writeFileSync(temporary, JSON.stringify(cookies || []), { mode: 0o600 });
       fs.renameSync(temporary, cookieFile);
     } finally { await client.detach().catch(() => {}); }
@@ -630,9 +635,9 @@ function browserProfileRuntime(root, load) {
       if (browser) return browser;
       // A browser that no longer answers still holds the profile, so a new one could not start.
       const stale = Number(fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8') : 0);
-      const ours = (pid) => { try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(profile); } catch { return process.platform !== 'linux'; } };
+      const ours = (pid) => { try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(profile); } catch { return proc.platform !== 'linux'; } };
       if (stale > 0 && ours(stale)) {
-        try { process.kill(-stale, 'SIGKILL'); } catch { try { process.kill(stale, 'SIGKILL'); } catch {} }
+        try { proc.kill(-stale, 'SIGKILL'); } catch { try { proc.kill(stale, 'SIGKILL'); } catch {} }
         await sleep(1000);
       }
       const port = await freePort();
@@ -655,7 +660,7 @@ function browserProfileRuntime(root, load) {
           try { if ((await fetch(`${url}/json/version`, { signal: AbortSignal.timeout(1000) })).ok) { fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 }); return true; } } catch {}
           await sleep(100);
         }
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+        try { proc.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
         return false;
       };
       // Where the kernel has no usable sandbox for this user, it runs without one, still as the locked-down user.
@@ -705,6 +710,7 @@ function liveRealtimeArgs(live) {
   return { url, key, topic };
 }
 function liveStreamer(kit, profileRuntime, cfg, load) {
+  const proc = load('process');
   const fs = load('fs');
   const path = load('path');
   const vmModules = '/opt/lingon/node_modules/';
@@ -762,7 +768,7 @@ function liveStreamer(kit, profileRuntime, cfg, load) {
     // An owner who left without handing back still hands back: the agent must not wait forever.
     if (takeover && Date.now() - lastViewer > VIEWER_MS) setTakeover(false);
     else if (takeover) fs.writeFileSync(takeoverFile, String(Date.now()), { mode: 0o600 });
-    if (Date.now() - Math.max(lastViewer, lastActivity) > IDLE_EXIT_MS) { fs.rmSync(takeoverFile, { force: true }); process.exit(0); }
+    if (Date.now() - Math.max(lastViewer, lastActivity) > IDLE_EXIT_MS) { fs.rmSync(takeoverFile, { force: true }); proc.exit(0); }
   }, 10000).unref?.();
   (async () => {
     const browser = await profileRuntime.connectExisting(puppeteer);
@@ -781,10 +787,10 @@ function liveStreamer(kit, profileRuntime, cfg, load) {
       if (wait <= 0) flush(); else if (!flushTimer) flushTimer = setTimeout(flush, wait);
     });
     page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) meta(); });
-    page.on('close', () => process.exit(0));
-    browser.on('disconnected', () => process.exit(0));
+    page.on('close', () => proc.exit(0));
+    browser.on('disconnected', () => proc.exit(0));
     connect();
-  })().catch((error) => { process.stderr.write(String(error.message || error)); process.exit(1); });
+  })().catch((error) => { proc.stderr.write(String(error.message || error)); proc.exit(1); });
 }
 
 function buildBrowserSessionScript(action, args = {}) {
@@ -873,7 +879,8 @@ function buildBrowserSessionScript(action, args = {}) {
     'set +e',
     // Bounded, so a hung page can never hold the VM's one command slot.
     'OUT=$(mktemp)',
-    `runuser -u lingon-browser -- timeout -k 5 170 env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /tmp/lingon-browser-session.js > "$OUT"`,
+    OWN_SCOPE,
+    `$SCOPE runuser -u lingon-browser -- timeout -k 5 170 env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /tmp/lingon-browser-session.js > "$OUT"`,
     'EC=$?',
     `if [ -s "$OUT" ]; then cat "$OUT"; elif [ "$EC" = 124 ] || [ "$EC" = 137 ]; then echo '{"ok":false,"error":"The browser step took too long and was stopped. Try again, or open a simpler page."}'; fi`,
     'rm -f "$OUT" /tmp/lingon-browser-session.js',
@@ -896,7 +903,8 @@ function liveStreamerLaunch(sessionId, live) {
     '  if [ ! -d /opt/lingon/node_modules/ws ]; then npm install --prefix /opt/lingon ws@8.21.3 >/dev/null 2>&1; fi',
     `  echo '${codeB64}' | base64 -d > '${root}/live.js'`,
     `  chown lingon-browser:lingon-browser '${root}/live.js' && chmod 600 '${root}/live.js'`,
-    `  runuser -u lingon-browser -- env LINGON_LIVE_PAYLOAD='${payloadB64}' nohup node '${root}/live.js' >> '${root}/live.log' 2>&1 &`,
+    `  ${OWN_SCOPE}`,
+    `  $SCOPE runuser -u lingon-browser -- env LINGON_LIVE_PAYLOAD='${payloadB64}' nohup node '${root}/live.js' >> '${root}/live.log' 2>&1 < /dev/null &`,
     `  echo $! > '${root}/live.pid'`,
     `  chown lingon-browser:lingon-browser '${root}/live.pid' '${root}/live.log' 2>/dev/null || true`,
     'fi',
@@ -1067,7 +1075,8 @@ function buildBrowserRelayScript(args = {}) {
     `echo '${codeB64}' | base64 -d > '${root}/relay.js'`,
     `chown lingon-browser:lingon-browser '${root}/relay.js' && chmod 600 '${root}/relay.js'`,
     `if [ -f '${root}/relay.pid' ] && kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null; then echo READY; exit 0; fi`,
-    `runuser -u lingon-browser -- env LINGON_BROWSER_RELAY_PAYLOAD='${payloadB64}' nohup node '${root}/relay.js' >> '${root}/relay.log' 2>&1 & echo $! > '${root}/relay.pid'`,
+    OWN_SCOPE,
+    `$SCOPE runuser -u lingon-browser -- env LINGON_BROWSER_RELAY_PAYLOAD='${payloadB64}' nohup node '${root}/relay.js' >> '${root}/relay.log' 2>&1 < /dev/null & echo $! > '${root}/relay.pid'`,
     `chown lingon-browser:lingon-browser '${root}/relay.pid' '${root}/relay.log' 2>/dev/null || true`,
     'sleep 1',
     `kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null`,
@@ -1299,7 +1308,8 @@ function buildDesktopRelayScript(args = {}) {
     `echo '${codeB64}' | base64 -d > '${root}/relay.js'`,
     `chown lingon-desktop:lingon-desktop '${root}/relay.js' && chmod 600 '${root}/relay.js'`,
     `if [ -f '${root}/relay.pid' ] && kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null; then echo READY; exit 0; fi`,
-    `runuser -u lingon-desktop -- env LINGON_DESKTOP_PAYLOAD='${payloadB64}' nohup node '${root}/relay.js' >> '${root}/relay.log' 2>&1 & echo $! > '${root}/relay.pid'`,
+    OWN_SCOPE,
+    `$SCOPE runuser -u lingon-desktop -- env LINGON_DESKTOP_PAYLOAD='${payloadB64}' nohup node '${root}/relay.js' >> '${root}/relay.log' 2>&1 < /dev/null & echo $! > '${root}/relay.pid'`,
     `chown lingon-desktop:lingon-desktop '${root}/relay.pid' '${root}/relay.log' 2>/dev/null || true`,
     'sleep 2',
     `kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null || { tail -c 600 '${root}/relay.log' >&2; exit 1; }`,
@@ -1886,8 +1896,10 @@ async function releaseLease(userId, { leaseId, skipSnapshot = false } = {}) {
         await supabaseRpc('finish_agent_vm_stop', { p_user_id: key, p_claim_token: claim, p_success: success }).catch(() => {});
       }
     }
+    // No backup here: files stay on the VM's disk while it idles, and the backup runs before it
+    // is deallocated (above, and in sweepLeases). A backup after every step also stopped the
+    // browser and its live view between steps.
     const active = await leaseSnapshot(key);
-    if (!active.length && !row?.should_stop && !skipSnapshot && !preSnapshotted) await snapshotDurableState(key);
     return { vmName: vmNameForUser(key), power: active.length ? 'running' : (row?.idle_until ? 'idle' : 'deallocated'), idleUntil: row?.idle_until || null, leases: active };
   }
   const map = leases.get(key);

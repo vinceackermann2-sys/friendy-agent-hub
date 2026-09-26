@@ -22,6 +22,9 @@
     const key=`${userId}:${taskId}`;
     if(workers.has(key)) return;
     workers.set(key,true);
+    // An advance returns only once its step is done; polling the task list meanwhile shows
+    // a long step's cards (such as the live browser) while it works.
+    void recoverTasks(rt,true);
     let failures=0;
     try {
       while(owner()===userId) {
