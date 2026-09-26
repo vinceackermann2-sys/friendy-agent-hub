@@ -1907,18 +1907,39 @@ function startIdleWatcher() {
   if (idleTimer.unref) idleTimer.unref();
 }
 
+// True when the VM's Run Command extension has been busy for over ten minutes: longer than
+// any command of ours takes, so it is stuck rather than working.
+async function stuckRunCommand(cfg, name) {
+  const view = await arm(cfg, 'GET', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/instanceView`, undefined, COMPUTE_API);
+  const extension = (view.extensions || []).find((item) => /runcommand/i.test(`${item.name || ''} ${item.type || ''}`));
+  const status = (extension?.statuses || []).find((item) => /transitioning|in progress/i.test(`${item.code || ''} ${item.displayStatus || ''} ${item.message || ''}`));
+  const since = Date.parse(status?.time || '');
+  return !!status && Number.isFinite(since) && Date.now() - since > 10 * 60 * 1000;
+}
+
 async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
   const cfg = azureConfig();
   const name = vmNameForUser(userId);
   const path_ = `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/runCommand`;
   // Azure runs one command per VM at a time. Another one (a workspace restore right after
   // the VM starts, a backup) makes a new command fail at once; it waits its turn instead.
+  // A command stuck for longer than any of ours runs (Azure only ends it after 90 minutes)
+  // would block every tool, so the VM restarts once to clear it; files stay on disk.
+  const busy = (error) => /run command extension execution is in progress|another operation is in progress|conflict/i.test(String(error && error.message));
+  let restarted = false;
   for (let attempt = 0; ; attempt++) {
     try {
       const data = await arm(cfg, 'POST', path_, { commandId: 'RunShellScript', script: [script] }, COMPUTE_API);
       return parseRunOutput(data, { maxStdout });
     } catch (error) {
-      if (attempt >= 36 || !/run command extension execution is in progress|another operation is in progress|conflict/i.test(String(error && error.message))) throw error;
+      if (!busy(error)) throw error;
+      if (attempt >= 36) {
+        if (restarted || !(await stuckRunCommand(cfg, name).catch(() => false))) throw error;
+        restarted = true;
+        await arm(cfg, 'POST', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/restart`, undefined, COMPUTE_API);
+        attempt = 30; // a few more tries once the VM is back
+        continue;
+      }
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
