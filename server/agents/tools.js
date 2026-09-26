@@ -264,15 +264,20 @@ async function scrapePage(url, signal, timeoutMs = 20000) {
   return { url: data?.metadata?.sourceURL || url, title: String(title || ''), text: String(data?.markdown || '') };
 }
 // Reads a public page as text: directly first, then through Firecrawl if needed.
-async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, fallback = true } = {}) {
+// A page the agent asked to read counts as thin (likely built by JavaScript) under this
+// many characters; search-result reads only fall back when a page has no text, to save credits.
+const THIN_PAGE = 1500;
+async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, fallback = true, thin = 200 } = {}) {
   let page = null, failure = null;
   try { page = await readPage(url, { signal, timeoutMs, maxChars }); } catch (error) { failure = error; }
   // Private addresses are refused outright, never sent to Firecrawl.
   if (failure?.code === 'HOST_BLOCKED') throw failure;
-  if (fallback && (!page || page.text.trim().length < 200) && firecrawlKey()) {
+  if (fallback && (!page || page.text.trim().length < thin) && firecrawlKey()) {
+    // Pages built by JavaScript (pricing tables, listings) return little text directly;
+    // the rendered version is kept when it has more.
     try {
       const scraped = await scrapePage(url, signal);
-      if (scraped.text.trim()) return { ...scraped, text: scraped.text.slice(0, maxChars) };
+      if (scraped.text.trim().length > (page?.text.trim().length || 0)) return { ...scraped, text: scraped.text.slice(0, maxChars) };
     } catch (error) { failure = failure || error; }
   }
   if (page) return page;
@@ -375,7 +380,7 @@ const TOOLS = {
       return Promise.all(urls.slice(0, 4).map(async (u) => {
         const t0 = Date.now();
         try {
-          const page = await readWebPage(u, { signal: ctx.signal, maxChars: from + size + 1 });
+          const page = await readWebPage(u, { signal: ctx.signal, maxChars: from + size + 1, thin: THIN_PAGE });
           ctx.trace(entry('globe', `web_search: ${new URL(page.url).hostname} · ${Date.now() - t0}ms`));
           return pageSlice(page, from, size);
         } catch (e) {

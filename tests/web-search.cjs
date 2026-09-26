@@ -110,7 +110,9 @@ const ctx = { trace: () => {} };
   assert.equal(pageHit.title, 'Öppettider & info');
   assert.equal(privateHit.ok, false);
   assert.match(privateHit.error, /private address/);
-  assert.deepEqual(scrapes, []);
+  // A short page the agent asked to read may be rendered (it may be built by JavaScript);
+  // a private address never reaches Firecrawl.
+  assert.deepEqual(scrapes, ['https://bibliotek.example.se/']);
 
   // Without a Firecrawl key, DuckDuckGo instant answers are used.
   delete process.env.FIRECRAWL_API_KEY;

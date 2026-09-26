@@ -8,6 +8,12 @@ const { browserProfileRuntime, buildBrowserSessionScript, buildBrowserRelayScrip
   const script = buildBrowserSessionScript('inspect', { sessionId:'live_abc123', uploadUrl:'https://abc.blob.core.windows.net/shots/a.jpg?sig=test' });
   const relay = buildBrowserRelayScript({ sessionId:'live_abc123', relayUrl:'wss://app.example/ws/live-vm/live_abc123', token:'a'.repeat(40) });
   const decoded = (text) => Buffer.from(text.match(/echo '([^']+)' \| base64 -d/)[1], 'base64').toString('utf8');
+  // Functions sent to the VM as text must not call the global require: the production
+  // bundler rewrites those calls to __require, which does not exist on the VM.
+  const azureVm = require('../server/agents/azure-vm');
+  for (const name of ['browserKit', 'browserProfileRuntime', 'liveStreamer', 'desktopKit']) {
+    if (azureVm[name]) assert.doesNotMatch(azureVm[name].toString(), /(^|[^.\w])require\(/, `${name} is serialized to the VM and must use the require it is given`);
+  }
   assert.match(decoded(script), /profileRuntime\.connectOrLaunch/);
   assert.match(decoded(relay), /profileRuntime\.session/);
   assert.match(decoded(relay), /await page\.close\(\)/);
@@ -21,7 +27,7 @@ const { browserProfileRuntime, buildBrowserSessionScript, buildBrowserRelayScrip
   const tempRoot = path.resolve(__dirname, '..', '.tmp');
   fs.mkdirSync(tempRoot, { recursive: true });
   const root = fs.mkdtempSync(path.join(tempRoot, 'profile-test-'));
-  const runtime = browserProfileRuntime(root);
+  const runtime = browserProfileRuntime(root, require);
   const server = http.createServer((request, response) => {
     if (request.url === '/login') response.setHeader('set-cookie', 'lingon_login=kept; HttpOnly; SameSite=Lax; Path=/');
     response.writeHead(200, { 'content-type': 'text/html' });

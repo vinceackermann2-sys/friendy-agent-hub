@@ -515,16 +515,18 @@ function toolBrowserSessionId(userId, sessionId) {
 // profile; passwords remain in the encrypted server vault and its password
 // manager stays disabled by policy. This function is serialized into both VM
 // browser runners, so it must not depend on module-scope imports.
-function browserProfileRuntime(root) {
-  const fs = require('fs');
-  const path = require('path');
+// Serialized to the VM with toString(): Node's require arrives as `load`, because a bundler
+// rewrites calls to the global require inside this module (to __require, absent on the VM).
+function browserProfileRuntime(root, load) {
+  const fs = load('fs');
+  const path = load('path');
   const profile = path.join(root, 'profile');
   const portFile = path.join(profile, 'debug-port');
   const cookieFile = path.join(profile, 'lingon-session-cookies.json');
   const launchLock = path.join(root, 'profile-launch.lock');
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const freePort = () => new Promise((resolve, reject) => {
-    const server = require('net').createServer();
+    const server = load('net').createServer();
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address();
@@ -652,11 +654,11 @@ function liveRealtimeArgs(live) {
   }
   return { url, key, topic };
 }
-function liveStreamer(kit, profileRuntime, cfg) {
-  const fs = require('fs');
-  const path = require('path');
+function liveStreamer(kit, profileRuntime, cfg, load) {
+  const fs = load('fs');
+  const path = load('path');
   const vmModules = '/opt/lingon/node_modules/';
-  const loadVmModule = (name) => module.require(vmModules + name);
+  const loadVmModule = (name) => load(vmModules + name);
   const WebSocket = loadVmModule('ws');
   const puppeteer = loadVmModule('puppeteer-core');
   const dir = path.join('/var/lib/lingon-browser/sessions', cfg.sessionId);
@@ -766,7 +768,7 @@ function buildBrowserSessionScript(action, args = {}) {
     "const fs = require('fs');",
     "const path = require('path');",
     `const kit = (${browserKit.toString()})();`,
-    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions');`,
+    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions', require);`,
     "const payload = JSON.parse(Buffer.from(process.env.LINGON_BROWSER_PAYLOAD, 'base64').toString('utf8'));",
     // While the owner drives the live view, the agent's browser steps wait. The streamer
     // refreshes the file every 10 s, so a stale file (streamer gone) no longer blocks.
@@ -828,8 +830,8 @@ function liveStreamerLaunch(sessionId, live) {
   const root = `/var/lib/lingon-browser/sessions/${sessionId}`;
   const source = [
     `const kit = (${browserKit.toString()})();`,
-    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions');`,
-    `(${liveStreamer.toString()})(kit, profileRuntime, JSON.parse(Buffer.from(process.env.LINGON_LIVE_PAYLOAD, 'base64').toString('utf8')));`,
+    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions', require);`,
+    `(${liveStreamer.toString()})(kit, profileRuntime, JSON.parse(Buffer.from(process.env.LINGON_LIVE_PAYLOAD, 'base64').toString('utf8')), require);`,
   ].join('\n');
   const codeB64 = Buffer.from(source, 'utf8').toString('base64');
   const payloadB64 = Buffer.from(JSON.stringify({ sessionId, ...live }), 'utf8').toString('base64');
@@ -959,7 +961,7 @@ function buildBrowserRelayScript(args = {}) {
     "const path = require('path');",
     "const WebSocket = require('/opt/lingon/node_modules/ws');",
     `const kit = (${browserKit.toString()})();`,
-    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions');`,
+    `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions', require);`,
     "const payload = JSON.parse(Buffer.from(process.env.LINGON_BROWSER_RELAY_PAYLOAD, 'base64').toString('utf8'));",
     "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
     "const findBrowser = () => ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p));",

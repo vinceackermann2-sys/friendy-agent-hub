@@ -373,6 +373,7 @@ function createCoordinator(d) {
         if(!cursors || Array.isArray(cursors) || typeof cursors!=='object' || Object.values(cursors).some(n=>!Number.isSafeInteger(n) || n<0)) throw Object.assign(new Error('Invalid task cursor.'),{status:400});
         return res.json({tasks:await d.tasks.list(userId,chatId,cursors)});
       }
+      if(path==='/api/agent/tasks/trace' && req.method==='GET') return res.json({task:await d.tasks.trace(userId,params.get('taskId'),chatId)});
       if(path==='/api/agent/tasks/advance' && req.method==='POST') {
         const existing=await d.tasks.owned(userId,body.taskId,chatId);
         const workerOnly=(process.env.CHAT_TASK_WORKER_ONLY || process.env.LINGON_CHAT_TASK_WORKER_ONLY)==='true';
@@ -479,7 +480,7 @@ const tasks=createTaskRuntime({records,model:callFoundryWithTools,clock:runtimeC
     const memoryHandled=(row.state.observations || []).some(o=>o.ok&&['memory_write','memory_update','memory_delete'].includes(o.name));
     const upkeep=!!row.state.context?.upkeep;
     const saved=memoryHandled||upkeep?[]:await finishMemory(userId,row.state.originalPrompt,row.state.result,await store.searchMemories(userId,row.state.originalPrompt,20),()=>{});
-    if(!upkeep)await store.saveTurn(userId,row.chat_id,'agent',row.state.result,{source:row.state.context?.automation?'automation':undefined,metadata:{taskId:row.id}});
+    if(!upkeep && !row.state.parentTaskId)await store.saveTurn(userId,row.chat_id,'agent',row.state.result,{source:row.state.context?.automation?'automation':undefined,metadata:{taskId:row.id}});
     return saved;
   }}});
 const coordinator=createCoordinator({tasks,model:callFoundryWithTools,schemas:TOOL_SCHEMAS,tools:TOOLS,azure,store,buildSystem,memoryContext,permission:permissionDecision,
