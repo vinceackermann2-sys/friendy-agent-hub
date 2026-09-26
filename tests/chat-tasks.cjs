@@ -338,6 +338,19 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   const longState=await runToEnd(long,(await long.create()).id);
   assert.equal(longState.status,'completed');
   assert.equal(longState.result,'Finished after 12 searches.');
+  // Past the research budget the worker writes its answer: only the card tool is left, and it
+  // sees every research result instead of paging back through shortened ones.
+  const research=setup();
+  research.d.schemas=['web_search','present','browser_open'].map(schemaFor);research.d.selectSchemas=()=>[];
+  research.d.tools.web_search={run:async a=>[{ok:true,text:`result for ${a.query} `+'x'.repeat(4000)}]};
+  for(let i=0;i<14;i++) research.answers.push({functionCalls:[{name:'web_search',args:{query:`q${i}`}}]});
+  research.answers.push({text:'Answer from the research.'});
+  const researchState=await runToEnd(research,(await research.create()).id);
+  assert.equal(researchState.status,'completed');
+  const finalCall=research.calls.filter(c=>c.model).at(-1).model;
+  assert.deepEqual(finalCall.tools.map(t=>t.name),['present'],'only the card tool is left');
+  assert.equal(finalCall.history.filter(h=>/tool web_search/.test(h.text)).length,14,'every research result is shown');
+  assert.match(finalCall.prompt,/researched enough/);
   const workerTools=long.calls.find(c=>c.model).model.tools.map(t=>t.name);
   assert.ok(workerTools.includes('web_search'),'read-only search remains available');
   assert.ok(workerTools.includes('composio_apps'),'workers can discover any connected app');
