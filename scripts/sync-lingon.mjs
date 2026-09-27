@@ -136,7 +136,7 @@ syncStripeProvider();
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs']) {
+for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs', 'product-search']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   if (name === 'automations') src = "import { tasks } from './conversation.js';\n" + src.replace(/^[ \t]*const \{ tasks \} = require\('\.\/conversation'\);\r?\n/gm, '');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>

@@ -40,6 +40,9 @@ const daysUntil = (month, day) => {
   return Math.round((target - today) / 864e5);
 };
 const year = () => fmt(now(), { year: 'numeric' });
+// The real product search: the Shopify catalog (.env credentials) and the web (Firecrawl, or
+// DuckDuckGo without a key, which may rate-limit and return no web results).
+const realProductSearch = (args) => TOOLS.product_search.run(args, { userId: null, trace: () => {} });
 
 // expect: 'answer' | 'task' | 'any'. check(result) returns an error string or ''.
 const CASES = [
@@ -118,6 +121,17 @@ const CASES = [
   { id: 'card.connect', prompt: 'Connect my Google Calendar.', expect: 'answer',
     tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE' }]), connect_app: () => ({ toolkit: 'googlecalendar', connected: false }) },
     check: r => r.cards.includes('connect') ? '' : `no connect card: ${r.text.slice(0, 160)}` },
+  // Shopping: products show as cards with photos, prices and store links, found in chat
+  // (no task, no VM), from web stores and Shopify stores.
+  { id: 'shop.find', prompt: 'Find me trail running shoes under 1500 kr', expect: 'answer', tools: { product_search: realProductSearch },
+    check: r => { const over = r.prices.filter(p => /^SEK/.test(p) && Number(p.replace(/[^\d.]/g, '')) > 1500);
+      // Asked in English with a Swedish budget and time zone: the reply stays in English.
+      const swedish = /\b(jag|skulle|och|för|den)\b/i.test(r.text);
+      return r.cards.includes('present') && r.linked && !over.length && !swedish ? '' : `no linked product cards, over budget (${over.join(', ')}) or not English: ${r.fns.join(',')} ${r.text.slice(0, 160)}`; } },
+  { id: 'shop.options', prompt: 'I want to buy a new yoga mat, show me a few options', expect: 'answer', tools: { product_search: realProductSearch },
+    check: r => r.cards.includes('present') && r.linked ? '' : `no linked product cards: ${r.fns.join(',')} ${r.text.slice(0, 160)}` },
+  { id: 'shop.swedish', prompt: 'Hitta en snygg ryggsäck för pendling', expect: 'answer', tools: { product_search: realProductSearch },
+    check: r => r.cards.includes('present') && r.linked && /\b(och|en|för|den|jag)\b/i.test(r.text) ? '' : `no linked cards or not Swedish: ${r.fns.join(',')} ${r.text.slice(0, 160)}` },
   { id: 'card.none', prompt: 'Why is the sky blue? One short paragraph.', expect: 'answer',
     check: r => !r.cards.length ? '' : `needless card: ${r.cards.join(',')}` },
   // Connectors: a connected app goes straight to work; a missing one gets a connect card.
@@ -127,6 +141,11 @@ const CASES = [
   { id: 'app.slack.missing', prompt: 'Post "Standup moved to 10" in our Slack #general channel', expect: 'any',
     tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE' }]), connect_app: () => ({ toolkit: 'slack', connected: false }) },
     check: r => r.cards.includes('connect') || r.route === 'task' ? '' : `neither connect card nor task: ${r.text.slice(0, 200)}` },
+  // The agent knows the owner's name from their profile and uses it where it belongs.
+  { id: 'owner.name', prompt: "What's my name?", expect: 'answer', owner: 'Marie-Louise',
+    check: r => /marie-louise/i.test(r.text) ? '' : `did not know the name: ${r.text}` },
+  { id: 'owner.signed', prompt: 'Write a two-line thank-you note to my neighbour for watering my plants, signed by me.', expect: 'answer', owner: 'Marie-Louise',
+    check: r => /marie-louise/i.test(r.text) ? '' : `not signed with the name: ${r.text}` },
   // The owner writes in English from a Swedish time zone: the reply stays in English.
   { id: 'chat.language', prompt: 'Any tips for a rainy Sunday?', expect: 'answer',
     check: r => /\b(the|and|you)\b/i.test(r.text) && !/\b(och|du|att)\b/i.test(r.text) ? '' : `wrong language: ${r.text}` },
@@ -158,7 +177,7 @@ async function runCase(c, variant) {
     calls.input += Number(r.usage?.input_tokens) || 0;
     calls.cached += Number(r.usage?.input_tokens_details?.cached_tokens) || 0;
     calls.output += Number(r.usage?.output_tokens) || 0;
-    for (const f of r.functionCalls || []) (calls.fns ||= []).push(f.name);
+    for (const f of r.functionCalls || []) { (calls.fns ||= []).push(f.name); (calls.args ||= []).push({ name: f.name, args: f.args }); }
     return r;
   };
   const coordinator = createCoordinator({ tasks, model, schemas: harness.TOOL_SCHEMAS, tools, azure: { getSandbox: async () => ({ mode: 'azure', vmName: 'vm-eval', location: 'swedencentral', vmSize: 'B2s' }) },
@@ -171,7 +190,7 @@ async function runCase(c, variant) {
     reasoningEffort: foundry.CHAT_REASONING_EFFORT, reportTiming: t => { timing = t; }, reportError: () => {} });
   const started = Date.now();
   let error = '';
-  const context = { agent: { name: 'Everest', pers: 'Calm' }, timeZone: TZ, userMessageId: 'msg_1' };
+  const context = { agent: { name: 'Everest', pers: 'Calm', ...(c.owner ? { ownerName: c.owner } : {}) }, timeZone: TZ, userMessageId: 'msg_1' };
   try {
     if (c.interrupt) {
       // Two messages through the real request handler: the second arrives while the
@@ -190,8 +209,11 @@ async function runCase(c, variant) {
   } catch (e) { error = e.message; }
   const final = events.filter(e => e.type === 'message').at(-1);
   const route = calls.task ? 'task' : events.some(e => e.card?.ask) ? 'ask' : 'answer';
-  const result = { id: c.id, route, text: final?.text || events.find(e => e.card?.ask)?.card.q || '', instructions: calls.task?.instructions || '', cards: events.filter(e => e.type === 'card').map(e => e.card.type), searched: (calls.fns || []).includes('web_search'),
-    ms: Date.now() - started, firstTokenMs: timing.firstTokenMs ?? null, modelCalls: calls.model, input: calls.input, cached: calls.cached, output: calls.output, fns: calls.fns || [], error };
+  // A card whose items open a page (a product in its store, a place, a source).
+  const linked = events.some(e => e.type === 'card' && (e.card.items || []).some(it => /^https:\/\//.test(it.url || '')));
+  const prices = events.flatMap(e => (e.type === 'card' && e.card.items || []).map(it => it.price).filter(Boolean));
+  const result = { id: c.id, route, text: final?.text || events.find(e => e.card?.ask)?.card.q || '', instructions: calls.task?.instructions || '', cards: events.filter(e => e.type === 'card').map(e => e.card.type), linked, prices, searched: (calls.fns || []).includes('web_search'),
+    ms: Date.now() - started, firstTokenMs: timing.firstTokenMs ?? null, modelCalls: calls.model, input: calls.input, cached: calls.cached, output: calls.output, fns: calls.fns || [], args: calls.args || [], error };
   const problems = [];
   if (error) problems.push(`error: ${error}`);
   if (c.expect !== 'any' && route !== c.expect && !((c.expect === 'answer' || c.allowAsk) && route === 'ask')) problems.push(`route ${route}, expected ${c.expect}`);

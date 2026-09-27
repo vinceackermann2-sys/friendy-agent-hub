@@ -76,7 +76,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   head: () => ({
     meta: [
       { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      // resizes-content: the on-screen keyboard shrinks the layout, so the chat
+      // header and composer stay in view while typing (Android Chrome).
+      { name: "viewport", content: "width=device-width, initial-scale=1, interactive-widget=resizes-content" },
+      { name: "theme-color", content: "#F6F6F7" },
       { name: "author", content: "Belna" },
       ...pageMeta({
         title: SITE_TITLE,

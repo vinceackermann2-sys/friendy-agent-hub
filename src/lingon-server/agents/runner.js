@@ -25,6 +25,17 @@ function userTimeZone(value) {
   if (!zone) return 'UTC';
   try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return zone; } catch { return 'UTC'; }
 }
+// The owner's country, from their time zone, so product searches show local stores and
+// prices. Empty when the zone does not name one country.
+const ZONE_COUNTRY = { Stockholm:'SE', Oslo:'NO', Copenhagen:'DK', Helsinki:'FI', Reykjavik:'IS', London:'GB', Dublin:'IE', Berlin:'DE', Paris:'FR',
+  Madrid:'ES', Amsterdam:'NL', Rome:'IT', Lisbon:'PT', Warsaw:'PL', Vienna:'AT', Zurich:'CH', Brussels:'BE', Prague:'CZ', Tallinn:'EE', Riga:'LV', Vilnius:'LT',
+  Toronto:'CA', Vancouver:'CA', Montreal:'CA', Edmonton:'CA', Winnipeg:'CA', Halifax:'CA', Sydney:'AU', Melbourne:'AU', Brisbane:'AU', Perth:'AU', Adelaide:'AU', Auckland:'NZ' };
+const US_ZONE = /^America\/(?:New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Detroit|Indiana|Kentucky|Boise)|^Pacific\/Honolulu$/;
+function timeZoneCountry(value) {
+  const zone = userTimeZone(value);
+  if (US_ZONE.test(zone)) return 'US';
+  return ZONE_COUNTRY[zone.split('/').pop()] || '';
+}
 
 function runtimeContext({ timeZone, now = new Date() } = {}) {
   const zone = userTimeZone(timeZone);
@@ -115,4 +126,4 @@ async function runResearch({ userId, sessionId, query, trace, push, signal }) {
   return r;
 }
 
-export { ensureCredit, modelAnswer, logModelUsage, runResearch, fanOut, runtimeClock, runtimeContext, userTimeZone, currentTimeAnswer };
+export { ensureCredit, modelAnswer, logModelUsage, runResearch, fanOut, runtimeClock, runtimeContext, userTimeZone, timeZoneCountry, currentTimeAnswer };

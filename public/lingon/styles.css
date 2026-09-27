@@ -269,7 +269,8 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 @keyframes conf{ to{ transform:translate(var(--dx),var(--dy)) rotate(540deg); opacity:0; } }
 
 /* ============ APP SHELL ============ */
-.app{ display:flex; height:100vh; overflow:hidden; }
+/* dvh follows the mobile browser toolbars, so the composer is never hidden under them. */
+.app{ display:flex; height:100vh; height:100dvh; overflow:hidden; }
 .mobile-nav-toggle,.side-scrim{ display:none; }
 .side{
   width:264px; flex:none; background:#fff; border-right:1px solid var(--line);
@@ -309,7 +310,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .chatitem .del{ display:none; margin-left:auto; color:var(--soft); background:none; border:none; padding:2px; border-radius:6px; }
 .chatitem:hover .del{ display:block; }
 .chatitem:hover .when{ display:none; }
-.chatitem .when{ margin-left:auto; font-size:11px; color:var(--soft); }
+.chatitem .when{ margin-left:auto; flex:none; font-size:11px; color:var(--soft); white-space:nowrap; }
 .side .foot{ margin-top:auto; padding:12px 12px 4px; border-top:1px solid var(--line2); }
 .side .foot .badge{ display:flex; gap:8px; align-items:center; font-size:11.5px; color:var(--soft); font-weight:600; }
 
@@ -317,12 +318,19 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .chathead{
   display:flex; align-items:center; gap:10px; padding:12px 22px; border-bottom:1px solid var(--line2);
   background:rgba(255,255,255,.85); backdrop-filter:blur(8px);
+  container-type:inline-size;
 }
-.chathead .ttl{ font-weight:700; font-size:14.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Title and chips keep to the left half so the centered agent head never covers them. */
+.chathead-lead{ display:flex; align-items:center; gap:10px; min-width:0; max-width:calc(50% - 39px); }
+.chathead .ttl{ min-width:0; font-weight:700; font-size:14.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chathead-lead .chip{ flex:none; }
 .chathead .sp{ flex:1; }
+@container (max-width:700px){ .chathead-lead .chip{ display:none; } }
+@container (max-width:600px){ .chathead .giftbtn span{ display:none; } .chathead .giftbtn{ padding:7px 10px; } }
+@container (max-width:250px){ .chathead-lead{ display:none; } }
 /* canvas open/close toggle: no background, no border — bare icon */
 .chathead [data-act="togglecanvas"]{
-  background:transparent; border:none; box-shadow:none; width:32px; height:32px;
+  background:transparent; border:none; box-shadow:none; width:32px; height:32px; flex:none;
 }
 .chathead [data-act="togglecanvas"]:hover{ background:transparent; border:none; color:var(--ink); }
 .trigger-head{ display:inline-flex; align-items:center; gap:6px; padding:7px 11px; border:1px solid var(--line); border-radius:999px; background:#fff; color:var(--mut); font-size:12px; font-weight:700; }
@@ -428,7 +436,8 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .acard .hd .aic{
   width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; flex:none;
 }
-.acard .hd b{ font-size:14px; display:block; }
+.acard .hd > :not(.tile):not(.st){ min-width:0; }
+.acard .hd b{ font-size:14px; display:block; overflow-wrap:anywhere; }
 .acard .hd .sub{ font-size:12.5px; color:var(--mut); margin-top:1px; }
 .acard .hd .st{ margin-left:auto; }
 .acard .bd{ padding:12px 16px; font-size:13.5px; color:#3C3F44; line-height:1.55; }
@@ -611,6 +620,50 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .canvas-file-note{ padding:16px; color:var(--mut); background:var(--panel); border-radius:12px; font-size:13px; }
 .canvas-document{ padding:16px; border:1px solid var(--line2); border-radius:12px; overflow-wrap:anywhere; }
 .canvas-selected-card .acard{ max-width:none; }
+
+/* ---------- Canvas: history of what the agent showed, and the open entry ---------- */
+.canvas-ico.k-browser{ background:#E7F0FE; color:#3B6DD9; }
+.canvas-ico.k-computer{ background:#17181A; color:#C9CBD1; }
+.canvas-ico.k-file{ background:#FFF3D9; color:#8A6D1A; }
+.canvas-ico.k-card{ background:var(--purple-soft); color:var(--purple); }
+.canvas-ico.thumb{ padding:0; overflow:hidden; background:var(--panel); border:1px solid var(--line2); }
+.canvas-ico.thumb img{ width:100%; height:100%; object-fit:cover; object-position:top; }
+.canvas-entry .canvas-go{ transform:rotate(-90deg); }
+.canvas-entry .appr-desc{ -webkit-line-clamp:1; }
+.appr-meta.live{ color:#2F6FDB; font-weight:700; }
+.appr-meta .livedot{ width:7px; height:7px; margin:0 6px 1px 0; vertical-align:middle; }
+.canvas .cbody.is-view{ display:flex; flex-direction:column; overflow:hidden; }
+.canvas-view{ flex:1; min-height:0; display:flex; flex-direction:column; }
+.canvas-view-head{ flex:none; }
+.canvas-view-bar{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.canvas-view-bar .canvas-back{ margin:0; }
+.canvas-view-acts{ margin-left:auto; display:flex; gap:6px; }
+.canvas-view-acts .iconbtn{ width:34px; height:34px; }
+.canvas-view-acts .iconbtn[aria-pressed="true"]{ background:var(--ink); border-color:var(--ink); color:#fff; }
+.canvas-view-title{ display:flex; align-items:center; gap:12px; padding:0 2px 12px; }
+.canvas-view-title .appr-desc{ -webkit-line-clamp:1; }
+.canvas-view-body{ flex:1; min-height:0; overflow:auto; }
+.canvas-view-body.is-doc{ display:flex; flex-direction:column; }
+.canvas-view-body.is-doc .arti-frame{ flex:1; min-height:320px; display:flex; }
+.canvas-view-body.is-doc .arti-frame iframe{ flex:1; height:auto; min-height:320px; }
+.canvas-view-body.is-doc .canvas-file-pdf{ flex:1; min-height:420px; }
+.canvas-view-body.is-doc .canvas-file-text,.canvas-view-body.is-doc .codebox{ max-height:none; }
+.canvas-view-body.is-doc .canvas-file-image{ margin:0 auto; }
+.canvas-view-body.is-term .canvas-term{ min-height:100%; margin:0; overflow-wrap:anywhere; }
+/* The live stream keeps its 1280×900 shape and fits with its address and controls. */
+.canvas-view-body.is-live{ overflow:hidden; container-type:size; }
+.canvas-view-body.is-live .livewrap{ height:100%; align-items:center; }
+.canvas-view-body.is-live .livebar,.canvas-view-body.is-live .controlbar{ width:100%; flex:none; }
+.canvas-view-body.is-live .liveview{ flex:none; width:min(100cqw, calc((100cqh - 110px) * 1.4222)); }
+/* Bigger: the open entry takes the chat's space too; "Smaller" or Esc gives it back. */
+.app.canvas-wide .main{ display:none; }
+.app.canvas-wide .canvas{ flex:1; width:auto !important; max-width:none; }
+.app.canvas-wide .canvas-resize,.app.canvas-wide .agent-hero{ display:none; }
+.app.canvas-wide .canvas-head{ padding-top:14px; }
+@media (max-width: 1100px){
+  .app.canvas-wide .main{ display:flex; }
+  .app.canvas-wide .canvas{ width:100vw !important; }
+}
 .cempty{ text-align:center; padding:60px 20px; color:var(--mut); }
 .cempty .mut2{ font-size:13px; margin-top:10px; color:var(--soft); }
 .arti-head{ display:flex; align-items:center; gap:10px; margin-bottom:12px; }
@@ -693,6 +746,8 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
     box-shadow:var(--shadow-lg); overflow:hidden; will-change:transform;
   }
   .app.mobile-nav-open .side{ transform:translateX(0); visibility:visible; transition:transform .3s cubic-bezier(.32,.72,.35,1), visibility 0s; }
+  /* Horizontal drags reach wireDrawerSwipe; vertical ones scroll the chats. */
+  .side{ touch-action:pan-y; }
   body.nav-lock{ overflow:hidden; }
   .mobile-nav-toggle{
     display:inline-grid; place-items:center; position:fixed; top:10px; left:12px; z-index:100;
@@ -715,19 +770,16 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
     border:1px solid var(--line) !important; border-radius:50%; background:#fff !important;
   }
   .chathead{ min-height:58px; padding:10px 16px 10px 58px; }
+  .chathead-lead{ max-width:calc(50% - 60px); }
   .trigger-head span{ display:none; }
   .thread{ padding:22px 16px 16px; }
   .composerwrap{ padding:8px 14px 14px; }
   .message-stack{ max-width:85%; }
-  /* Mobile only: hold-to-reveal for Reply / emoji / Copy. Hidden until
-     the user long-presses a message bubble (.msg.show-actions via JS).
-     Desktop hover behaviour above is left untouched. */
-  .message-actions{ opacity:0; transform:translateY(-2px); pointer-events:none; }
-  .msg:hover .message-actions,.msg:focus-within .message-actions{ opacity:0; transform:translateY(-2px); pointer-events:none; }
-  .msg.show-actions .message-actions,.msg.show-actions:hover .message-actions,.msg.show-actions:focus-within .message-actions{ opacity:1; transform:none; pointer-events:auto; }
+  /* The thread is a flex column, so margins add up; keep the rhythm tighter on phones. */
+  .msg{ margin:10px 0; }
+  .msg .acard{ margin:6px 0; }
+  .msg.agent{ gap:8px; }
   .message-actions button span{ display:none; }
-  .msg .bub{ -webkit-touch-callout:none; transition:filter .15s ease,transform .15s ease; }
-  .msg.pressing .bub{ filter:brightness(.96); transform:scale(.99); }
   .page{ padding:64px 16px 24px; }
   .seg{ display:flex; width:100%; overflow-x:auto; }
   .grid3{ grid-template-columns:1fr; }
@@ -749,9 +801,52 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .acard.pop, .msg.pop{ animation:pop .25s ease both; }
 .chathead{ transform:translateZ(0); }
 .side, .canvas{ -webkit-overflow-scrolling:touch; }
+/* Without scroll anchoring, rows that size themselves as they scroll into view make the thread jump. */
+@supports not (overflow-anchor:auto){
+  .msg, .acard{ content-visibility:visible; }
+}
 @media (prefers-reduced-motion: reduce){
   .side, .canvas, .side-scrim, .canvas-scrim, .mobile-nav-toggle{ transition:none !important; }
   .msg.msg-new, .fadeup, .pop, .mascot-bob{ animation:none !important; }
+}
+
+/* ---------- phones and touch screens ---------- */
+button, [data-act], summary{ -webkit-tap-highlight-color:transparent; }
+/* A quick double tap on a control acts twice instead of zooming the page. */
+a, button, input, select, textarea, label, summary, [data-act]{ touch-action:manipulation; }
+/* Phones and touch tablets have no hover: Reply / emoji / Copy stay out of the
+   layout until the user holds a bubble (.msg.show-actions, set in wireMobileHoldActions). */
+@media (max-width:760px), (hover:none){
+  .message-actions{ display:none; }
+  .msg.show-actions .message-actions{ display:flex; opacity:1; transform:none; pointer-events:auto; animation:actionsIn .16s ease both; }
+  .msg .bub{ -webkit-touch-callout:none; transition:filter .15s ease,transform .15s ease; }
+  .msg.pressing .bub{ filter:brightness(.96); transform:scale(.99); }
+}
+@keyframes actionsIn{ from{ opacity:0; transform:translateY(-2px); } }
+@media (hover:none){
+  /* Hover lifts stick after a tap on touch screens, so a press gives the feedback instead. */
+  .btn:hover, .giftbtn:hover{ transform:none; box-shadow:none; }
+  .micbtn:hover, .voicebtn:hover, .swatch:hover, .life-prompt:hover, .apps-stack-logo:hover, .app-card:hover, .lib-card:hover,
+  .giftmodal-share-option:not(:disabled):hover .giftmodal-share-icon{ transform:none; }
+  .btn:active, .giftbtn:active, .micbtn:active, .voicebtn:active, .iconbtn:active{ transform:scale(.96); }
+  .sitem:active, .qopt:active{ background:#F0F0F2; }
+  /* Controls that otherwise appear on hover stay visible. */
+  .lib-card-download, .sub-row .ap-x{ opacity:1; transform:none; }
+  .chatitem.on .when{ display:none; }
+  .chatitem.on .del{ display:grid; place-items:center; width:32px; height:32px; margin:-6px -8px -6px auto; }
+}
+@media (max-width:900px), (hover:none){
+  /* The hand-drawn wobble filter repaints with every twinkle; at this size it isn't visible. */
+  .belna-stars .hand{ filter:none; }
+}
+@media (pointer:coarse){
+  /* iOS zooms into any field under 16px when it gets focus. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), textarea, select{ font-size:16px !important; }
+  .sitem{ min-height:40px; }
+  .chathead [data-act="togglecanvas"]{ width:40px; height:40px; }
+  .chathead .giftbtn{ min-height:36px; }
+  .message-actions button{ min-height:36px; padding:6px 10px; }
+  .message-actions .reaction-choice{ width:36px; min-width:36px; height:36px; }
 }
 
 /* ============ BELNA landing redesign (branch redesign/belna-hero) ============ */
@@ -1154,7 +1249,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 .afooter .base a{ display:inline; font-size:13px; color:var(--soft); text-decoration:none; margin:0; font-weight:600; }
 .afooter .base a:hover{ color:var(--ink); }
 .afooter .base{ max-width:1120px; margin:0 auto; padding:18px 24px 34px; color:var(--soft); font-size:13px; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; border-top:1px solid var(--line2); }
-.legal{ max-width:760px; margin:0 auto; padding:60px 24px; }
+.legal{ max-width:760px; margin:0 auto; padding:60px 24px; overflow-wrap:break-word; }
 .legal h1{ font-size:32px; font-weight:800; }
 .legal h2{ font-size:18px; margin:26px 0 8px; }
 .legal p, .legal li{ color:#3C3F44; font-size:14.5px; line-height:1.65; }

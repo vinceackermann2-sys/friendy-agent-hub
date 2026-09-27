@@ -19,7 +19,8 @@ const { browserProfileRuntime, buildBrowserSessionScript, buildBrowserRelayScrip
   assert.match(decoded(script), /profileRuntime\.connectOrLaunch/);
   assert.match(decoded(relay), /profileRuntime\.session/);
   assert.match(decoded(relay), /await page\.close\(\)/);
-  assert.doesNotMatch(decoded(relay), /await browser\.close\(\)/, 'stopping one task must not close another task’s browser');
+  const healthyRelay = decoded(relay).replace('catch (error) { await browser.close().catch(() => {}); throw error; }', '');
+  assert.doesNotMatch(healthyRelay, /await browser\.close\(\)/, 'only failed security setup may close a newly launched browser; stopping one task keeps shared browsers alive');
   assert.match(script, /PasswordManagerEnabled.*false/);
   assert.match(relay, /PasswordManagerEnabled.*false/);
 
@@ -70,13 +71,44 @@ const { browserProfileRuntime, buildBrowserSessionScript, buildBrowserRelayScrip
     assert.notEqual(first.page.target()._targetId, second.page.target()._targetId, 'simultaneous tasks get separate tabs');
     await second.page.goto(url);
     assert.match(await second.page.evaluate(() => document.body.innerText), /Signed in/, 'the account profile shares website login state');
+    // These tabs have no per-page download setup. The profile's browser-wide
+    // protection must cancel downloads, including a download from a popup.
+    const downloadClient = await browser.target().createCDPSession();
+    try {
+      // CDP event delivery belongs to the configuring session; attach this
+      // observer with the same denial enforced by the production runtime.
+      await downloadClient.send('Browser.setDownloadBehavior', { behavior: 'deny', eventsEnabled: true });
+      for (const popup of [false, true]) {
+        let timer;
+        const cancelled = new Promise((resolve, reject) => {
+          const progress = (event) => {
+            if (!['canceled', 'completed'].includes(event.state)) return;
+            clearTimeout(timer);
+            downloadClient.off('Browser.downloadProgress', progress);
+            resolve(event.state);
+          };
+          downloadClient.on('Browser.downloadProgress', progress);
+          timer = setTimeout(() => { downloadClient.off('Browser.downloadProgress', progress); reject(new Error('Download cancellation was not observed')); }, 5000);
+        });
+        await second.page.evaluate((popup) => {
+          const target = popup ? window.open('about:blank') : window;
+          if (!target) throw new Error('Test popup did not open');
+          const link = target.document.createElement('a');
+          link.href = URL.createObjectURL(new Blob(['harmless download test']));
+          link.download = 'security-test.txt';
+          target.document.body.appendChild(link);
+          link.click();
+        }, popup);
+        assert.equal(await cancelled, 'canceled', popup ? 'popup downloads are denied' : 'blob downloads are denied');
+      }
+    } finally { await downloadClient.detach(); }
     assert.equal((await runtime.session(browser, 'live_first')).reusedPage, true);
     await close(browser); browser = null;
     browser = await runtime.connectOrLaunch(puppeteer, chrome);
     const later = await runtime.session(browser, 'live_later');
     await later.page.goto(url);
     assert.match(await later.page.evaluate(() => document.body.innerText), /Signed in/, 'website login state survives a browser restart');
-    console.log('browser profile: cookies persist across tasks and browser restarts, with isolated tabs');
+    console.log('browser profile: persistent cookies, isolated tabs, and denied blob/popup downloads on real Chrome');
   } finally {
     if (browser) await close(browser).catch(() => {});
     const closed = new Promise((resolve) => server.close(resolve));

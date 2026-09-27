@@ -45,6 +45,22 @@ async function main() {
   });
   assert.equal(product.seller.domain, 'run.myshopify.com');
   assert.equal(product.variants[0].price.amount, 89.99);
+  assert.equal(product.url, null);
+  // The catalog links variants, not products, to the merchant's store: the product takes the first link.
+  const linked = shoppay.publicProduct({
+    id: 'gid://shopify/p/2', title: 'Road shoe', rating: { value: 4.9, count: 94 }, media: [{ url: 'https://cdn.shopify.com/road.jpg' }],
+    variants: [{ id: 'v1', price: { amount: 123000, currency: 'SEK' } }, { id: 'v2', url: 'https://run.example.com/products/road?variant=2', price: { amount: 123000, currency: 'SEK' } }],
+  });
+  assert.equal(linked.url, 'https://run.example.com/products/road?variant=2');
+  assert.deepEqual(linked.rating, { value: 4.9, count: 94 });
+  const { resultCard } = require('../server/agents/cards');
+  const card = resultCard('shop_search', { products: [linked] }, { query: 'road shoes' });
+  const { price, ...shown } = card.items[0];
+  assert.match(price, /^SEK\s1,230\.00$/);
+  assert.deepEqual(shown, { title: 'Road shoe', subtitle: '', meta: '★ 4.9 (94)', image: 'https://cdn.shopify.com/road.jpg', url: 'https://run.example.com/products/road?variant=2' });
+  assert.equal(resultCard('shop_search', { products: [] }, { query: 'nothing' }), null, 'no matches, no empty card');
+  assert.equal(card.subtitle, undefined);
+  assert.match(resultCard('shop_search', { products: [linked], maxPrice: 1500, currency: 'SEK' }, { query: 'road shoes' }).subtitle, /^1 under SEK\s1,500\.00$/, 'the budget shows on the card');
 
   try {
     await shoppay.completePurchase('user_test', { merchant: 'run.myshopify.com', checkoutId: 'chk_1', confirm: false });
@@ -105,6 +121,38 @@ async function main() {
   } finally {
     global.fetch = originalFetch;
     store.upsertShopPayAccount = originalUpsert;
+    for (const name of envNames) originalEnv[name] === undefined ? delete process.env[name] : process.env[name] = originalEnv[name];
+  }
+
+  // A budget in the owner's currency reaches the catalog as US cents (its filters use dollars),
+  // and results priced in that currency are held to it exactly.
+  const catalogCalls = [];
+  try {
+    process.env.SHOPIFY_CLIENT_ID = 'catalog-client';
+    process.env.SHOPIFY_CLIENT_SECRET = 'catalog-secret';
+    global.fetch = async (url, init = {}) => {
+      const href = String(url);
+      if (href === 'https://api.shopify.com/auth/access_token') return Response.json({ access_token: 'app-token', expires_in: 3600 });
+      if (href === 'https://catalog.shopify.com/api/ucp/mcp') {
+        catalogCalls.push(JSON.parse(init.body).params.arguments.catalog);
+        const item = (title, amount, currency) => ({ id: title, title, variants: [{ id: `${title}-v`, url: `https://shop.example/${title}`, price: { amount, currency } }] });
+        return Response.json({ result: { structuredContent: { products: [item('cheap', 45600, 'SEK'), item('pricey', 195000, 'SEK'), item('euro', 12000, 'EUR')] } } });
+      }
+      throw new Error('Unexpected request: ' + href);
+    };
+    const budgeted = await shoppay.searchCatalog(null, { query: 'trail running shoes', country: 'SE', maxPrice: 1500 });
+    assert.deepEqual(catalogCalls[0].filters, { price: { max: 14250 } });
+    assert.equal(catalogCalls[0].context.address_country, 'SE');
+    assert.deepEqual(budgeted.products.map((p) => p.title), ['cheap', 'euro']);
+    assert.equal(budgeted.products[0].url, 'https://shop.example/cheap');
+    assert.equal(budgeted.currency, 'SEK');
+    const open = await shoppay.searchCatalog(null, { query: 'trail running shoes', country: 'DE' });
+    assert.equal(catalogCalls[1].filters, undefined, 'no budget, no price filter');
+    assert.equal(open.products.length, 3);
+    await shoppay.searchCatalog(null, { query: 'trail running shoes', country: 'DE', maxPrice: 100 });
+    assert.deepEqual(catalogCalls[2].filters, { price: { max: 11000 } }, 'euro countries budget in euros');
+  } finally {
+    global.fetch = originalFetch;
     for (const name of envNames) originalEnv[name] === undefined ? delete process.env[name] : process.env[name] = originalEnv[name];
   }
 

@@ -193,6 +193,30 @@ function taskWorkspace(taskId) {
   return '/home/lingon/workspace' + (taskId ? '/tasks/' + crypto.createHash('sha256').update(String(taskId)).digest('hex').slice(0,24) : '');
 }
 
+function workerWorkspaceSetup(taskId) {
+  return [
+    'set -eu',
+    `WORKDIR=${taskWorkspace(taskId)}`,
+    // Open every directory without following links before touching its contents.
+    // A worker can create symlinks in /workspace; privileged setup must never follow them.
+    'python3 - "$WORKDIR" <<\'LINGON_WORKSPACE\'',
+    'import os, pwd, sys',
+    'user = pwd.getpwnam("lingon")',
+    'fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)',
+    'try:',
+    '    for part in sys.argv[1].strip("/").split("/"):',
+    '        try: os.mkdir(part, 0o700, dir_fd=fd)',
+    '        except FileExistsError: pass',
+    '        child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)',
+    '        os.close(fd)',
+    '        fd = child',
+    '    os.fchown(fd, user.pw_uid, user.pw_gid)',
+    'finally: os.close(fd)',
+    'LINGON_WORKSPACE',
+    'cd "$WORKDIR"',
+  ];
+}
+
 function buildRunScript(language, code, taskId) {
   const bin = LANGS[String(language || '').toLowerCase()];
   if (!bin) throw Object.assign(new Error('Unsupported language. Use js, python, or bash.'), { code: 'BAD_INPUT' });
@@ -204,18 +228,15 @@ function buildRunScript(language, code, taskId) {
   const ext = bin === 'node' ? 'js' : bin === 'python3' ? 'py' : 'sh';
   const image = shellQuote(workerImage());
   return [
-    'set +e',
-    `WORKDIR=${taskWorkspace(taskId)}`,
-    'mkdir -p "$WORKDIR"',
-    'chown -R lingon:lingon "$WORKDIR"',
-    'cd "$WORKDIR"',
+    ...workerWorkspaceSetup(taskId),
     'command -v podman >/dev/null 2>&1 || { echo "Worker container runtime is not ready." >&2; exit 125; }',
     `podman image exists ${image} || { echo "Worker container image is not ready." >&2; exit 125; }`,
     `JOB=$(mktemp "/tmp/lingon-job.XXXXXX.${ext}")`,
     'trap \'rm -f "$JOB"\' EXIT',
     `echo '${b64}' | base64 -d > "$JOB"`,
     'chown lingon:lingon "$JOB" && chmod 600 "$JOB"',
-    `timeout 20s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.${ext}:ro" --workdir /workspace --env HOME=/home/lingon ${image} ${bin} "/run/lingon/job.${ext}"; EC=$?`,
+    'set +e',
+    `timeout 20s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --ulimit nofile=256:256 --ipc=private --pid=private --uts=private --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.${ext}:ro" --workdir /workspace --env HOME=/home/lingon ${image} ${bin} "/run/lingon/job.${ext}"; EC=$?`,
     'exit $EC',
   ].join('\n');
 }
@@ -228,18 +249,15 @@ function buildShellScript(command, taskId) {
   if (/[^A-Za-z0-9+/=]/.test(b64)) throw Object.assign(new Error('Sandbox encode failed.'), { code: 'BAD_INPUT' });
   const image = shellQuote(workerImage());
   return [
-    'set +e',
-    `WORKDIR=${taskWorkspace(taskId)}`,
-    'mkdir -p "$WORKDIR"',
-    'chown -R lingon:lingon "$WORKDIR"',
-    'cd "$WORKDIR"',
+    ...workerWorkspaceSetup(taskId),
     'command -v podman >/dev/null 2>&1 || { echo "Worker container runtime is not ready." >&2; exit 125; }',
     `podman image exists ${image} || { echo "Worker container image is not ready." >&2; exit 125; }`,
     'JOB=$(mktemp "/tmp/lingon-cmd.XXXXXX.sh")',
     'trap \'rm -f "$JOB"\' EXIT',
     `echo '${b64}' | base64 -d > "$JOB"`,
     'chown lingon:lingon "$JOB" && chmod 600 "$JOB"',
-    `timeout 30s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.sh:ro" --workdir /workspace --env HOME=/home/lingon ${image} bash /run/lingon/job.sh`,
+    'set +e',
+    `timeout 30s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --ulimit nofile=256:256 --ipc=private --pid=private --uts=private --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.sh:ro" --workdir /workspace --env HOME=/home/lingon ${image} bash /run/lingon/job.sh`,
     'EC=$?',
     'exit $EC',
   ].join('\n');
@@ -263,7 +281,10 @@ function browserKit() {
     try {
       const u = new URL(value);
       if (['about:', 'data:', 'blob:'].includes(u.protocol)) return true;
-      return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password && !PRIVATE_HOST.test(u.hostname);
+      return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password
+        && (!u.port || ['80', '443'].includes(u.port))
+        && (u.hostname.includes('.') || u.hostname.startsWith('['))
+        && !/\.(home|lan)$/i.test(u.hostname) && !PRIVATE_HOST.test(u.hostname);
     } catch { return false; }
   };
   async function settle(page, ms = 2500) {
@@ -289,7 +310,13 @@ function browserKit() {
       (dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss()).catch(() => {});
     });
     const cdp = await page.target().createCDPSession();
-    await cdp.send('Page.setDownloadBehavior', { behavior: 'deny' }).catch(() => {});
+    try {
+      // Browser-wide: also covers popups and downloads from blob/data URLs.
+      await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny', eventsEnabled: true });
+    } catch (error) {
+      await page.close().catch(() => {});
+      throw new Error('Browser download protection could not be enabled.');
+    } finally { await cdp.detach().catch(() => {}); }
   }
   async function open(page, url) {
     if (!allowedRequest(url) || !/^https?:/i.test(url)) throw new Error('Only public http and https pages can be opened.');
@@ -517,10 +544,20 @@ function browserKit() {
 // may reach the public internet and loopback only, never private networks, the
 // Azure platform endpoint or instance metadata. Without a firewall nothing starts.
 function networkGuard(user) {
+  if (!['lingon-browser', 'lingon-desktop'].includes(user)) throw new Error('Invalid network guard user.');
   return [
     "command -v iptables >/dev/null 2>&1 || { echo 'iptables is required for the network guard' >&2; exit 1; }",
-    `for NET in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 168.63.129.16/32; do iptables -C OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT 2>/dev/null || iptables -I OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT || exit 1; done`,
-    `if command -v ip6tables >/dev/null 2>&1; then for NET in fc00::/7 fe80::/10; do ip6tables -C OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT 2>/dev/null || ip6tables -I OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT; done; fi`,
+    // Install denies before allows. Every failure stops the browser launch.
+    `for NET in 0.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 168.63.129.16/32 192.0.0.0/24 192.0.2.0/24 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4; do iptables -C OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT 2>/dev/null || iptables -I OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT || exit 1; done`,
+    // IPv6 is denied entirely rather than leaving mapped/translated addresses open.
+    "command -v ip6tables >/dev/null 2>&1 || { echo 'ip6tables is required for the network guard' >&2; exit 1; }",
+    `ip6tables -C OUTPUT -m owner --uid-owner ${user} -j REJECT 2>/dev/null || ip6tables -I OUTPUT -m owner --uid-owner ${user} -j REJECT || exit 1`,
+    `iptables -C OUTPUT ! -o lo -m owner --uid-owner ${user} ! -p tcp -j REJECT 2>/dev/null || iptables -I OUTPUT ! -o lo -m owner --uid-owner ${user} ! -p tcp -j REJECT || exit 1`,
+    `iptables -C OUTPUT ! -o lo -m owner --uid-owner ${user} -p tcp -m multiport ! --dports 80,443 -j REJECT 2>/dev/null || iptables -I OUTPUT ! -o lo -m owner --uid-owner ${user} -p tcp -m multiport ! --dports 80,443 -j REJECT || exit 1`,
+    // Only the browser owner may connect to its local debugging service.
+    "iptables -C OUTPUT -o lo -p tcp -m owner ! --uid-owner lingon-browser -j REJECT 2>/dev/null || iptables -I OUTPUT -o lo -p tcp -m owner ! --uid-owner lingon-browser -j REJECT || exit 1",
+    // Revoke any desktop sessions left running by an earlier release.
+    "if id -u lingon-desktop >/dev/null 2>&1; then iptables -C OUTPUT -m owner --uid-owner lingon-desktop -j REJECT 2>/dev/null || iptables -I OUTPUT -m owner --uid-owner lingon-desktop -j REJECT || exit 1; pkill -KILL -u lingon-desktop 2>/dev/null || true; fi",
   ];
 }
 const BROWSER_NETWORK_GUARD = networkGuard('lingon-browser');
@@ -590,8 +627,20 @@ function browserProfileRuntime(root, load) {
       const url = `http://127.0.0.1:${port}`;
       const probe = await fetch(`${url}/json/version`, { signal: AbortSignal.timeout(1500) });
       if (!probe.ok) return null;
-      return await puppeteer.connect({ browserURL: url });
+      const browser = await puppeteer.connect({ browserURL: url });
+      try { await protectBrowser(browser); return browser; }
+      catch (error) { await browser.disconnect(); throw error; }
     } catch { return null; }
+  };
+  const protectBrowser = async (browser) => {
+    const client = await browser.target().createCDPSession();
+    try {
+      const { arguments: flags } = await client.send('Browser.getBrowserCommandLine');
+      if (!Array.isArray(flags) || flags.some((flag) => /^--(?:no-sandbox|disable-(?:setuid-sandbox|seccomp-filter-sandbox|namespace-sandbox|web-security))(?:=|$)/.test(flag))) {
+        throw new Error('Browser sandbox protection is required.');
+      }
+      await client.send('Browser.setDownloadBehavior', { behavior: 'deny', eventsEnabled: true });
+    } finally { await client.detach().catch(() => {}); }
   };
   const cookieClient = async (browser) => {
     const page = (await browser.pages())[0] || await browser.newPage();
@@ -690,13 +739,15 @@ function browserProfileRuntime(root, load) {
         try { proc.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
         return false;
       };
-      // Where the kernel has no usable sandbox for this user, it runs without one, still as the locked-down user.
+      // A missing kernel sandbox is a hard failure, never a reason to remove it.
       const tail = () => { try { return fs.readFileSync(logFile, 'utf8').slice(-400).trim(); } catch { return ''; } };
-      if (!(await start([])) && !(/sandbox/i.test(tail()) && await start(['--no-sandbox']))) {
+      if (!(await start([]))) {
         throw new Error(`Failed to launch the browser process. ${tail()}`.trim());
       }
       fs.writeFileSync(portFile, String(port), { mode: 0o600 });
       browser = await puppeteer.connect({ browserURL: url });
+      try { await protectBrowser(browser); }
+      catch (error) { await browser.close().catch(() => {}); throw error; }
       await restoreCookies(browser).catch(() => {});
       return browser;
     } finally { try { fs.rmdirSync(launchLock); } catch {} }
@@ -919,23 +970,25 @@ function buildBrowserSessionScript(action, args = {}) {
     ...CHROMIUM_POLICY_SETUP,
     ...BROWSER_INSTALL,
     ...BROWSER_NETWORK_GUARD,
-    `echo '${codeB64}' | base64 -d > /tmp/lingon-browser-session.js`,
-    'chown lingon-browser:lingon-browser /tmp/lingon-browser-session.js && chmod 600 /tmp/lingon-browser-session.js',
+    'install -d -m 755 -o root -g root /run/lingon',
+    `echo '${codeB64}' | base64 -d > /run/lingon/browser-session.js`,
+    'chown root:root /run/lingon/browser-session.js && chmod 644 /run/lingon/browser-session.js',
     'set +e',
     // Bounded, so a hung page can never hold the VM's one command slot.
     'OUT=$(mktemp)',
     OWN_SCOPE,
-    `$SCOPE runuser -u lingon-browser -- timeout -k 5 170 env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /tmp/lingon-browser-session.js > "$OUT"`,
+    `$SCOPE runuser -u lingon-browser -- timeout -k 5 170 env LINGON_BROWSER_PAYLOAD='${payloadB64}' node /run/lingon/browser-session.js > "$OUT"`,
     'EC=$?',
     `if [ -s "$OUT" ]; then cat "$OUT"; elif [ "$EC" = 124 ] || [ "$EC" = 137 ]; then echo '{"ok":false,"error":"The browser step took too long and was stopped. Try again, or open a simpler page."}'; fi`,
-    'rm -f "$OUT" /tmp/lingon-browser-session.js',
+    'rm -f "$OUT" /run/lingon/browser-session.js',
     ...(live ? liveStreamerLaunch(sessionId, live) : []),
     'exit $EC',
   ].join('\n');
 }
 // Starts this session's live streamer after a browser step, unless it is running.
 function liveStreamerLaunch(sessionId, live) {
-  const root = `/var/lib/lingon-browser/sessions/${sessionId}`;
+  const root = `/run/lingon/${sessionId}`;
+  const stateRoot = `/var/lib/lingon-browser/sessions/${sessionId}`;
   const source = [
     `const kit = (${browserKit.toString()})();`,
     `const profileRuntime = (${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions', require);`,
@@ -944,14 +997,15 @@ function liveStreamerLaunch(sessionId, live) {
   const codeB64 = Buffer.from(source, 'utf8').toString('base64');
   const payloadB64 = Buffer.from(JSON.stringify({ sessionId, ...live }), 'utf8').toString('base64');
   return [
-    `if [ -f '${root}/target-id' ] && ! { [ -f '${root}/live.pid' ] && kill -0 "$(cat '${root}/live.pid')" 2>/dev/null; }; then`,
+    `if [ -f '${stateRoot}/target-id' ] && ! { [ -f '${root}/live.pid' ] && kill -0 "$(cat '${root}/live.pid')" 2>/dev/null; }; then`,
     '  if [ ! -d /opt/lingon/node_modules/ws ]; then npm install --prefix /opt/lingon ws@8.21.3 >/dev/null 2>&1; fi',
+    `  install -d -m 755 -o root -g root '${root}'`,
     `  echo '${codeB64}' | base64 -d > '${root}/live.js'`,
-    `  chown lingon-browser:lingon-browser '${root}/live.js' && chmod 600 '${root}/live.js'`,
+    `  chown root:root '${root}/live.js' && chmod 644 '${root}/live.js'`,
     `  ${OWN_SCOPE}`,
     `  $SCOPE runuser -u lingon-browser -- env LINGON_LIVE_PAYLOAD='${payloadB64}' nohup node '${root}/live.js' >> '${root}/live.log' 2>&1 < /dev/null &`,
     `  echo $! > '${root}/live.pid'`,
-    `  chown lingon-browser:lingon-browser '${root}/live.pid' '${root}/live.log' 2>/dev/null || true`,
+    `  chown root:root '${root}/live.pid' '${root}/live.log' 2>/dev/null || true`,
     'fi',
   ];
 }
@@ -1109,20 +1163,20 @@ function buildBrowserRelayScript(args = {}) {
     "})().catch((error) => { process.stderr.write(String(error.message || error)); process.exitCode = 1; });",
   ].join('\n');
   const codeB64 = Buffer.from(runner, 'utf8').toString('base64');
-  const root = `/var/lib/lingon-browser/sessions/${sessionId}`;
+  const root = `/run/lingon/${sessionId}`;
   return [
     'set -eu',
     'id -u lingon-browser >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/lingon-browser --shell /usr/sbin/nologin lingon-browser',
     'if [ ! -d /opt/lingon/node_modules/ws ]; then npm install --prefix /opt/lingon ws@8.21.3; fi',
     ...CHROMIUM_POLICY_SETUP,
     ...BROWSER_NETWORK_GUARD,
-    `install -d -m 700 -o lingon-browser -g lingon-browser '${root}'`,
+    `install -d -m 755 -o root -g root /run/lingon '${root}'`,
     `echo '${codeB64}' | base64 -d > '${root}/relay.js'`,
-    `chown lingon-browser:lingon-browser '${root}/relay.js' && chmod 600 '${root}/relay.js'`,
+    `chown root:root '${root}/relay.js' && chmod 644 '${root}/relay.js'`,
     `if [ -f '${root}/relay.pid' ] && kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null; then echo READY; exit 0; fi`,
     OWN_SCOPE,
     `$SCOPE runuser -u lingon-browser -- env LINGON_BROWSER_RELAY_PAYLOAD='${payloadB64}' nohup node '${root}/relay.js' >> '${root}/relay.log' 2>&1 < /dev/null & echo $! > '${root}/relay.pid'`,
-    `chown lingon-browser:lingon-browser '${root}/relay.pid' '${root}/relay.log' 2>/dev/null || true`,
+    `chown root:root '${root}/relay.pid' '${root}/relay.log' 2>/dev/null || true`,
     'sleep 1',
     `kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null`,
     'echo READY',
@@ -1131,7 +1185,7 @@ function buildBrowserRelayScript(args = {}) {
 
 function buildBrowserRelayStopScript(sessionId) {
   const id = browserSessionId(sessionId);
-  const root = `/var/lib/lingon-browser/sessions/${id}`;
+  const root = `/run/lingon/${id}`;
   return [
     'set +e',
     `if [ -f '${root}/relay.pid' ]; then kill "$(cat '${root}/relay.pid')" 2>/dev/null || true; fi`,
@@ -1234,7 +1288,15 @@ function desktopKit() {
 // install whatever is missing the first time the desktop starts.
 const DESKTOP_PACKAGES = [['xvfb', 'Xvfb'], ['openbox', 'openbox'], ['xdotool', 'xdotool'], ['ffmpeg', 'ffmpeg'], ['x11-xserver-utils', 'xsetroot'], ['pcmanfm', 'pcmanfm'], ['mousepad', 'mousepad']];
 // Chromium on the VM never downloads files and never stores passwords or cards.
-const CHROMIUM_POLICY = '{"DownloadRestrictions":3,"PasswordManagerEnabled":false,"AutofillCreditCardEnabled":false,"AutofillAddressEnabled":false}';
+const CHROMIUM_POLICY = JSON.stringify({
+  DownloadRestrictions: 3, PasswordManagerEnabled: false,
+  AutofillCreditCardEnabled: false, AutofillAddressEnabled: false,
+  DeveloperToolsAvailability: 2, ExtensionInstallBlocklist: ['*'],
+  AllowFileSelectionDialogs: false, PrintingEnabled: false,
+  SafeBrowsingProtectionLevel: 1, SafeBrowsingProceedAnywayDisabled: true,
+  ExternalProtocolDialogShowAlwaysOpenCheckbox: false,
+  URLBlocklist: ['file://*', 'javascript://*', 'chrome://*', 'chrome-extension://*', 'devtools://*'],
+});
 const CHROMIUM_POLICY_SETUP = [
   `for DIR in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed /etc/opt/chrome/policies/managed; do install -d -m 755 "$DIR"; printf '%s' '${CHROMIUM_POLICY}' > "$DIR/lingon.json"; done`,
   `if [ -d /var/snap/chromium/current ]; then install -d -m 755 /var/snap/chromium/current/policies/managed && printf '%s' '${CHROMIUM_POLICY}' > /var/snap/chromium/current/policies/managed/lingon.json || true; fi`,
@@ -1249,117 +1311,9 @@ const CHROMIUM_POLICY_SETUP = [
  * is no terminal, because commands run in the sandboxed worker instead.
  */
 function buildDesktopRelayScript(args = {}) {
-  const sessionId = browserSessionId(args.sessionId);
-  const relayUrl = String(args.relayUrl || '');
-  const token = String(args.token || '');
-  if (!/^wss?:\/\//i.test(relayUrl)) throw Object.assign(new Error('Desktop relay URL must be ws:// or wss://.'), { code: 'BAD_INPUT' });
-  if (!/^[A-Za-z0-9._~-]{32,256}$/.test(token)) throw Object.assign(new Error('Desktop relay token is invalid.'), { code: 'BAD_INPUT' });
-  const payloadB64 = Buffer.from(JSON.stringify({ sessionId, relayUrl, token }), 'utf8').toString('base64');
-  const runner = [
-    "const fs = require('fs');",
-    "const path = require('path');",
-    "const { spawn, execFile } = require('child_process');",
-    "const WebSocket = require('/opt/lingon/node_modules/ws');",
-    `const kit = (${desktopKit.toString()})();`,
-    "const payload = JSON.parse(Buffer.from(process.env.LINGON_DESKTOP_PAYLOAD, 'base64').toString('utf8'));",
-    "const HOME = '/home/lingon-desktop', SESSION = path.join(HOME, '.relay', payload.sessionId);",
-    "const displayFile = path.join(SESSION, 'display');",
-    "let DISPLAY = fs.existsSync(displayFile) ? fs.readFileSync(displayFile, 'utf8').trim() : '';",
-    "if (!/^:\\d+$/.test(DISPLAY)) { let n = 10; while (fs.existsSync('/tmp/.X11-unix/X' + n) || fs.existsSync('/tmp/.X' + n + '-lock')) n++; DISPLAY = ':' + n; fs.writeFileSync(displayFile, DISPLAY); }",
-    "const env = { ...process.env, DISPLAY, HOME, XDG_RUNTIME_DIR: path.join(SESSION, 'run') };",
-    "fs.mkdirSync(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });",
-    "fs.mkdirSync(path.join(HOME, 'Files'), { recursive: true });",
-    "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
-    "const run = (cmd, args, timeout = 15000, input) => new Promise((resolve, reject) => { const child = execFile(cmd, args, { env, timeout }, (error, stdout, stderr) => error ? reject(new Error(String(stderr || error.message).trim().slice(0, 300))) : resolve(String(stdout).trim())); child.stdin.on('error', () => {}); child.stdin.end(input == null ? '' : String(input)); });",
-    "const detach = (cmd, args) => { const child = spawn(cmd, args, { env, detached: true, stdio: 'ignore' }); child.on('error', () => {}); child.unref(); };",
-    "const displayUp = () => run('xdotool', ['getdisplaygeometry'], 3000).then(() => true, () => false);",
-    "const send = (socket, value) => { try { if (socket && socket.readyState === 1) socket.send(JSON.stringify(value)); } catch {} };",
-    "const APPS = {",
-    "  browser: () => { const bin = ['/snap/bin/chromium', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p)); if (!bin) throw new Error('Chromium is not installed yet (first boot is still running).'); return [bin, ['--user-data-dir=' + path.join(SESSION, 'chromium'), '--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage', '--window-position=0,0', '--window-size=' + kit.WIDTH + ',' + kit.HEIGHT]]; },",
-    "  files: () => ['pcmanfm', [path.join(HOME, 'Files')]],",
-    "  editor: () => ['mousepad', []],",
-    "};",
-    "let socket = null, stopping = false, ffmpeg = null;",
-    "async function ensureDisplay() {",
-    "  if (await displayUp()) return;",
-    "  detach('Xvfb', [DISPLAY, '-screen', '0', kit.WIDTH + 'x' + kit.HEIGHT + 'x24', '-nolisten', 'tcp']);",
-    "  for (let i = 0; i < 60 && !(await displayUp()); i++) await sleep(100);",
-    "  if (!(await displayUp())) throw new Error('The virtual screen did not start.');",
-    "  detach('openbox', []);",
-    "  await run('xsetroot', ['-solid', '#20242e']).catch(() => {});",
-    "}",
-    // ffmpeg writes a stream of JPEG images; each one is sent as a binary frame.
-    "function startFrames() {",
-    "  if (stopping) return;",
-    "  ffmpeg = spawn('ffmpeg', ['-loglevel', 'error', '-f', 'x11grab', '-framerate', '3', '-video_size', kit.WIDTH + 'x' + kit.HEIGHT, '-draw_mouse', '1', '-i', DISPLAY, '-f', 'image2pipe', '-vcodec', 'mjpeg', '-q:v', '7', 'pipe:1'], { env, stdio: ['ignore', 'pipe', 'ignore'] });",
-    "  const SOI = Buffer.from([0xff, 0xd8]), EOI = Buffer.from([0xff, 0xd9]);",
-    "  let buffer = Buffer.alloc(0);",
-    "  ffmpeg.stdout.on('data', (chunk) => {",
-    "    buffer = Buffer.concat([buffer, chunk]);",
-    "    for (;;) {",
-    "      const start = buffer.indexOf(SOI);",
-    "      if (start < 0) { buffer = Buffer.alloc(0); return; }",
-    "      const end = buffer.indexOf(EOI, start + 2);",
-    "      if (end < 0) { buffer = buffer.length > 4000000 ? Buffer.alloc(0) : buffer.subarray(start); return; }",
-    "      const frame = buffer.subarray(start, end + 2); buffer = buffer.subarray(end + 2);",
-    "      try { if (socket && socket.readyState === 1 && socket.bufferedAmount < 4000000) socket.send(frame); } catch {}",
-    "    }",
-    "  });",
-    "  ffmpeg.on('error', () => {});",
-    "  ffmpeg.on('exit', () => { ffmpeg = null; if (!stopping) setTimeout(startFrames, 1000); });",
-    "}",
-    "async function metadata() {",
-    "  const title = await run('xdotool', ['getactivewindow', 'getwindowname']).catch(() => '');",
-    "  const ids = (await run('xdotool', ['search', '--onlyvisible', '--name', '.']).catch(() => '')).split('\\n').filter(Boolean).slice(-15);",
-    "  const windows = [];",
-    "  for (const id of ids) { const name = (await run('xdotool', ['getwindowname', id]).catch(() => '')).slice(0, 100); if (name && !windows.includes(name)) windows.push(name); }",
-    "  return { title: title.slice(0, 120) || 'Desktop', windows, desktop: true };",
-    "}",
-    // A vault fill names the window it was approved for; nothing is typed elsewhere.
-    "async function execute(ev) {",
-    "  if (ev.expectTitle) { const active = await run('xdotool', ['getactivewindow', 'getwindowname']).catch(() => ''); if (!active.toLowerCase().includes(String(ev.expectTitle).toLowerCase())) throw new Error('The active window is \"' + active.slice(0, 80) + '\", not the approved one. Nothing was typed.'); }",
-    "  for (const step of kit.steps(ev)) {",
-    "    if (step.sleep) await sleep(step.sleep);",
-    "    else if (step.xdotool) await run('xdotool', step.xdotool, 15000 + (step.stdin ? step.stdin.length * 60 : 0), step.stdin);",
-    "    else if (step.launch) { const [bin, args] = APPS[step.launch](); detach(bin, step.url ? [...args, step.url] : args); }",
-    "  }",
-    "}",
-    "const dispatch = async (command) => { const action = String(command.action || 'inspect'); const ev = command.event || {}; if (action === 'input') { await execute(ev); if (ev.type === 'move') return { desktop: true }; if (ev.agent === true) await sleep(500); } else if (action === 'stop') { stopping = true; } else if (action !== 'inspect') throw new Error('Unsupported desktop relay action.'); return metadata(); };",
-    "const connect = () => new Promise((resolve, reject) => { const ws = new WebSocket(payload.relayUrl); const timer = setTimeout(() => { try { ws.terminate(); } catch {} reject(new Error('relay connection timed out')); }, 15000); ws.once('open', () => { clearTimeout(timer); resolve(ws); }); ws.once('error', (error) => { clearTimeout(timer); reject(error); }); });",
-    "(async () => {",
-    "  await ensureDisplay();",
-    "  startFrames();",
-    "  while (!stopping) {",
-    "    try { socket = await connect(); send(socket, { type: 'ready', sessionId: payload.sessionId }); send(socket, { type: 'meta', ...(await metadata()), state: 'idle' });",
-    "      await new Promise((resolve) => { let queue = Promise.resolve(); socket.on('message', (raw) => { queue = queue.then(async () => { let command; try { command = JSON.parse(String(raw)); } catch { return; } if (command.type !== 'command') return; try { const result = await dispatch(command); send(socket, { type: 'result', id: command.id, ...result, state: 'idle' }); } catch (error) { send(socket, { type: 'result', id: command.id, ok: false, error: String(error.message || error) }); } }).catch(() => {}); }); socket.once('close', resolve); socket.once('error', resolve); });",
-    "    } catch (error) { if (!stopping) await sleep(1000); } finally { try { socket?.close(); } catch {} socket = null; }",
-    "  }",
-    "  if (ffmpeg) ffmpeg.kill();",
-    "})().catch((error) => { process.stderr.write(String(error.message || error)); process.exitCode = 1; });",
-  ].join('\n');
-  const codeB64 = Buffer.from(runner, 'utf8').toString('base64');
-  const root = `/home/lingon-desktop/.relay/${sessionId}`;
-  const missing = DESKTOP_PACKAGES.map(([pkg, cmd]) => `command -v ${cmd} >/dev/null 2>&1 || NEED="$NEED ${pkg}"`);
-  return [
-    'set -eu',
-    'id -u lingon-desktop >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/lingon-desktop --shell /usr/sbin/nologin lingon-desktop',
-    'NEED=""',
-    ...missing,
-    'if [ -n "$NEED" ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq --no-install-recommends $NEED fonts-dejavu-core >/dev/null; fi',
-    'if [ ! -d /opt/lingon/node_modules/ws ]; then npm install --prefix /opt/lingon ws@8.21.3; fi',
-    ...networkGuard('lingon-desktop'),
-    ...CHROMIUM_POLICY_SETUP,
-    `install -d -m 700 -o lingon-desktop -g lingon-desktop /home/lingon-desktop /home/lingon-desktop/.relay '${root}'`,
-    `echo '${codeB64}' | base64 -d > '${root}/relay.js'`,
-    `chown lingon-desktop:lingon-desktop '${root}/relay.js' && chmod 600 '${root}/relay.js'`,
-    `if [ -f '${root}/relay.pid' ] && kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null; then echo READY; exit 0; fi`,
-    OWN_SCOPE,
-    `$SCOPE runuser -u lingon-desktop -- env LINGON_DESKTOP_PAYLOAD='${payloadB64}' nohup node '${root}/relay.js' >> '${root}/relay.log' 2>&1 < /dev/null & echo $! > '${root}/relay.pid'`,
-    `chown lingon-desktop:lingon-desktop '${root}/relay.pid' '${root}/relay.log' 2>/dev/null || true`,
-    'sleep 2',
-    `kill -0 "$(cat '${root}/relay.pid')" 2>/dev/null || { tail -c 600 '${root}/relay.log' >&2; exit 1; }`,
-    'echo READY',
-  ].join('\n');
+  // A native file manager/editor can launch commands outside the worker container.
+  // Keep this surface closed until it has its own OS-enforced isolation boundary.
+  throw Object.assign(new Error('Native desktop access is disabled for VM security. Use the protected browser and isolated code tools.'), { code: 'DISABLED' });
 }
 
 function buildDesktopRelayStopScript(sessionId) {
@@ -2234,17 +2188,9 @@ async function stopBrowserRelay(userId, sessionId) {
   }
 }
 
-async function startDesktopRelay(userId, args = {}, { alreadyRunning = false } = {}) {
-  const sb = await getSandbox(userId);
-  if (sb.mode !== 'azure') {
-    throw Object.assign(new Error('Computer use requires the user Azure VM.'), { code: 'DISABLED' });
-  }
-  if (!alreadyRunning) await ensureRunning(userId);
-  const out = await runCommand(userId, buildDesktopRelayScript(args), { maxStdout: 2000, maxStderr: 4000 });
-  if (!/\bREADY\b/.test(out.stdout || '')) {
-    throw Object.assign(new Error(out.stderr || 'The desktop did not start.'), { code: 'AZURE_DESKTOP' });
-  }
-  return { mode: 'azure', vmName: sb.vmName, relay: 'x11-stream' };
+async function startDesktopRelay(userId, args = {}) {
+  // Reject before provisioning, starting, or sending a command to a VM.
+  buildDesktopRelayScript(args);
 }
 
 async function stopDesktopRelay(userId, sessionId) {

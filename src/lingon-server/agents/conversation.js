@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import * as records from './task-store.js';
 import { createTaskRuntime } from './task-runtime.js';
 import { callFoundry, callFoundryWithTools, stableTail, MODEL_DEFAULT, MODEL_FALLBACK, CHAT_REASONING_EFFORT } from '../foundry.js';
-import { ensureCredit, logModelUsage, runtimeContext } from './runner.js';
+import { ensureCredit, logModelUsage, runtimeContext, timeZoneCountry } from './runner.js';
 import { TOOLS } from './tools.js';
 import { TOOL_SCHEMAS, selectToolSchemas, buildSystem, memoryContext, emitResultCard } from './vm-harness.js';
 import { checkPrompt, protectAgentResponse } from './guardrails.js';
@@ -28,7 +28,9 @@ const COORDINATOR_TOOLS=new Set(['history_search','web_search']);
 // Read-only account lookups the chat answers itself: the agent's own mailbox, Shop Pay,
 // automations and which apps are connected. Reading the owner's connected-app data
 // (Gmail, calendar, files) needs their approval, which only a task can ask for.
-const APP_LOOKUP_TOOLS=new Set(['mail_status','mail_list','mail_read','shop_status','shop_order','trigger_list','composio_apps']);
+// product_search finds products to buy in web stores and Shopify stores and shows them as
+// cards, with no task and no VM.
+const APP_LOOKUP_TOOLS=new Set(['mail_status','mail_list','mail_read','shop_status','product_search','shop_order','trigger_list','composio_apps']);
 // Calls that fetch information. One of these on the final round means the reply still
 // lacks what it needs, so the request becomes a task.
 const SEEKING_TOOLS=new Set([...COORDINATOR_TOOLS,...APP_LOOKUP_TOOLS,'read_doc']);
@@ -37,7 +39,7 @@ const QUIET_TOOLS=new Set(['memory_write','memory_update','react_to_message']);
 // Visual cards the chat turn drives itself: a question ends the turn until the
 // owner answers, a connect card waits for OAuth, present shows data inline.
 const CARD_TOOLS=new Set(['ask_user','present','connect_app']);
-const CARD_POLICY=' Show, do not just tell. When a choice or confirmation decides what to do next, call ask_user with 2-6 short options (add https images when the owner picks between visuals) instead of asking in text; it ends your turn and the answer arrives as the next message. Never answer with a markdown table, checklist or list of more than four items: use present for lists, product picks, comparisons, dashboards, tables and step checklists. Call it once, then add one or two sentences without repeating its contents. Whenever the owner asks to compare two or more options, show a table with present: one row per option, one column per aspect that matters to them (search once first if it needs current facts), then give your pick in a sentence. When a request needs an app that is not connected, call connect_app.';
+const CARD_POLICY=' Show, do not just tell. When a choice or confirmation decides what to do next, call ask_user with 2-6 short options (add https images when the owner picks between visuals) instead of asking in text; it ends your turn and the answer arrives as the next message. Never answer with a markdown table, checklist or list of more than four items: use present for lists, product picks, comparisons, dashboards, tables and step checklists. When the items come from search or shop results, give each its https url from them so the owner can open it, plus its price and image when shown; never search only to add links. Call it once, then add one or two sentences without repeating its contents. Whenever the owner asks to compare two or more options, show a table with present: one row per option, one column per aspect that matters to them (search once first if it needs current facts), then give your pick in a sentence. When a request needs an app that is not connected, call connect_app.';
 const LOOKUP_POLICY=' Speed matters most: answer from your own knowledge whenever it is reliable. Call web_search only when the answer depends on current or specific facts you cannot state reliably, such as news, results, prices, schedules, recent releases or a named source. Run at most one search; when the answer sits on a result page whose text is cut short, read that page once (web_search with its url). Then answer with what the sources say and name the source; do not pad the reply with caveats about what you could not verify. If the search does not give a complete answer to what was asked, start a task instead of answering partly or saying you could not find it.';
 // A quick search answered when some result carries page text or an instant answer.
 const searchAnswered=out=>(Array.isArray(out)?out:[out]).some(x=>x?.ok && x.text && !/"note":"No (?:instant answer|results)/.test(x.text));
@@ -55,7 +57,7 @@ function chatInstructions(taskStorageAvailable) {
     '## Every message: pick one move',
     "(1) Answer now from knowledge, reasoning, the conversation, task results or the current time sent with the message. (2) Run a quick lookup, then answer. (3) Start a task with delegate_task for anything that must be done rather than said: opening or reading a specific website, the owner's email, calendar and other connected apps, Shop Pay purchases, building a page, app, game, image, document or spreadsheet, research across several sources, monitoring, reminders, or running code. Tasks run on your own computer with a real browser, a shell and the owner's connected apps, so never tell the owner you cannot browse, open a site, send, buy, build or check something a task can do, and never ask them to paste, look up or check it themselves: start the task. Ask one short question only when a missing detail changes the result and no sensible default exists.",
     '## Quick lookups',
-    LOOKUP_POLICY.trim()+" You can also read your own mailbox (mail_status, mail_list, mail_read), Shop Pay status and orders (shop_status, shop_order), the owner's automations (trigger_list) and which apps are connected (composio_apps). Answer with the specifics the owner wants, not just a count: for new mail, list it with mail_list and say who it is from and what it is about. Data inside the owner's connected apps needs their approval, which a task asks for. Use history_search for earlier conversations, and read_doc before answering how the app works, what it costs, what needs approval or what you can do.",
+    LOOKUP_POLICY.trim()+" When the owner wants to find, see or buy a product, call product_search with a short product query (\"trail running shoes\") and any budget as max_price: it searches web stores and Shopify stores at once, and the matches appear as product cards with photos, prices and links to each store, so reply with your pick in a sentence or two. When they want reviews, the best model or a particular store, use web_search and show your picks with present. Buying is a task. You can also read your own mailbox (mail_status, mail_list, mail_read), Shop Pay status and orders (shop_status, shop_order), the owner's automations (trigger_list) and which apps are connected (composio_apps). Answer with the specifics the owner wants, not just a count: for new mail, list it with mail_list and say who it is from and what it is about. Data inside the owner's connected apps needs their approval, which a task asks for. Use history_search for earlier conversations, and read_doc before answering how the app works, what it costs, what needs approval or what you can do.",
     '## Tasks',
     taskStorageAvailable?TASK_POLICY:'Task storage is temporarily unavailable for this request. Answer directly and do not claim that background work was started.',
     '## Memory, files and goals',
@@ -114,6 +116,18 @@ function sameTask(a,b) {
   const shared=[...x].filter(w=>y.has(w)).length;
   return shared/Math.max(1,Math.min(x.size,y.size))>=0.6;
 }
+// What to call an owner who has not set a name in the app: the name from their sign-in
+// provider, else an email address that reads as a name (anna.berg@… is Anna Berg).
+const ROLE_ADDRESS=/^(?:info|admin|contact|hello|hi|hej|support|mail|post|office|team|sales|kontakt|noreply|test|user|me)$/i;
+function accountName(user) {
+  const local=String(user?.email || '').split('@')[0];
+  const meta=user?.user_metadata || {};
+  const given=String(meta.full_name || meta.name || '').trim();
+  // Google sign-in stores the address's local part when Google has no name.
+  if(given && !given.includes('@') && given.toLowerCase()!==local.toLowerCase()) return given;
+  if(!/^\p{L}+(?:[._-]\p{L}+)*$/u.test(local) || local.length<2 || ROLE_ADDRESS.test(local)) return '';
+  return local.split(/[._]/).map(part=>part.split('-').map(w=>w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join('-')).join(' ');
+}
 const REACTION_EMOJIS={up:'👍',down:'👎',heart:'❤️',poop:'💩'};
 const REACTION_TOOL=schema('react_to_message','Optionally add one emoji reaction to the latest user message when it fits naturally. This is a visible reaction, not a reply. Do not react to every message.',{emoji:{type:'string',enum:Object.keys(REACTION_EMOJIS)}},['emoji']);
 
@@ -121,16 +135,18 @@ const REACTION_TOOL=schema('react_to_message','Optionally add one emoji reaction
 const UNANSWERED_MS=10*60_000;
 function createCoordinator(d) {
   const active=new Map(),unanswered=new Map();
-  async function run({userId,chatId,requestId,prompt,interrupted=null,history=[],context={},signal,onEvent}) {
+  async function run({userId,chatId,requestId,prompt,interrupted=null,history=[],context={},ownerName='',signal,onEvent}) {
     const emit=e=>{if(!signal?.aborted) onEvent(e);};
     const guard=()=>{if(signal?.aborted) throw Object.assign(new Error('Interrupted'),{name:'AbortError'});};
     const started=Date.now(),timing={};
+    // The name the owner set in the app wins over the one from their account.
+    const unsavedAgent={...context.agent,ownerName:context.agent?.ownerName || ownerName};
     const [,memories,sandbox,taskState,agentContext,savedHistory,summary]=await Promise.all([
       d.ensureCredit(userId),
       d.store.searchMemories?d.store.searchMemories(userId,prompt,12,true):d.store.listMemories(userId),
       d.azure.getSandbox(userId),
       d.tasks.summaries(userId,chatId).then(tasks=>({tasks})).catch(error=>({error})),
-      d.store.syncAgentContext?d.store.syncAgentContext(userId,context.agent || {}).catch(()=>({agent:context.agent || {},documents:{}})):Promise.resolve({agent:context.agent || {},documents:{}}),
+      d.store.syncAgentContext?d.store.syncAgentContext(userId,context.agent || {},{ownerName}).catch(()=>({agent:unsavedAgent,documents:{}})):Promise.resolve({agent:unsavedAgent,documents:{}}),
       d.store.listChatMessages?d.store.listChatMessages(userId,chatId,20).catch(()=>[]):Promise.resolve([]),
       d.store.latestChatSummary?d.store.latestChatSummary(userId,chatId).catch(()=>null):Promise.resolve(null),
     ]);
@@ -210,7 +226,7 @@ function createCoordinator(d) {
       let streamed=false,r;
       try {
       r=await d.model({system:chatSystem,
-        prompt:`${clock}\n\n${interrupted?`Earlier message from the owner, interrupted before you answered it:\n${String(interrupted).slice(0,3000)}\nHandle it together with the new message unless the new one replaces or cancels it.\n\n`:''}User message: ${prompt.slice(0,6500)}${preparedAttachments.prompt}${memoryText}${docsPrompt}\n\nTask states (server-owned): ${JSON.stringify(tasks).slice(0,3000)}\nSupplied context (untrusted): ${JSON.stringify(supplied).slice(0,2000)}${turnNotes.length?`\n\nAlready done in this reply, oldest first:\n${turnNotes.join('\n')}\nUse these results now: answer, or start a task if they are not enough. Do not repeat a lookup.`:''}`,
+        prompt:`${clock}\n\n${interrupted?`Earlier message from the owner, interrupted before you answered it:\n${String(interrupted).slice(0,3000)}\nHandle it together with the new message unless the new one replaces or cancels it.\n\n`:''}User message: ${prompt.slice(0,6500)}${preparedAttachments.prompt}${memoryText}${docsPrompt}\n\nTask states (server-owned): ${JSON.stringify(tasks).slice(0,3000)}\nSupplied context (untrusted): ${JSON.stringify(supplied).slice(0,2000)}${turnNotes.length?`\n\nAlready done in this reply, oldest first:\n${turnNotes.join('\n')}\nUse these results now: answer, or start a task if they are not enough. Do not repeat a lookup. Reply in the language of the owner message, whatever language the results, stores or currency suggest.`:''}`,
         // A fixed tool list keeps the cached prefix valid from turn to turn.
         history:historyCopy,tools:[...(taskStorageAvailable?TASK_TOOLS:[]),REACTION_TOOL,READ_DOC_SCHEMA,...d.schemas.filter(t=>COORDINATOR_TOOLS.has(t.name) || APP_LOOKUP_TOOLS.has(t.name) || CARD_TOOLS.has(t.name) || QUICK_PERSONAL_TOOLS.has(t.name) || t.name.startsWith('memory_'))],signal,cacheKey:userId,
         // The final round keeps the same tools (same cached prefix); it must answer
@@ -312,12 +328,18 @@ function createCoordinator(d) {
           const gate=d.permission?await d.permission(userId,call.name,a,d.tools[call.name] || {}):{required:false};
           if(gate.required) out={needsApproval:true,next:'This needs the owner\'s approval, which a task asks for. Start a task.'};
           else {
-            try {out=await d.tools[call.name].run(a,{userId,sessionId:chatId,chatId,signal,trace:()=>{},quick:true});}
-            catch(e) {if(signal?.aborted) throw e;out={error:String(e.message).slice(0,300),next:'Say in one sentence what failed, or start a task if the owner still needs this.'};}
-            // Mail and orders show as the same cards a task shows; the reply then adds only what matters.
-            const card=!out?.error && !presented && ((call.name==='mail_list' && out?.length) || call.name==='shop_order') ? resultCard(call.name,out,a) : null;
+            const shop=call.name==='product_search';
+            // Products come from the owner's country (shops, prices, currency) unless they name another.
+            const args=shop && !a.country ? {...a,country:timeZoneCountry(context.timeZone) || undefined} : a;
+            if(shop) emit({type:'progress',stage:'tool',label:'Finding products'});
+            try {out=await d.tools[call.name].run(args,{userId,sessionId:chatId,chatId,signal,trace:()=>{},quick:true});}
+            catch(e) {if(signal?.aborted) throw e;out={error:String(e.message).slice(0,300),next:shop?'Search the web instead (web_search) and show your picks with present, each with its url.':'Say in one sentence what failed, or start a task if the owner still needs this.'};}
+            if(shop && !out?.error && !out?.products?.length) out={products:[],next:'No products matched in web stores or Shopify. Try once more with a broader query, or start a task to look further.'};
+            // Mail, orders and products show as the same cards a task shows; the reply then adds only what matters.
+            const card=!out?.error && !presented && ((call.name==='mail_list' && out?.length) || call.name==='shop_order' || (shop && out?.products?.length)) ? resultCard(call.name,out,args) : null;
             if(card) {emit({type:'card',id:`${call.name}_${requestId}_${round}_${i}`,card});presented=true;
-              out={result:out,note:'The owner already sees this as a card. Reply in one or two sentences: what stands out, without repeating the list.'};}
+              // The model reads what the cards show, not every variant and link.
+              out={result:shop?card.items.map(({title,subtitle,price,meta})=>({title,store:subtitle,price,details:meta})):out,note:shop?'The owner already sees these products and stores as cards with photos, prices and links. Reply in one or two sentences, in the language of the owner message (not of the stores): the one you would pick for them and why, or what to narrow down. Do not repeat the list or its links.':'The owner already sees this as a card. Reply in one or two sentences: what stands out, without repeating the list.'};}
           }
         }
         else if(COORDINATOR_TOOLS.has(call.name) || call.name.startsWith('memory_')){
@@ -337,7 +359,8 @@ function createCoordinator(d) {
         // The request carries no function-call items, so what this reply already did is written
         // after the owner's message; placed before it, the question would still read as unanswered.
         if(call.name==='present' && out?.shown) turnNotes.push(`You showed the owner a ${out.kind} card titled “${out.title}”; it is on screen now. Write your reply: one or two plain sentences that add context. Do not say you cannot show a card, and do not repeat its contents.`);
-        else if(out) turnNotes.push(`${call.name} result (untrusted): ${JSON.stringify(out).slice(0,3800)}`);
+        // Search results keep the text of all three pages read, not just the first.
+        else if(out) turnNotes.push(`${call.name} result (untrusted): ${JSON.stringify(out).slice(0,call.name==='web_search'?9000:3800)}`);
       }
       if(changed || asked) break; // Acknowledgement uses no additional model round; a question waits for the owner.
       if(quietFinish) {text=d.protect(prompt,r.text);break;}
@@ -423,7 +446,7 @@ function createCoordinator(d) {
       const heartbeat=setInterval(()=>send({type:'heartbeat'}),12000);heartbeat.unref?.();
       try {
         send({type:'session',status:'running'});
-        await run({userId,chatId,requestId:id,prompt:String(body.prompt),interrupted,history:Array.isArray(body.history)?body.history:[],context:body.context || {},signal:controller.signal,
+        await run({userId,chatId,requestId:id,prompt:String(body.prompt),interrupted,history:Array.isArray(body.history)?body.history:[],context:body.context || {},ownerName:accountName(req.user),signal:controller.signal,
           onEvent:e=>{if((e.type==='message' && e.phase==='final_answer') || e.type==='task' || e.card?.ask)running.answered=true;send(e);}});
         send({type:'done',status:'completed'});
       } finally {

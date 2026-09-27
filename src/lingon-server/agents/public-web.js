@@ -95,7 +95,10 @@ function htmlToText(html) {
     .replace(/<(br|\/p|\/div|\/h[1-6]|\/tr|\/section|\/article|\/ul|\/ol|\/table|\/blockquote)\b[^>]*>/gi, '\n')
     .replace(/<[^>]+>/g, ' ');
   const text = decodeEntities(body).replace(/[ \t\f\v\r]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-  return { title: decodeEntities(title).replace(/\s+/g, ' ').trim(), text };
+  // The page's preview image, so a pick from search results can show a photo.
+  const meta = (html.match(/<meta\b[^>]*(?:property|name)=["'](?:og:image|twitter:image)["'][^>]*>/i) || [])[0] || '';
+  const image = decodeEntities((meta.match(/\bcontent=["']([^"']+)["']/i) || [])[1] || '').trim();
+  return { title: decodeEntities(title).replace(/\s+/g, ' ').trim(), text, image: /^https:\/\//i.test(image) ? image.slice(0, 600) : '' };
 }
 function decodeBody(body, contentType) {
   const charset = (/charset=([\w-]+)/i.exec(contentType) || [])[1] || 'utf-8';
@@ -107,11 +110,17 @@ async function readPage(url, { signal, timeoutMs, maxChars = 12000 } = {}) {
   const page = await fetchPublic(url, { signal, timeoutMs });
   const type = page.contentType.toLowerCase();
   if (/html|xml/.test(type) || !type) {
-    const { title, text } = htmlToText(decodeBody(page.body, type));
-    return { url: page.url, title, text: text.slice(0, maxChars) };
+    const { title, text, image } = htmlToText(decodeBody(page.body, type));
+    return { url: page.url, title, text: text.slice(0, maxChars), ...(image ? { image } : {}) };
   }
   if (/^text\/|json/.test(type)) return { url: page.url, title: '', text: decodeBody(page.body, type).slice(0, maxChars) };
   throw new Error(`unsupported content type ${type.split(';')[0] || 'unknown'} at ${new URL(page.url).hostname}`);
+}
+
+// A public page's HTML as sent, for the structured data (JSON-LD, meta tags) text drops.
+async function readHtml(url, { signal, timeoutMs } = {}) {
+  const page = await fetchPublic(url, { signal, timeoutMs });
+  return { url: page.url, html: /html|xml/.test(page.contentType.toLowerCase()) || !page.contentType ? decodeBody(page.body, page.contentType) : '' };
 }
 
 // Free web search from DuckDuckGo's HTML results: titles, links and snippets. Used when
@@ -129,4 +138,4 @@ async function searchDuckDuckGo(query, { signal, limit = 8 } = {}) {
   }).filter((r) => /^https?:\/\//.test(r.url) && !/(^|\.)duckduckgo\.com$/.test(new URL(r.url).hostname) && !seen.has(r.url) && seen.add(r.url)).slice(0, limit);
 }
 
-export { publicUrlProblem, fetchPublic, readPage, htmlToText, searchDuckDuckGo };
+export { publicUrlProblem, fetchPublic, readPage, readHtml, htmlToText, searchDuckDuckGo };

@@ -23,7 +23,7 @@ const window={Engine:{},LingonAuth:{get:()=>({user:{id:owner}}),
 const timers=new Set();
 const later=(fn,ms)=>{const t=setTimeout(()=>{timers.delete(t);fn();},ms);t.unref();timers.add(t);return t;};
 const context=vm.createContext({window,WeakMap,Promise,AbortController,TextDecoder,Uint8Array,crypto:webcrypto,setTimeout:later,clearTimeout,
-  state:{agent:{name:'Agent'},vault:{},memory:[]},uid:()=>webcrypto.randomUUID(),isActive:()=>false,$:()=>null,msgNode:()=>null,replaceNode:()=>{},save:()=>{}});
+  state:{agent:{name:'Agent'},vault:{},memory:[]},uid:()=>webcrypto.randomUUID(),isActive:()=>false,$:()=>null,msgNode:()=>null,replaceNode:()=>{},repaintCanvasSoon:()=>{},save:()=>{}});
 const src=fs.readFileSync(require.resolve('../app/app.js'),'utf8');
 vm.runInContext(src.slice(src.indexOf('const managedRunTokens'),src.indexOf('\nfunction replaceNode(c, m){',src.indexOf('const managedRunTokens'))),context);
 vm.runInContext(fs.readFileSync(require.resolve('../app/engine.managed.js'),'utf8'),context);

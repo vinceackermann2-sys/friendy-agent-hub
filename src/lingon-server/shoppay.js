@@ -4,6 +4,7 @@
    complete_checkout only runs after owner approval of a live quote. */
 import crypto from 'node:crypto';
 import * as store from './store.js';
+import { currencyFor, USD_RATE } from './agents/product-search.js';
 
 const UCP_VERSION = '2026-08-25';
 const SHOP_SCOPES = 'openid email dev.ucp.shopping.catalog.search:read';
@@ -344,15 +345,19 @@ function publicProduct(p) {
     price: v.price && v.price.amount != null ? money(v.price.amount, v.price.currency) : null,
     available: !!(v.availability && v.availability.available !== false),
     seller: v.seller ? { name: v.seller.name, domain: v.seller.domain } : null,
+    url: v.url || null,
     checkoutUrl: v.checkout_url || null,
   }));
   const range = p.price_range || {};
+  const rating = p.rating && Number(p.rating.value) > 0 ? { value: Number(p.rating.value), count: Number(p.rating.count) || 0 } : null;
   return {
     id: p.id,
     title: p.title,
-    url: p.url || null,
+    // The catalog links each variant to its page in the merchant's store; the product has no link of its own.
+    url: p.url || (variants.find((v) => v.url) || {}).url || null,
     price: range.min ? money(range.min.amount, range.min.currency) : (variants[0] && variants[0].price) || null,
     image: (p.media && p.media[0] && p.media[0].url) || null,
+    rating,
     variants,
     seller: (variants[0] && variants[0].seller) || null,
   };
@@ -547,19 +552,22 @@ function normalizeItems(items) {
   });
 }
 
-async function searchCatalog(userId, { query, country, limit } = {}) {
+// The catalog filters prices in US dollars, so a budget in the owner's currency is converted
+// (USD_RATE) before it is sent. Results priced in the budget's own currency are then held to it exactly.
+
+async function searchCatalog(userId, { query, country, limit, maxPrice, currency } = {}) {
   const q = String(query || '').trim().slice(0, 200);
   if (q.length < 2) fail('BAD_INPUT', 'Search query is required.');
+  const cc = String(country || 'US').slice(0, 2).toUpperCase();
+  const budget = Number(maxPrice) > 0 ? Number(maxPrice) : 0;
+  const budgetCurrency = String(currency || currencyFor(cc)).slice(0, 3).toUpperCase();
+  const catalog = { query: q, context: { address_country: cc }, pagination: { limit: Math.max(1, Math.min(10, Number(limit) || 6)) } };
+  if (budget && USD_RATE[budgetCurrency]) catalog.filters = { price: { max: Math.round(budget * USD_RATE[budgetCurrency] * 100) } };
   const token = await bearerFor(userId, { resourceHost: CATALOG_HOST, scope: 'dev.ucp.shopping.catalog.search:read', allowApp: true });
-  const out = await mcpCall('https://' + CATALOG_HOST + '/api/ucp/mcp', 'search_catalog', {
-    meta: mcpMeta(),
-    catalog: {
-      query: q,
-      context: { address_country: String(country || 'US').slice(0, 2).toUpperCase() },
-      pagination: { limit: Math.max(1, Math.min(10, Number(limit) || 6)) },
-    },
-  }, token);
-  return { products: (out.products || []).slice(0, 10).map(publicProduct) };
+  const out = await mcpCall('https://' + CATALOG_HOST + '/api/ucp/mcp', 'search_catalog', { meta: mcpMeta(), catalog }, token);
+  const products = (out.products || []).slice(0, 10).map(publicProduct)
+    .filter((p) => !budget || !p.price || p.price.currency !== budgetCurrency || p.price.amount <= budget);
+  return budget ? { products, maxPrice: budget, currency: budgetCurrency } : { products };
 }
 
 async function getProduct(userId, { id } = {}) {

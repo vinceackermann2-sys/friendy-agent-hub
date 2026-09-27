@@ -97,6 +97,10 @@ async function ensureProfile(userId) {
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
 const AGENT_DOC_KEYS = ['identity', 'soul', 'user', 'agents'];
+// The owner's name reaches the agent's prompt, so it keeps only what names are made of.
+function cleanPersonName(value) {
+  return String(value || '').normalize('NFC').replace(/[^\p{L}\p{M}\p{N} .'’-]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
 function cleanAgent(agent = {}) {
   const style = ['Playful', 'Precise', 'Calm', 'Bold'].includes(agent.pers) ? agent.pers : 'Playful';
   const rawName = String(agent.name || '').trim().slice(0, 40);
@@ -104,7 +108,15 @@ function cleanAgent(agent = {}) {
     name: !rawName || /^lingon$/i.test(rawName) ? 'Your agent' : rawName,
     color: String(agent.color || 'lingon').trim().slice(0, 30) || 'lingon',
     pers: style,
+    ownerName: cleanPersonName(agent.ownerName),
   };
+}
+// An update without the owner's name keeps the saved one; a device that never
+// learned it cannot erase it.
+function agentPatch(agent) {
+  const patch = { ...(agent && typeof agent === 'object' ? agent : {}) };
+  if (!cleanPersonName(patch.ownerName)) delete patch.ownerName;
+  return patch;
 }
 function defaultAgentDocuments(agent = {}) {
   const a = cleanAgent(agent);
@@ -139,7 +151,7 @@ async function getAgentContext(userId, hint = {}) {
 }
 async function saveAgentContext(userId, input = {}) {
   const previous = await getAgentContext(userId);
-  const agent = cleanAgent({ ...previous.agent, ...(input.agent || {}) });
+  const agent = cleanAgent({ ...previous.agent, ...agentPatch(input.agent) });
   const documents = cleanAgentDocuments({ ...previous.documents, ...(input.documents || {}) }, agent);
   const expected = input.revision == null ? null : Number(input.revision);
   const s = supa();
@@ -170,9 +182,12 @@ async function saveAgentContext(userId, input = {}) {
   saveLocal(d);
   return contextView(row || d.agentContexts[d.agentContexts.length - 1]);
 }
-async function syncAgentContext(userId, hint = {}) {
+// fallback.ownerName is the name from the owner's account. It stands in only until
+// they set a name in the app.
+async function syncAgentContext(userId, hint = {}, fallback = {}) {
   const current = await getAgentContext(userId);
-  const next = cleanAgent({ ...current.agent, ...hint });
+  const next = cleanAgent({ ...current.agent, ...agentPatch(hint) });
+  if (!next.ownerName) next.ownerName = cleanPersonName(fallback.ownerName);
   if (current.revision && JSON.stringify(next) === JSON.stringify(current.agent)) return current;
   return saveAgentContext(userId, { agent:next, documents:current.documents, revision:current.revision });
 }

@@ -75,6 +75,8 @@ const IC = {
   eyeoff:'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/>',
   dice:'<path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
   aur:'<path d="M7 17L17 7M7 7h10v10"/>',
+  expand:'<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  shrink:'<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   panel:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
   board:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 15l-5-5-9 9"/>',
   easel:'<path d="M12 3V1M5 4h14l2 13H3L5 4Z"/><path d="M8 17l-2 6M16 17l2 6M8 9h8M7 13h10"/>',
@@ -472,6 +474,8 @@ const fresh = () => ({
   shopPay:null, shopPayLoading:false, shopPayOrders:[],
   // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'approvals'
   agentEdit:false, mailTab:'inbox',
+  // What the Canvas shows now, from any chat (see canvasItemView); null shows the Canvas history.
+  canvasItem:null,
   // settings / apps rework
   settingsTab:'profiles', userMenuOpen:false,
   agentPermissions:null,
@@ -859,7 +863,7 @@ async function syncFromBackend(force = false) {
     if (ac) {
       state.agentContext = ac;
       if (ac.revision > 0 && ac.agent) {
-        state.agent = { ...state.agent, ...ac.agent, name:publicAgentName(ac.agent.name) || 'Your agent' };
+        state.agent = { ...agentSettings(state.agent), ...agentSettings(ac.agent), name:publicAgentName(ac.agent.name) || 'Your agent' };
         state.onboarded = true;
         delete state.agent.provisional;
       }
@@ -2889,6 +2893,7 @@ function syncShellClasses(){
   const app = $('#app');
   if (!app) return;
   app.classList.toggle('nocanvas', !canvasShouldShow());
+  app.classList.toggle('canvas-wide', canvasWideOn());
   app.classList.toggle('mobile-nav-open', !!mobileNavOpen);
   const t = app.querySelector('.mobile-nav-toggle');
   if (t){
@@ -2917,6 +2922,14 @@ function setMobileNav(open, opts = {}){
     if (t){ try { t.focus({ preventScroll:true }); } catch {} }
   }
 }
+// Moves between chats and pages inside the mounted shell, so the phone drawer
+// slides shut over the new page instead of vanishing with a full re-render.
+function switchView(){
+  if (!$('#app') || !signedIn() || needsOnboarding() || state.ownerId !== currentUserId()) return renderApp();
+  paintSide(); paintMain(); paintCanvas();
+  syncShellClasses();
+  refreshGoals(false); refreshLibrary(false);
+}
 function setCanvasOpen(open, opts = {}){
   state.canvasOpen = !!open;
   save();
@@ -2935,6 +2948,7 @@ function setCanvasOpen(open, opts = {}){
     }));
   } else {
     // Keep painted content during slide-out; hiding is pure CSS.
+    canvasWide = false;
     syncShellClasses();
     try { liveClose(); } catch {}
   }
@@ -2952,6 +2966,7 @@ function wireShellKeys(){
       e.preventDefault(); return;
     }
     if (mobileNavOpen){ e.preventDefault(); setMobileNav(false, { refocus:true }); return; }
+    if (canvasWideOn()){ e.preventDefault(); $('#canvas [data-act="canvas-wide"]')?.click(); return; }
     if (canvasShouldShow() && window.matchMedia('(max-width: 1100px)').matches){ e.preventDefault(); setCanvasOpen(false); }
   });
   try {
@@ -2960,6 +2975,43 @@ function wireShellKeys(){
     if (mq.addEventListener) mq.addEventListener('change', onChange);
     else if (mq.addListener) mq.addListener(onChange);
   } catch {}
+  wireDrawerSwipe();
+}
+// Phones: the open navigation drawer follows a leftward drag and closes past a
+// third of its width or on a quick flick. Vertical drags keep scrolling the chats.
+function wireDrawerSwipe(){
+  let drag = null;
+  document.addEventListener('touchstart', (e) => {
+    const side = mobileNavOpen && e.touches.length === 1 && e.target.closest ? e.target.closest('#side') : null;
+    if (!side) return;
+    const t = e.touches[0];
+    drag = { side, x:t.clientX, y:t.clientY, dx:0, axis:null, at:performance.now() };
+  }, { passive:true });
+  document.addEventListener('touchmove', (e) => {
+    if (!drag || !e.touches[0]) return;
+    const dx = e.touches[0].clientX - drag.x, dy = e.touches[0].clientY - drag.y;
+    if (!drag.axis){
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      drag.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (drag.axis === 'x') drag.side.style.transition = 'none';
+    }
+    if (drag.axis !== 'x') return;
+    drag.dx = Math.min(0, dx);
+    drag.side.style.transform = `translateX(${drag.dx}px)`;
+  }, { passive:true });
+  const end = () => {
+    const d = drag;
+    drag = null;
+    if (!d || d.axis !== 'x') return;
+    const flick = d.dx < -30 && performance.now() - d.at < 250;
+    const close = flick || d.dx < -(d.side.offsetWidth || 264) / 3;
+    // Clearing the inline styles hands the drawer back to CSS, which animates it from the finger.
+    d.side.style.transition = '';
+    d.side.style.transform = '';
+    if (close) setMobileNav(false);
+  };
+  document.addEventListener('touchend', end, { passive:true });
+  document.addEventListener('touchcancel', end, { passive:true });
 }
 function renderApp(){
   if (!signedIn()){ renderAuth(); return; }
@@ -2992,9 +3044,14 @@ function currentUser(){
   try { sess = window.LingonAuth && window.LingonAuth.get(); } catch {}
   // No fake fallback identity — unauthenticated callers get an explicit guest.
   const email = (sess && sess.user && sess.user.email) || '';
-  const name = (state.userProfile && state.userProfile.name) || (email ? email.split('@')[0] : 'Guest');
+  const name = profileName() || state.agentContext?.agent?.ownerName || (email ? email.split('@')[0] : 'Guest');
   return { email: email || 'signed-out', name };
 }
+// The name the owner typed in their profile. The agent is told it; without one, the
+// server uses the name from their account.
+function profileName(){ return String((state.userProfile && state.userProfile.name) || '').trim(); }
+// state.agent holds the agent's own settings. The owner's name lives in userProfile.
+function agentSettings(agent){ const { ownerName, ...settings } = agent || {}; return settings; }
 function artifactRows(){
   const rows = [];
   state.chats.forEach(c => {
@@ -3886,9 +3943,11 @@ function paintChat(M){
   M.innerHTML = `
     <div class="floathead${fv.working ? ' working' : ''}"><div class="fav">${Mascot.head(state.agent.color,44)}</div><div class="pill" role="status" aria-live="polite">${esc(state.agent.name)}<span class="st" id="floatstatus">${esc(fv.text)}</span></div></div>
     <div class="chathead">
-      <span class="ttl">${esc(c.title)}</span>
+      <span class="chathead-lead">
+      <span class="ttl" title="${esc(c.title)}">${esc(c.title)}</span>
       ${c.source === 'automation' ? `<span class="chip">${icon('clock',12)} ${String(c.id).startsWith('updates_') ? 'updates' : 'sub-agent'}</span>` : ''}
       ${runningTask(c) ? '<span class="chip green">' + icon('box',12) + ' delegated · agent available</span>' : (c.coordinatorRuns ? '<span class="chip">' + icon('refresh',12) + ' replying…</span>' : '')}
+      </span>
       <span class="sp"></span>
       ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
       <button class="giftbtn" data-act="opengift" title="Invite a friend — 10 million tokens each" aria-label="Open invite code">${Mascot.logo(18)}<span>Invite a friend · 10M each</span></button>
@@ -4030,9 +4089,9 @@ function msgNode(c, m){
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
 
-/* Mobile only: hold-to-reveal for Reply / emoji / Copy in agent chat.
-   Desktop keeps hover (.msg:hover .message-actions in CSS). On mobile
-   (<=760px, same breakpoint as CSS) actions stay hidden until the user
+/* Phones and touch tablets: hold-to-reveal for Reply / emoji / Copy in agent chat.
+   Desktop keeps hover (.msg:hover .message-actions in CSS). Without hover
+   (<=760px or a touch screen, same query as CSS) actions stay hidden until the user
    long-presses a message bubble, then .show-actions reveals them. */
 (function wireMobileHoldActions(){
   if (window.__lingonHoldWired) return;
@@ -4040,7 +4099,7 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
   const HOLD_MS = 500;
   const MOVE_TOL = 10;
   const isMobileMode = () => {
-    try { return window.matchMedia('(max-width: 760px)').matches; } catch { return false; }
+    try { return window.matchMedia('(max-width: 760px), (hover: none)').matches; } catch { return false; }
   };
   const closeAll = (except) => {
     document.querySelectorAll('.msg.show-actions').forEach((n) => { if (n !== except) n.classList.remove('show-actions'); });
@@ -4719,7 +4778,7 @@ function makeRT(c){
 
 
   const rt = {
-    chat: c, agent: state.agent, vault: state.vault,
+    chat: c, agent: state.agent, ownerName: String(state.userProfile?.name || '').trim(), vault: state.vault,
     isFirst: c.messages.filter(m => m.role === 'user').length <= 1,
     managedTask(task){
       c.managedTasks=c.managedTasks || {};
@@ -4836,8 +4895,9 @@ function makeRT(c){
           if (!card.url) card.url = m.card.url;
           if (!card.screenshot && card.status === 'running') card.screenshot = m.card.screenshot;
         }
-        if (!m) { m = { id:uid(), managedId:event.id, kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
-        else { m.card = card; replaceNode(c,m); }
+        // A card's time orders it in the Canvas's Latest list; a working browser or computer moves up as it works.
+        if (!m) { m = { id:uid(), managedId:event.id, at:Date.now(), kind:'card', card }; c.messages.push(m); append(msgNode(c,m)); }
+        else { m.card = card; if (card.type === 'browser' || card.type === 'computer') m.at = Date.now(); replaceNode(c,m); }
         if (card.type === 'goal') refreshGoals();
         if (card.type === 'library' || card.libraryId) refreshLibrary();
         if (card.type === 'system_file') refreshSystemFiles(true);
@@ -4845,7 +4905,7 @@ function makeRT(c){
           if (typeof window !== 'undefined' && window.LingonAuth?.signedIn()) syncFromBackend(true).then(()=>{if(state.view==='library'&&state.libraryCat==='system'&&state.systemFile==='system:memory'&&$('#main'))paintLibrary($('#main'));}).catch(()=>{});
           else if (!state.memory.some(x => x.text === card.text)) rt.remember(card.text, 'account');
         }
-        if (active() && state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && (!c.canvasSelectedMessageId || ['browser','computer'].includes(card.type))) paintCanvas();
+        repaintCanvasSoon();
       }
       if (event.type === 'error') {
         c.managedStatus = 'failed';
@@ -4873,12 +4933,9 @@ function makeRT(c){
       c.trace = c.trace || []; c.trace.push({ ic, t, at: Date.now() });
       save();
     },
-    artifact(a,opts={}){
+    artifact(a){
       c.artifact = a;
-      if(!opts.background){c.canvasSelectedMessageId = null; delete c.canvasSelectedFileIndex;}
-      if(active()) {
-        if(state.canvasOpen && state.canvasTab==='canvas')paintCanvas();
-      }
+      repaintCanvasSoon();
       save();
     },
     chips(){ /* suggestion chips removed — no-op for backward compat */ },
@@ -5067,26 +5124,8 @@ function replaceNode(c, m){
   const old = document.querySelector(`[data-mid="${m.id}"]`);
   if (old) old.replaceWith(msgNode(c, m));
   updateFloat();
-  // Live-follow: browser/computer progress also renders in the canvas timeline.
-  if (m.kind === 'card' && state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && isActive(c)) paintCanvas();
-}
-
-/* Visual browser and computer activity lives in the canvas. Older chats may
-   still contain these cards in their message history. */
-function runTimelineHTML(c){
-  if (!c) return '';
-  const shown = new Set((c.messages || []).map(m => m.managedId).filter(Boolean));
-  const runs = (c.canvasRuns || []).filter(run => !shown.has(run.id));
-  if (!runs.length) return '';
-  return `<div class="runbox"><div class="runhead">${icon('box',14)} Live run — browser &amp; computer use</div>` + runs.map(m => {
-    const cd = m.card;
-    if (cd.type === 'browser') return `<div class="runrow"><span class="rtile">${icon('globe',14)}</span><div class="rbody">
-      <div class="rurl">${esc(cd.url || 'VM browser')}</div><div class="rnote">${cd.status === 'done' ? 'rendered' : cd.status === 'failed' ? 'failed' : 'working…'} · ${esc(cd.note)}</div>
-      ${cd.screenshot ? `<div class="shot"><img src="${cd.screenshot}" alt="Rendered page screenshot" loading="lazy"></div>` : ''}
-      ${cd.liveId ? `<button class="btn ghost small" data-act="watchlive">Watch live</button>` : ''}</div></div>`;
-    return `<div class="runrow"><span class="rtile dark">${icon('term',14)}</span><div class="rbody">
-      <div class="term mini">${cd.lines.map(L => `<div class="${L.cls || ''}">${esc(L.t)}</div>`).join('')}</div></div></div>`;
-  }).join('') + `</div>`;
+  // Live-follow: browser/computer progress also updates the open Canvas and its history.
+  if (m.kind === 'card') repaintCanvasSoon();
 }
 
 function resolveCard(c, m, payload, status){
@@ -5441,19 +5480,7 @@ function subAgentsTabContent(){
   </div>`;
 }
 
-/* Live tab helpers: newest live browser session id for this chat. */
-function liveIdFor(c){
-  if (!c) return null;
-  for (let i = (c.messages || []).length - 1; i >= 0; i--){
-    const m = c.messages[i];
-    if (m.kind === 'card' && m.card.type === 'browser' && m.card.liveId) return m.card.liveId;
-  }
-  for (let i = (c.canvasRuns || []).length - 1; i >= 0; i--){
-    const card = c.canvasRuns[i].card;
-    if (card.type === 'browser' && card.liveId) return card.liveId;
-  }
-  return null;
-}
+/* Newest sandbox computer session for this chat. */
 function pcIdFor(c){
   if (!c) return null;
   for (let i = (c.messages || []).length - 1; i >= 0; i--){
@@ -5476,8 +5503,7 @@ function cardStreams(c, cd){
 function syncCardLive(c){
   if (!c || c !== chat()) return;
   const want = [...(c.messages || [])].reverse().find(m => m.kind === 'card' && cardStreams(c, m.card))?.card.liveId || null;
-  const selected = (c.messages || []).find(m => m.id === c.canvasSelectedMessageId);
-  const canvasLive = state.canvasOpen && (state.canvasTab || 'canvas') === 'canvas' && (state._showLiveInCanvas || !!selected?.card?.liveId);
+  const canvasLive = !!canvasLiveId();
   if (want && (!liveWS || (liveIdShown !== want && !canvasLive))) liveConnectRealtime(want);
   else if (!want && liveWS && !canvasLive && String(liveIdShown || '').startsWith('rt:')) liveClose();
 }
@@ -5531,42 +5557,6 @@ function liveClose(){
   try { liveWS && liveWS.close(); } catch {}
   try { pcWS && pcWS.close(); } catch {}
   liveWS = null; liveIdShown = null; liveControl = false; pcWS = null; pcIdShown = null;
-}
-function paintLive(body, c, selectedId){
-  const id = selectedId || liveIdFor(c);
-  if (!id){
-    if (liveIdShown) liveClose();
-    body.innerHTML = `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">No live session</div><div class="mut2">Ask for research and the agent's real browser appears here — watch it, take over, hand back.</div></div>`;
-    return;
-  }
-  const browserCards = [...(c.messages || []).filter(m => m.kind === 'card'), ...(c.canvasRuns || [])];
-  const poster = browserCards.filter(m => !selectedId || m.card.liveId === selectedId).reduce((acc, m) => (m.card.type === 'browser' && m.card.screenshot) ? m.card.screenshot : acc, '');
-  const desktop = browserCards.some(m => m.card && m.card.liveId === id && m.card.desktop);
-  const surface = desktop ? 'computer' : 'browser';
-  window.__liveFrames = 0;
-  body.innerHTML = `
-    <button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>
-    <div class="livewrap" id="livewrap">
-      <div class="livebar"><span class="url" id="liveurl">connecting…</span><span class="chip purple" id="livestate">connecting</span></div>
-      <div class="liveview" id="liveview" tabindex="0" aria-label="Live ${surface} workspace">
-        <canvas id="livecanvas" width="1280" height="900" aria-label="Live ${surface} stream"></canvas>
-        <img id="liveimg" alt="${desktop ? 'Computer' : 'Browser'} preview" hidden${poster ? ` src="${poster}"` : ''}>
-        ${browserCards.some(m => m.card?.liveId === id && cardStreams(c, m.card)) ? agentPointerHTML(id) : ''}
-        <div class="bigcursor" id="bigcursor"></div>
-      </div>
-      <div class="controlbar">
-        <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
-        <div class="cinfo"><b id="livestatus">Agent ${surface}</b><div class="sub" id="livesub">${desktop ? 'live virtual computer' : 'live interactive stream'} — the agent is connected to the VM</div></div>
-        <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
-        <button class="btn ghost small" data-act="canvas-back">Back</button>
-      </div>
-    </div>`;
-  // The address shows at once from the newest card; the stream updates it as the page changes.
-  const shownUrl = [...(c.messages || [])].reverse().find(m => m.card?.type === 'browser' && m.card.liveId === id && m.card.url)?.card.url;
-  if (shownUrl && !desktop) $('#liveurl').textContent = shownUrl;
-  liveConnect(id);
-  if (liveCardFrame?.id === id) drawLiveFrame(liveCardFrame.url);
-  else if (poster) drawLiveFrame(poster);
 }
 let liveFrameBusy = false, liveFramePending = null;
 function drawLiveFrame(data){
@@ -5947,7 +5937,7 @@ function canvasFileContent(c, m){
   const card = m.card;
   if (typeof card.content === 'string') return card.content;
   if (card.dataUrl) return card.dataUrl;
-  if (card.libraryId && card.fromLibrary) return libraryItemContent(card.libraryId, () => { if (state.activeChat === c.id && c.canvasSelectedMessageId === m.id && state.canvasOpen) paintCanvas(); });
+  if (card.libraryId && card.fromLibrary) return libraryItemContent(card.libraryId, repaintCanvasSoon);
   if (!card.managedArtifactId) return '';
   const key = `${c.id}:${card.managedArtifactId}`;
   if (!canvasFileCache.has(key)) {
@@ -5963,15 +5953,16 @@ function canvasFileContent(c, m){
         canvasFileCache.set(key, { content });
       })
       .catch(error => canvasFileCache.set(key, { error:error.message }))
-      .finally(() => { if (state.activeChat === c.id && c.canvasSelectedMessageId === m.id && state.canvasOpen) paintCanvas(); });
+      .finally(repaintCanvasSoon);
   }
   return canvasFileCache.get(key);
 }
-function canvasDocumentHTML(file, value){
+// The Canvas view already names the file above it, so it asks for the document without its header.
+function canvasDocumentHTML(file, value, opts = {}){
   const name = String(file.name || file.title || 'File');
   const format = String(file.format || name.split('.').pop() || 'text').toLowerCase();
   const raw = typeof value === 'string' ? value : value?.content || '';
-  const header = `<div class="arti-head"><b>${esc(name)}</b><span class="chip">${esc(format)}</span></div>`;
+  const header = opts.head === false ? '' : `<div class="arti-head"><b>${esc(name)}</b><span class="chip">${esc(format)}</span></div>`;
   if (value?.loading) return header + '<div class="canvas-file-note">Loading preview…</div>';
   if (value?.error) return header + `<div class="canvas-file-note">${esc(value.error)}</div>`;
   if (/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(raw)) return header + `<img class="canvas-file-image" src="${esc(raw)}" alt="${esc(name)}">`;
@@ -5985,47 +5976,229 @@ function canvasDocumentHTML(file, value){
   if (format === 'md' || format === 'markdown') return header + `<div class="canvas-document">${md(content)}</div>`;
   return header + `<pre class="canvas-file-text">${esc(content || 'No preview available for this file.')}</pre>`;
 }
-function canvasGalleryHTML(c){
-  if (!c) return '';
-  const items = [];
-  for (const m of c.messages || []) {
-    if (m.kind === 'card' && m.card.type !== 'memory') items.push({m, label:m.card.title || m.card.name || m.card.q || m.card.note || m.card.label || m.card.type, kind:m.card.type});
-    for (const [i,file] of (m.files || []).entries()) items.push({m, i, label:file.name, kind:'file'});
+// The chart, page, code or plan a chat produced (the chat's own artifact).
+function chatArtifactHTML(a){
+  if (!a) return '';
+  if (a.kind === 'chart'){
+    const max = Math.max.apply(null, a.data.map(d => d.v));
+    return `<div class="chartbox"><div class="ct">${esc(a.title)}</div><div class="cs">n = 1,392 qualifying comments · last 30 days</div>
+      <div class="bars">${a.data.map((d, i) => `<div class="bcol"><span class="v">${d.v}%</span><div class="bar" style="height:${Math.round(d.v / max * 100)}%;background:${d.c};animation-delay:${i * 60}ms"></div><span class="l">${esc(d.l)}</span></div>`).join('')}</div>
+      <div class="chartfoot">${esc(a.foot)}</div></div>`;
   }
-  if (!items.length) return '';
-  return `<div class="canvas-gallery"><div class="runhead">${icon('easel',14)} From this chat</div>${items.slice(-30).reverse().map(item => `<button class="canvas-gallery-item" data-act="${item.i === undefined ? 'canvas-card' : 'canvas-upload'}" data-chat="${c.id}" data-msg="${item.m.id}"${item.i === undefined ? '' : ` data-i="${item.i}"`}><span>${icon(item.kind === 'browser' ? 'globe' : item.kind === 'file' ? 'file' : item.kind === 'computer' ? 'term' : 'easel',15)}</span><b>${esc(item.label)}</b><small>${esc(item.kind)}</small></button>`).join('')}</div>`;
+  if (a.kind === 'html') return `<div class="arti-frame"><iframe sandbox="allow-scripts" title="${esc(a.title)}" srcdoc="${esc(a.html)}"></iframe></div>`;
+  if (a.kind === 'code') return `<div class="arti-head"><b>${esc(a.title)}</b><button class="btn ghost tiny" data-act="copycode">${icon('copy',13)} Copy</button></div><div class="codebox">${esc(a.code)}</div>`;
+  if (a.kind === 'plan') return `<div class="planbox"><div class="ct" style="font-weight:800;margin-bottom:10px">${esc(a.title)}</div><div class="md">${a.items.map(i => `<p>${md(i).replace(/<\/?p>/g,'')}</p>`).join('')}</div></div>`;
+  return '';
 }
-function paintCanvasSelection(body, c, m){
-  const file = c.canvasSelectedFileIndex !== undefined ? m.files?.[c.canvasSelectedFileIndex] : null;
-  if (file) {
-    body.innerHTML = `<button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>${canvasDocumentHTML(file, file.dataUrl || file.content || '')}`;
-    return;
+
+/* ---------------- Canvas: what the agent shows, bigger ----------------
+   One Canvas for the whole workspace, not one per chat or task. Its tab is a history
+   of what the agent showed in any chat — browser, computer, files and dashboards —
+   newest first, in the same list as Approvals and Automations. Opening an entry shows
+   it large; "Bigger" lets it take the chat's space as well. */
+let canvasRepaintTimer = 0, canvasWide = false;
+const canvasTime = v => typeof v === 'number' ? v : Date.parse(v || '') || 0;
+function canvasKind(cd){
+  if (!cd) return '';
+  if (cd.type === 'browser') return cd.desktop ? 'computer' : 'browser';
+  if (cd.type === 'computer') return 'computer';
+  if (['file','canvas','artifact'].includes(cd.type)) return 'file';
+  if (cd.type === 'subagents' || (cd.type === 'present' && ['dashboard','table'].includes(cd.kind))) return 'card';
+  return '';
+}
+// Newest first across every chat. A task's browser or computer shows once, as its newest card.
+function canvasHistory(){
+  const rows = [], seen = new Set();
+  for (const c of state.chats || []) {
+    const base = canvasTime(c.updatedAt || c.createdAt);
+    const msgs = c.messages || [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i], cd = m.kind === 'card' ? m.card : null, kind = canvasKind(cd);
+      if (!kind) continue;
+      const group = (kind === 'browser' || kind === 'computer') && cd.taskId ? `${c.id}:${kind}:${cd.taskId}` : `${c.id}:${m.id}`;
+      if (seen.has(group)) continue;
+      seen.add(group);
+      rows.push({ kind, c, m, at:canvasTime(m.at || m.createdAt) || base, order:i });
+    }
+    if (c.artifact && !msgs.some(m => m.card?.type === 'artifact' && m.card.title === c.artifact.title)) rows.push({ kind:'file', c, artifact:true, at:base, order:msgs.length });
   }
+  return rows.sort((a, b) => b.at - a.at || b.order - a.order);
+}
+// state.canvasItem is what the Canvas shows: { kind:'card'|'upload'|'artifact', chatId, msgId, fileIndex }.
+function canvasItemView(ref){
+  const c = ref && (state.chats || []).find(x => x.id === ref.chatId);
+  if (!c) return null;
+  if (ref.kind === 'artifact') return c.artifact ? { c, kind:'file', icon:'easel', title:c.artifact.title || 'Artifact', label:'Artifact' } : null;
+  const m = (c.messages || []).find(x => x.id === ref.msgId);
+  if (!m) return null;
+  if (ref.kind === 'upload') { const file = m.files?.[ref.fileIndex]; return file ? { c, m, file, kind:'file', icon:'file', title:file.name, label:'Your upload' } : null; }
   const cd = m.card;
-  if (cd.type === 'browser' && cd.liveId) { paintLive(body, c, cd.liveId); return; }
-  const back = `<button class="canvas-back" data-act="canvas-back">${icon('left',14)} All Canvas items</button>`;
-  if (cd.type === 'browser') {
-    const index = c.messages.indexOf(m);
-    const related = c.messages.slice(index).filter(item => item.card?.type === 'browser' && (!cd.taskId || item.card.taskId === cd.taskId));
-    const latest = related.at(-1)?.card || cd;
-    const screenshot = [...related].reverse().find(item => item.card.screenshot)?.card.screenshot || cd.screenshot;
-    body.innerHTML = back + `<div class="arti-head"><b>Browser view</b><span class="chip">${esc(latest.status || '')}</span></div><div class="rurl">${esc(latest.url || cd.url || '')}</div><p class="rnote">${esc(latest.note || '')}</p>${screenshot ? `<img class="canvas-file-image" src="${esc(screenshot)}" alt="Browser screenshot">` : '<div class="canvas-file-note">Waiting for the browser image…</div>'}`;
-    return;
-  }
+  if (!cd) return null;
+  const kind = canvasKind(cd) || 'card';
+  if (cd.type === 'browser') return { c, m, kind, icon:cd.desktop ? 'laptop' : 'globe', title:cd.desktop ? 'Virtual computer' : hostName(cd.url) || cd.url || 'Browser', label:cd.desktop ? 'Computer' : 'Browser' };
   if (cd.type === 'computer') {
-    const index = c.messages.indexOf(m);
-    const related = c.messages.slice(index).filter(item => item.card?.type === 'computer' && (!cd.taskId || item.card.taskId === cd.taskId));
-    const latest = related.at(-1)?.card || cd;
-    const lines = related.flatMap(item => item.card.lines || []).slice(-40);
-    body.innerHTML = back + `<div class="arti-head"><b>Computer output</b><span class="chip">${esc(latest.status || '')}</span></div><div class="term mini" id="pcout">${lines.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('')}${latest.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div>`;
-    if (cd.pcId) pcConnect(cd.pcId);
-    return;
+    const command = String((cd.lines || []).find(L => /^\$\s/.test(String(L.t || '')))?.t || '').replace(/^\$\s*/, '');
+    return { c, m, kind, icon:'term', title:command || 'Computer', label:'Computer' };
   }
-  if (cd.type === 'file' || cd.type === 'canvas') {
-    body.innerHTML = back + canvasDocumentHTML(cd, cd.type === 'file' ? canvasFileContent(c,m) : cd.content);
-    return;
+  if (kind === 'file') { const info = artifactInfo({ ...cd, name:cd.name || cd.title }); return { c, m, kind, icon:info.ic, title:info.title, label:info.label }; }
+  return { c, m, kind, icon:cd.type === 'present' ? 'chart' : 'users', title:cd.title || cd.name || 'Canvas item', label:cd.type === 'present' ? 'Dashboard' : 'Agents' };
+}
+function canvasRefOf(r){ return r.artifact ? { kind:'artifact', chatId:r.c.id } : { kind:'card', chatId:r.c.id, msgId:r.m.id }; }
+function canvasHistoryHTML(){
+  const rows = canvasHistory().slice(0, 80).map(r => {
+    const v = canvasItemView(canvasRefOf(r));
+    if (!v) return '';
+    const cd = r.m?.card;
+    const working = !!cd && (cardStreams(r.c, cd) || cd.status === 'running');
+    const thumb = cd?.type === 'browser' ? safeImg(cd.screenshot) : '';
+    const open = r.artifact ? `data-act="canvas-artifact" data-chat="${esc(r.c.id)}"` : `data-act="canvas-card" data-chat="${esc(r.c.id)}" data-msg="${esc(r.m.id)}"`;
+    return `<article class="appr-item canvas-entry">
+      <button type="button" class="appr-row" ${open} aria-label="Open ${esc(v.title)} in the Canvas">
+        <span class="appr-ico canvas-ico k-${r.kind}${thumb ? ' thumb' : ''}">${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : icon(v.icon, 18)}</span>
+        <span class="appr-copy">
+          <b>${esc(v.title)}</b>
+          <span class="appr-desc">${esc(r.c.title || 'Chat')}</span>
+          <span class="appr-meta${working ? ' live' : ''}">${working ? '<span class="livedot"></span>' : ''}${esc([working ? 'Working now' : v.label, fmtAgo(r.at)].filter(Boolean).join(' · '))}</span>
+        </span>
+        <span class="appr-chev canvas-go">${icon('chev',16)}</span>
+      </button>
+    </article>`;
+  }).join('');
+  return `<div class="appr-panel">
+    <h3 class="appr-heading">Canvas history</h3>
+    ${rows || `<div class="appr-empty">Nothing here yet. When ${esc(state.agent?.name || 'your agent')} browses, works on its computer or makes a file in any chat, it shows up here to open bigger.</div>`}
+  </div>`;
+}
+function canvasLiveHTML(c, id){
+  const cards = (c.messages || []).filter(m => m.kind === 'card' && m.card.liveId === id);
+  const desktop = cards.some(m => m.card.desktop);
+  const surface = desktop ? 'computer' : 'browser';
+  const url = [...cards].reverse().find(m => m.card.url)?.card.url || '';
+  const poster = safeImg([...cards].reverse().find(m => m.card.screenshot)?.card.screenshot);
+  return `<div class="livewrap" id="livewrap">
+      <div class="livebar"><span class="url" id="liveurl">${esc(desktop ? 'Agent computer' : url || 'connecting…')}</span><span class="chip purple" id="livestate">connecting</span></div>
+      <div class="liveview" id="liveview" tabindex="0" aria-label="Live ${surface} workspace">
+        <canvas id="livecanvas" width="1280" height="900" aria-label="Live ${surface} stream"></canvas>
+        <img id="liveimg" alt="${desktop ? 'Computer' : 'Browser'} preview" hidden${poster ? ` src="${esc(poster)}"` : ''}>
+        ${cards.some(m => cardStreams(c, m.card)) ? agentPointerHTML(id) : ''}
+        <div class="bigcursor" id="bigcursor"></div>
+      </div>
+      <div class="controlbar">
+        <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
+        <div class="cinfo"><b id="livestatus">Agent ${surface}</b><div class="sub" id="livesub">${desktop ? 'live virtual computer' : 'live interactive stream'} — the agent is connected to the VM</div></div>
+        <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
+      </div>
+    </div>`;
+}
+function canvasLiveMount(id){
+  window.__liveFrames = 0;
+  liveConnect(id);
+  const poster = $('#liveimg')?.getAttribute('src');
+  if (liveCardFrame?.id === id) drawLiveFrame(liveCardFrame.url);
+  else if (poster) drawLiveFrame(poster);
+}
+// A browser card without a live session shows the task's newest page and picture.
+function canvasShotHTML(c, m){
+  const cd = m.card;
+  const related = (c.messages || []).filter(x => x === m || (cd.taskId && x.card?.type === 'browser' && x.card.taskId === cd.taskId));
+  const latest = related.at(-1)?.card || cd;
+  const shot = safeImg([...related].reverse().find(x => x.card?.screenshot)?.card.screenshot);
+  return `<div class="livebar"><span class="url">${esc(latest.url || cd.url || '')}</span><span class="chip">${esc(latest.status || '')}</span></div>
+    ${latest.note ? `<p class="rnote">${esc(latest.note)}</p>` : ''}
+    ${shot ? `<img class="canvas-file-image" src="${esc(shot)}" alt="Browser screenshot">` : '<div class="canvas-file-note">Waiting for the browser image…</div>'}`;
+}
+function canvasComputerHTML(c, m){
+  const cd = m.card;
+  const related = (c.messages || []).filter(x => x === m || (cd.taskId && x.card?.type === 'computer' && x.card.taskId === cd.taskId));
+  const latest = related.at(-1)?.card || cd;
+  const lines = related.flatMap(x => x.card.lines || []).slice(-80);
+  return `<div class="term canvas-term"${cd.pcId ? ` data-pc="${esc(cd.pcId)}"` : ''}>${lines.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('') || '<div>$ …</div>'}${latest.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div>`;
+}
+const canvasBody = (html, cls = '') => ({ key:html, html, cls });
+// What an open entry shows; a live view keeps one key so updates never restart it.
+function canvasItemBody(ref, v){
+  if (ref.kind === 'artifact') return canvasBody(chatArtifactHTML(v.c.artifact), 'is-doc');
+  if (ref.kind === 'upload') return canvasBody(canvasDocumentHTML(v.file, v.file.dataUrl || v.file.content || '', { head:false }), 'is-doc');
+  const { c, m } = v, cd = m.card;
+  if (cd.type === 'browser') return cd.liveId ? { key:'live:' + cd.liveId, html:canvasLiveHTML(c, cd.liveId), cls:'is-live', live:cd.liveId } : canvasBody(canvasShotHTML(c, m));
+  if (cd.type === 'computer') return canvasBody(canvasComputerHTML(c, m), 'is-term');
+  if (cd.type === 'artifact' && c.artifact?.title === cd.title) return canvasBody(chatArtifactHTML(c.artifact), 'is-doc');
+  if (cd.type === 'file' || cd.type === 'canvas') return canvasBody(canvasDocumentHTML(cd, cd.type === 'file' ? canvasFileContent(c, m) : cd.content, { head:false }), 'is-doc');
+  return canvasBody(`<div class="canvas-selected-card">${cardNode(c, m)}</div>`);
+}
+function canvasViewHeadHTML(v){
+  return `<div class="canvas-view-bar">
+      <button class="canvas-back" data-act="canvas-back">${icon('left',14)} Canvas history</button>
+      <span class="canvas-view-acts">
+        <button class="iconbtn" data-act="openchat" data-id="${esc(v.c.id)}" title="Open the chat" aria-label="Open the chat">${icon('chatb',15)}</button>
+        <button class="iconbtn" data-act="canvas-wide" aria-pressed="${canvasWide}" title="${canvasWide ? 'Smaller' : 'Bigger'}" aria-label="${canvasWide ? 'Show it next to the chat' : 'Show it bigger'}">${icon(canvasWide ? 'shrink' : 'expand',15)}</button>
+      </span>
+    </div>
+    <div class="canvas-view-title">
+      <span class="appr-ico canvas-ico k-${v.kind}">${icon(v.icon, 18)}</span>
+      <span class="appr-copy"><b>${esc(v.title)}</b><span class="appr-desc">${esc(v.label)} · ${esc(v.c.title || 'Chat')}</span></span>
+    </div>`;
+}
+function canvasLiveId(){
+  if (!canvasShouldShow() || (state.canvasTab || 'canvas') !== 'canvas') return null;
+  const v = state.canvasItem?.kind === 'card' ? canvasItemView(state.canvasItem) : null;
+  return v?.m.card.type === 'browser' ? v.m.card.liveId || null : null;
+}
+function canvasWideOn(){ return canvasWide && canvasShouldShow() && (state.canvasTab || 'canvas') === 'canvas' && !!canvasItemView(state.canvasItem); }
+function syncCanvasWide(){ $('#app')?.classList.toggle('canvas-wide', canvasWideOn()); }
+function workspaceLive(){
+  return (state.chats || []).some(c => (c.messages || []).some(m => m.kind === 'card' && cardStreams(c, m.card)));
+}
+/* The Canvas tab: the history, or the open entry. Parts that did not change keep their
+   DOM, so a live view or a page keeps running while the agent's cards update. */
+function paintCanvasTab(body){
+  const put = (node, html) => { if (node.__html !== html) { node.innerHTML = html; node.__html = html; } };
+  const ref = state.canvasItem, v = ref ? canvasItemView(ref) : null;
+  if (!v) {
+    body.classList.remove('is-view');
+    put(body, canvasHistoryHTML());
+    return {};
   }
-  body.innerHTML = back + `<div class="canvas-selected-card">${cardNode(c,m)}</div>`;
+  body.classList.add('is-view');
+  let view = body.querySelector(':scope > .canvas-view');
+  if (!view) {
+    body.innerHTML = '<div class="canvas-view"><div class="canvas-view-head"></div><div class="canvas-view-body"></div></div>';
+    body.__html = null;
+    view = body.querySelector(':scope > .canvas-view');
+  }
+  put(view.querySelector('.canvas-view-head'), canvasViewHeadHTML(v));
+  const next = canvasItemBody(ref, v), el = view.querySelector('.canvas-view-body');
+  el.className = 'canvas-view-body' + (next.cls ? ' ' + next.cls : '');
+  const fresh = el.__key !== next.key;
+  if (fresh) { el.innerHTML = next.html; el.__key = next.key; }
+  return { live:next.live, fresh };
+}
+function canvasAfterPaint(body, painted){
+  if (painted.live && canvasShouldShow() && (painted.fresh || liveIdShown !== painted.live)) canvasLiveMount(painted.live);
+  const term = body.querySelector('.canvas-term[data-pc]');
+  if (term && painted.fresh && !$('#pcout')) { term.id = 'pcout'; pcConnect(term.dataset.pc); }
+  const c = chat();
+  const cardLive = [...(c?.messages || [])].reverse().find(m => m.kind === 'card' && cardStreams(c, m.card))?.card.liveId;
+  if (!painted.live && !term && (liveWS || pcWS) && !(cardLive && cardLive === liveIdShown)) liveClose();
+  syncCanvasWide();
+}
+// Card updates refresh the open Canvas without restarting what it plays.
+function repaintCanvasSoon(){
+  if (canvasRepaintTimer) return;
+  canvasRepaintTimer = setTimeout(() => {
+    canvasRepaintTimer = 0;
+    if (!canvasShouldShow()) return;
+    const tab = $('#canvas .canvas-tab[data-t="canvas"]');
+    if (tab) { const dot = tab.querySelector('.livedot'), on = workspaceLive(); if (on && !dot) tab.insertAdjacentHTML('beforeend', '<span class="livedot"></span>'); else if (!on && dot) dot.remove(); }
+    const body = $('#cbody');
+    if (body && (state.canvasTab || 'canvas') === 'canvas') canvasAfterPaint(body, paintCanvasTab(body));
+  }, 120);
+}
+// Opens something in the Canvas panel of the current chat.
+function canvasShow(ref){
+  state.canvasItem = ref;
+  state.canvasTab = 'canvas';
+  if (canvasShouldShow()) { save(); paintCanvas(); } else setCanvasOpen(true);
 }
 
 function paintCanvas(){
@@ -6034,14 +6207,11 @@ function paintCanvas(){
   if (state.canvasTab === 'agent') state.canvasTab = 'approvals';
   if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
   if (!['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
-  if (!state._showLiveInCanvas) state._showLiveInCanvas = false;
   const c = chat();
   const top = state.canvasTab || 'canvas';
-  const selected = c && (c.messages || []).find(m => m.id === c.canvasSelectedMessageId);
   // A chat card still streaming its task's browser keeps the connection.
   const cardLive = [...(c?.messages || [])].reverse().find(m => m.kind === 'card' && cardStreams(c, m.card))?.card.liveId;
-  if (!(top === 'canvas' && (state._showLiveInCanvas || selected?.card?.liveId)) && (liveWS || pcWS) && !(cardLive && cardLive === liveIdShown)) liveClose();
-  const liveId = liveIdFor(c);
+  if (!canvasLiveId() && (liveWS || pcWS) && !(cardLive && cardLive === liveIdShown)) liveClose();
   cv.innerHTML = `
     <div class="canvas-resize" id="canvasResize"></div>
     <div class="canvas-head">
@@ -6049,7 +6219,7 @@ function paintCanvas(){
       <div class="canvas-head-row">
         <div class="canvas-tabs" role="tablist" aria-label="Agent panel">
           ${[
-            ['canvas', 'easel', 'Canvas', liveId ? '<span class="livedot"></span>' : ''],
+            ['canvas', 'easel', 'Canvas', workspaceLive() ? '<span class="livedot"></span>' : ''],
             ['subagents', 'clock', 'Automations', ''],
             ['approvals', 'shieldcheck', 'Approvals', ''],
             ['mail', 'mail', 'Mail', mailCache && mailCache.unread ? `<span class="cnt" aria-hidden="true">${mailCache.unread}</span>` : ''],
@@ -6062,6 +6232,7 @@ function paintCanvas(){
     <div class="cbody" id="cbody"></div>`;
   initCanvasResize();
   centerActiveSeg(cv);
+  syncCanvasWide();
   const an = $('#agentname');
   if (an) an.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
@@ -6089,45 +6260,7 @@ function paintCanvas(){
     refreshSubAgents();
     return;
   }
-  if (top === 'live'){
-    state.canvasTab = 'canvas'; state._showLiveInCanvas = true;
-    paintLive(body, c);
-    return;
-  }
-  // Show live session in canvas tab when flagged or when there's an active live session but no artifact
-  if (state._showLiveInCanvas && liveIdFor(c)){
-    paintLive(body, c);
-    return;
-  }
-  if (selected && (selected.card || selected.files?.[c.canvasSelectedFileIndex])) {
-    paintCanvasSelection(body, c, selected);
-    return;
-  }
-  const a = c && c.artifact;
-  const run = canvasGalleryHTML(c) + runTimelineHTML(c);
-  if (!a){
-    body.innerHTML = run || `<div class="cempty">${Mascot.svg(state.agent.color,'idle',80,'mascot-bob')}<div style="font-weight:700;margin-top:12px">The canvas</div><div class="mut2">Charts, live pages, diffs and plans I create will render here while we chat.</div></div>`;
-    return;
-  }
-  if (a.kind === 'chart'){
-    const max = Math.max.apply(null, a.data.map(d => d.v));
-    body.innerHTML = run + `<div class="chartbox"><div class="ct">${esc(a.title)}</div><div class="cs">n = 1,392 qualifying comments · last 30 days</div>
-      <div class="bars">${a.data.map((d, i) => `<div class="bcol"><span class="v">${d.v}%</span><div class="bar" style="height:${Math.round(d.v / max * 100)}%;background:${d.c};animation-delay:${i * 60}ms"></div><span class="l">${esc(d.l)}</span></div>`).join('')}</div>
-      <div class="chartfoot">${esc(a.foot)}</div></div>`;
-    return;
-  }
-  if (a.kind === 'html'){
-    body.innerHTML = run + `<div class="arti-head"><b>${esc(a.title)}</b><span class="chip green">live</span></div><div class="arti-frame"><iframe sandbox="allow-scripts" srcdoc="${esc(a.html)}"></iframe></div>`;
-    return;
-  }
-  if (a.kind === 'code'){
-    body.innerHTML = run + `<div class="arti-head"><b>${esc(a.title)}</b><button class="btn ghost tiny" data-act="copycode">${icon('copy',13)} Copy</button></div><div class="codebox" id="codebox">${esc(a.code)}</div>`;
-    return;
-  }
-  if (a.kind === 'plan'){
-    body.innerHTML = run + `<div class="planbox"><div class="ct" style="font-weight:800;margin-bottom:10px">${esc(a.title)}</div><div class="md">${a.items.map(i => `<p>${md(i).replace(/<\/?p>/g,'')}</p>`).join('')}</div></div>`;
-    return;
-  }
+  canvasAfterPaint(body, paintCanvasTab(body));
 }
 
 /* ---------------- canvas drag-to-resize ---------------- */
@@ -6433,8 +6566,8 @@ async function persistAgentContext(documents){
   agentContextSavePending=(async()=>{let completed=0;do{
     const target=agentContextSaveVersion,current=state.agentContext || {revision:0,documents:editableAgentDocuments()};
     const nextDocuments=queuedAgentDocuments || current.documents;queuedAgentDocuments=null;
-    const saved=await window.LingonAuth.api('/api/agent-context',{method:'PUT',body:JSON.stringify({agent:state.agent,documents:nextDocuments,revision:current.revision})});
-    state.agentContext=saved;if(saved.agent)state.agent={...state.agent,...saved.agent};
+    const saved=await window.LingonAuth.api('/api/agent-context',{method:'PUT',body:JSON.stringify({agent:{...agentSettings(state.agent),ownerName:profileName() || undefined},documents:nextDocuments,revision:current.revision})});
+    state.agentContext=saved;if(saved.agent)state.agent={...agentSettings(state.agent),...agentSettings(saved.agent)};
     state.systemManifest={...(state.systemManifest || {}),revision:saved.revision,documents:{...((state.systemManifest || {}).documents || {}),...(saved.documents || {})}};
     save();completed=target;
   }while(completed<agentContextSaveVersion);})();
@@ -6520,6 +6653,8 @@ function paintSettings(M){
   if (un) un.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
     state.userProfile = Object.assign({}, state.userProfile, { name: v }); save(); paintSide(); toast('Profile updated.');
+    // Automations and tasks read the owner's name from the saved agent context.
+    persistAgentContext().catch(()=>{});
   });
   const browserName=M.querySelector('#browser-agent-name');
   if(browserName)browserName.addEventListener('change',e=>{
@@ -6929,7 +7064,7 @@ document.addEventListener('click', async e => {
   if (act === 'closecanvas'){ setCanvasOpen(false); return; }
   if (act === 'nav'){
     if (!signedIn()){ renderAuth(); return; }
-    mobileNavOpen = false; state.view = b.dataset.view; state.userMenuOpen = false; save(); renderApp();
+    mobileNavOpen = false; canvasWide = false; state.view = b.dataset.view; state.userMenuOpen = false; save(); switchView();
     if (state.view === 'apps') refreshComposioApps();
     return;
   }
@@ -7018,14 +7153,14 @@ document.addEventListener('click', async e => {
     catch(err){toast(err.message || 'Could not save agent reset.');}
     return;
   }
-  if (act === 'open-library'){ mobileNavOpen = false; state.view = 'library'; state.userMenuOpen = false; save(); renderApp(); refreshLibrary(); return; }
+  if (act === 'open-library'){ mobileNavOpen = false; state.view = 'library'; state.userMenuOpen = false; save(); switchView(); refreshLibrary(); return; }
   if (act === 'system-file-view'){
     const key=b.dataset.key;
     if(!['identity','soul','user','agents'].includes(key))return;
     mobileNavOpen=false;state.view='library';state.libraryCat='system';state.systemFile=`system:${key}`;state.userMenuOpen=false;
     save();renderApp();refreshSystemFiles(true);return;
   }
-  if (act === 'open-goals'){ mobileNavOpen = false; state.view = 'goals'; state.userMenuOpen = false; save(); renderApp(); refreshGoals(); return; }
+  if (act === 'open-goals'){ mobileNavOpen = false; state.view = 'goals'; state.userMenuOpen = false; save(); switchView(); refreshGoals(); return; }
   /* goals */
   const repaintGoals = repaintGoalViews;
   if (act === 'goal-start'){ mobileNavOpen = false; newChat({goal:true, category:b.dataset.c}); return; }
@@ -7190,10 +7325,10 @@ document.addEventListener('click', async e => {
     } catch (err) { toast(err.message); }
     return;
   }
-  if (act === 'newchat'){ mobileNavOpen = false; newChat(); return; }
+  if (act === 'newchat'){ mobileNavOpen = false; canvasWide = false; newChat(); return; }
   if (act === 'openchat'){
     if (!signedIn()){ renderAuth(); return; }
-    mobileNavOpen = false; state.activeChat = b.dataset.id; state.view = 'chat'; save(); renderApp(); return;
+    mobileNavOpen = false; canvasWide = false; state.activeChat = b.dataset.id; state.view = 'chat'; save(); switchView(); return;
   }
   if (act === 'delchat'){
     e.stopPropagation();
@@ -7206,6 +7341,7 @@ document.addEventListener('click', async e => {
     }
     pendingFilesByForm.delete(`cform:${b.dataset.id}`);
     state.chats = state.chats.filter(x => x.id !== b.dataset.id);
+    if (state.canvasItem?.chatId === b.dataset.id) state.canvasItem = null;
     const deletedId=b.dataset.id;
     clientPending.delete('chat:'+deletedId);
     clientQueued.delete('chat:'+deletedId);
@@ -7218,7 +7354,6 @@ document.addEventListener('click', async e => {
   if (act === 'ctab'){
     const next = b.dataset.t === 'agent' || b.dataset.t === 'trace' || b.dataset.t === 'wallet' ? 'canvas' : b.dataset.t;
     state.canvasTab = ['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(next) ? next : 'canvas';
-    if (next !== 'canvas') state._showLiveInCanvas = false;
     save(); paintCanvas();
     if (next === 'subagents') refreshSubAgents(true);
     if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
@@ -7321,9 +7456,8 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'library-open' && c){
-    state.activeChat = c.id; state.view = 'chat'; state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-    c.canvasSelectedMessageId = m ? m.id : null;
-    if (b.dataset.file !== undefined) c.canvasSelectedFileIndex = Number(b.dataset.file); else delete c.canvasSelectedFileIndex;
+    state.activeChat = c.id; state.view = 'chat'; state.canvasOpen = true; state.canvasTab = 'canvas';
+    state.canvasItem = !m ? { kind:'artifact', chatId:c.id } : b.dataset.file !== undefined ? { kind:'upload', chatId:c.id, msgId:m.id, fileIndex:Number(b.dataset.file) } : { kind:'card', chatId:c.id, msgId:m.id };
     save(); renderApp(); return;
   }
   if (act === 'library-upload-open'){
@@ -7434,30 +7568,33 @@ document.addEventListener('click', async e => {
     toast('Your request is ready for the agent. Send it when you’re ready.');
     return;
   }
+  // "Open in Canvas" on a chat card, or a Canvas history entry, shows it large in the Canvas.
   if (act === 'canvas-card' && c && m?.card){
-    state.activeChat = c.id;
-    c.canvasSelectedMessageId = m.card.type === 'artifact' && c.artifact?.title === m.card.title ? null : m.id;
-    delete c.canvasSelectedFileIndex;
-    state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-    $('#app')?.classList.remove('nocanvas'); syncShellClasses(); save(); paintCanvas(); return;
+    const cd = m.card;
+    canvasShow(cd.type === 'artifact' && c.artifact?.title === cd.title ? { kind:'artifact', chatId:c.id } : { kind:'card', chatId:c.id, msgId:m.id });
+    return;
   }
+  if (act === 'canvas-artifact' && c?.artifact){ canvasShow({ kind:'artifact', chatId:c.id }); return; }
   if (act === 'canvas-upload' && c && m?.files?.[Number(b.dataset.i)]){
-    state.activeChat = c.id; c.canvasSelectedMessageId = m.id; c.canvasSelectedFileIndex = Number(b.dataset.i);
-    state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = false;
-    $('#app')?.classList.remove('nocanvas'); syncShellClasses(); save(); paintCanvas(); return;
+    canvasShow({ kind:'upload', chatId:c.id, msgId:m.id, fileIndex:Number(b.dataset.i) });
+    return;
   }
-  if (act === 'canvas-back'){
-    const current = chat(); if (current) { current.canvasSelectedMessageId = null; delete current.canvasSelectedFileIndex; }
-    state._showLiveInCanvas = false; liveClose(); save(); paintCanvas(); return;
+  if (act === 'canvas-back'){ state.canvasItem = null; canvasWide = false; save(); paintCanvas(); return; }
+  if (act === 'canvas-wide'){
+    canvasWide = !canvasWide;
+    const body = $('#cbody');
+    if (body) canvasAfterPaint(body, paintCanvasTab(body)); else syncCanvasWide();
+    return;
   }
-  if (act === 'viewcanvas'){ const current = chat(); if (current) { current.canvasSelectedMessageId = null; delete current.canvasSelectedFileIndex; } state._showLiveInCanvas = false; state.canvasOpen = true; state.canvasTab = 'canvas'; $('#app') && $('#app').classList.remove('nocanvas'); syncShellClasses(); paintCanvas(); return; }
-  if (act === 'watchlive'){ state.canvasOpen = true; state.canvasTab = 'canvas'; state._showLiveInCanvas = true; $('#app') && $('#app').classList.remove('nocanvas'); syncShellClasses(); save(); paintCanvas(); return; }
+  if (act === 'viewcanvas'){ state.canvasItem = null; setCanvasOpen(true, { tab:'canvas' }); return; }
+  if (act === 'watchlive'){
+    const from = c || chat();
+    const hit = from && [...(from.messages || [])].reverse().find(x => x.kind === 'card' && x.card?.type === 'browser' && x.card.liveId);
+    if (!hit) { toast('There is no live browser in this chat yet.'); return; }
+    canvasShow({ kind:'card', chatId:from.id, msgId:hit.id });
+    return;
+  }
   if (act === 'takeover'){ liveTakeover(); return; }
-  if (act === 'closestop-live'){
-    const id = liveIdShown;
-    if (id){ window.LingonAuth.api('/api/live/stop', { method: 'POST', body: JSON.stringify({ liveId: id }) }).catch(() => {}); }
-    liveClose(); state._showLiveInCanvas = false; state.canvasTab = 'canvas'; save(); paintCanvas(); return;
-  }
   if (act === 'openbrowser'){ toast('For safety, browsing stays contained in the sandbox window above.'); return; }
   if (act === 'artmenu'){ toast('Artifact saved — find it in Vault → Library.'); return; }
   if (act === 'replymsg' && c && m){
@@ -7484,7 +7621,7 @@ document.addEventListener('click', async e => {
     reactions.has(reaction.id) ? reactions.delete(reaction.id) : reactions.add(reaction.id);
     m.reactions = [...reactions]; save(); replaceNode(c, m); return;
   }
-  if (act === 'copycode'){ const t = $('#codebox'); if (t) await copyText(t.textContent); toast('Copied'); return; }
+  if (act === 'copycode'){ const t = b.closest('.cbody')?.querySelector('.codebox'); if (t) await copyText(t.textContent); toast('Copied'); return; }
 
   /* card resolutions (real accounts only — no anonymous approvals) */
   if (act === 'task-change-cancel' && c) {c.taskReply=null;c.taskReplyScope=null;save();paintMain();return;}

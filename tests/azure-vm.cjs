@@ -59,7 +59,7 @@ assert.doesNotMatch(browserRunner, /puppeteer\.launch\(/);
 assert.match(browserRunner, /setTimeout\(\(\) => process\.exit\(\), 1500\)\.unref\(\)/);
 assert.match(browserRunner, /request\.abort/);
 assert.match(sessionBrowser, /install -d -m 700 -o lingon-browser/);
-assert.match(sessionBrowser, /runuser -u lingon-browser -- timeout -k 5 170 env .* node \/tmp\/lingon-browser-session\.js/);
+assert.match(sessionBrowser, /runuser -u lingon-browser -- timeout -k 5 170 env .* node \/run\/lingon\/browser-session\.js/);
 // Any public web page may load; the firewall for the browser user is set up before it starts.
 assert.match(browserRunner, /const kit = \(function browserKit/);
 assert.ok(sessionBrowser.indexOf('iptables -C OUTPUT -m owner --uid-owner lingon-browser') < sessionBrowser.indexOf('runuser -u lingon-browser'));

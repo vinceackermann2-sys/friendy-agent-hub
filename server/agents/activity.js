@@ -68,6 +68,7 @@ function describeTool(name, args = {}) {
     case 'mail_draft': return args.to ? `Drafting an email to ${clip(args.to, 32)}` : 'Drafting an email';
     case 'mail_send': return args.to ? `Sending an email to ${clip(args.to, 32)}` : 'Sending an email';
     case 'shop_status': return 'Checking Shop Pay';
+    case 'product_search': return `Finding${args.query ? quoted(args.query) : ' products'}`;
     case 'shop_search': return `Searching shops${args.query ? ' for' + quoted(args.query) : ''}`;
     case 'shop_product': return 'Looking at a product';
     case 'shop_checkout': return 'Preparing checkout';

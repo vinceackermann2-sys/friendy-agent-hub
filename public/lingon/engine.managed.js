@@ -157,7 +157,7 @@
       lines:(card.lines || []).slice(-8),agents:card.agents,
     }));
     return stream(rt, '/api/agent/conversation', { prompt, requestId: crypto.randomUUID(), history,
-      context: { agent: { name: rt.agent.name, pers: rt.agent.pers }, replyTo: last?.replyTo, timeZone: localTimeZone(),
+      context: { agent: { name: rt.agent.name, pers: rt.agent.pers, ownerName: rt.ownerName || undefined }, replyTo: last?.replyTo, timeZone: localTimeZone(),
         userMessageId: last?.id, artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, type:f.type, size:f.size, dataUrl:f.dataUrl })) } });
   }
   async function cancelCurrent(rt, replacing = false) {

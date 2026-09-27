@@ -38,7 +38,7 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
   await rejects('computer_action', { action: 'open_app', app: 'browser', url: 'http://169.254.169.254/' }, /private address/);
   await rejects('computer_action', { action: 'key' }, /key needs a key/);
   await rejects('computer_submit', { action: 'click', x: 5, y: 5 }, /needs a summary/);
-  await rejects('computer_action', { action: 'screenshot' }, /requires the user Azure VM/);
+  await rejects('computer_action', { action: 'screenshot' }, /Native desktop access is disabled/);
   const desk = azure.desktopKit();
   assert.deepEqual(desk.steps({ type: 'click', x: 10, y: 20, agent: true }), [{ xdotool: ['mousemove', '10', '20'] }, { sleep: 120 }, { xdotool: ['click', '1'] }]);
   assert.deepEqual(desk.steps({ type: 'click', x: 10, y: 20, button: 2 }), [{ xdotool: ['mousemove', '10', '20'] }, { xdotool: ['click', '3'] }], 'user clicks are instant');
@@ -49,14 +49,7 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
   assert.equal(desk.steps({ type: 'drag', x: 0, y: 0, to_x: 80, to_y: 40 }).filter((step) => step.xdotool?.[0] === 'mousemove').length, 9, 'drags move in steps');
   assert.throws(() => desk.steps({ type: 'key', key: 'rm -rf /' }), /Unknown key/);
   assert.throws(() => desk.steps({ type: 'open_app', app: 'terminal' }), /browser, files and editor/);
-  const deskScript = azure.buildDesktopRelayScript({ sessionId: 'live_desk1', relayUrl: 'wss://app.example/ws/live-vm/live_desk1?token=t', token: 'a'.repeat(40) });
-  const deskRunner = Buffer.from(deskScript.match(/echo '([^']+)' \| base64 -d >/)[1], 'base64').toString('utf8');
-  assert.doesNotThrow(() => new (require('node:vm').Script)(deskRunner), 'the desktop relay is valid JavaScript');
-  assert.ok(deskScript.indexOf('--uid-owner lingon-desktop') < deskScript.indexOf('runuser -u lingon-desktop'), 'the firewall is set before the desktop starts');
-  assert.match(deskScript, /DownloadRestrictions":3/);
-  assert.match(deskScript, /runuser -u lingon-desktop/);
-  assert.doesNotMatch(deskRunner, /xterm|gnome-terminal|x-terminal-emulator/, 'the desktop has no terminal');
-  assert.throws(() => azure.buildDesktopRelayScript({ sessionId: 'live_desk1', relayUrl: 'https://bad', token: 'a'.repeat(40) }), /ws:\/\/ or wss:\/\//);
+  assert.throws(() => azure.buildDesktopRelayScript({ sessionId: 'live_desk1' }), (error) => error.code === 'DISABLED', 'desktop startup cannot bypass the worker boundary');
 
   // Vault credentials: listed by name, typed only after approval, only on the
   // approved site or window, and never returned to the model.

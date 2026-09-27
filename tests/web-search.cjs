@@ -45,12 +45,15 @@ const ctx = { trace: () => {} };
   dns.lookup = realLookup;
 
   const html = '<html><head><title>Öppettider &amp; info</title><style>.x{}</style></head><body><nav>Menu</nav><h1>Stadsbiblioteket</h1><p>Öppet 10&ndash;19</p><script>evil()</script><ul><li>Lån</li><li>Wifi</li></ul><footer>Cookies</footer></body></html>';
-  assert.deepEqual(sandbox.htmlToText(html), { title: 'Öppettider & info', text: 'Stadsbiblioteket\nÖppet 10-19\n\n- Lån\n- Wifi' });
+  assert.deepEqual(sandbox.htmlToText(html), { title: 'Öppettider & info', text: 'Stadsbiblioteket\nÖppet 10-19\n\n- Lån\n- Wifi', image: '' });
+  // A page's preview image comes along (https only), so a pick can show a photo on its card.
+  assert.equal(sandbox.htmlToText('<head><meta content="https://cdn.example.se/shoe.jpg?w=800&amp;q=80" property="og:image"></head><p>Shoe</p>').image, 'https://cdn.example.se/shoe.jpg?w=800&q=80');
+  assert.equal(sandbox.htmlToText('<meta property="og:image" content="http://cdn.example.se/shoe.jpg"><p>Shoe</p>').image, '');
 
   // Firecrawl search; the top result pages are read directly, with a Firecrawl
   // scrape only when the direct read finds almost no text.
   process.env.FIRECRAWL_API_KEY = 'fc-test';
-  pages.set('https://bibliotek.example.se/', { status: 200, body: html.replace('Wifi', 'Wifi ' + 'Studierum och grupprum. '.repeat(10)) });
+  pages.set('https://bibliotek.example.se/', { status: 200, body: html.replace('<style>', '<meta property="og:image" content="https://bibliotek.example.se/hus.jpg"><style>').replace('Wifi', 'Wifi ' + 'Studierum och grupprum. '.repeat(10)) });
   pages.set('https://redirect.example.se/', { status: 302, location: 'https://final.example.se/page' });
   pages.set('https://final.example.se/page', { status: 200, type: 'text/plain', body: 'Plain text page '.repeat(20) });
   pages.set('https://app.example.se/', { status: 200, body: '<title>App</title><div id="root"></div>' });
@@ -79,6 +82,7 @@ const ctx = { trace: () => {} };
   const parsed = JSON.parse(hit.text);
   assert.equal(parsed.results.length, 4, 'duplicate URLs are merged');
   assert.match(parsed.results[0].text, /^Stadsbiblioteket\nÖppet 10-19/);
+  assert.equal(parsed.results[0].image, 'https://bibliotek.example.se/hus.jpg');
   assert.match(parsed.results[1].text, /^Plain text page/, 'redirects are followed');
   assert.match(parsed.results[2].text, /only exists after JavaScript/, 'a page without text is scraped by Firecrawl');
   assert.deepEqual(scrapes, ['https://app.example.se/'], 'pages with text cost no Firecrawl credits');
@@ -86,11 +90,21 @@ const ctx = { trace: () => {} };
   assert.ok(!pageRequests.some((r) => r.url.includes('unread')));
   assert.ok(pageRequests.every((r) => r.lookup === sandbox.safeLookup), 'every page request resolves through the guard');
 
-  // The chat reply (quick) reads only the first result and never waits for a scrape.
+  // The chat reply (quick) reads the top three results too, and never waits for a scrape.
   pageRequests.length = 0; scrapes.length = 0;
   await TOOLS.web_search.run({ query: 'quick' }, { ...ctx, quick: true });
-  assert.deepEqual([...new Set(pageRequests.map((r) => new URL(r.url).hostname))], ['bibliotek.example.se']);
+  assert.deepEqual([...new Set(pageRequests.map((r) => new URL(r.url).hostname))].sort(), ['app.example.se', 'bibliotek.example.se', 'final.example.se', 'redirect.example.se']);
   assert.equal(scrapes.length, 0);
+
+  // render reads a page as a browser shows it through Firecrawl, without a direct read first,
+  // so prices that load with JavaScript need no VM browser. Private addresses still never leave.
+  pageRequests.length = 0; scrapes.length = 0;
+  const [rendered, renderedPrivate] = await TOOLS.web_search.run({ urls: ['https://app.example.se/', 'http://10.1.2.3/'], render: true }, ctx);
+  assert.match(rendered.text, /only exists after JavaScript/);
+  assert.deepEqual(scrapes, ['https://app.example.se/']);
+  assert.equal(pageRequests.length, 0, 'a rendered read does not fetch the page directly first');
+  assert.equal(renderedPrivate.ok, false);
+  assert.match(renderedPrivate.error, /private address/);
 
   await TOOLS.web_search.run({ query: 'news', country: 'XX' }, ctx);
   assert.equal(JSON.parse(searches.filter((s) => s.url.pathname === '/v2/search').at(-1).opts.body).country, undefined, 'unknown country codes are dropped');

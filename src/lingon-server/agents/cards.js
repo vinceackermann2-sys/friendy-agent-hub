@@ -26,6 +26,8 @@ const addresses = (value) => (Array.isArray(value) ? value : String(value || '')
   .map((item) => str(typeof item === 'object' ? item?.email || item?.address : item, 200)).filter(Boolean).slice(0, 20);
 function money(amount, currency) {
   if (amount && typeof amount === 'object') return money(amount.amount, amount.currency || currency);
+  // No price is not a price of zero.
+  if (amount == null || amount === '') return '';
   const n = Number(amount);
   if (!Number.isFinite(n)) return '';
   try { return new Intl.NumberFormat('en-US', { style: 'currency', currency: String(currency || 'USD').toUpperCase() }).format(n); }
@@ -190,17 +192,26 @@ function approvalCard(name, args = {}, detail = '', tool = {}, key) {
 }
 
 /* ---------- results ---------- */
+const stars = (rating) => (Number(rating?.value) > 0 ? `★ ${Number(rating.value).toFixed(1)}${Number(rating.count) > 0 ? ` (${Number(rating.count)})` : ''}` : undefined);
+// Each product opens its page in the merchant's store; a store link from the web shows
+// what the search said about it.
 function productItems(products = []) {
   return products.slice(0, 12).map((product) => ({
     title: str(product.title, 140), subtitle: str(product.seller?.name || product.seller?.domain, 120),
-    price: money(product.price), image: httpsUrl(product.image) || undefined, url: httpsUrl(product.url) || undefined,
+    ...(money(product.price) ? { price: money(product.price) } : {}), ...(stars(product.rating) || product.snippet ? { meta: stars(product.rating) || str(product.snippet, 160) } : {}), image: httpsUrl(product.image) || undefined,
+    url: httpsUrl(product.url || product.variants?.find((v) => v?.url)?.url) || undefined,
   })).filter((item) => item.title);
 }
 function resultCard(name, out, args = {}) {
   if (!out || typeof out !== 'object') return null;
   if (name === 'present') return { ...presentArgs(args && args.title ? args : out), status: 'done' };
-  if (name === 'shop_search' && Array.isArray(out.products)) {
-    return { type: 'present', kind: 'products', title: str(args.query, 80) ? `Results for “${str(args.query, 80)}”` : 'Products', items: productItems(out.products), status: 'done' };
+  // No matches shows no card; the agent says so and looks elsewhere.
+  if ((name === 'product_search' || name === 'shop_search') && Array.isArray(out.products) && out.products.length) {
+    const items = productItems(out.products);
+    // A budget the owner gave shows on the card, so they see it was applied.
+    const budget = out.maxPrice ? money(out.maxPrice, out.currency) : '';
+    return { type: 'present', kind: 'products', title: str(args.query, 80) ? `Results for “${str(args.query, 80)}”` : 'Products',
+      ...(budget ? { subtitle: `${items.length} under ${budget}` } : {}), items, status: 'done' };
   }
   if ((name === 'shop_checkout' || name === 'shop_purchase' || name === 'shop_order') && out.merchant) {
     const total = (out.totals || []).find((t) => t.type === 'total');

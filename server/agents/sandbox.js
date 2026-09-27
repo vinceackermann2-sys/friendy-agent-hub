@@ -132,7 +132,10 @@ function htmlToText(html) {
     .replace(/<(br|\/p|\/div|\/h[1-6]|\/tr|\/section|\/article|\/ul|\/ol|\/table|\/blockquote)\b[^>]*>/gi, '\n')
     .replace(/<[^>]+>/g, ' ');
   const text = decodeEntities(body).replace(/[ \t\f\v\r]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-  return { title: decodeEntities(title).replace(/\s+/g, ' ').trim(), text };
+  // The page's preview image, so a pick from search results can show a photo.
+  const meta = (html.match(/<meta\b[^>]*(?:property|name)=["'](?:og:image|twitter:image)["'][^>]*>/i) || [])[0] || '';
+  const image = decodeEntities((meta.match(/\bcontent=["']([^"']+)["']/i) || [])[1] || '').trim();
+  return { title: decodeEntities(title).replace(/\s+/g, ' ').trim(), text, image: /^https:\/\//i.test(image) ? image.slice(0, 600) : '' };
 }
 
 function decodeBody(body, contentType) {
@@ -145,11 +148,32 @@ async function readPage(url, { signal, timeoutMs, maxChars = 12000 } = {}) {
   const page = await fetchPublic(url, { signal, timeoutMs });
   const type = page.contentType.toLowerCase();
   if (/html|xml/.test(type) || !type) {
-    const { title, text } = htmlToText(decodeBody(page.body, type));
-    return { url: page.url, title, text: text.slice(0, maxChars) };
+    const { title, text, image } = htmlToText(decodeBody(page.body, type));
+    return { url: page.url, title, text: text.slice(0, maxChars), ...(image ? { image } : {}) };
   }
   if (/^text\/|json/.test(type)) return { url: page.url, title: '', text: decodeBody(page.body, type).slice(0, maxChars) };
   return { url: page.url, title: '', text: '', note: `Unsupported content type ${type.split(';')[0]}. Open it in the browser instead.` };
+}
+
+// A public page's HTML as sent, for the structured data (JSON-LD, meta tags) text drops.
+async function readHtml(url, { signal, timeoutMs } = {}) {
+  const page = await fetchPublic(url, { signal, timeoutMs });
+  return { url: page.url, html: /html|xml/.test(page.contentType.toLowerCase()) || !page.contentType ? decodeBody(page.body, page.contentType) : '' };
+}
+
+// Free web search from DuckDuckGo's HTML results: titles, links and snippets. Used when
+// Firecrawl is not configured; the caller reads the top pages itself.
+async function searchDuckDuckGo(query, { signal, limit = 8 } = {}) {
+  const page = await fetchPublic(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(String(query).slice(0, 300))}`, { signal, timeoutMs: 8000 });
+  const html = decodeBody(page.body, page.contentType);
+  const clean = (s) => decodeEntities(String(s || '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+  const snippets = [...html.matchAll(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => clean(m[1]));
+  const seen = new Set();
+  return [...html.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m, i) => {
+    let url = decodeEntities(m[1]);
+    try { const u = new URL(url, 'https://duckduckgo.com'); url = u.searchParams.get('uddg') || u.href; } catch { url = ''; }
+    return { title: clean(m[2]).slice(0, 200), url, snippet: (snippets[i] || '').slice(0, 400) };
+  }).filter((r) => /^https?:\/\//.test(r.url) && !/(^|\.)duckduckgo\.com$/.test(new URL(r.url).hostname) && !seen.has(r.url) && seen.add(r.url)).slice(0, limit);
 }
 
 function blocked(url) {
@@ -210,4 +234,4 @@ async function fetchAllowlisted(url, opts = {}, timeoutMs = 9000) {
   }
 }
 
-module.exports = { ALLOW_HOSTS, hostAllowed, fetchAllowlisted, fetchPublic, readPage, publicUrlProblem, isPublicAddress, safeLookup, htmlToText };
+module.exports = { ALLOW_HOSTS, hostAllowed, fetchAllowlisted, fetchPublic, readPage, readHtml, searchDuckDuckGo, publicUrlProblem, isPublicAddress, safeLookup, htmlToText };
