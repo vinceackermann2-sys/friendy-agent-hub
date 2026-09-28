@@ -14,8 +14,10 @@ account and issuer identity/card approval. The owner controls all funds.
   enabled connected-account webhook subscribes to five card transaction events.
   Its signing secret and the recovery provider key are stored in Supabase.
 - Authenticated recovery returned HTTP 200 after reading the live TimeWarp
-  account. Anonymous requests return 401. There were zero connected live wallets,
-  pending purchases and queued events. This proves provider authentication;
+  account. Anonymous requests return 401. The latest check has one connected live
+  wallet, zero pending purchases and zero queued events. The pre-issuer
+  "No Rain account found" response on GET cards is treated as an empty card list;
+  other provider failures still block recovery. This proves provider authentication;
   it does not prove card issuance, cancellation or a real transaction event.
 - The minute recovery schedule is installed but gated by Vault's
   `wallet_recovery_enabled`, currently false. The application additionally
@@ -25,7 +27,7 @@ account and issuer identity/card approval. The owner controls all funds.
   the three bank withdrawal scopes to the previous wallet scopes and expires
   28 September 2027. `WHOP_PLATFORM_ACCOUNT_ID` and `WHOP_SANDBOX=false` are saved.
   A signed-in request on the published site now authenticates against the live
-  TimeWarp platform account and returns the unconnected-wallet state.
+  TimeWarp platform account. Owner wallet setup has created a connected account.
 - The private checkout source, agent session bridge and owner-only bank challenge
   screen are implemented and tested with a fake card in an isolated browser.
   The dedicated Azure host passed authenticated HTTPS health with a sandboxed

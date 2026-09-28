@@ -45,6 +45,12 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   assert.equal((await createBelnaWallet({store,env:{}}).snapshot('u1')).wallet.configured,false);
   assert.equal((await wallet.snapshot('new-owner')).wallet.status,'not_created');
   await assert.rejects(createBelnaWallet({store,env:{WHOP_COMPANY_API_KEY:'rejected',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp'},fetchImpl:async()=>({ok:false,status:401,json:async()=>({})})}).snapshot('new-owner'),/could not be completed/);
+  for (const [status,message,expected] of [[400,'No Rain account found',0],[400,'No Rain account found. Please apply for a card first.',0],[400,'Invalid account',1],[401,'No Rain account found',1]]) {
+    const pendingWallet=createBelnaWallet({env:{WHOP_COMPANY_API_KEY:'secret',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp'},
+      store:{supaConfigured:()=>true,listPendingWalletConnections:async()=>[{account_id:'biz_pending'}],saveBelnaWallet:async()=>{}},
+      fetchImpl:async(url,init)=>{assert.equal(init.redirect,'manual');assert.ok(url.includes('/cards?'));return {ok:false,status,json:async()=>({error:{message}})};}});
+    assert.equal((await pendingWallet.reconcileConnectionCards()).unresolved,expected,'only the precise pre-issuer no-account response is an empty card list');
+  }
   await assert.rejects(wallet.setup({id:'u1',email:'a@example.com'},{country:'Sweden'}),/country code/);
   await wallet.setup({id:'u1',email:'a@example.com'},{country:'SE',dailyLimitUsd:1.10});
   await wallet.setup({id:'u1',email:'a@example.com'},{country:'SE'});

@@ -34,6 +34,12 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if (!response.ok) {
       // Provider errors may contain account details; only classified, friendly copy leaves here.
       const message = String(data?.error?.message || '').toLowerCase();
+      // Whop returns 400 before an owner has an issuer account. This specific
+      // provider error on the card list means no cards exist yet.
+      // Keep every other provider failure blocking recovery.
+      if (response.status===400 && method==='GET' && path.startsWith('/cards?') && /^no rain account found\b/.test(message)) return {data:[]};
+      console.error('belna-wallet-provider-rejection', { status:response.status,
+        reason:/no rain account found/.test(message)?'NO_CARD_ACCOUNT':/rain account is not approved/.test(message)?'CARD_NOT_APPROVED':/identity|verification/.test(message)?'IDENTITY_REQUIRED':/not authorized|permission/.test(message)?'PERMISSION':'OTHER' });
       if (/verification|identity/.test(message)) throw fail('Complete your identity check before creating your card.', 'VERIFY');
       if (/application|approved/.test(message)) throw fail('Your card application is being reviewed. Refresh after it is approved.', 'REVIEW');
       throw Object.assign(fail('Your wallet request could not be completed. Please try again.', 'PROVIDER'),{providerStatus:response.status});
@@ -184,7 +190,10 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
           const account=await request('/accounts/'+encodeURIComponent(row.account_id));
           if(account.capabilities?.card_issuing==='active')await store.saveBelnaWallet(row.user_id,{application_status:'approved'});
         }
-      } catch { unresolved++; }
+      } catch (error) {
+        unresolved++;
+        console.error('belna-wallet-connection-recovery', { code:error?.code || 'STORE', providerStatus:error?.providerStatus || null });
+      }
       finally {
         try { await store.saveBelnaWallet(row.user_id,{last_connection_check_at:new Date().toISOString()}); }
         catch { unresolved++; }
