@@ -22,7 +22,13 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       response = await fetchImpl(base + path, { method, redirect:'error', signal:AbortSignal.timeout(20000),
         headers:{ Authorization:'Bearer ' + setting('WHOP_COMPANY_API_KEY'), 'Api-Version-Date':'2026-09-25', 'Content-Type':'application/json', ...(key ? { 'Idempotency-Key':key } : {}) },
         ...(body ? { body:JSON.stringify(body) } : {}) });
-    } catch { throw fail('Your wallet could not be reached. Please try again.', 'PROVIDER'); }
+    } catch (error) {
+      console.error('belna-wallet-provider-transport', {
+        name: String(error?.name || '').slice(0, 40),
+        causeCode: String(error?.cause?.code || '').slice(0, 40),
+      });
+      throw fail('Your wallet could not be reached. Please try again.', 'PROVIDER');
+    }
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       // Provider errors may contain account details; only classified, friendly copy leaves here.
