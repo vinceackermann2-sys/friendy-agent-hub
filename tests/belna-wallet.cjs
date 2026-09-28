@@ -20,6 +20,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     walletRecoveryReady:async()=>recoveryReady,
   };
   const fetchImpl=async (url, init) => {
+    assert.equal(init.redirect, 'manual');
     const path=new URL(url).pathname.replace('/api/v1',''), body=init.body ? JSON.parse(init.body) : null;
     calls.push({path,method:init.method,key:init.headers['Idempotency-Key'],body,version:init.headers['Api-Version-Date']});
     let data;

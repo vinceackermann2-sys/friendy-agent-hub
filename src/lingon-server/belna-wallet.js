@@ -19,7 +19,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     const base = environment() === 'sandbox' ? 'https://sandbox-api.whop.com/api/v1' : 'https://api.whop.com/api/v1';
     let response;
     try {
-      response = await fetchImpl(base + path, { method, redirect:'error', signal:AbortSignal.timeout(20000),
+      response = await fetchImpl(base + path, { method, redirect:'manual', signal:AbortSignal.timeout(20000),
         headers:{ Authorization:'Bearer ' + setting('WHOP_COMPANY_API_KEY'), 'Api-Version-Date':'2026-09-25', 'Content-Type':'application/json', ...(key ? { 'Idempotency-Key':key } : {}) },
         ...(body ? { body:JSON.stringify(body) } : {}) });
     } catch (error) {
