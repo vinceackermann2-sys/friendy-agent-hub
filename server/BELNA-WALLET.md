@@ -19,9 +19,10 @@ account and issuer identity/card approval. The owner controls all funds.
   "No Rain account found" response on GET cards is treated as an empty card list;
   other provider failures still block recovery. This proves provider authentication;
   it does not prove card issuance, cancellation or a real transaction event.
-- The minute recovery schedule is installed but gated by Vault's
-  `wallet_recovery_enabled`, currently false. The application additionally
-  requires a successful recovery heartbeat less than three minutes old.
+- The minute recovery schedule is enabled through Vault's
+  `wallet_recovery_enabled=true`. An automatic scheduled run was verified with
+  a fresh successful live heartbeat. The application additionally requires a
+  successful recovery heartbeat less than three minutes old.
 - TimeWarp's twelve-scope "Belna App Server Wallet and Withdrawals" key was saved
   as `WHOP_COMPANY_API_KEY` in the Lingon Agent Helper Lovable project. It adds
   the three bank withdrawal scopes to the previous wallet scopes and expires
@@ -37,8 +38,12 @@ account and issuer identity/card approval. The owner controls all funds.
   host. The host is not yet tested from an actual issuer-approved purchase.
 - The wallet source release and edge-compatible provider/checkout requests are
   published on `belna.se`. Signed-in Wallet and Settings views load. Owner card
-  applications and withdrawal UI are enabled. Live purchase card issuing stays
-  explicitly disabled until a consenting owner's issuer and merchant tests pass.
+  applications and withdrawal UI are enabled. At the owner's explicit request,
+  `WHOP_CARD_ISSUING_ENABLED=true` is configured for live manual checkout testing.
+  The isolated host passes authenticated browser health. Each owner still needs
+  issuer approval, an active wallet, sufficient funds and explicit purchase
+  approval. Actual issuer card creation, closure and merchant orders remain
+  unverified until the owner's manual tests complete.
 
 Secrets belong only in server stores; never use VITE_ variables or chat.
 Lovable preview receives secret changes immediately, while the live app requires
@@ -120,13 +125,15 @@ bank challenges, redirects and merchant confirmation need live validation.
    approval themselves. Do not infer connected-account card access from the
    team-member dashboard or promise every country is eligible.
 2. Check live signed card event ingestion/deduplication, issuer cancellation,
-   later capture/refund, connection-card cleanup and recovery failures. Activate
-   Vault `wallet_recovery_enabled` only after validating the recovery paths.
+   later capture/refund, connection-card cleanup and recovery failures. The owner
+   authorized enabling Vault `wallet_recovery_enabled` for live manual testing;
+   synthetic recovery tests and live scheduled heartbeat checks passed.
    Monitor queue age and unresolved attempts; current recovery processes five
    queued events and up to 100 pending cards per run.
 3. With explicit merchant/item/maximum-budget approval, test a small purchase,
-   decline, expiry, owner pause, bank challenge and unknown outcome. Enable
-   `WHOP_CARD_ISSUING_ENABLED=true` only after these gates are met. Missing or stale
+   decline, expiry, owner pause, bank challenge and unknown outcome. The owner
+   authorized `WHOP_CARD_ISSUING_ENABLED=true` before these live tests so they can
+   perform them themselves. Missing or stale
    recovery or private host health still blocks card creation automatically.
 
 Whop cards are production-only in its current guide. Do not assume sandbox card
