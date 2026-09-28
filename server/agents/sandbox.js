@@ -10,6 +10,8 @@ const dns = require('dns');
 const http = require('http');
 const https = require('https');
 const net = require('net');
+const zlib = require('zlib');
+const { Readable } = require('stream');
 const { ALLOW_HOSTS, hostAllowed } = require('../harness');
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -43,6 +45,17 @@ function publicUrlProblem(value) {
   return '';
 }
 
+// For fetches that cannot take safeLookup (the owner's own connectors): every address the
+// name resolves to must be public. Throws when the name does not resolve.
+async function hostResolvesPublic(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '');
+  if (net.isIP(host)) return isPublicAddress(host);
+  let addresses;
+  try { addresses = await dns.promises.lookup(host, { all: true }); }
+  catch { throw Object.assign(new Error(`Could not find ${host}.`), { code: 'HOST_BLOCKED' }); }
+  return addresses.length > 0 && addresses.every((a) => isPublicAddress(a.address));
+}
+
 function safeLookup(hostname, options, callback) {
   dns.lookup(hostname, { ...options, all: true }, (error, addresses) => {
     if (error) return callback(error);
@@ -51,6 +64,40 @@ function safeLookup(hostname, options, callback) {
     }
     if (options && options.all) return callback(null, addresses);
     return callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+
+// One HTTPS request that connects only to an address safeLookup approved, answered as a
+// fetch Response. fetch() resolves a name again after it was checked, so a name answering
+// first with a public address and then with a private one could reach an internal host.
+// Redirects are returned, never followed; the caller checks each hop.
+function pinnedFetch(url, { method = 'GET', headers = {}, body, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    if (target.protocol !== 'https:') return reject(Object.assign(new Error('Only https addresses can be reached.'), { code: 'HOST_BLOCKED' }));
+    const sent = { 'Accept-Encoding': 'gzip, deflate, br', ...headers };
+    if (body != null) sent['Content-Length'] = Buffer.byteLength(body);
+    const req = https.request(target, { method, headers: sent, signal, lookup: safeLookup }, (res) => {
+      const out = new Headers();
+      for (const [name, value] of Object.entries(res.headers)) {
+        for (const item of Array.isArray(value) ? value : [value]) if (item != null) out.append(name, String(item));
+      }
+      const encoding = String(res.headers['content-encoding'] || '').trim().toLowerCase();
+      const decode = { gzip: zlib.createGunzip, 'x-gzip': zlib.createGunzip, deflate: zlib.createInflate, br: zlib.createBrotliDecompress }[encoding];
+      let stream = res;
+      if (decode) { stream = res.pipe(decode()); res.on('error', (error) => stream.destroy(error)); out.delete('content-encoding'); out.delete('content-length'); }
+      const empty = method === 'HEAD' || [204, 205, 304].includes(res.statusCode);
+      if (empty) res.resume();
+      // A timeout while the body streams ends it with the timeout as the reason, as fetch does.
+      signal?.addEventListener?.('abort', () => stream.destroy(signal.reason), { once: true });
+      resolve(new Response(empty ? null : Readable.toWeb(stream), { status: res.statusCode, statusText: res.statusMessage || '', headers: out }));
+    });
+    // Failures read as fetch's do: the abort reason (a TimeoutError), a refused private
+    // address as it is, and any other network failure as "fetch failed".
+    req.on('error', (error) => reject(signal?.aborted ? signal.reason
+      : error.code === 'HOST_BLOCKED' ? error : new TypeError('fetch failed', { cause: error })));
+    if (body != null) req.write(body);
+    req.end();
   });
 }
 
@@ -234,4 +281,4 @@ async function fetchAllowlisted(url, opts = {}, timeoutMs = 9000) {
   }
 }
 
-module.exports = { ALLOW_HOSTS, hostAllowed, fetchAllowlisted, fetchPublic, readPage, readHtml, searchDuckDuckGo, publicUrlProblem, isPublicAddress, safeLookup, htmlToText };
+module.exports = { ALLOW_HOSTS, hostAllowed, fetchAllowlisted, fetchPublic, readPage, readHtml, searchDuckDuckGo, publicUrlProblem, isPublicAddress, hostResolvesPublic, pinnedFetch, safeLookup, htmlToText };

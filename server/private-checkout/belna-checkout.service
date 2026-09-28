@@ -1,0 +1,30 @@
+[Unit]
+Description=Belna private checkout
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=belna-checkout
+Group=belna-checkout
+WorkingDirectory=/opt/belna-checkout
+EnvironmentFile=/etc/belna-checkout.env
+ExecStartPre=+/bin/sh /opt/belna-checkout/server/private-checkout/network-guard.sh
+ExecStart=/usr/bin/node server/private-checkout/index.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/belna-checkout
+Environment=HOME=/var/lib/belna-checkout
+RuntimeDirectory=belna-checkout-browsers
+RuntimeDirectoryMode=0700
+Environment=PUPPETEER_CACHE_DIR=/opt/belna-checkout/chrome-cache
+LimitCORE=0
+MemoryMax=3G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

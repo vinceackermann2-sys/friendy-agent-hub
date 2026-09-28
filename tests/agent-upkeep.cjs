@@ -4,16 +4,23 @@ const path=require('node:path');
 const {UPKEEP_DEFINITIONS,upkeepRows,prepareUpkeepSignal,nextUpkeepRun}=require('../server/agents/upkeep');
 
 const kinds=UPKEEP_DEFINITIONS.map(item=>item.kind);
-assert.deepEqual(kinds,['memory','relationships','ideas','study','reflection','skills','quiet']);
-assert.equal(new Set(kinds).size,7);
+assert.deepEqual(kinds,['personal_email','memory','relationships','ideas','study','reflection','skills','quiet']);
+assert.equal(new Set(kinds).size,8);
 assert(UPKEEP_DEFINITIONS.every(item=>item.description&&item.prompt&&Array.isArray(item.allowedTools)));
 
 const seeded=upkeepRows('owner-1',Date.parse('2026-09-22T08:00:00Z'));
-assert.equal(seeded.length,7);
+assert.equal(seeded.length,8);
 assert(seeded.every(item=>item.systemKind&&item.id.startsWith(`upkeep_${item.systemKind}_`)));
 assert.equal(upkeepRows('owner-1')[0].id,seeded[0].id,'system ids are stable per owner');
 assert.notEqual(upkeepRows('owner-2')[0].id,seeded[0].id,'system ids are account scoped');
 
+const personal=seeded.find(item=>item.systemKind==='personal_email');
+assert.equal(personal.enabled,false,'the personal check-in emails conversation quotes, so it waits for the owner to turn it on');
+assert(seeded.filter(item=>item.systemKind!=='personal_email').every(item=>item.enabled));
+assert.equal(personal.trigger.intervalMinutes,2880);
+assert.equal(personal.nextRunAt,'2026-09-24T08:00:00.000Z');
+assert.equal(nextUpkeepRun(personal,Date.parse('2026-09-22T08:00:00Z')),'2026-09-24T08:00:00.000Z');
+assert.deepEqual(UPKEEP_DEFINITIONS.find(item=>item.kind==='personal_email').allowedTools,[]);
 const memory=seeded.find(item=>item.systemKind==='memory');
 assert.equal(prepareUpkeepSignal(memory,[]).eligible,false,'idle accounts skip inference');
 const signal=[{role:'user',text:'Remember that I prefer concise answers',created_at:'2026-09-22T07:00:00Z'}];
@@ -34,4 +41,4 @@ const backend=fs.readFileSync(path.join(__dirname,'../server/agents/automations.
 assert.match(backend,/listUpkeepSignals/);
 assert.match(backend,/if\(!upkeepSignal\.eligible\)/);
 assert.match(backend,/allowedTools/);
-console.log('agent upkeep: seven routines, stable seeding, signal gating, quiet delay, and tool limits: ok');
+console.log('agent upkeep: eight routines, stable seeding, signal gating, quiet delay, and tool limits: ok');

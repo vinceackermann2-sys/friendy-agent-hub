@@ -4,7 +4,7 @@
 // card data is stored or typed by the agent.
 import crypto from 'node:crypto';
 import { cardNumberIn } from './payment-safety.js';
-function createPurchaseFlow({ live }) {
+function createPurchaseFlow({ live, wallet }) {
   const bad = (message) => Object.assign(new Error(message), { code: 'BAD_INPUT' });
   const purchaseWords = /\b(?:buy|purchase|checkout|place order|pay now|confirm order|köp|kassa|betala|bekräfta köp|beställ)\b/i;
   const checkoutContext = /\b(?:checkout|order total|payment method|shipping address|place order|your basket|your cart|kassa|ordersumma|betalningssätt|leveransadress|slutför köp|beställning)\b/i;
@@ -53,15 +53,36 @@ function createPurchaseFlow({ live }) {
     if (!items.length || items.some((item) => !item.title || !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 100 || !Number.isFinite(item.price) || item.price < 0)) throw bad('Purchase items need titles, quantities and prices.');
     const amount = Number(input.amount);
     const currency = String(input.currency || '').toUpperCase();
-    const shippingAddress = String(input.shippingAddress || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const shippingAddress = String(input.shippingAddress || '').replace(/\s+/g, ' ').trim().slice(0, 600);
     if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000 || !/^[A-Z]{3}$/.test(currency) || shippingAddress.length < 8) throw bad('Purchase needs a valid total, currency and delivery address.');
-    const paymentMethod = ['shop_pay', 'saved_card'].includes(input.payment?.method) ? input.payment.method : '';
+    const shippingAddressId=String(input.shippingAddressId || '');
+    // The saved address's own parts: a checkout shows an address its own way (lines, spacing),
+    // so the private checkout compares these, not the formatted line.
+    let shippingAddressParts=null;
+    if(wallet?.addresses) {
+      const saved=(await wallet.addresses(userId)).addresses;
+      if(saved.length || shippingAddressId) {
+        const address=saved.find(a=>a.id===shippingAddressId);
+        if(!address || flat(address.formatted)!==flat(shippingAddress)) throw bad('Use shipping_addresses to select a current saved address and copy its formatted address before approval.');
+        shippingAddressParts={recipient:address.recipient,line1:address.line1,line2:address.line2 || '',postalCode:address.postalCode,city:address.city};
+      }
+    }
+    const paymentMethod = ['shop_pay', 'saved_card', 'belna_wallet'].includes(input.payment?.method) ? input.payment.method : '';
+    if(wallet?.preferences){
+      const selection=await wallet.preferences(userId);
+      if(!selection.spendingMethod)throw bad('Wallet spending is inactive. Ask the owner to select a wallet in Settings before purchasing.');
+      if((paymentMethod==='belna_wallet'?'belna_wallet':'existing_card')!==selection.spendingMethod)throw bad('This payment method is inactive. Ask the owner to switch wallets in Settings before purchasing.');
+      if(selection.selectionSaved && paymentMethod==='saved_card' && !selection.merchantEnabled)throw bad('Connect logged-in payments in Settings before using a merchant-saved card.');
+    }
     const payment = String(input.payment?.label || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     if (!paymentMethod) throw bad('Pay with Shop Pay or a card already saved in the merchant account. Never enter card details.');
     if (!payment || /\d{5,}/.test(payment.replace(/[ -]/g, '')) || cardNumberIn(payment)) throw bad('Copy the payment method as the checkout shows it, for example "Shop Pay" or "Visa ending in 1234". Never include a full card number.');
-    if (!flat(`${session.text || ''}\n${(session.elements || []).join('\n')}`).includes(flat(payment))) throw bad('Select Shop Pay or the saved card on the checkout page first, then copy its label exactly as shown.');
+    if (paymentMethod === 'belna_wallet') {
+      if (!wallet || !(await wallet.snapshot(userId)).wallet.agentCardPayments) throw bad('Belna Wallet checkout is not enabled yet. Use an existing saved card.');
+      if (currency !== 'USD' || payment !== 'Belna Wallet') throw bad('Belna Wallet purchases currently require USD and the label Belna Wallet.');
+    } else if (!flat(`${session.text || ''}\n${(session.elements || []).join('\n')}`).includes(flat(payment))) throw bad('Select Shop Pay or the saved card on the checkout page first, then copy its label exactly as shown.');
     return { merchant: host, website: session.url, items, amount, currency, shippingAddress,
-      payment, paymentMethod,
+      payment, paymentMethod, ...(shippingAddressId ? {shippingAddressId} : {}), ...(shippingAddressParts ? {shippingAddressParts} : {}),
       checkoutKey: pageKey(session, args), target: targetLine(session, args).slice(0, 200),
       pageExcerpt: safeExcerpt(session) };
   }

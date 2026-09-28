@@ -103,6 +103,22 @@ function syncStripeProvider() {
 
 syncStripeProvider();
 
+{
+  const src = readFileSync(join(root, 'server/agents/wallet-tools.js'), 'utf8');
+  writeFileSync(join(root, 'src/lingon-server/agents/wallet-tools.js'), src.replace('module.exports = { createWalletTools };', 'export { createWalletTools };'), 'utf8');
+}
+
+for (const [name, factory] of [['belna-wallet', 'createBelnaWallet'], ['belna-wallet-store', 'createBelnaWalletStore'], ['wallet-purchases','createWalletPurchases'], ['private-checkout-client','createPrivateCheckoutClient']]) {
+  const src = readFileSync(join(root, `server/${name}.js`), 'utf8');
+  const esm = src.replace(`module.exports = { ${factory} };`, `export { ${factory} };`).replace("const { createWalletPurchases } = require('./wallet-purchases');", "import { createWalletPurchases } from './wallet-purchases.js';");
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted Belna wallet module');
+  writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');
+}
+{
+  const src = readFileSync(join(root, 'server/whop-webhook.js'), 'utf8');
+  writeFileSync(join(root, 'src/lingon-server/whop-webhook.js'), src.replace('module.exports = { verifyWhopWebhook };', 'export { verifyWhopWebhook };'), 'utf8');
+}
+
 // The wallet uses injected persistence dependencies, so its implementation is
 // identical in the Express and edge runtimes.
 {
@@ -132,6 +148,24 @@ syncStripeProvider();
   if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted support module');
   writeFileSync(join(root, 'src/lingon-server/support.js'), esm, 'utf8');
 }
+// The owner's own API and MCP connectors, and their storage.
+{
+  const src = readFileSync(join(root, 'server/custom-connector-store.js'), 'utf8');
+  const esm = src.replace('module.exports = { createCustomConnectorStore };', 'export { createCustomConnectorStore };');
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted custom connector store');
+  writeFileSync(join(root, 'src/lingon-server/custom-connector-store.js'), esm, 'utf8');
+}
+{
+  const src = readFileSync(join(root, 'server/connectors.js'), 'utf8');
+  const esm = src
+    .replace("const store = require('./store');", "import * as store from './store.js';")
+    .replace("const { compactParams, compactResult } = require('./composio');", "import { compactParams, compactResult } from './composio.js';")
+    // Workers cannot open connections into private networks, so the address check is the boundary there.
+    .replace("const { publicUrlProblem, hostResolvesPublic, pinnedFetch } = require('./agents/sandbox');", "import { publicUrlProblem } from './agents/public-web.js';\nconst hostResolvesPublic = async () => true;\nconst pinnedFetch = (url, init) => fetch(url, init);")
+    .replace(/module\.exports\s*=\s*\{/, 'export {');
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted connectors module');
+  writeFileSync(join(root, 'src/lingon-server/connectors.js'), esm, 'utf8');
+}
 
 
 // These modules are shared logic; generate the ESM port instead of maintaining
@@ -143,8 +177,8 @@ for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-run
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);
   src = src.replace(/const (\w+) = require\('([^']+)'\);/g, (_, binding, spec) =>
     spec === 'crypto' ? `import ${binding} from 'node:crypto';` : spec === 'path' ? `import path from 'node:path';` : `import * as ${binding} from '${spec}.js';`);
-  src = src.replace('module.exports={createCoordinator,updateChatSummary,handle:coordinator.handle,tasks,startWorker};',
-    'const handle=coordinator.handle;\nexport {createCoordinator,updateChatSummary,handle,tasks,startWorker};');
+  src = src.replace('module.exports={createCoordinator,updateChatSummary,acknowledgeTask,handle:coordinator.handle,tasks,startWorker};',
+    'const handle=coordinator.handle;\nexport {createCoordinator,updateChatSummary,acknowledgeTask,handle,tasks,startWorker};');
   src = src.replace(/module\.exports\s*=\s*\{/g, 'export {');
   if (/require\(|module\.exports/.test(src)) throw new Error(`Unconverted CommonJS in ${name}`);
   writeFileSync(join(root, `src/lingon-server/agents/${name}.js`), src, 'utf8');

@@ -62,6 +62,9 @@ function describeTool(name, args = {}) {
     case 'composio_apps': return 'Checking your connected apps';
     case 'composio_tools': return args.toolkit ? `Checking what ${titleCase(args.toolkit)} can do` : 'Checking a connected app';
     case 'composio_execute': return args.tool ? `Using ${titleCase(String(args.tool).split('_')[0])}` : 'Using a connected app';
+    case 'connector_tools': return args.connector ? `Checking what ${titleCase(String(args.connector).replace(/-/g, ' '))} can do` : 'Checking a connector';
+    case 'connector_call': return args.connector ? `Using ${titleCase(String(args.connector).replace(/-/g, ' '))}` : 'Using a connector';
+    case 'connector_setup': return args.name ? `Connecting ${clip(args.name, 40)}` : 'Connecting a service';
     case 'mail_status': return 'Checking the mailbox';
     case 'mail_list': return args.folder === 'sent' ? 'Checking sent mail' : 'Checking the inbox';
     case 'mail_read': return 'Reading an email';

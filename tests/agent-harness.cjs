@@ -44,6 +44,34 @@ async function main() {
   assert.ok(picked("Påminn mig varje dag klockan åtta").includes("trigger_create"), "Swedish automation request");
   assert.ok(picked("Skapa en bild av en älg i skogen").includes("image_generate"), "Swedish image request");
   assert.ok(!picked("Förklara fotosyntes kort").includes("browser_open"), "plain questions stay small");
+  // Words that only contain a browser word do not hand the worker the browser.
+  for (const task of ["Check my facebook messages", "Summarize this information", "Which platform performs best?", "Fulfill the order"]) {
+    assert.ok(!picked(task).includes("browser_open"), `${task} should not select browser tools`);
+  }
+  assert.ok(picked("Book a table and fill in the form").includes("browser_open"), "booking and forms still use the browser");
+
+  // composio_apps says what is connected, what can be connected and what a connection cannot
+  // do, so the agent can tell the owner instead of trying to sign in another way.
+  const composio = require("../server/composio");
+  const { TOOLS } = require("../server/agents/tools");
+  const saved = { configured: composio.configured, listConnected: composio.listConnected, listAuthConfigs: composio.listAuthConfigs, isToolkitConnected: composio.isToolkitConnected };
+  composio.configured = () => true;
+  composio.listConnected = async () => [{ id: "ca_1", toolkit: "gmail", status: "ACTIVE", email: "owner@example.se", picture: "https://example.se/p.png" }, { id: "ca_2", toolkit: "slack", status: "EXPIRED" }];
+  composio.listAuthConfigs = async () => [{ toolkit: "facebook" }, { toolkit: "gmail" }, { toolkit: "googlecalendar" }];
+  composio.isToolkitConnected = async (_, toolkit) => toolkit === "gmail";
+  try {
+    const ctx = { userId: "u", trace: () => {} };
+    const apps = await TOOLS.composio_apps.run({}, ctx);
+    assert.deepEqual(apps.connected, [{ id: "ca_1", toolkit: "gmail", account: "owner@example.se" }]);
+    assert.deepEqual(apps.canConnect, ["facebook", "googlecalendar"]);
+    assert.match(apps.limits.facebook, /not a personal profile/);
+    assert.equal(apps.limits.instagram, undefined, "limits only for apps offered here");
+    const none = await TOOLS.connect_app.run({ toolkit: "myspace" }, ctx);
+    assert.equal(none.available, false);
+    assert.equal(await TOOLS.connect_app.needsApproval({ toolkit: "myspace" }, ctx), false, "no connect card for an app that cannot be connected");
+    assert.equal(await TOOLS.connect_app.needsApproval({ toolkit: "google_calendar" }, ctx), true);
+    assert.equal((await TOOLS.connect_app.run({ toolkit: "google_calendar" }, ctx)).toolkit, "googlecalendar");
+  } finally { Object.assign(composio, saved); }
 
   const active = { status: "running", kind: "research" };
   assert.equal(routeMessage(active, "What sources are you checking?"), "respond");

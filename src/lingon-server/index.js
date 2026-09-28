@@ -22,8 +22,14 @@ import { fetchAllowlisted } from './agents/sandbox.js';
 import { normalizeSubAgent, nextRunAt } from './agents/triggers.js';
 import * as Automations from './agents/automations.js';
 import * as composio from './composio.js';
+import * as connectors from './connectors.js';
 import * as mail from './mail.js';
 import * as shoppay from './shoppay.js';
+import { createBelnaWallet } from './belna-wallet.js';
+import { createPrivateCheckoutClient } from './private-checkout-client.js';
+import { exportCheckout } from './agents/azure-vm.js';
+const privateCheckout = createPrivateCheckoutClient({exportCheckout});
+const belnaWallet = createBelnaWallet({ store,secureCheckout:privateCheckout.factory });
 import { saveSupportSubmission } from './support.js';
 import { isAzureConfigured, isLeaseStoreConfigured, verifySweepToken, sweepLeases } from './agents/azure-vm.js';
 import { handle as vmHarnessHandle } from './agents/vm-harness.js';
@@ -1002,6 +1008,51 @@ function shopPayErr(e) {
     : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
+function belnaWalletErr(e) {
+  return e.code === 'BAD_INPUT' ? 400 : e.code === 'NOT_SET_UP' ? 503 : e.code === 'VERIFY' || e.code === 'REVIEW' ? 409 : 502;
+}
+app.get('/api/wallet-history',requireAuth(async(req,res)=>{res.setHeader('Cache-Control','no-store');try{res.json(await belnaWallet.existingHistory(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}}));
+app.get('/api/wallet-preferences',requireAuth(async(req,res)=>{res.setHeader('Cache-Control','no-store');try{res.json(await belnaWallet.preferences(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}}));
+app.post('/api/wallet-preferences',rateLimit(20,60000),requireAuth(async(req,res)=>{res.setHeader('Cache-Control','no-store');try{res.json(await belnaWallet.savePreferences(req.user.id,req.body||{}));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}}));
+app.get('/api/shipping-addresses',requireAuth(async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  try{res.json(await belnaWallet.addresses(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
+}));
+for(const action of ['save','delete'])app.post('/api/shipping-addresses/'+action,rateLimit(20,60000),requireAuth(async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  try{res.json(await belnaWallet[action==='save'?'saveAddress':'deleteAddress'](req.user.id,req.body||{}));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
+}));
+for (const action of ['owner-state','owner-input']) app.post('/api/belna-wallet/purchases/:id/'+action,rateLimit(90,60000),requireAuth(async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  try {
+    if(!/^[a-f0-9-]{36}$/.test(req.params.id))return res.status(404).json({error:'Purchase not found.'});
+    const purchase=await store.getWalletPurchase(req.user.id,req.params.id);
+    if(!purchase || purchase.status!=='submitted' || purchase.canceled_at || Date.parse(purchase.expires_at)<=Date.now())return res.status(409).json({error:'This payment verification is no longer available. Check wallet activity before purchasing again.'});
+    res.json(action==='owner-state'?await privateCheckout.ownerState(purchase.id,req.user.id):await privateCheckout.ownerInput(purchase.id,req.user.id,req.body?.event));
+  }catch{res.status(409).json({error:'No private bank verification is available. Check wallet activity before purchasing again.'});}
+}));
+app.get('/api/belna-wallet', requireAuth(async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try { res.json(await belnaWallet.snapshot(req.user.id)); }
+  catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
+}));
+for (const action of ['setup', 'verify', 'card-connect', 'controls', 'deposit', 'withdraw-session', 'receive', 'quote', 'send']) {
+  app.post('/api/belna-wallet/' + action, rateLimit(10, 60000), requireAuth(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = action === 'setup' ? await belnaWallet.setup(req.user, req.body || {})
+        : action === 'verify' ? await belnaWallet.verify(req.user.id)
+        : action === 'card-connect' ? await belnaWallet.connectCard(req.user.id)
+        : action === 'controls' ? await belnaWallet.updateCard(req.user.id, req.body || {})
+        : action === 'deposit' ? await belnaWallet.deposit(req.user.id)
+        : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
+        : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
+        : action === 'send' ? await belnaWallet.confirmTransfer(req.user.id, req.body || {})
+        : await belnaWallet.receive(req.user.id, req.body || {});
+      res.json(result);
+    } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
+  }));
+}
 app.get('/api/ucp-profile', (req, res) => {
   res.json(shoppay.platformProfile(siteOrigin(req)));
 });
@@ -1222,6 +1273,41 @@ app.patch('/api/memories/:id',rateLimit(30,60000),requireAuth(async(req,res)=>{
 app.delete('/api/memories/:id', requireAuth(async (req, res) => {
   try{const count=await store.delMemory(req.user.id,req.params.id);if(!count)return res.status(404).json({error:'Memory not found.'});res.json({ok:true,deleted:count});}
   catch(e){res.status(e.code==='PERSISTENCE'?503:400).json({error:e.message});}
+}));
+
+// ---------- the owner's own connectors: APIs and MCP servers they add ----------
+// The credential is saved to the vault; responses carry only its ref.
+const connectorFailure = (res, e) => {
+  const status = ['BAD_INPUT', 'AUTH_FAILED', 'HOST_BLOCKED', 'CHECK_FAILED', 'MCP_ERROR', 'UNREACHABLE'].includes(e.code) ? 400
+    : e.code === 'NOT_FOUND' ? 404 : ['NOT_ENCRYPTED', 'PERSISTENCE', 'NOT_SET_UP'].includes(e.code) ? 503 : 502;
+  res.status(status).json({ error: e.message || 'Connector request failed.' });
+};
+app.get('/api/connectors', requireAuth(async (req, res) => {
+  try { res.json({ connectors: await connectors.list(req.user.id), available: true }); }
+  catch (e) {
+    if (e.code === 'NOT_SET_UP') return res.json({ connectors: [], available: false, error: e.message });
+    connectorFailure(res, e);
+  }
+}));
+app.post('/api/connectors', rateLimit(10, 60000), requireAuth(async (req, res) => {
+  try { res.json(await connectors.create(req.user.id, req.body || {}, { signal: requestSignal(req) })); }
+  catch (e) { connectorFailure(res, e); }
+}));
+app.post('/api/connectors/:id/check', rateLimit(20, 60000), requireAuth(async (req, res) => {
+  try { res.json({ connector: await connectors.refresh(req.user.id, req.params.id, { signal: requestSignal(req) }) }); }
+  catch (e) { connectorFailure(res, e); }
+}));
+app.put('/api/connectors/:id/secret', rateLimit(10, 60000), requireAuth(async (req, res) => {
+  try { res.json(await connectors.replaceSecret(req.user.id, req.params.id, req.body?.secret, { signal: requestSignal(req) })); }
+  catch (e) { connectorFailure(res, e); }
+}));
+app.put('/api/connectors/:id/permissions', rateLimit(60, 60000), requireAuth(async (req, res) => {
+  try { res.json({ connector: await connectors.setPermissions(req.user.id, req.params.id, req.body?.disabled) }); }
+  catch (e) { connectorFailure(res, e); }
+}));
+app.delete('/api/connectors/:id', rateLimit(30, 60000), requireAuth(async (req, res) => {
+  try { res.json({ ok: true, ...(await connectors.remove(req.user.id, req.params.id)) }); }
+  catch (e) { connectorFailure(res, e); }
 }));
 
 // ---------- vault secrets ----------

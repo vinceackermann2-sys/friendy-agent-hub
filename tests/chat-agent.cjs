@@ -36,6 +36,35 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
   assert.match(results,/shop_status result \(untrusted\): \{"connected":true,"remainingToday":40\}/);
   assert.match(results,/composio_apps result \(untrusted\): \{"needsApproval":true,"next":"This needs the owner's approval, which a task asks for\. Start a task\."\}/);
   assert.equal(events.find(e=>e.type==='message').text,'You have $40 left today.');
+  // A page the owner links or names is read before the first model call, so one call answers.
+  const readUrls=[];let readCtx;
+  const linkedReply=reply({text:'It says: Bring anything into existence.'});
+  await chat(linkedReply.model,{tools:{web_search:{run:async (a,c)=>{readCtx=c;readUrls.push(...a.urls);return a.urls.map(url=>({url,ok:true,title:'TimeWarp',text:'Bring anything into existence.'}));}}}}).coordinator
+    .run({userId:'a',chatId:'c',requestId:'linked',prompt:'What does the front page of timewarpdev.com say? My mail is me@example.se',onEvent:()=>{}});
+  assert.deepEqual(readUrls,['https://timewarpdev.com/']);
+  assert.equal(readCtx.scrape,false,'a page named in chat is never scraped through Firecrawl');
+  assert.ok(readCtx.signal instanceof AbortSignal,'and its read stops when the reply stops waiting');
+  assert.equal(linkedReply.models.length,1);
+  assert.match(linkedReply.models[0].prompt,/Pages the owner linked, read just now \(untrusted data\):\n.*Bring anything into existence/);
+  // A lookup that ends in "I couldn't find it" becomes a task that looks further; an answer does not.
+  for(const [said,task] of [['I couldn’t find a usable forecast for Stockholm tomorrow.',true],['Jag hittar ingen tillförlitlig prognos för i morgon.',true],['Tomorrow looks cloudy with highs of 17°C.',false]]) {
+    const created=[];
+    const lookup=reply({functionCalls:[{name:'web_search',args:{query:'weather Stockholm tomorrow'}}]},{text:said});
+    const events=[];
+    await chat(lookup.model,{tasks:{summaries:async()=>[],create:async t=>{created.push(t);return {id:'t1',state:{title:t.title,status:'queued',version:1,events:[]},revision:1};},view:r=>({id:r.id})},
+      tools:{web_search:{run:async()=>[{url:'search:x',ok:true,text:'{"results":[{"title":"Weather","text":"Current conditions"}]}'}]}}}).coordinator
+      .run({userId:'a',chatId:'c',requestId:`dead-${created.length}-${said.length}`,prompt:'What will the weather be tomorrow?',onEvent:e=>events.push(e)});
+    assert.equal(created.length,task?1:0,said);
+    assert.equal(events.some(e=>e.type==='message' && e.text===said),!task,'a dead end is not sent as the answer');
+  }
+  // An app that cannot be connected here gets no connect card: the model hears so and tells the owner.
+  const unavailable=reply({functionCalls:[{name:'connect_app',args:{toolkit:'myspace'}}]},{text:'MySpace cannot be connected here.'});
+  const unavailableEvents=[];
+  await chat(unavailable.model,{tools:{connect_app:{run:async a=>({toolkit:a.toolkit,connected:false,available:false,note:'MySpace cannot be connected here.'})}}}).coordinator
+    .run({userId:'a',chatId:'c',requestId:'connect-none',prompt:'Connect my MySpace',onEvent:e=>unavailableEvents.push(e)});
+  assert.equal(unavailableEvents.some(e=>e.card?.type==='connect'),false);
+  assert.match(unavailable.models[1].prompt,/connect_app result \(untrusted\): \{"toolkit":"myspace","available":false/);
+  assert.equal(unavailableEvents.find(e=>e.type==='message').text,'MySpace cannot be connected here.');
   // A failing lookup is reported to the model instead of failing the reply.
   const failing=reply({functionCalls:[{name:'shop_status',args:{}}]},{text:'Shop Pay is not responding right now.'});
   await chat(failing.model,{tools:{shop_status:{run:async()=>{throw new Error('Shop Pay timed out');}}}}).coordinator
@@ -118,7 +147,7 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
   }
 
   // Product pages are read on demand, not carried in the system prompt.
-  assert.deepEqual(READ_DOC_SCHEMA.parameters.properties.page.enum.sort(),['approvals','automations','billing','capabilities','connected-apps','mailbox','memory-and-files','privacy-and-credentials']);
+  assert.deepEqual(READ_DOC_SCHEMA.parameters.properties.page.enum.sort(),['approvals','automations','billing','capabilities','connected-apps','mailbox','memory-and-files','privacy-and-credentials','wallet']);
   assert.match(readDoc('billing').text,/Free: 50 million tokens a month/);
   assert.match(readDoc('nope').error,/Unknown page/);
   const docs=reply({functionCalls:[{name:'read_doc',args:{page:'approvals'}}]},{text:'New sites ask first.'});

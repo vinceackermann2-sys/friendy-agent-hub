@@ -115,6 +115,13 @@ const IC = {
   trophy:'<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4a1 1 0 0 0-1 1c0 2.5 2 4 4 4M17 6h3a1 1 0 0 1 1 1c0 2.5-2 4-4 4"/>',
   users:'<path d="M16 21v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 19.5V21"/><circle cx="10" cy="8.5" r="3.5"/><path d="M20 21v-1.5a3.5 3.5 0 0 0-2.5-3.35M15.5 5.2a3.5 3.5 0 0 1 0 6.6"/>',
   dollar:'<path d="M12 2v20M17 6.5C17 4.6 14.8 3.5 12 3.5S7 4.8 7 7s2 3 5 3.8 5 1.7 5 4.2-2.2 3.5-5 3.5-5-1.1-5-3"/>',
+  arrin:'<path d="M17 7L7 17M17 17H7V7"/>',
+  link:'<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  bank:'<path d="M3 10h18L12 4 3 10Z"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18"/>',
+  pin:'<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21Z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  bag:'<path d="M5 8h14l-1.2 12H6.2L5 8Z"/><path d="M9 8a3 3 0 0 1 6 0"/>',
+  receipt:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 8h6M9 12h6"/>',
+  chevr:'<path d="M9 6l6 6-6 6"/>',
   palette:'<path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-.6-.3-1-.6-1.4-.3-.4-.6-.8-.6-1.4 0-1.1.9-1.7 2-1.7h2.3A3.9 3.9 0 0 0 21 10.6C21 6.4 17 3 12 3Z"/><circle cx="7.5" cy="11" r="1" fill="currentColor"/><circle cx="10" cy="7" r="1" fill="currentColor"/><circle cx="15" cy="7" r="1" fill="currentColor"/>',
   checksq:'<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12.5l2.8 2.8L16 10"/>',
   game:'<path d="M6.5 8h11A4.5 4.5 0 0 1 22 12.5v1a3.5 3.5 0 0 1-6.3 2.1L14.5 14h-5l-1.2 1.6A3.5 3.5 0 0 1 2 13.5v-1A4.5 4.5 0 0 1 6.5 8Z"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="16" cy="11.5" r=".9" fill="currentColor" stroke="none"/><circle cx="18" cy="13.5" r=".9" fill="currentColor" stroke="none"/>',
@@ -471,6 +478,8 @@ const fresh = () => ({
   subAgents:[], triggerOptions:{ schedules:[15,60,360,1440], apps:[] },
   // Composio connected apps (Belna Apps) — loaded from /api/composio/apps
   composioApps:[], composioLoading:false, appQuery:'', appFilter:'all', appOpen:null, appDetails:{},
+  // The owner's own APIs and MCP servers, from /api/connectors; never kept in browser storage.
+  customConnectors:[], customConnectorsAvailable:true,
   shopPay:null, shopPayLoading:false, shopPayOrders:[],
   // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'approvals'
   agentEdit:false, mailTab:'inbox',
@@ -555,7 +564,7 @@ state.composioLoading = false;
     'canvasSelectedMessageId','canvasSelectedFileIndex','replyingTo','taskReply','taskReplyScope','coordinatorRuns'];
   const clientProfile = () => ({
     onboarded:!!state.onboarded,
-    agent:state.agent ? { name:state.agent.name, color:state.agent.color, pers:state.agent.pers,
+    agent:state.agent ? { name:state.agent.name, color:state.agent.color,
       provisional:!!state.agent.provisional, claimedAt:state.agent.claimedAt || null } : null,
     theme:state.theme || 'grey',
     userProfile:state.userProfile ? {name:state.userProfile.name || ''} : null,
@@ -741,6 +750,7 @@ state.composioLoading = false;
     updateClientTimes();
     const persisted=JSON.parse(JSON.stringify(state, function(key, value){ return key === 'dataUrl' && this?.storageId ? undefined : value; }));
     if(persisted.vault?.secrets)persisted.vault.secrets=persisted.vault.secrets.map((secret)=>secret.backend?{id:secret.id,ref:secret.ref,name:secret.name,at:secret.at,backend:true}:secret);
+    delete persisted.customConnectors;
     let localSaved=true;
     try {
       const json=JSON.stringify(persisted);
@@ -966,6 +976,7 @@ function refreshComposioApps(force = false) {
   if (!force && Date.now() - composioCheckedAt < COMPOSIO_CACHE_MS) return Promise.resolve();
   // Mark the attempt before painting; an empty Apps result must not start a loop.
   composioCheckedAt = Date.now();
+  refreshCustomConnectors();
   state.composioLoading = true;
   if (state.view === 'apps' && $('#main')) paintApps($('#main'));
   const request = (async () => {
@@ -2666,7 +2677,7 @@ function startPendingPromptFlow(pendingOverride){
   if (!signedIn()) { renderAuth(); return; }
   ensureOwnerScope();
   if (typeof pendingOverride === 'string' && pendingOverride.trim()) state.pendingPrompt = pendingOverride.trim();
-  if (!state.agent) state.agent = { name:'Your agent', color:'lingon', pers:'Playful', provisional:true };
+  if (!state.agent) state.agent = { name:'Your agent', color:'lingon', provisional:true };
   state.agent.provisional = true;
   let c = state.chats.find(item => item.onboarding);
   if (!c) {
@@ -2742,7 +2753,7 @@ async function completeOnboarding(c){
   const answers = c.onboardingAnswers;
   if (!answers?.name || !Mascot.PALETTE[answers.color]) return;
   const ownerId = currentUserId();
-  state.agent = { name:publicAgentName(answers.name), color:answers.color, pers:'Playful', ownerId, claimedAt:Date.now() };
+  state.agent = { name:publicAgentName(answers.name), color:answers.color, ownerId, claimedAt:Date.now() };
   const pending = state.pendingPrompt;
   const intro = `Hi ${currentUser().name}! I’m ${state.agent.name}, your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. ${pending ? 'I’m getting started on your request now.' : 'Tell me what you want done, and I’ll take it from there.'} I’ll ask for access or approval when needed.`;
   const priorIntro = c.messages.find(m => m.role === 'agent' && /own secure computer/.test(m.text || ''));
@@ -2865,7 +2876,6 @@ async function sendPromptDirect(c, text, files = []){
 /* ================================================================
    ONBOARDING
 ================================================================ */
-const PERS = ['Playful','Precise','Calm','Bold'];
 const THEMES = [
   { id:'grey', name:'Standard Grey', c:'#5A5D63' },
   { id:'brick', name:'Classic Blue', c:'#3B6DD9' },
@@ -3020,7 +3030,7 @@ function renderApp(){
     if (!chat()?.onboarding) return startPendingPromptFlow();
     state.view = 'chat';
   }
-  if (!state.agent) state.agent = { name: 'Your agent', color: 'lingon', pers: 'Playful', provisional: true, claimedAt: Date.now() };
+  if (!state.agent) state.agent = { name: 'Your agent', color: 'lingon', provisional: true, claimedAt: Date.now() };
   applyTheme();
   belnaStopLandingFx();
   root.innerHTML = `
@@ -3051,7 +3061,7 @@ function currentUser(){
 // server uses the name from their account.
 function profileName(){ return String((state.userProfile && state.userProfile.name) || '').trim(); }
 // state.agent holds the agent's own settings. The owner's name lives in userProfile.
-function agentSettings(agent){ const { ownerName, ...settings } = agent || {}; return settings; }
+function agentSettings(agent){ const { ownerName, pers, ...settings } = agent || {}; return settings; }
 function artifactRows(){
   const rows = [];
   state.chats.forEach(c => {
@@ -3696,13 +3706,12 @@ function paintSide(){
     <button class="sidebrand" data-act="nav" data-view="chat" title="Belna — back to chat">${Mascot.logo(28)}<span>belna</span></button>
     <button class="btn" style="margin:8px 4px 4px" data-act="newchat">${icon('plus',15)} New chat</button>
     <div class="side-workspace${workspaceIntroClass}"${workspaceIntroStyle}>
-      <div class="slabel">Workspace</div>
       <button class="sitem navitem${libOn ? ' on' : ''}" data-act="open-library" title="Open your file library">
-        <span class="sicon sicon-lib">${icon('library',15)}</span><span>Library</span>
+        <span class="sicon sicon-lib">${icon('library',17)}</span><span class="navlabel">Library</span>
         ${libCount ? `<span class="cnt">${libCount}</span>` : ''}
       </button>
       <button class="sitem navitem${goalsOn ? ' on' : ''}" data-act="open-goals" title="Set goals and check them off as you go">
-        <span class="sicon sicon-goal"><svg class="ic goal-mark" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle class="goal-ring-outer" cx="12" cy="12" r="9"/><circle class="goal-ring-inner" cx="12" cy="12" r="5"/><circle class="goal-center" cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span><span>Goals</span>
+        <span class="sicon sicon-goal"><svg class="ic goal-mark" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle class="goal-ring-outer" cx="12" cy="12" r="9"/><circle class="goal-ring-inner" cx="12" cy="12" r="5"/><circle class="goal-center" cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg></span><span class="navlabel">Goals</span>
         ${gc.total ? `<span class="cnt">${gc.active}/${gc.total}</span>` : ''}
       </button>
     </div>
@@ -3710,11 +3719,10 @@ function paintSide(){
       <div class="slabel">Chats</div>
       <div class="chatlist" role="region" aria-label="Chats" tabindex="0">
         ${state.chats.map(c => `
-          <button class="sitem chatitem ${c.id === state.activeChat && state.view === 'chat' ? 'on' : ''}" data-act="openchat" data-id="${c.id}">
-            <span class="chat-bullet" aria-hidden="true"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span>
-            <span class="when">${fmtWhen(c.createdAt)}</span>
-            <span class="del" data-act="delchat" data-id="${c.id}" title="Delete chat">${icon('trash',13)}</span>
-          </button>`).join('') || '<div class="empty" style="padding:20px">No chats yet</div>'}
+          <button class="sitem chatitem ${c.id === state.activeChat && state.view === 'chat' ? 'on' : ''}" data-act="openchat" data-id="${c.id}" title="${esc(c.title)}">
+            <span class="chat-title">${esc(c.title)}</span>
+            <span class="del" data-act="delchat" data-id="${c.id}" title="Delete chat">${icon('trash',14)}</span>
+          </button>`).join('') || '<div class="empty chat-empty">No chats yet</div>'}
       </div>
     </div>
     <div class="sidebottom">
@@ -3860,6 +3868,7 @@ function statusFor(c){
         case 'approval': return 'Needs approval';
         case 'connect': return 'Connecting';
         case 'secret': return 'Waiting for a secret';
+        case 'connector': return 'Waiting for a key';
         case 'question': return 'Asking you';
         case 'subagents': return 'Sub-agent working · available';
         case 'browser': return 'Browsing';
@@ -3874,7 +3883,7 @@ function statusFor(c){
    and the pill narrates the latest step from this chat (live progress label
    or tool line). Free → just the name; waiting on you → what it needs. */
 const floatLive = new Map();   // chat id -> latest real step of the current run
-const FLOAT_WAIT = { 'Needs approval':'Needs your approval', 'Connecting':'Waiting for a connection', 'Waiting for a secret':'Waiting for a secret', 'Asking you':'Waiting for your answer' };
+const FLOAT_WAIT = { 'Needs approval':'Needs your approval', 'Connecting':'Waiting for a connection', 'Waiting for a secret':'Waiting for a secret', 'Waiting for a key':'Waiting for a key', 'Asking you':'Waiting for your answer' };
 function noteActivity(c, t){
   const text = String(t || '').replace(/\s*(\.\.\.|…)\s*$/, '').trim();
   if (!c || !text) return;
@@ -4079,8 +4088,8 @@ function msgNode(c, m){
     if (!['queued','running','waiting_peers','stopping'].includes(m.card.status)) return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
     return el(`<div class="msg agent task-working" data-mid="${m.id}" role="status" aria-label="${esc(state.agent.name)} is working on ${esc(m.card.title || 'a task')}"><div class="ava">${Mascot.svg(state.agent.color,'think',30)}</div><div class="body"><div class="bub-wrap"><div class="bub"><span class="tdots"><i></i><i></i><i></i></span></div></div></div></div>`);
   }
-  // Task milestones and "changes queued" notes are progress chatter; the task's
-  // answer reports the outcome. Failures still show.
+  // A task's updates arrive as the agent's own messages. The "changes queued" note (and
+  // milestone cards from older tasks) is chatter the chat reply already covers. Failures still show.
   if (m.kind === 'card' && m.card?.type === 'progress' && m.card.taskId && m.card.status === 'done')
     return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
   if (m.kind === 'card')
@@ -4180,7 +4189,18 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
     // Keyboard toggle for connector cards (outer div acts as button).
     if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.classList && e.target.classList.contains('conn-head')) {
       e.preventDefault();
-      openConnector(e.target.dataset.toolkit);
+      if (e.target.dataset.act === 'toggle-cc') ccToggle(e.target.dataset.id);
+      else openConnector(e.target.dataset.toolkit);
+    }
+    // Enter in the add-connector form connects; in the key box it saves the new key.
+    if (e.key === 'Enter' && e.target && e.target.matches && e.target.matches('.cc-form input')) {
+      e.preventDefault();
+      ccSave(e.target.closest('.cc-form'));
+    }
+    if (e.key === 'Enter' && e.target && e.target.matches && e.target.matches('[data-cc-rekey]')) {
+      e.preventDefault();
+      const form = e.target.closest('.cc-rekey');
+      ccRekeySave(form.querySelector('[data-act="cc-rekey-save"]').dataset.id, form);
     }
   });
   // Tapping far from any open message (e.g. thread padding, composer) closes it.
@@ -4270,8 +4290,9 @@ function cvOrderHTML(c, v){
     ${v.checkoutExcerpt ? `<p class="cv-fine">Live checkout text: ${esc(v.checkoutExcerpt)}</p>` : ''}
   </div>`;
 }
-const APPROVAL_TILES = { email:'mail', message:'chatb', event:'clock', app_action:'box', purchase:'card', submit:'check', credential:'key', website:'globe', search:'websearch', web_action:'globe', automation:'clock', generic:'shieldcheck' };
+const APPROVAL_TILES = { email:'mail', message:'chatb', event:'clock', app_action:'box', purchase:'card', submit:'check', credential:'key', website:'globe', search:'websearch', web_action:'globe', automation:'clock', money:'wallet', generic:'shieldcheck' };
 const APPROVAL_VERBS = { email:'Send', message:'Send', event:'Add event', purchase:'Place order', automation:'Create', website:'Open site', search:'Search', credential:'Allow', submit:'Allow', web_action:'Allow', app_action:'Allow', generic:'Allow' };
+const MONEY_VERBS = { send:'Send money', link:'Create link', limit:'Change limit', resume:'Resume', pause:'Pause' };
 function cvApprovalBody(c, cd){
   const v = cd.view || {};
   switch (v.kind) {
@@ -4286,6 +4307,7 @@ function cvApprovalBody(c, cd){
     case 'search': return v.query ? `<div class="cv-callout">${icon('websearch',16)}<span>“${esc(v.query)}”</span></div>` : `<div class="cv-chips">${cvChips(v.urls)}</div>`;
     case 'web_action': return `<div class="cv-callout">${icon(v.surface === 'computer' ? 'laptop' : 'globe',16)}<span>${esc(humanizeSlug(v.action || 'action'))}${v.text ? ` · ${esc(v.text)}` : ''}</span></div>`;
     case 'automation': return `<div class="cv-kvs">${cvRow('Name', esc(v.name))}${cvRow('When', esc(v.when))}</div>${v.prompt ? cvClamp(`<div class="cv-bubble">${esc(v.prompt)}</div>`, '', cvLong(v.prompt)) : ''}`;
+    case 'money': return `<div class="cv-kvs">${cvRow('Amount', esc(v.amount || ''))}${cvRow('To', esc(v.to || ''))}${cvRow('For', esc(v.title || ''))}</div><p class="cv-fine">${esc(v.action === 'send' ? (v.note || 'Payment partner fees may apply.') : v.action === 'link' ? 'Creates a link to share. Money arrives only after someone pays it. Partner fees may apply.' : v.action === 'resume' ? 'Your card can be used again. Every purchase still needs your approval.' : 'Every purchase still needs your approval.')}</p>`;
     default: return `<pre class="cv-pre">${esc(cd.detail || '')}</pre>`;
   }
 }
@@ -4295,7 +4317,7 @@ function approvalCardHTML(c, m){
   const app = v.app || (v.kind === 'email' ? v.provider : '');
   const tile = app ? `<div class="tile cv-tile brand">${cvAppMark(app)}</div>` : cvTile(APPROVAL_TILES[v.kind] || 'shieldcheck');
   const sub = pending ? `${esc(state.agent.name)} wants to do this` : v.appName ? esc(v.appName) : 'Action approval';
-  const verb = APPROVAL_VERBS[v.kind] || 'Allow';
+  const verb = (v.kind === 'money' && MONEY_VERBS[v.action]) || APPROVAL_VERBS[v.kind] || 'Allow';
   return `<div class="acard cv-card cv-approval ${pending ? 'is-pending' : ''}">
     ${cvHead(tile, esc(cd.view && cd.title ? cd.title : approvalHeadline({ title:cd.title, detail:cd.detail })), sub, cvDecisionChip(cd.status))}
     <div class="bd">${cvApprovalBody(c, cd)}</div>
@@ -4651,6 +4673,33 @@ function cardNode(c, m){
     ${pending ? `<div class="stack"><button class="btn" data-act="connect" data-chat="${k}" data-msg="${mid}">Connect</button><button class="btn ghost" data-act="deny-connect" data-chat="${k}" data-msg="${mid}">Not now</button></div>` : `<div class="ft"><span class="note">${icon('lock',12)} manage in Vault</span></div>`}</div>`;
   }
 
+  if (cd.type === 'connector') {
+    // The agent set up one of the owner's APIs or MCP servers (connector_setup). The owner sees
+    // where the key goes and pastes it here; it goes straight to the vault, never to the agent.
+    const mcp = cd.kind === 'mcp', auth = cd.auth || { type:'none' };
+    const done = cd.status === 'connected' || cd.status === 'approved';
+    const keyLabel = CC_SECRET_LABEL[auth.type] || 'Key', keyNoun = CC_SECRET_NOUN[auth.type] || 'key';
+    const keyHost = (() => { try { return new URL(cd.keyUrl).hostname; } catch { return ''; } })();
+    return `<div class="acard connector-card">
+    ${hd(icon(mcp ? 'grid' : 'code',20),'var(--acc-soft)','var(--acc)',`Connect ${esc(cd.name || 'a service')}`,`${mcp ? 'MCP server' : 'API'} · ${esc(cd.host || '')}`)}
+    <div class="bd">
+      ${cd.note ? `<p class="secret-card-reason">${esc(cd.note)}</p>` : ''}
+      ${pending ? `<div class="connector-card-where">${icon('globe',14)}<span>${auth.type === 'none' ? `Connects to <b>${esc(cd.host)}</b>. No key needed.` : `Your ${keyNoun} is sent only to <b>${esc(cd.host)}</b>.`}</span></div>
+      ${cd.warning ? `<div class="connector-card-warning" role="alert">${icon('alert',14)}<span>${esc(cd.warning)}</span></div>` : ''}
+      ${auth.type !== 'none' ? `<div class="secret-card-fields">
+        ${auth.type === 'basic' ? `<label class="secret-card-label">Username<input class="field" data-f="username" type="text" value="${esc(auth.username || '')}" aria-label="Username" autocomplete="off" spellcheck="false"></label>` : ''}
+        <label class="secret-card-label">${keyLabel}<input class="field mono" data-f="key" type="password" aria-label="${keyLabel}" placeholder="Paste your ${keyNoun}" autocomplete="new-password" spellcheck="false"></label>
+      </div>` : ''}
+      ${keyHost ? `<a class="connector-card-link" href="${esc(cd.keyUrl)}" target="_blank" rel="noopener noreferrer">${icon('key',13)} Get your ${keyNoun} on ${esc(keyHost)}</a>` : ''}
+      ${cd.error ? `<div class="cc-error" role="alert">${icon('alert',14)}<span>${esc(cd.error)}</span></div>` : ''}
+      <div class="secnote">${icon('shieldcheck',14)} ${esc(state.agent.name)} never sees the key. It is encrypted in your vault.</div>`
+      : done ? `<p class="connector-card-done">${cd.tools ? `${cd.tools} tool${cd.tools === 1 ? '' : 's'} ready.` : 'Ready to use.'} You can turn any permission off in Connectors.</p>` : ''}
+    </div>
+    ${pending ? `<div class="stack"><button class="btn" data-act="connector-save" data-chat="${k}" data-msg="${mid}">${icon('plus',14)} ${cd.warning ? `Send ${keyNoun} to ${esc(cd.host)}` : 'Connect'}</button><button class="btn ghost" data-act="connector-skip" data-chat="${k}" data-msg="${mid}">Not now</button></div>`
+      : done && cd.connectorId ? `<div class="ft"><span class="note">${icon('lock',12)} Key in your vault</span><button class="btn ghost small" data-act="cc-open" data-id="${esc(cd.connectorId)}">Open in Connectors</button></div>` : ''}
+  </div>`;
+  }
+
   if (cd.type === 'secret') {
     // Agent requests (vault_request) fix the name the agent will look up; the
     // decision event reports them as approved/denied rather than saved/skipped.
@@ -4829,7 +4878,7 @@ function makeRT(c){
       if (!task && managedRunTokens.get(c) !== runToken && !(answerReady && ['card', 'artifact', 'trace'].includes(event.type))) return;
       if (event.type === 'progress' && typeof event.label === 'string') {
         // Internal stages do not create chat cards (published cards stay in
-        // history; task updates arrive as milestone cards) — they only
+        // history; task updates arrive as agent messages) — they only
         // narrate the header mascot's status line.
         if (!task) noteActivity(c, event.label);
         return;
@@ -5230,8 +5279,6 @@ function agentAppearanceForm(a){
     <input class="field" id="agentname" maxlength="18" value="${esc(a.name)}">
     <label class="alabel">Mascot appearance</label>
     <div class="swatches" style="justify-content:flex-start;margin-top:8px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}" title="${Mascot.PALETTE[k].name}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
-    <label class="alabel">Personality</label>
-    <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
   </div>`;
 }
 function canvasHeroHTML(){
@@ -5373,57 +5420,328 @@ function refreshShopPay(force = false){
     if (owner !== billingIdentity()) return;
     state.shopPayLoading = false;
     save();
-    if (state.canvasOpen && state.canvasTab === 'payments' && $('#cbody')) $('#cbody').innerHTML = paymentsTabContent();
+    repaintWallet();
   });
 }
-function paymentsTabContent(){
-  const stripe = composioAppByToolkit('stripe');
-  const stripeConnected = !!stripe?.connected;
-  const shop = shopPaySnapshot();
-  const limit = Number(shop.dailyLimitUsd || 200);
-  const remaining = Number(shop.remainingUsd != null ? shop.remainingUsd : limit);
-  const shopOpen = state.paymentOpenId === 'shop-pay';
-  const shopRow = shop.connected
-    ? `<article class="appr-item${shopOpen ? ' open' : ''}" data-id="shop-pay">
-        <button type="button" class="appr-row" data-act="appr-toggle" data-key="payment" data-id="shop-pay" aria-expanded="${shopOpen ? 'true' : 'false'}">
-          <span class="appr-ico wordmark shop-pay-mark">${shopPayBrandMark()}</span>
-          <span class="appr-copy"><b>Shop Pay</b><span class="appr-desc">Linked as ${esc(shop.email || 'your Shop account')}</span><span class="appr-meta ok">Connected · $${remaining.toFixed(2)} of $${limit.toFixed(0)} left today</span></span>
-          <span class="appr-chev">${icon('chev',16)}</span>
-        </button>
-        <div class="appr-more">
-          <div class="appr-more-line">${shop.nativeCheckout ? 'Eligible checkouts complete here after you approve.' : 'Checkouts finish on the merchant site after you approve.'}</div>
-          <label class="payments-limit">Daily limit $<input class="field tiny" id="shoppaylimit" type="number" min="1" max="2000" step="1" value="${esc(limit)}"></label>
-          <button class="btn ghost small" data-act="shop-pay-limit">Save limit</button>
-          <button class="btn ghost small" data-act="shop-pay-disconnect">Disconnect</button>
-        </div>
-      </article>`
-    : `<article class="appr-item"><div class="appr-row static">
-        <span class="appr-ico wordmark shop-pay-mark">${shopPayBrandMark()}</span>
-        <span class="appr-copy"><b>Shop Pay</b><span class="appr-desc">Search Shopify stores and prepare checkouts you approve.</span><span class="appr-meta">${state.shopPayLoading ? 'Checking…' : shop.configured ? 'Not connected' : 'Not available on this server yet'}</span></span>
-        ${shop.configured ? `<button class="btn small" data-act="shop-pay-connect">Connect</button>` : ''}
-      </div></article>`;
-  const stripeRow = `<article class="appr-item"><div class="appr-row static">
-      <span class="appr-ico wordmark stripe-mark">${stripeIconHtml()}</span>
-      <span class="appr-copy"><b>Stripe</b><span class="appr-desc">Payment and revenue tasks in your Stripe account.</span><span class="appr-meta${stripeConnected ? ' ok' : ''}">${state.composioLoading ? 'Checking…' : stripeConnected ? 'Connected' : stripe ? 'Not connected' : 'Not available on this server yet'}</span></span>
-      ${stripeConnected
-        ? `<button class="btn ghost small" data-act="payments-stripe-apps">Manage</button>`
-        : stripe ? `<button class="btn small" data-act="connect-app" data-toolkit="stripe" data-auth="${esc(stripe.authConfigId || '')}">Connect</button>` : ''}
-    </div></article>`;
-  const orders = (state.shopPayOrders || []).slice(0, 5).map((o) => `<article class="appr-item"><div class="appr-row static">
-      <span class="appr-ico">${icon('card',18)}</span>
-      <span class="appr-copy"><b>${esc(o.title || o.merchant || 'Order')}</b><span class="appr-meta">${esc([o.amount != null ? '$' + Number(o.amount).toFixed(2) : '', o.status].filter(Boolean).join(' · '))}</span></span>
-      ${o.continueUrl ? `<a class="btn ghost small" href="${esc(o.continueUrl)}" target="_blank" rel="noopener">Finish</a>` : ''}
-    </div></article>`).join('');
-  return `<div class="appr-panel">
-    <div class="appr-toolbar"><h3 class="appr-heading">Payments</h3><button class="iconbtn" data-act="payments-refresh" title="Refresh payments" aria-label="Refresh payments">${icon('refresh',15)}</button></div>
-    <p class="appr-lede">${esc((state.agent && state.agent.name) || 'Your agent')} can prepare purchases for you. Every payment pauses in Approvals until you say yes.</p>
-    <h4 class="appr-group">Payment methods</h4>
-    ${shopRow}${stripeRow}
-    ${orders ? `<h4 class="appr-group">Recent orders</h4>${orders}` : ''}
+let walletHistory=[];
+let walletPreferences=null,walletPreferencesLoading=false,walletConnectOpen=false,walletExistingOpen=false,walletAction=null;
+let walletAddresses=null, walletAddressesLoading=false, walletAddressEdit=null, walletAddressError='';
+let belnaWalletOwner = null, belnaWalletCache = null, belnaWalletLoading = false, belnaWalletError = '', belnaWalletBusy = false, belnaReceiveLink = null, belnaTransferQuote = null, belnaReceiveAttempt = null;
+let walletWithdrawalClose=null, walletElementsLoading=null, walletVerificationClose=null, walletLimitEdit=false;
+async function openWalletVerification(purchaseId){
+ const owner=scopeBelnaWallet();if(!owner || !/^[a-f0-9-]{36}$/.test(purchaseId||''))return;
+ walletVerificationClose?.();const previous=document.activeElement;
+ const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-verification-dialog" role="dialog" aria-modal="true" aria-label="Private bank verification"><header><div><h3>Verify your payment</h3><p>Only you can see this bank verification. Your agent cannot access it.</p></div><button class="btn ghost small" aria-label="Close payment verification">'+icon('x',18)+'</button></header><p role="status">Opening your private verification…</p><img alt="Your private bank verification" tabindex="0"><form><label>Code or response<input class="field" type="password" autocomplete="off" maxlength="200"></label><button class="btn small" type="submit">Enter response</button><button class="btn ghost small" type="button" data-key="Tab">Next field</button><button class="btn ghost small" type="button" data-key="Enter">Continue</button></form></section></div>');
+ let closed=false,busy=false,timer,expiry;
+ const close=()=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(expiry);overlay.querySelector('img').removeAttribute('src');overlay.querySelector('input').value='';overlay.remove();document.removeEventListener('keydown',key);if(walletVerificationClose===close)walletVerificationClose=null;previous?.focus?.();};
+ const key=e=>{if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button,input,img')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}};
+ const api=event=>window.LingonAuth.api('/api/belna-wallet/purchases/'+purchaseId+'/'+(event?'owner-input':'owner-state'),{method:'POST',body:JSON.stringify(event?{event}:{})});
+ const refresh=async()=>{if(closed)return;if(owner!==billingIdentity()){close();return;}try{const state=await api();if(closed||owner!==billingIdentity()){close();return;}if(!/^[A-Za-z0-9+/=]+$/.test(state.image||'') || state.image.length>3000000)throw Error('Could not show your bank verification.');const until=Date.parse(state.expiresAt);if(!Number.isFinite(until)||until<=Date.now())throw Error('Your bank verification expired.');overlay.querySelector('img').src='data:image/jpeg;base64,'+state.image;overlay.querySelector('[role="status"]').textContent='Click the bank screen or enter its requested response below.';clearTimeout(expiry);expiry=setTimeout(close,Math.min(15*60000,until-Date.now()));timer=setTimeout(refresh,2000);}catch(e){if(!closed){overlay.querySelector('[role="status"]').textContent=e.message||'This verification is unavailable. Check wallet activity.';overlay.querySelector('img').removeAttribute('src');}}};
+ const input=async event=>{if(closed||busy||owner!==billingIdentity())return;busy=true;clearTimeout(timer);try{await api(event);await refresh();}catch(e){if(!closed)overlay.querySelector('[role="status"]').textContent=e.message||'Could not send your response.';}finally{busy=false;}};
+ walletVerificationClose=close;overlay.querySelector('header button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};document.addEventListener('keydown',key);document.body.append(overlay);overlay.querySelector('button').focus();
+ overlay.querySelector('img').onclick=e=>{const r=e.target.getBoundingClientRect();input({type:'click',x:(e.clientX-r.left)*1280/r.width,y:(e.clientY-r.top)*900/r.height});};
+ overlay.querySelector('form').onsubmit=e=>{e.preventDefault();const field=overlay.querySelector('input'),text=field.value;field.value='';if(text)input({type:'type',text});};
+ overlay.querySelectorAll('[data-key]').forEach(b=>b.onclick=()=>input({type:'key',key:b.dataset.key}));refresh();
+}
+function loadWalletElements(){
+  if(window.WhopElements)return Promise.resolve(window.WhopElements);
+  if(walletElementsLoading)return walletElementsLoading;
+  walletElementsLoading=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');script.src='https://cdn.whop.com/elements/amber/elements.js';script.dataset.whopElements='';
+    const timer=setTimeout(()=>{script.remove();walletElementsLoading=null;reject(Error('The secure bank connection timed out. Please try again.'));},15000);
+    script.onload=()=>{clearTimeout(timer);if(window.WhopElements)resolve(window.WhopElements);else{walletElementsLoading=null;reject(Error('The secure bank connection could not load.'));}};
+    script.onerror=()=>{clearTimeout(timer);script.remove();walletElementsLoading=null;reject(Error('The secure bank connection could not load. Please try again.'));};document.head.append(script);
+  });return walletElementsLoading;
+}
+async function openWalletWithdrawal(){
+  const owner=scopeBelnaWallet();if(!owner)return;
+  walletWithdrawalClose?.();
+  const previous=document.activeElement;
+  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">Withdraw to your bank</h3><p>Choose your bank, review fees and arrival time, then confirm.</p></div><button class="btn ghost small" aria-label="Close bank withdrawal">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure bank connection…</div><div id="wallet-withdraw-element"></div></section></div>');
+  let element,group,expiryTimer,identityTimer,closed=false;
+  const close=()=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearInterval(identityTimer);try{element?.destroy?.();group?.destroy?.();}catch{}overlay.remove();document.removeEventListener('keydown',onKey);if(walletWithdrawalClose===close)walletWithdrawalClose=null;previous?.focus?.();};
+  const onKey=e=>{if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const focusable=[...overlay.querySelectorAll('button,iframe,[tabindex="0"]')];const first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
+  walletWithdrawalClose=close;overlay.querySelector('button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};document.addEventListener('keydown',onKey);document.body.append(overlay);overlay.querySelector('button').focus();
+  identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close();},1000);
+  try{
+    // Never persist this token in app state/storage or send it to the agent.
+    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/withdraw-session',{method:'POST',body:'{}'}),loadWalletElements()]);
+    if(closed || owner!==billingIdentity()){close();return;}
+    const expires=Date.parse(session.expiresAt);
+    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your bank connection expired. Open Withdraw again.');
+    group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance:{theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}}});
+    element=group.create('withdraw',{onDone:()=>{close();refreshBelnaWallet(true);},onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your bank connection could not load. Close and try again.';}});
+    element.mount('#wallet-withdraw-element');overlay.querySelector('.wallet-withdraw-status').textContent='You stay in control. Bank details are handled in the secure connection.';
+    expiryTimer=setTimeout(()=>{close();toast('Your secure bank session expired. Open Withdraw again.');},Math.min(15*60000,expires-Date.now()));
+  }catch(e){if(!closed){overlay.querySelector('.wallet-withdraw-status').textContent=e.message||'Could not open your bank connection. Please try again.';}}
+}
+function scopeBelnaWallet(){
+  const owner = billingIdentity();
+  if (owner !== belnaWalletOwner) {
+    walletWithdrawalClose?.();
+    walletVerificationClose?.();
+    walletHistory=[];walletPreferences=null;walletPreferencesLoading=false;walletConnectOpen=false;walletExistingOpen=false;walletAction=null;walletLimitEdit=false;
+    walletAddresses=null; walletAddressesLoading=false; walletAddressEdit=null; walletAddressError='';
+    belnaWalletOwner = owner; belnaWalletCache = null; belnaWalletLoading = false; belnaWalletError = ''; belnaWalletBusy = false; belnaReceiveLink = null; belnaTransferQuote=null; belnaReceiveAttempt=null;
+  }
+  return owner;
+}
+function repaintWallet(){
+  if(state.view==='settings' && state.settingsTab==='wallet' && $('#wallet-settings-content')){
+    if(walletAddressEdit && document.activeElement?.closest('.wallet-address-form'))return;
+    if(walletLimitEdit && document.activeElement?.id==='belna-wallet-limit')return;
+    $('#wallet-settings-content').innerHTML=walletSettingsContent();
+    return;
+  }
+  if (state.canvasOpen && state.canvasTab === 'payments' && $('#cbody')) $('#cbody').innerHTML = paymentsTabContent();
+}
+function refreshBelnaWallet(force = false){
+  refreshShippingAddresses(force);
+  refreshWalletPreferences(force);
+  const owner = scopeBelnaWallet();
+  if (!owner || belnaWalletLoading || (!force && (belnaWalletCache || belnaWalletError))) return Promise.resolve();
+  belnaWalletLoading = true; belnaWalletError = '';
+  repaintWallet();
+  return window.LingonAuth.api('/api/belna-wallet').then(j => {
+    if (owner === scopeBelnaWallet()) belnaWalletCache = j;
+  }).catch(e => {
+    if (owner === scopeBelnaWallet()) belnaWalletError = e.message || 'Could not load your wallet. Refresh to try again.';
+  }).finally(() => {
+    if (owner !== scopeBelnaWallet()) return;
+    belnaWalletLoading = false; repaintWallet();
+  });
+}
+function walletMoney(value){
+  return value == null || !Number.isFinite(Number(value)) ? 'Unavailable' : new Intl.NumberFormat('en-US', { style:'currency', currency:'USD' }).format(Number(value));
+}
+function refreshShippingAddresses(force=false){
+  const owner=scopeBelnaWallet();
+  if(!owner || walletAddressesLoading || (!force && walletAddresses))return;
+  walletAddressesLoading=true;
+  window.LingonAuth.api('/api/shipping-addresses').then(j=>{if(owner===scopeBelnaWallet()){walletAddresses=Array.isArray(j.addresses)?j.addresses:[];walletAddressError='';}})
+    .catch(e=>{if(owner===scopeBelnaWallet())walletAddressError=e.message || 'Could not load shipping addresses.';})
+    .finally(()=>{if(owner===scopeBelnaWallet()){walletAddressesLoading=false;if(!walletAddressEdit)repaintWallet();}});
+}
+let walletCountriesCache;
+function walletCountryOptions(selected='SE'){
+  if(!walletCountriesCache){const names=new Intl.DisplayNames(['en'],{type:'region',fallback:'none'});walletCountriesCache=[];
+    for(let a=65;a<91;a++)for(let b=65;b<91;b++){const code=String.fromCharCode(a,b),label=names.of(code);if(label && label!==code && code!=='ZZ')walletCountriesCache.push({code,label});}
+    walletCountriesCache.sort((a,b)=>a.label.localeCompare(b.label));
+  }
+  return walletCountriesCache.map(c=>'<option value="'+c.code+'"'+(selected===c.code?' selected':'')+'>'+esc(c.label)+'</option>').join('');
+}
+// ---------- Wallet UI ----------
+// The chat panel shows the way the agent pays now (Belna Wallet balance, or the owner's
+// existing card); Settings holds the choice, Belna Wallet controls, existing-card
+// connections and delivery addresses. Nothing here shows or stores a card number.
+const WALLET_STATUS = { recorded:'Completed', completed:'Completed', succeeded:'Completed', pending:'Pending', processing:'Processing', authorized:'Authorized', awaiting_confirmation:'Submitted', submitted:'Submitted', needs_buyer:'Finish checkout', escalated:'Finish checkout', failed:'Failed', canceled:'Canceled', declined:'Declined', expired:'Expired' };
+function walletStatusLabel(status){
+  const s = String(status || 'recorded').toLowerCase();
+  return WALLET_STATUS[s] || s.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
+}
+function walletDate(at){
+  const t = Date.parse(at || '');
+  return Number.isFinite(t) ? new Intl.DateTimeFormat('en-US', { month:'short', day:'numeric' }).format(t) : '';
+}
+function walletAmount(x){
+  if (x.currency && x.currency !== 'USD' && Number.isFinite(Number(x.amount))) {
+    try { return new Intl.NumberFormat('en-US', { style:'currency', currency:x.currency }).format(Number(x.amount)); } catch {}
+  }
+  return walletMoney(x.amount);
+}
+function belnaWalletState(){
+  const w = belnaWalletCache?.wallet;
+  return { w, created: !!w && !['unavailable','not_created','setup_pending'].includes(w.status) };
+}
+function walletDefaultAddress(){
+  return (walletAddresses || []).find(a => a.isDefault) || (walletAddresses || [])[0] || null;
+}
+// One list row, shared by activity, purchases and connections. sub and right are HTML.
+function walletRow({ ic = 'wallet', mark = '', tone = '', title, sub = '', right = '', cls = '' }){
+  return `<div class="wl-row${cls ? ' ' + cls : ''}"><span class="wl-ico${tone ? ' ' + tone : ''}" aria-hidden="true">${mark ? esc(mark) : icon(ic, 17)}</span><span class="wl-copy"><b>${esc(title)}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right}</div>`;
+}
+const walletSwitch = (on, act, label, extra = '') => `<button type="button" class="wl-switch${on ? ' on' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-act="${act}" ${extra}${belnaWalletBusy ? ' disabled' : ''}><span></span></button>`;
+
+/* ----- Tao pays with: the choice, in Settings and on an empty panel ----- */
+function walletMethodPicker(){
+  scopeBelnaWallet();
+  const { w, created } = belnaWalletState(), shop = shopPaySnapshot(), active = walletPreferences?.activeMethod || null;
+  const existing = !!(shop.connected || walletPreferences?.merchantEnabled), busy = belnaWalletBusy ? ' disabled' : '';
+  const option = (id, ic, title, desc, connected, side, extra = '') => {
+    const on = active === id;
+    const act = connected || id === null ? `data-act="wallet-switch" data-method="${id || ''}"` : `data-act="${id === 'belna_wallet' ? 'wallet-connect-belna' : 'wallet-existing-options'}"`;
+    return `<div class="wpay-opt${on ? ' on' : ''}" data-option="${id || 'off'}"><div class="wpay-line"><button type="button" class="wpay-main" role="radio" aria-checked="${on}" ${act}${busy}><span class="wpay-radio" aria-hidden="true"></span><span class="wpay-ic ${ic}" aria-hidden="true">${ic === 'belna' ? icon('spark', 12) : ic === 'card' ? icon('card', 16) : icon('x', 14)}</span><span class="wpay-copy"><b>${title}</b><small>${desc}</small></span></button>${side ? `<span class="wpay-side">${side}</span>` : ''}</div>${extra}</div>`;
+  };
+  const belnaSide = created ? `<b>${esc(walletMoney(w.balance?.available))}</b> available`
+    : `<button type="button" class="btn ghost small" data-act="wallet-connect-belna" aria-expanded="${walletConnectOpen}"${busy}>Set up</button>`;
+  const belnaSetup = !created && walletConnectOpen ? `<div class="wpay-extra"><label class="wl-field">Country you live in<select class="field" id="belna-wallet-country">${walletCountryOptions('SE')}</select></label><button type="button" class="btn small" data-act="belna-wallet-setup"${!w?.configured || belnaWalletBusy ? ' disabled' : ''}>Create wallet</button>${!w?.configured ? '<p class="wl-hint">Belna Wallet isn’t available yet.</p>' : '<p class="wl-hint">You’ll verify your identity with our payment partner next.</p>'}</div>` : '';
+  const existingSide = existing ? esc(shop.connected ? 'Shop Pay connected' : 'Store cards on')
+    : `<button type="button" class="btn ghost small" data-act="wallet-existing-options" aria-expanded="${walletExistingOpen}">Connect</button>`;
+  const existingSetup = walletExistingOpen ? `<div class="wpay-extra wl-list boxed">${walletRow({ mark:'S', tone:'shop', title:'Shop Pay', sub:esc(shop.connected ? shop.email || 'Connected' : shop.configured ? 'Your saved Shop Pay payment method' : 'Not available yet'),
+      right: shop.connected ? `<span class="wl-ok">${icon('check', 13)} Connected</span>` : `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured ? ' disabled' : ''}>Connect Shop Pay</button>` })}${walletRow({ ic:'bag', title:'Cards saved in stores', sub:'Like Amazon. You sign in when ' + esc(state.agent.name) + ' opens the store.',
+      right: walletPreferences?.merchantEnabled ? `<span class="wl-ok">${icon('check', 13)} On</span>` : `<button type="button" class="btn ghost small" data-act="wallet-merchant-connect"${busy}>Turn on</button>` })}</div>` : '';
+  return `<div class="wpay" role="radiogroup" aria-label="${esc(state.agent.name)} pays with">
+    ${option('belna_wallet', 'belna', 'Belna Wallet', 'Your own balance. One-time card per approved purchase.', created, belnaSide, belnaSetup)}
+    ${option('existing_card', 'card', 'A card you already use', 'Shop Pay or a card saved in a store you sign in to.', existing, existingSide, existingSetup)}
+    ${option(null, 'off', 'Off', esc(state.agent.name) + ' can find products and prices, but can’t pay.', true, '')}
   </div>`;
 }
 
-const UPKEEP_ICONS = { memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
+/* ----- Settings › Wallet ----- */
+function walletCardStatus(w){
+  if (w.cardProgramAvailable === false) return { text:'Not available yet' };
+  if (w.cardReady ?? w.status === 'ready') return w.paused ? { text:'Paused', tone:'warn' } : { text:'On · one-time card per approved purchase' };
+  if (w.status === 'denied') return { text:'Not approved', tone:'warn' };
+  if (w.status === 'review') return { text:'In review' };
+  return { text:'Identity check needed', tone:'warn' };
+}
+function walletBelnaGroup(){
+  const { w, created } = belnaWalletState();
+  if (!created) return '';
+  const card = walletCardStatus(w), ready = w.cardReady ?? w.status === 'ready', busy = belnaWalletBusy ? ' disabled' : '';
+  const cardActions = w.cardProgramAvailable === false || ready || w.status === 'denied' ? ''
+    : `<span class="wset-actions">${['verification_required','review'].includes(w.status) ? `<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>Verify identity</button>` : ''}<button type="button" class="btn ${['verification_required','review'].includes(w.status) ? 'ghost ' : ''}small" data-act="belna-wallet-card-connect"${busy}>Connect card</button></span>`;
+  const limit = Number(w.dailyCardLimitUsd);
+  const limitRow = walletLimitEdit
+    ? `<div class="wset-row wset-edit wset-limit"><label class="wl-field">Daily card allowance (USD)<input class="field" id="belna-wallet-limit" type="number" min="1" max="2000" step="0.01" value="${Number.isFinite(limit) ? limit : ''}"></label><span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-limit"${busy}>Save</button><button type="button" class="btn ghost small" data-act="wallet-limit-cancel">Cancel</button></span></div>`
+    : `<div class="wset-row"><span class="wset-copy"><b>Daily card allowance</b><small>Up to $2,000. Each purchase still needs your approval.</small></span><span class="wset-value">${esc(walletMoney(Number.isFinite(limit) ? limit : null))}</span><button type="button" class="btn ghost small" data-act="wallet-limit-edit">Change</button></div>`;
+  const pending = Number(w.balance?.pending);
+  const country = w.country ? (() => { try { return new Intl.DisplayNames(['en'], { type:'region' }).of(w.country); } catch { return w.country; } })() : '';
+  return `<section class="wset-sec"><h4 class="wset-label">Belna Wallet</h4><div class="wset-group">
+    <button type="button" class="wset-row wset-link" data-act="wallet-open-panel"><span class="wset-copy"><b>Balance</b><small>${esc([pending > 0 ? walletMoney(pending) + ' pending' : '', 'USD', country].filter(Boolean).join(' · '))}</small></span><span class="wset-value">${esc(walletMoney(w.balance?.available))}</span>${icon('chevr', 16)}</button>
+    <div class="wset-row"><span class="wset-copy"><b>Card payments</b><small${card.tone ? ` class="${card.tone}"` : ''}>${esc(card.text)}</small></span>${cardActions}</div>
+    ${limitRow}
+    <div class="wset-row"><span class="wset-copy"><b>Pause card spending</b><small>Also cancels purchase cards that are waiting.</small></span>${walletSwitch(!!w.paused, 'belna-wallet-freeze', 'Pause card spending', `data-frozen="${!w.paused}"`)}</div>
+  </div></section>`;
+}
+function walletExistingGroup(){
+  const shop = shopPaySnapshot(), merchant = !!walletPreferences?.merchantEnabled;
+  return `<section class="wset-sec"><h4 class="wset-label">Existing card</h4><div class="wset-group">
+    <div class="wset-row"><span class="wset-copy"><b>Shop Pay</b><small>${esc(shop.connected ? 'Connected as ' + (shop.email || 'your Shop Pay account') : shop.configured ? 'Not connected' : 'Not available yet')}</small></span>${shop.connected ? '<button type="button" class="btn ghost small" data-act="shop-pay-disconnect">Disconnect</button>' : `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured ? ' disabled' : ''}>Connect</button>`}</div>
+    <div class="wset-row"><span class="wset-copy"><b>Cards saved in stores</b><small>Like Amazon. You sign in when ${esc(state.agent.name)} opens the store.</small></span>${walletSwitch(merchant, 'wallet-merchant-toggle', 'Cards saved in stores')}</div>
+    <button type="button" class="wset-row wset-link" data-act="wallet-existing-connect"><span class="wset-copy"><b>Store sign-ins</b><small>Kept in Secrets</small></span>${icon('chevr', 16)}</button>
+  </div></section>`;
+}
+function walletAddressForm(){
+  const a = walletAddressEdit;
+  const field = (name, label, autocomplete, optional = false) => `<label class="wl-field"><span>${label}${optional ? ' <span class="mut">(optional)</span>' : ''}</span><input class="field" id="wallet-address-${name}" value="${esc(a?.[name] || '')}" autocomplete="${autocomplete}" maxlength="${({ label:40, recipient:80, line1:100, line2:60, city:60, region:60, postalCode:20 })[name]}"${optional ? '' : ' required'}></label>`;
+  return `<form class="wset-row wset-edit wallet-address-form" onsubmit="return false">
+    <div class="wl-fields">${field('label', 'Address name', 'off')}${field('recipient', 'Full name', 'shipping name')}</div>
+    ${field('line1', 'Street address', 'shipping address-line1')}${field('line2', 'Apartment, suite, etc.', 'shipping address-line2', true)}
+    <div class="wl-fields">${field('postalCode', 'Postal code', 'shipping postal-code')}${field('city', 'City', 'shipping address-level2')}</div>
+    <div class="wl-fields">${field('region', 'State / region', 'shipping address-level1', true)}<label class="wl-field">Country<select class="field" id="wallet-address-country" autocomplete="shipping country">${walletCountryOptions(a.country || 'SE')}</select></label></div>
+    <label class="wl-check"><input id="wallet-address-default" type="checkbox"${a.isDefault ? ' checked' : ''}> Use as my default delivery address</label>
+    <span class="wset-actions"><button type="button" class="btn small" data-act="wallet-address-save"${belnaWalletBusy ? ' disabled' : ''}>Save address</button><button type="button" class="btn ghost small" data-act="wallet-address-cancel">Cancel</button>${a.id ? `<button type="button" class="btn ghost small wl-danger" data-act="wallet-address-delete" data-id="${esc(a.id)}"${belnaWalletBusy ? ' disabled' : ''}>Remove</button>` : ''}</span>
+  </form>`;
+}
+function walletShippingContent(){
+  const addresses = walletAddresses || [], editing = walletAddressEdit;
+  const rows = addresses.map(a => editing?.id === a.id ? walletAddressForm() : `<div class="wset-row wallet-address">
+    <button type="button" class="wl-radio${a.isDefault ? ' on' : ''}" role="radio" aria-checked="${!!a.isDefault}" aria-label="${esc(a.isDefault ? 'Default: ' + a.label : 'Make ' + a.label + ' the default')}"${a.isDefault ? '' : ` data-act="wallet-address-default" data-id="${esc(a.id)}"`}${belnaWalletBusy ? ' disabled' : ''}></button>
+    <span class="wset-copy"><b>${esc(a.label)}${a.isDefault ? ' <span class="wl-tag">Default</span>' : ''}</b><small>${esc(a.formatted)}</small></span>
+    <button type="button" class="wl-link" data-act="wallet-address-edit" data-id="${esc(a.id)}">Edit</button>
+  </div>`).join('');
+  const add = editing && !editing.id ? walletAddressForm() : !editing ? `<button type="button" class="wset-row wset-add" data-act="wallet-address-add">${icon('plus', 16)} Add address</button>` : '';
+  const loading = walletAddressesLoading && !walletAddresses ? '<div class="wset-row"><small class="wl-hint">Loading addresses…</small></div>' : '';
+  return `<h4 class="wset-label">Delivery addresses</h4><div class="wset-group" role="radiogroup" aria-label="Default delivery address">${loading}${rows}${add}</div>
+    ${walletAddressError ? `<p class="wl-error" role="alert">${esc(walletAddressError)}</p>` : ''}
+    <p class="wset-foot">${esc(state.agent.name)} uses the default. You see the address again before every purchase.</p>`;
+}
+function refreshWalletPreferences(force=false){
+ const owner=scopeBelnaWallet();if(!owner || walletPreferencesLoading || (!force && walletPreferences))return;
+ walletPreferencesLoading=true;Promise.all([window.LingonAuth.api('/api/wallet-preferences'),window.LingonAuth.api('/api/wallet-history')]).then(([j,h])=>{if(owner===scopeBelnaWallet()){walletPreferences=j;walletHistory=h.history || [];}}).catch(e=>{if(owner===scopeBelnaWallet())toast(e.message || 'Could not load wallet preferences.');}).finally(()=>{if(owner===scopeBelnaWallet()){walletPreferencesLoading=false;repaintWallet();}});
+}
+function setWalletPreferences(payload){
+ const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy)return;
+ belnaWalletBusy=true;repaintWallet();window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify(payload)}).then(j=>{if(owner===scopeBelnaWallet()){walletPreferences=j;walletExistingOpen=false;}}).catch(e=>{if(owner===scopeBelnaWallet())toast(e.message || 'Could not switch wallet.');}).finally(()=>{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}});
+}
+function walletSettingsContent(){
+  scopeBelnaWallet();
+  return `<div class="wset">
+    ${belnaWalletError ? `<p class="wl-error" role="alert">${esc(belnaWalletError)}</p>` : ''}
+    <section class="wset-sec"><h4 class="wset-label">${esc(state.agent.name)} pays with</h4>${walletMethodPicker()}<p class="wset-foot">Applies to future purchases. Switching never deletes a connection, balance or history.</p></section>
+    ${walletBelnaGroup()}
+    ${walletExistingGroup()}
+    <section class="wset-sec" id="wallet-shipping-section">${walletShippingContent()}</section>
+  </div>`;
+}
+
+/* ----- Chat panel ----- */
+const WALLET_ACTIVITY_ICONS = { 'Deposit':'plus', 'Payment received':'arrin', 'Received money':'arrin', 'Refund':'arrin', 'Sent money':'aur', 'Withdrawal':'bank', 'Payment fee':'receipt', 'Purchase':'bag' };
+function walletActivityContent(){
+  const c = belnaWalletCache || {};
+  const verifications = (c.purchases || []).filter(p => p.status === 'submitted' && !p.cardCanceled && Date.parse(p.expiresAt) > Date.now())
+    .map(p => walletRow({ ic:'shieldcheck', tone:'warn', cls:'attn', title:'Verify your payment at ' + (p.merchant || 'the store'), sub:'Your bank asks you to confirm this purchase.', right:`<button type="button" class="btn small" data-act="wallet-verify-payment" data-id="${esc(p.purchaseId)}">Verify</button>` })).join('');
+  const data = c.activity || [...(c.transfers || []).map(x => ({ title:'Sent to ' + x.recipient, amount:x.amount, status:x.status, at:x.at })), ...(c.purchases || []).map(x => ({ title:x.merchant, amount:x.amount, status:x.status, at:x.at })), ...(c.transactions || [])];
+  const home = walletDefaultAddress();
+  const rows = data.map(x => {
+    const title = String(x.title || 'Wallet activity'), incoming = /received|deposit|refund/i.test(title), outgoing = !incoming && /purchase|sent|withdrawal|fee/i.test(title);
+    const status = walletStatusLabel(x.status), sub = [walletDate(x.at), status !== 'Completed' ? status : ''].filter(Boolean).join(' · ');
+    return walletRow({ ic:WALLET_ACTIVITY_ICONS[title] || (incoming ? 'arrin' : outgoing ? 'aur' : 'wallet'), tone:incoming ? 'in' : '', title, sub:esc(sub),
+      right:`<span class="wl-amt${incoming ? ' in' : ''}">${incoming ? '+' : outgoing ? '−' : ''}${esc(walletAmount(x))}</span>` });
+  }).join('');
+  return `${verifications ? `<div class="wl-list wl-attn">${verifications}</div>` : ''}<section class="wl-sec" aria-label="Wallet activity"><div class="wl-sec-head"><h4>Activity</h4><button type="button" class="wl-link" data-act="wallet-manage-shipping">${home ? 'Delivery: ' + esc(home.label) : 'Add delivery address'}</button></div>
+    ${rows ? `<div class="wl-list">${rows}</div>` : '<p class="wl-empty">Purchases, deposits, sends and payments will appear here.</p>'}</section>`;
+}
+function walletActionContent(){
+  if (walletAction === 'send') return `<div class="wl-form"><b>Send money</b><div class="wl-fields"><label class="wl-field">Recipient’s Belna email<input class="field" id="belna-wallet-recipient" type="email" placeholder="name@example.com"></label><label class="wl-field">Amount (USD)<input class="field" id="belna-wallet-send-amount" type="number" min="1" max="50" step="0.01"></label></div>
+    <span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-quote">Review send</button>${belnaTransferQuote && !belnaTransferQuote.status ? '<button type="button" class="btn small" data-act="belna-wallet-send">Confirm send</button>' : ''}</span>
+    ${belnaTransferQuote ? `<p class="wl-hint">${esc(walletMoney(belnaTransferQuote.amount) + ' to ' + belnaTransferQuote.recipient + '. ' + belnaTransferQuote.fees)}${belnaTransferQuote.status ? ' · ' + esc(walletStatusLabel(belnaTransferQuote.status)) : ''}</p>` : '<p class="wl-hint">Up to $50 in 24 hours, to another Belna Wallet.</p>'}</div>`;
+  if (walletAction === 'earn') return `<div class="wl-form"><b>Get paid with a payment link</b><div class="wl-fields"><label class="wl-field">Payment for<input class="field" id="belna-wallet-receive-title" maxlength="120" placeholder="Design work"></label><label class="wl-field">Amount (USD)<input class="field" id="belna-wallet-receive-amount" type="number" min="1" max="2000" step="0.01"></label></div>
+    <span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-receive">Create payment link</button>${belnaReceiveLink ? `<a class="btn ghost small" href="${esc(belnaReceiveLink.url)}" target="_blank" rel="noopener noreferrer">Open payment link</a><button type="button" class="btn ghost small" data-act="belna-wallet-copy-link">Copy link</button>` : ''}</span>
+    <p class="wl-hint">Money arrives after someone pays and it settles. Partner fees may apply.</p></div>`;
+  return '';
+}
+function walletSetupContent(w){
+  if (w.cardProgramAvailable === false) return `<div class="wl-note">${icon('card', 17)}<span><b>Card payments aren’t available for your wallet yet</b><small>Your balance, sends and payment links work as usual.</small></span></div>`;
+  if (w.cardReady ?? w.status === 'ready') return w.paused
+    ? `<div class="wl-note warn">${icon('lock', 17)}<span><b>Card spending is paused</b><small>Resume it in wallet settings.</small></span><button type="button" class="btn ghost small" data-act="wallet-manage">Settings</button></div>`
+    : `<div class="wl-note ok">${icon('shieldcheck', 17)}<span><b>Card payments are on</b><small>${w.agentCardPayments ? `${esc(state.agent.name)} gets a one-time card for each purchase you approve.` : 'Agent card checkout isn’t available yet.'}</small></span></div>`;
+  const busy = belnaWalletBusy ? ' disabled' : '', review = w.status === 'review', denied = w.status === 'denied';
+  const step = (n, done, title, sub, action = '') => `<li class="wl-step${done ? ' done' : ''}"><span class="wl-step-n" aria-hidden="true">${done ? icon('check', 12) : n}</span><span class="wl-copy"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${action}</li>`;
+  return `<section class="wl-setup" aria-label="Card setup"><div class="wl-setup-head"><b>Let ${esc(state.agent.name)} buy things</b><small>1 of 3 done</small></div><div class="wl-progress" aria-hidden="true"><span></span></div>
+    <ol>${step(1, true, 'Create your wallet', '')}
+    ${step(2, false, 'Verify your identity', review ? 'In review with our payment partner' : 'Opens with our payment partner', `<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>${review ? 'Continue' : 'Start'}</button>`)}
+    ${step(3, false, 'Connect your card', denied ? 'Your card application wasn’t approved.' : `Then ${esc(state.agent.name)} gets a one-time card for each purchase you approve.`, denied ? '' : `<button type="button" class="btn ghost small" data-act="belna-wallet-card-connect"${busy}>Connect card</button>`)}</ol></section>`;
+}
+function walletExistingPanel(){
+  const shop = shopPaySnapshot(), home = walletDefaultAddress(), busy = belnaWalletBusy ? ' disabled' : '';
+  const connections = walletRow({ mark:'S', tone:'shop', title:'Shop Pay', sub:esc(shop.connected ? shop.email || 'Connected' : 'Not connected'),
+      right: shop.connected ? `<span class="wl-ok">${icon('check', 13)} Connected</span>` : `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured ? ' disabled' : ''}>Connect</button>` })
+    + walletRow({ ic:'bag', title:'Cards saved in stores', sub:'You sign in when ' + esc(state.agent.name) + ' opens the store',
+      right: walletPreferences?.merchantEnabled ? `<span class="wl-ok">${icon('check', 13)} On</span>` : `<button type="button" class="btn ghost small" data-act="wallet-merchant-connect"${busy}>Turn on</button>` })
+    + `<button type="button" class="wl-row wl-row-link" data-act="wallet-manage-shipping"><span class="wl-ico" aria-hidden="true">${icon('pin', 17)}</span><span class="wl-copy"><b>${home ? 'Delivers to ' + esc(home.label) : 'No delivery address yet'}</b><small>${home ? esc(home.formatted) : 'Add one so orders know where to go'}</small></span>${icon('chevr', 16)}</button>`;
+  const orders = [...walletHistory.map(x => ({ ...x, method:'' })), ...(state.shopPayOrders || []).map(o => ({ title:o.title || o.merchant || 'Purchase', amount:o.amount, currency:o.currency, status:o.status, at:o.at, method:'Shop Pay', continueUrl:o.continueUrl }))];
+  const rows = orders.map(x => {
+    const title = String(x.title || 'Purchase'), attn = /needs_buyer|escalated/.test(String(x.status)), url = /^https:\/\//.test(x.continueUrl || '') ? x.continueUrl : '';
+    const sub = [walletDate(x.at), x.method, walletStatusLabel(x.status)].filter(Boolean).join(' · ');
+    return walletRow({ mark:title.trim().slice(0, 1).toUpperCase() || '?', tone:attn ? 'warn' : '', cls:attn ? 'attn' : '', title, sub:esc(sub),
+      right:`<span class="wl-amt">${esc(walletAmount(x))}</span>${attn && url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Finish</a>` : ''}` });
+  }).join('');
+  return `<div class="wl-list boxed" aria-label="Connections">${connections}</div>
+    <section class="wl-sec" aria-label="Purchases"><div class="wl-sec-head"><h4>Purchases</h4></div>${rows ? `<div class="wl-list">${rows}</div>` : '<p class="wl-empty">Purchases you approve will appear here.</p>'}</section>
+    <p class="wl-foot">${icon('lock', 14)} No wallet balance here. ${esc(state.agent.name)} never sees your card.</p>`;
+}
+function paymentsTabContent(){
+  scopeBelnaWallet();
+  const { w, created } = belnaWalletState(), active = walletPreferences?.activeMethod;
+  const name = active === 'existing_card' ? 'a card you already use' : active === 'belna_wallet' && created ? 'Belna Wallet' : '';
+  let body = belnaWalletError ? `<p class="wl-error" role="alert">${esc(belnaWalletError)}</p>` : '';
+  if (active === 'existing_card') body += walletExistingPanel();
+  else if (active === 'belna_wallet' && created) {
+    const pending = Number(w.balance?.pending);
+    const act = (attrs, ic, label, on = false) => `<button type="button" class="wl-act${on ? ' on' : ''}" ${attrs}${on ? ' aria-pressed="true"' : ''}><span class="wl-act-ic" aria-hidden="true">${icon(ic, 19)}</span>${label}</button>`;
+    body += `<section class="wl-balance" aria-label="Belna Wallet balance"><span class="wl-label">Available</span><div class="wl-big"><strong>${esc(walletMoney(w.balance?.available))}</strong><span>USD</span></div>${pending > 0 ? `<span class="wl-pending">+ ${esc(walletMoney(pending))} on the way</span>` : ''}${w.sandbox ? '<span class="wl-tag">Test wallet · no real money</span>' : ''}</section>
+      <div class="wl-acts" aria-label="Wallet actions">${act('data-act="belna-wallet-deposit"', 'plus', 'Add money')}${act('data-act="wallet-money-action" data-action="send"', 'aur', 'Send', walletAction === 'send')}${act('data-act="wallet-money-action" data-action="earn"', 'link', 'Get paid', walletAction === 'earn')}${act('data-act="wallet-money-action" data-action="withdraw"', 'bank', 'Withdraw')}</div>
+      ${walletActionContent()}${walletSetupContent(w)}${walletActivityContent()}`;
+  } else {
+    const loading = (belnaWalletLoading && !belnaWalletCache) || (walletPreferencesLoading && !walletPreferences);
+    body += loading ? '<p class="wl-empty">Loading your wallet…</p>' : `<p class="wl-lede">Choose how ${esc(state.agent.name)} pays. You approve every purchase, and ${esc(state.agent.name)} never sees a card number.</p>${walletMethodPicker()}`;
+  }
+  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${name ? `<p>${esc(state.agent.name)} pays with ${name}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${body}</div>`;
+}
+
+const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
 function automationItemHtml(agent){
   const open = state.automationOpenId === agent.id;
   const trigger = agent.trigger || {};
@@ -5441,6 +5759,7 @@ function automationItemHtml(agent){
       <span class="appr-chev">${icon('chev',16)}</span>
     </button>
     <div class="appr-more">
+      ${agent.description ? `<div class="trigger-result">${esc(agent.description)}</div>` : ''}
       ${agent.lastError ? `<div class="trigger-error">${esc(agent.lastError)}</div>` : ''}
       ${agent.triggerSyncError ? `<div class="trigger-error">${esc(agent.triggerSyncError)}</div>` : ''}
       ${agent.lastResult ? `<div class="trigger-result">${esc(agent.lastResult)}</div>` : ''}
@@ -5454,7 +5773,7 @@ function automationItemHtml(agent){
 /* Sub Agents / Automations panel: the user's automations followed by the upkeep routines, in one list. */
 function subAgentsTabContent(){
   const agents = state.subAgents || [];
-  const upkeepOrder = ['memory','relationships','ideas','study','reflection','skills','quiet'];
+  const upkeepOrder = ['personal_email','memory','relationships','ideas','study','reflection','skills','quiet'];
   const upkeep = agents.filter(agent => agent.systemKind).sort((a,b) => upkeepOrder.indexOf(a.systemKind)-upkeepOrder.indexOf(b.systemKind));
   const customAgents = agents.filter(agent => !agent.systemKind);
   const displayAgents = [...customAgents, ...upkeep];
@@ -6103,9 +6422,16 @@ function canvasShotHTML(c, m){
   const related = (c.messages || []).filter(x => x === m || (cd.taskId && x.card?.type === 'browser' && x.card.taskId === cd.taskId));
   const latest = related.at(-1)?.card || cd;
   const shot = safeImg([...related].reverse().find(x => x.card?.screenshot)?.card.screenshot);
-  return `<div class="livebar"><span class="url">${esc(latest.url || cd.url || '')}</span><span class="chip">${esc(latest.status || '')}</span></div>
-    ${latest.note ? `<p class="rnote">${esc(latest.note)}</p>` : ''}
+  const ended = liveEnded(c, cd);
+  return `<div class="livebar"><span class="url">${esc(latest.url || cd.url || '')}</span><span class="chip">${esc(ended ? 'last screen' : latest.status || '')}</span></div>
+    ${ended ? '<p class="rnote">The task is finished and its browser is closed. This is the last screen it showed.</p>' : latest.note ? `<p class="rnote">${esc(latest.note)}</p>` : ''}
     ${shot ? `<img class="canvas-file-image" src="${esc(shot)}" alt="Browser screenshot">` : '<div class="canvas-file-note">Waiting for the browser image…</div>'}`;
+}
+// A task's browser streams only while the task works. Afterwards the VM stops, so the
+// entry shows the last screen instead of "connecting" to a stream that will not come and
+// offering a takeover of a browser that is gone.
+function liveEnded(c, cd){
+  return String(cd?.liveId || '').startsWith('rt:') && !(c?.messages || []).some(x => x.kind === 'card' && x.card?.liveId === cd.liveId && cardStreams(c, x.card));
 }
 function canvasComputerHTML(c, m){
   const cd = m.card;
@@ -6120,7 +6446,7 @@ function canvasItemBody(ref, v){
   if (ref.kind === 'artifact') return canvasBody(chatArtifactHTML(v.c.artifact), 'is-doc');
   if (ref.kind === 'upload') return canvasBody(canvasDocumentHTML(v.file, v.file.dataUrl || v.file.content || '', { head:false }), 'is-doc');
   const { c, m } = v, cd = m.card;
-  if (cd.type === 'browser') return cd.liveId ? { key:'live:' + cd.liveId, html:canvasLiveHTML(c, cd.liveId), cls:'is-live', live:cd.liveId } : canvasBody(canvasShotHTML(c, m));
+  if (cd.type === 'browser') return cd.liveId && !liveEnded(c, cd) ? { key:'live:' + cd.liveId, html:canvasLiveHTML(c, cd.liveId), cls:'is-live', live:cd.liveId } : canvasBody(canvasShotHTML(c, m));
   if (cd.type === 'computer') return canvasBody(canvasComputerHTML(c, m), 'is-term');
   if (cd.type === 'artifact' && c.artifact?.title === cd.title) return canvasBody(chatArtifactHTML(c.artifact), 'is-doc');
   if (cd.type === 'file' || cd.type === 'canvas') return canvasBody(canvasDocumentHTML(cd, cd.type === 'file' ? canvasFileContent(c, m) : cd.content, { head:false }), 'is-doc');
@@ -6130,7 +6456,6 @@ function canvasViewHeadHTML(v){
   return `<div class="canvas-view-bar">
       <button class="canvas-back" data-act="canvas-back">${icon('left',14)} Canvas history</button>
       <span class="canvas-view-acts">
-        <button class="iconbtn" data-act="openchat" data-id="${esc(v.c.id)}" title="Open the chat" aria-label="Open the chat">${icon('chatb',15)}</button>
         <button class="iconbtn" data-act="canvas-wide" aria-pressed="${canvasWide}" title="${canvasWide ? 'Smaller' : 'Bigger'}" aria-label="${canvasWide ? 'Show it next to the chat' : 'Show it bigger'}">${icon(canvasWide ? 'shrink' : 'expand',15)}</button>
       </span>
     </div>
@@ -6142,7 +6467,7 @@ function canvasViewHeadHTML(v){
 function canvasLiveId(){
   if (!canvasShouldShow() || (state.canvasTab || 'canvas') !== 'canvas') return null;
   const v = state.canvasItem?.kind === 'card' ? canvasItemView(state.canvasItem) : null;
-  return v?.m.card.type === 'browser' ? v.m.card.liveId || null : null;
+  return v?.m.card.type === 'browser' && !liveEnded(v.c, v.m.card) ? v.m.card.liveId || null : null;
 }
 function canvasWideOn(){ return canvasWide && canvasShouldShow() && (state.canvasTab || 'canvas') === 'canvas' && !!canvasItemView(state.canvasItem); }
 function syncCanvasWide(){ $('#app')?.classList.toggle('canvas-wide', canvasWideOn()); }
@@ -6223,7 +6548,7 @@ function paintCanvas(){
             ['subagents', 'clock', 'Automations', ''],
             ['approvals', 'shieldcheck', 'Approvals', ''],
             ['mail', 'mail', 'Mail', mailCache && mailCache.unread ? `<span class="cnt" aria-hidden="true">${mailCache.unread}</span>` : ''],
-            ['payments', 'wallet', 'Payments', ''],
+            ['payments', 'wallet', 'Wallet', ''],
           ].map(([t, ic, label, badge]) => `<button class="canvas-tab${top === t ? ' on' : ''}" role="tab" aria-selected="${top === t}" data-act="ctab" data-t="${t}" title="${label}" aria-label="${label}${t === 'mail' && mailCache?.unread ? `, ${mailCache.unread} unread` : ''}">${icon(ic,18)}${badge}</button>`).join('')}
         </div>
         <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
@@ -6248,7 +6573,7 @@ function paintCanvas(){
   if (top === 'payments'){
     body.innerHTML = paymentsTabContent();
     if (signedIn()) refreshShopPay();
-    if (!state.composioLoading && signedIn()) refreshComposioApps();
+    if (signedIn()) refreshBelnaWallet();
     return;
   }
   if (top === 'approvals'){
@@ -6382,7 +6707,6 @@ function paintProfile(M){
           <span class="chip green">${icon('check',12)} claimed ${new Date(a.claimedAt).toLocaleDateString()}</span>
         </div>
         <div class="swatches" style="justify-content:flex-start;margin-top:16px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
-        <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
       </div>
     </div>
     <div class="psec"><h3 style="color:var(--acc)">${icon('alert',15)} Danger zone</h3>
@@ -6411,6 +6735,9 @@ const VAULT_KINDS = {
     { k:'name', label:'Name', placeholder:'e.g. OpenAI API key' },
     { k:'value', label:'Key', placeholder:'Paste the key', secret:true, masked:true },
   ] },
+  // Saved as a connector too: the key goes to the vault and the API or MCP server to Connectors.
+  api: { label:'API connection', icon:'code', connector:true },
+  mcp: { label:'MCP server', icon:'grid', connector:true },
   other: { label:'Other', icon:'lock', fields:[
     { k:'name', label:'Name', placeholder:'e.g. Wi-Fi password' },
     { k:'value', label:'Value', secret:true, masked:true },
@@ -6429,9 +6756,12 @@ function vaultKindEntries(kind, f){
 }
 function vaultDisplayEntries(secrets){
   const used = new Set();
+  const connectorFor = new Map((state.customConnectors || []).filter(c => c.secretId).map(c => [c.secretId, c]));
   return secrets.flatMap(s => {
     if (used.has(s.id)) return [];
     used.add(s.id);
+    const connector = connectorFor.get(s.id);
+    if (connector) return [{ name:connector.name, kind:connector.kind === 'mcp' ? 'MCP server' : 'API connection', icon:connector.kind === 'mcp' ? 'grid' : 'code', secrets:[s], connector }];
     const login = /^(.*) (username|password)$/i.exec(s.name);
     const peer = login && secrets.find(x => !used.has(x.id) && x.name === `${login[1]} ${login[2].toLowerCase() === 'username' ? 'password' : 'username'}`);
     if (login && (peer || /\.|^localhost$/i.test(login[1]))){
@@ -6455,10 +6785,10 @@ function settingsSecretsBody(v){
       <div class="vault-kinds" role="radiogroup" aria-label="Credential type">
         ${Object.entries(VAULT_KINDS).map(([k, d]) => `<button type="button" class="vault-kind ${k === kind ? 'on' : ''}" role="radio" aria-checked="${k === kind}" data-act="vault-kind" data-k="${k}"><span class="vault-kind-icon">${icon(d.icon,16)}</span><span>${d.label}</span><span class="vault-kind-indicator" aria-hidden="true"></span></button>`).join('')}
       </div>
-      <form class="vault-add-form" data-kind="${kind}" autocomplete="off" onsubmit="return false">
+      ${VAULT_KINDS[kind].connector ? ccFormHtml(kind) : `<form class="vault-add-form" data-kind="${kind}" autocomplete="off" onsubmit="return false">
         ${VAULT_KINDS[kind].fields.map(fd => `<label class="${fd.short ? 'vault-add-short' : fd.secret ? 'vault-add-value' : ''}"><span>${fd.label}${fd.optional ? ' <i>optional</i>' : ''}</span><input class="field${fd.secret ? ' mono' : ''}" data-vf="${fd.k}" type="${fd.masked ? 'password' : 'text'}" placeholder="${esc(fd.placeholder || '')}" maxlength="${fd.secret ? 4000 : 80}" autocomplete="${fd.masked ? 'new-password' : 'off'}" spellcheck="false"${fd.inputmode ? ` inputmode="${fd.inputmode}"` : ''}${locked ? ' disabled' : ''}></label>`).join('')}
         <button class="btn" data-act="addsecret"${locked ? ' disabled' : ''}>${icon('plus',14)} Save</button>
-      </form>
+      </form>`}
     </div>
     <div class="vault-list">
       <div class="vault-section-head"><h3>Saved credentials</h3><span>${entries.length} · reveal is only for you</span></div>
@@ -6466,12 +6796,13 @@ function settingsSecretsBody(v){
         <span class="vault-item-icon">${icon(entry.icon,16)}</span>
         <div class="vault-item-copy">
           <b>${esc(entry.name)}</b>
-          <div class="vault-item-meta"><span class="vault-item-type">${entry.kind}</span><span>Added ${fmtAgo(entry.secrets[0].at)}</span>${entry.secrets.some(s => !s.backend) ? '<span>Only on this device</span>' : ''}</div>
+          <div class="vault-item-meta"><span class="vault-item-type">${entry.kind}</span>${entry.connector ? `<span class="vault-item-connector ${entry.connector.status === 'error' ? 'is-error' : ''}">${entry.connector.status === 'error' ? 'Needs attention' : 'Connected'} in Connectors</span>` : ''}<span>Added ${fmtAgo(entry.secrets[0].at)}</span>${entry.secrets.some(s => !s.backend) ? '<span>Only on this device</span>' : ''}</div>
           ${shown ? `<div class="vault-item-details">${entry.secrets.map(s => `<div class="vault-item-detail"><div><span>${entry.kind === 'Login' ? (/ username$/i.test(s.name) ? 'Username' : 'Password') : 'Value'}</span><code>${esc(s.ref)}</code></div><div class="vault-item-value mono" data-rev="${esc(s.id)}">${esc(s.value)}</div><button class="iconbtn" data-act="copysecret" data-id="${esc(s.id)}" title="Copy value" aria-label="Copy ${esc(s.name)}">${icon('copy',14)}</button></div>`).join('')}</div>` : ''}
         </div>
         <div class="vault-item-actions">
+          ${entry.connector ? `<button class="iconbtn" data-act="cc-open" data-id="${esc(entry.connector.id)}" title="Open in Connectors" aria-label="Open ${esc(entry.name)} in Connectors">${icon('box',15)}</button>` : ''}
           <button class="iconbtn" data-act="reveal-credential" data-ids="${ids}" title="${shown ? 'Hide' : 'Reveal (only you)'}" aria-label="${shown ? 'Hide' : 'Reveal'} ${esc(entry.name)}">${shown ? icon('eyeoff',16) : icon('eye',16)}</button>
-          <button class="iconbtn" data-act="delete-credential" data-ids="${ids}" data-name="${esc(entry.name)}" title="Delete" aria-label="Delete ${esc(entry.name)}">${icon('trash',14)}</button>
+          <button class="iconbtn" data-act="delete-credential" data-ids="${ids}" data-name="${esc(entry.name)}"${entry.connector ? ' data-connector="1"' : ''} title="Delete" aria-label="Delete ${esc(entry.name)}">${icon('trash',14)}</button>
         </div>
       </div>`; }).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Add a credential above, or ${agentName} will ask when a task needs one.</p></div></div>`}
     </div>
@@ -6549,9 +6880,9 @@ function centerActiveSeg(container){
 }
 function centerActiveSettingsTab(container){ centerActiveSeg(container); }
 function editableAgentDocuments(){
-  const a=state.agent || {name:'Your agent',pers:'Playful'};
+  const a=state.agent || {name:'Your agent'};
   const fallback = {
-    identity:`# Identity\n\nName: ${a.name}\nStyle: ${a.pers}`,
+    identity:`# Identity\n\nName: ${a.name}`,
     soul:'# Soul\n\nBe warm, candid, practical, and reliable. Adapt detail to the user and keep promises explicit.',
     user:'# User\n\nAdd stable preferences, background, language, and timezone here.',
     agents:'# Working agreement\n\nPlan substantial work, verify results with evidence, surface uncertainty, and ask before irreversible external actions.',
@@ -6595,12 +6926,11 @@ function paintSettings(M){
         <div class="info">
           <input class="field" id="pname" value="${esc(a.name)}" maxlength="18" style="max-width:220px;font-weight:700">
           <div class="swatches" style="justify-content:flex-start;margin-top:14px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
-          <div class="persrow" style="justify-content:flex-start">${PERS.map(p => `<button class="pers ${p === a.pers ? 'on' : ''}" data-act="p-pers" data-p="${p}">${p}</button>`).join('')}</div>
         </div>
       </div>
       <div class="kv" style="margin-top:12px">
         <div class="row"><span style="color:var(--mut)">${icon('mail',16)}</span><div><b>Agent mail</b><div class="sub">${mailCache?.address ? esc(mailCache.address) : 'Open Mail to see the agent’s address'}</div></div></div>
-        <div class="row"><span style="color:var(--mut)">${icon('wallet',16)}</span><div><b>Shop Pay</b><div class="sub">${state.shopPay?.connected ? 'Connected for approved purchases' : state.shopPay?.configured ? 'Ready to connect in Payments' : 'Payment connection unavailable'}</div></div></div>
+        <div class="row"><span style="color:var(--mut)">${icon('wallet',16)}</span><div><b>Shop Pay</b><div class="sub">${state.shopPay?.connected ? 'Connected for approved purchases' : state.shopPay?.configured ? 'Ready to connect in Wallet' : 'Payment connection unavailable'}</div></div></div>
       </div>
     </div>
     <div class="psec"><h3>${icon('star',15)} Theme</h3>
@@ -6613,6 +6943,8 @@ function paintSettings(M){
       <div class="kv"><div class="row"><div><b>Release this agent</b><div class="sub">Deletes chats, vault, memory and the claim on this device.</div></div>
       <div class="rgt"><button class="btn soft small" data-act="reset">Release</button></div></div></div>
     </div>`;
+  } else if (tab === 'wallet'){
+    body = '<div id="wallet-settings-content">'+walletSettingsContent()+'</div>';
   } else if (tab === 'secrets'){
     body = settingsSecretsBody(state.vault);
   } else if (tab === 'browser'){
@@ -6627,9 +6959,10 @@ function paintSettings(M){
   const previousTabScroll = M.querySelector('.settings-tabs')?.scrollLeft || 0;
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Settings</h1><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></div>
-    <p class="psub">${({ billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.'}</p>
+    <p class="psub">${({ wallet:'How '+esc(a.name)+' pays, spending rules and where orders are delivered.', billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.'}</p>
     <div class="seg settings-tabs" aria-label="Settings sections">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles" aria-pressed="${tab === 'profiles'}">${icon('user',14)} Profiles</button>
+      <button class="${tab === 'wallet' ? 'on' : ''}" data-act="stab" data-t="wallet" aria-pressed="${tab === 'wallet'}">${icon('wallet',14)} Wallet</button>
       <button class="${tab === 'secrets' ? 'on' : ''}" data-act="stab" data-t="secrets" aria-pressed="${tab === 'secrets'}">${icon('key',14)} Secrets</button>
       <button class="${tab === 'browser' ? 'on' : ''}" data-act="stab" data-t="browser" aria-pressed="${tab === 'browser'}">${icon('globe',14)} Browser</button>
       <button class="${tab === 'usage' ? 'on' : ''}" data-act="stab" data-t="usage" aria-pressed="${tab === 'usage'}">${icon('spark',14)} Usage</button>
@@ -6683,6 +7016,9 @@ function paintSettings(M){
   if (tab === 'billing' || tab === 'usage'){
     loadBillingContent(tab);
   }
+  if(tab==='wallet'){refreshBelnaWallet();refreshShopPay();}
+  // Vault entries that belong to a connector say so; the reply repaints this tab.
+  if (tab === 'secrets' && signedIn() && ccLoadedFor !== billingIdentity()) refreshCustomConnectors();
   // One status check per user if presence has not reported yet; the reply repaints this tab.
   if (tab === 'browser' && !workspacePresenceInfo && signedIn() && browserPresenceChecked !== currentUserId()) {
     browserPresenceChecked = currentUserId();
@@ -6795,9 +7131,12 @@ function connectorBodyHtml(a){
 }
 function paintApps(M){
   const apps = Array.isArray(state.composioApps) ? state.composioApps : [];
+  const own = Array.isArray(state.customConnectors) ? state.customConnectors : [];
   const q = String(state.appQuery || '').toLowerCase().trim();
   const filter = state.appFilter === 'connected' ? 'connected' : 'all';
-  const connectedCount = apps.filter((a) => a.connected).length;
+  const connectedCount = apps.filter((a) => a.connected).length + own.length;
+  // The owner's own APIs and MCP servers count as connected: they exist once they work.
+  const ownList = q ? own.filter((c) => [c.name, c.host, c.description, c.kind === 'mcp' ? 'mcp server' : 'api'].some((v) => String(v || '').toLowerCase().includes(q))) : own;
 
   let list = apps.slice();
   if (filter === 'connected') list = list.filter((a) => a.connected);
@@ -6842,10 +7181,16 @@ function paintApps(M){
     </article>`;
   }).join('');
 
-  let board = `<div class="conn-list">${rows}</div>`;
-  if (state.composioLoading && !list.length) board = `<div class="conn-list">${'<article class="conn-row skel"></article>'.repeat(6)}</div>`;
-  else if (!state.composioLoading && !apps.length) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Connections aren't configured on this server.</span></div>`;
-  else if (!state.composioLoading && !list.length) board = `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
+  // APIs and MCP servers are added by the agent from chat: it finds the address and the owner
+  // only pastes the key into a secure card.
+  const agentName = esc(state.agent?.name || 'your agent');
+  const ask = `<p class="conn-ask">${icon('spark',14)}<span>Need an API or MCP server? Ask ${agentName} in chat. It sets it up and only asks you for the key.</span></p>`;
+  const ownRows = ownList.map(ccRowHtml).join('');
+  const grouped = ownList.length && (list.length || state.composioLoading);
+  let board = `<div class="conn-list">${ownList.length ? `${grouped ? '<h2 class="conn-group">Your own</h2>' : ''}${ownRows}${grouped ? '<h2 class="conn-group">Apps</h2>' : ''}` : ''}${rows}</div>${ask}`;
+  if (state.composioLoading && !list.length) board = `<div class="conn-list">${ownRows}${'<article class="conn-row skel"></article>'.repeat(ownList.length ? 3 : 6)}</div>`;
+  else if (!state.composioLoading && !apps.length && !own.length) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Ask ${agentName} in chat to connect an app, API or MCP server.</span></div>`;
+  else if (!state.composioLoading && !list.length && !ownList.length) board = `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
 
   M.innerHTML = `<div class="page"><div class="pageinner apps-page">
     <div class="apps-toolbar">
@@ -6873,6 +7218,214 @@ function paintApps(M){
   if (!state.composioLoading && signedIn()) refreshComposioApps();
 }
 
+/* ---------------- Your own connectors: APIs and MCP servers the owner adds ---------------- */
+// The key goes straight to the encrypted vault on the server. The unsent form lives only
+// in memory here, never in browser storage.
+// var and function declarations: the Connectors page can paint before this block has run.
+var CC_AUTH = [['bearer','Bearer token'],['header','API key in a header'],['query','API key in the URL'],['basic','Username and password'],['none','No authentication']];
+var CC_SECRET_LABEL = { bearer:'Token', header:'API key', query:'API key', basic:'Password' };
+// The same, inside a sentence.
+var CC_SECRET_NOUN = { bearer:'token', header:'API key', query:'API key', basic:'password' };
+var ccDraft = null, ccRekeyId = null, ccLoadedFor = null, ccRefreshPending = null, ccBusy = new Set();
+function ccKey(id){ return 'cc:' + id; }
+function customConnectorById(id){ return (state.customConnectors || []).find((c) => c.id === id) || null; }
+function ccNewDraft(kind){ return { kind, auth:'bearer', name:'', url:'', header:'', param:'', username:'', secret:'', testPath:'', docsUrl:'', description:'', error:'', busy:false }; }
+function refreshCustomConnectors(){
+  if (!signedIn()) return Promise.resolve();
+  if (ccRefreshPending) return ccRefreshPending;
+  const owner = billingIdentity();
+  ccRefreshPending = window.LingonAuth.api('/api/connectors').then((j) => {
+    if (owner !== billingIdentity()) return;
+    state.customConnectors = Array.isArray(j.connectors) ? j.connectors : [];
+    state.customConnectorsAvailable = j.available !== false;
+    ccLoadedFor = owner;
+    // A repaint while the owner types in the form would take their cursor away.
+    if (document.activeElement?.closest?.('.cc-form')) return;
+    if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+    if (state.view === 'settings' && state.settingsTab === 'secrets' && $('#main')) paintSettings($('#main'));
+  }).catch(() => {}).finally(() => { ccRefreshPending = null; });
+  return ccRefreshPending;
+}
+function ccRepaint(){
+  if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+  else if (state.view === 'settings' && $('#main')) paintSettings($('#main'));
+}
+function ccPatch(next){
+  state.customConnectors = (state.customConnectors || []).map((c) => c.id === next.id ? next : c);
+  save();
+}
+// The manual form in Settings > Secrets. In chat, the agent sets connectors up with a card.
+function ccFormHtml(kind){
+  if (!ccDraft) ccDraft = ccNewDraft(kind);
+  if (ccDraft.kind !== kind) ccDraft.kind = kind;
+  const d = ccDraft, mcp = d.kind === 'mcp';
+  const agentName = esc(state.agent?.name || 'Your agent');
+  const locked = state.vault?.encrypted === false && d.auth !== 'none';
+  const unavailable = state.customConnectorsAvailable === false;
+  const field = (k, label, attrs, optional) => `<label class="cc-f cc-f-${k}"><span>${label}${optional ? ' <i>optional</i>' : ''}</span><input class="field${k === 'secret' ? ' mono' : ''}" data-cc="${k}" value="${esc(d[k] || '')}" ${attrs}></label>`;
+  return `<form class="cc-form" data-kind="${d.kind}" data-auth="${esc(d.auth)}" autocomplete="off" onsubmit="return false">
+    <p class="cc-lead">${mcp ? `Add a remote MCP server by its URL. ${agentName} can then use its tools.` : `Add a REST API by its base URL. ${agentName} sends requests there with your key.`} It also appears in Connectors, with its status and permissions.</p>
+    <div class="cc-grid">
+      ${field('name', 'Name', `placeholder="${mcp ? 'e.g. Linear' : 'e.g. Weather API'}" maxlength="60" spellcheck="false"`)}
+      ${field('url', mcp ? 'Server URL' : 'Base URL', `placeholder="${mcp ? 'https://mcp.example.com/mcp' : 'https://api.example.com/v1'}" inputmode="url" maxlength="1000" spellcheck="false"`)}
+      <label class="cc-f cc-f-auth"><span>Sign-in</span><select class="field" data-cc="auth">${CC_AUTH.map(([v, l]) => `<option value="${v}"${v === d.auth ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      ${field('header', 'Header name', 'placeholder="X-API-Key" maxlength="60" spellcheck="false"')}
+      ${field('param', 'Query parameter', 'placeholder="api_key" maxlength="60" spellcheck="false"')}
+      ${field('username', 'Username', 'maxlength="200" spellcheck="false"', true)}
+      ${field('secret', CC_SECRET_LABEL[d.auth] || 'Key', `type="password" placeholder="Paste it here" maxlength="4000" autocomplete="new-password" spellcheck="false"${locked ? ' disabled' : ''}`)}
+      ${field('testPath', 'Test path', 'placeholder="/me" maxlength="300" spellcheck="false"', true)}
+      ${field('docsUrl', 'API docs', 'placeholder="https://docs.example.com" inputmode="url" maxlength="1000" spellcheck="false"', true)}
+      <label class="cc-f cc-f-description"><span>What it’s for <i>optional</i></span><textarea class="field" data-cc="description" rows="2" maxlength="600" placeholder="${mcp ? `Tell ${agentName} when to use it` : `Tell ${agentName} when to use it and which endpoints matter`}">${esc(d.description || '')}</textarea></label>
+    </div>
+    ${d.error ? `<div class="cc-error" role="alert">${icon('alert',14)}<span>${esc(d.error)}</span></div>` : ''}
+    <div class="cc-foot">
+      <span class="cc-note">${icon('lock',12)} ${unavailable ? 'Your own connectors aren’t available on this server yet.' : locked ? 'The vault is locked on this server, so keys can’t be saved.' : `The key is encrypted in your vault. ${agentName} never sees it.`}</span>
+      <button type="button" class="btn" data-act="cc-save"${d.busy || locked || unavailable ? ' disabled' : ''}>${d.busy ? 'Connecting…' : `${icon('plus',14)} Connect`}</button>
+    </div>
+  </form>`;
+}
+function ccPermBlock(c, kind, label){
+  const rows = (c.permissions || []).filter((p) => p.kind === kind);
+  if (!rows.length) return '';
+  return `<div class="conn-kind">
+    <div class="conn-kind-h"><b>${label}</b><span>${rows.filter((p) => p.enabled).length}/${rows.length}</span>${switchHtml(rows.every((p) => p.enabled), `data-act="cc-perm-kind" data-id="${esc(c.id)}" data-kind="${kind}" aria-label="All ${label.toLowerCase()} permissions"`)}</div>
+    ${rows.map((p) => `<div class="conn-perm"><div><b>${esc(p.name || p.slug)}</b><span>${esc(p.description || p.slug)}</span></div>${switchHtml(!!p.enabled, `data-act="cc-perm" data-id="${esc(c.id)}" data-slug="${esc(p.slug)}" aria-label="${esc(p.name || p.slug)}"`)}</div>`).join('')}
+  </div>`;
+}
+function ccBodyHtml(c){
+  const mcp = c.kind === 'mcp', id = esc(c.id), auth = c.auth || { type:'none' };
+  const secret = c.secretId && (state.vault?.secrets || []).find((s) => s.id === c.secretId);
+  const signIn = { none:'No authentication', bearer:'Bearer token', header:`Key in the ${auth.header || ''} header`, query:`Key in the ${auth.param || ''} URL parameter`, basic:auth.username ? `Username ${auth.username} and password` : 'Basic auth with the key' }[auth.type] || 'Custom';
+  const busy = ccBusy.has(c.id);
+  return `<div class="conn-body">
+    <div class="conn-actions">
+      <button class="btn small" data-act="cc-check" data-id="${id}"${busy ? ' disabled' : ''}>${icon('refresh',14)} ${busy ? 'Testing…' : 'Test connection'}</button>
+      ${auth.type !== 'none' ? `<button class="btn ghost small" data-act="cc-rekey" data-id="${id}">${icon('key',14)} Replace ${CC_SECRET_NOUN[auth.type] || 'key'}</button>` : ''}
+      <button class="btn ghost small" data-act="cc-remove" data-id="${id}">${icon('trash',14)} Remove</button>
+    </div>
+    ${c.status === 'error' ? `<div class="warnband cc-warn">${icon('alert',18)}<div><b>Needs attention</b>${esc(c.lastError || 'The last check failed.')}</div></div>` : ''}
+    ${ccRekeyId === c.id ? `<form class="cc-rekey" autocomplete="off" onsubmit="return false"><input class="field mono" data-cc-rekey type="password" aria-label="New ${CC_SECRET_NOUN[auth.type] || 'key'}" placeholder="Paste the new ${CC_SECRET_NOUN[auth.type] || 'key'}" maxlength="4000" autocomplete="new-password" spellcheck="false"><button type="button" class="btn small" data-act="cc-rekey-save" data-id="${id}">Save</button><button type="button" class="btn ghost small" data-act="cc-rekey" data-id="${id}">Cancel</button></form>` : ''}
+    <div class="conn-sec"><h3>Connection</h3>
+      <div class="cc-kv">
+        <div><span>${mcp ? 'Server' : 'Base URL'}</span><code title="${esc(c.url)}">${esc(c.url)}</code></div>
+        <div><span>Sign-in</span><b>${esc(signIn)}${secret ? ` · <code>${esc(secret.ref)}</code> in your vault` : c.secretId ? ' · saved in your vault' : ''}</b></div>
+        ${mcp && c.server?.name ? `<div><span>Reports as</span><b>${esc(c.server.name)}${c.server.version ? ' ' + esc(c.server.version) : ''}</b></div>` : ''}
+        ${!mcp && c.testPath ? `<div><span>Test path</span><code>${esc(c.testPath)}</code></div>` : ''}
+        ${!mcp && c.docsUrl ? `<div><span>Docs</span><a href="${esc(c.docsUrl)}" target="_blank" rel="noopener noreferrer">${esc(c.docsUrl)}</a></div>` : ''}
+        <div><span>Last check</span><b>${c.checkedAt ? esc(fmtAgo(c.checkedAt)) : 'On first use'}</b></div>
+      </div>
+      ${c.description ? `<p class="conn-hint cc-about">${esc(c.description)}</p>` : ''}
+    </div>
+    <div class="conn-sec"><h3>Permissions</h3>
+      <p class="conn-hint">${mcp ? 'Tools your agent may use.' : 'Requests your agent may send.'} Reads run when you ask; anything that changes data asks you first. Turn any off to block it.</p>
+      ${(c.permissions || []).length ? ccPermBlock(c, 'read', 'Read') + ccPermBlock(c, 'write', 'Write') : `<div class="conn-empty">No tools found. Test the connection to look again.</div>`}
+    </div>
+  </div>`;
+}
+function ccRowHtml(c){
+  const open = state.appOpen === ccKey(c.id), mcp = c.kind === 'mcp', bad = c.status === 'error';
+  const tools = (c.permissions || []).length;
+  const sub = [mcp ? 'MCP server' : 'API', c.host, mcp ? `${tools} tool${tools === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+  return `<article class="conn-row cc-row ${bad ? 'is-error' : 'is-connected'} ${open ? 'is-open' : ''}">
+    <div class="conn-head" data-act="toggle-cc" data-id="${esc(c.id)}" role="button" tabindex="0" aria-expanded="${open}">
+      <span class="app-logo cc-logo">${icon(mcp ? 'grid' : 'code',18)}${bad ? '' : `<i class="app-pip">${icon('check',10)}</i>`}</span>
+      <span class="conn-meta"><b>${esc(c.name)}</b><span>${esc(sub)}</span></span>
+      <span class="chip cc-type">${mcp ? 'MCP' : 'API'}</span>
+      ${bad ? '<span class="chip cc-attention">Needs attention</span>' : '<span class="chip green">Connected</span>'}
+      <span class="conn-chev">${icon('chev',16)}</span>
+    </div>
+    ${open ? ccBodyHtml(c) : ''}
+  </article>`;
+}
+function ccToggle(id){
+  state.appOpen = state.appOpen === ccKey(id) ? null : ccKey(id);
+  if (ccRekeyId && state.appOpen !== ccKey(ccRekeyId)) ccRekeyId = null;
+  save(); paintApps($('#main'));
+}
+// A connector the server added or updated. Connecting the same address again replaces its
+// row and its vault key, so neither shows twice.
+function ccAdopt(j){
+  const c = j.connector, before = customConnectorById(c.id);
+  state.customConnectors = [...(state.customConnectors || []).filter((x) => x.id !== c.id), c];
+  if (j.secret) state.vault.secrets = [{ ...j.secret, backend:true }, ...state.vault.secrets.filter((s) => s.id !== j.secret.id && s.id !== before?.secretId)];
+  return c;
+}
+function ccToolCount(c){ return c.kind === 'mcp' ? (c.permissions || []).length : 0; }
+async function ccSave(form){
+  const d = ccDraft;
+  if (!form || !d || d.busy) return;
+  if (!signedIn()){ renderAuth(); return; }
+  d.busy = true; d.error = '';
+  ccRepaint();
+  try {
+    const body = { kind:d.kind, name:d.name, url:d.url, description:d.description,
+      auth:{ type:d.auth, ...(d.auth === 'header' ? { header:d.header } : d.auth === 'query' ? { param:d.param } : d.auth === 'basic' ? { username:d.username } : {}) },
+      secret:d.auth === 'none' ? '' : d.secret, testPath:d.kind === 'api' ? d.testPath : '', docsUrl:d.kind === 'api' ? d.docsUrl : '' };
+    const c = ccAdopt(await window.LingonAuth.api('/api/connectors', { method:'POST', body:JSON.stringify(body) }));
+    ccDraft = null;
+    save();
+    const tools = ccToolCount(c);
+    toast(`${c.name} connected${tools ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''}. You’ll find it in Connectors too.`);
+  } catch (e) {
+    if (ccDraft) ccDraft.error = e.message || 'Could not connect.';
+  }
+  if (ccDraft) ccDraft.busy = false;
+  ccRepaint();
+  paintSide();
+}
+async function ccCheck(id){
+  const c = customConnectorById(id);
+  if (!c || ccBusy.has(id)) return;
+  ccBusy.add(id); paintApps($('#main'));
+  try {
+    const j = await window.LingonAuth.api('/api/connectors/' + encodeURIComponent(id) + '/check', { method:'POST', body:'{}' });
+    ccPatch(j.connector);
+    const tools = j.connector.kind === 'mcp' ? (j.connector.permissions || []).length : 0;
+    toast(j.connector.status === 'error' ? (j.connector.lastError || `${c.name} needs attention.`) : `${c.name} is connected${tools ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''}.`);
+  } catch (e) { toast(e.message || 'Could not test the connection.'); }
+  ccBusy.delete(id); paintApps($('#main'));
+}
+async function ccRekeySave(id, form){
+  const input = form && form.querySelector('[data-cc-rekey]');
+  const value = input ? input.value : '';
+  if (!value.trim()){ toast('Paste the new key first.'); input?.focus(); return; }
+  const c = customConnectorById(id);
+  const button = form.querySelector('[data-act="cc-rekey-save"]');
+  if (button) { button.disabled = true; button.textContent = 'Checking…'; }
+  try {
+    const j = await window.LingonAuth.api('/api/connectors/' + encodeURIComponent(id) + '/secret', { method:'PUT', body:JSON.stringify({ secret:value }) });
+    ccPatch(j.connector);
+    if (j.secret) state.vault.secrets = [{ ...j.secret, backend:true }, ...state.vault.secrets.filter((s) => s.id !== c?.secretId)];
+    ccRekeyId = null; save();
+    toast(`New key saved. ${j.connector.name} is connected.`);
+  } catch (e) { toast(e.message || 'Could not replace the key.'); }
+  paintApps($('#main'));
+}
+async function ccRemove(id){
+  const c = customConnectorById(id);
+  if (!c || !window.confirm(`Remove ${c.name}? Your agent loses access${c.secretId ? ', and its key is deleted from your vault' : ''}.`)) return;
+  try {
+    await window.LingonAuth.api('/api/connectors/' + encodeURIComponent(id), { method:'DELETE' });
+    state.customConnectors = (state.customConnectors || []).filter((x) => x.id !== id);
+    if (c.secretId) state.vault.secrets = state.vault.secrets.filter((s) => s.id !== c.secretId);
+    if (state.appOpen === ccKey(id)) state.appOpen = null;
+    save(); paintApps($('#main')); paintSide();
+    toast(`${c.name} removed.`);
+  } catch (e) { toast(e.message || 'Could not remove it.'); }
+}
+async function ccSetPermissions(id, change){
+  const c = customConnectorById(id);
+  if (!c) return;
+  const before = c.permissions;
+  c.permissions = (c.permissions || []).map((p) => ({ ...p, enabled:change(p) }));
+  paintApps($('#main'));
+  try {
+    const j = await window.LingonAuth.api('/api/connectors/' + encodeURIComponent(id) + '/permissions', { method:'PUT', body:JSON.stringify({ disabled:c.permissions.filter((p) => !p.enabled).map((p) => p.slug) }) });
+    ccPatch(j.connector);
+  } catch (e) { c.permissions = before; toast(e.message || 'Could not save that permission.'); }
+  paintApps($('#main'));
+}
+
 /* ================================================================
    GLOBAL EVENTS
 ================================================================ */
@@ -6885,7 +7438,7 @@ window.addEventListener('focus', () => {
   else if (signedIn() && clientPending.size) void flushClientState();
   if (signedIn() && state.deletedChatIds?.length) void flushDeletedChats();
   if (signedIn() && state.onboarded) syncFromBackend().then((updated) => { if (updated && $('#side')) paintSide(); });
-  if (signedIn() && state.canvasOpen && state.canvasTab === 'payments') refreshComposioApps(true);
+  if (signedIn() && state.canvasOpen && state.canvasTab === 'payments') { refreshBelnaWallet(true); refreshShopPay(true); }
   // Returning from the OAuth tab: pull the fresh account list so the newly
   // connected mail/name/profile appears without a manual Refresh.
   if (signedIn() && (pendingConnect || (state.view === 'apps' && state.appOpen))) {
@@ -6943,6 +7496,21 @@ document.addEventListener('input', e => {
   const c = state.chats.find(c => c.id === form.dataset.chat);
   const m = c?.messages.find(m => m.id === form.dataset.msg);
   if (m?.card.status === 'pending') { m.card.draft = e.target.value; save(); }
+});
+// The add-connector form: the draft stays in memory, never in browser storage.
+document.addEventListener('input', e => {
+  const el = e.target.closest && e.target.closest('[data-cc]');
+  const form = el && el.closest('.cc-form');
+  if (!form || !ccDraft) return;
+  ccDraft[el.dataset.cc] = el.value;
+  if (ccDraft.error) { ccDraft.error = ''; form.querySelector('.cc-error')?.remove(); }
+  if (el.dataset.cc === 'auth') {
+    form.dataset.auth = el.value;
+    const label = form.querySelector('.cc-f-secret > span');
+    if (label) label.textContent = CC_SECRET_LABEL[el.value] || 'Key';
+    const header = form.querySelector('[data-cc="header"]');
+    if (el.value === 'header' && header && !header.value) { header.value = ccDraft.header = 'X-API-Key'; }
+  }
 });
 document.addEventListener('change', (e) => {
   if (e.target && e.target.id === 'subtrigger') {
@@ -7072,6 +7640,78 @@ document.addEventListener('click', async e => {
     refreshComposioApps(true).then(() => { if (state.appOpen) openConnector(state.appOpen, true); });
     return;
   }
+  if(act==='wallet-manage' || act==='wallet-manage-shipping'){state.view='settings';state.settingsTab='wallet';save();renderApp();if(act==='wallet-manage-shipping')$('#wallet-shipping-section')?.scrollIntoView({block:'start'});return;}
+  if(act==='wallet-connect-belna'){walletConnectOpen=!walletConnectOpen;repaintWallet();return;}
+  if(act==='wallet-existing-options'){walletExistingOpen=!walletExistingOpen;repaintWallet();return;}
+  if(act==='wallet-merchant-connect'){setWalletPreferences({merchantEnabled:true,activeMethod:'existing_card'});return;}
+  if(act==='wallet-switch'){setWalletPreferences({activeMethod:b.dataset.method || null});return;}
+  if(act==='wallet-merchant-toggle'){const on=!walletPreferences?.merchantEnabled;setWalletPreferences({merchantEnabled:on,...(!on && walletPreferences?.activeMethod==='existing_card' && !shopPaySnapshot().connected?{activeMethod:null}:{})});return;}
+  if(act==='wallet-limit-edit' || act==='wallet-limit-cancel'){walletLimitEdit=act==='wallet-limit-edit';repaintWallet();if(walletLimitEdit)$('#belna-wallet-limit')?.focus();return;}
+  if(act==='wallet-open-panel'){state.view='chat';state.canvasTab='payments';state.canvasOpen=true;save();renderApp();refreshBelnaWallet(true);refreshShopPay(true);return;}
+  if(act==='wallet-verify-payment'){openWalletVerification(b.dataset.id);return;}
+  if(act==='wallet-money-action'){if(b.dataset.action==='withdraw'){openWalletWithdrawal();return;}walletAction=walletAction===b.dataset.action?null:b.dataset.action;belnaTransferQuote=null;repaintWallet();return;}
+  if(act==='wallet-existing-connect'){state.view='settings';state.settingsTab='secrets';state.vaultKind='login';save();renderApp();toast('Save the merchant login here. Keep your payment card saved with the merchant.');return;}
+  if(act.startsWith('wallet-address-')){
+    const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy)return;
+    const saved=(walletAddresses || []).find(a=>a.id===b.dataset.id);
+    if(act==='wallet-address-add'){walletAddressEdit={label:'Home',country:'SE',isDefault:!(walletAddresses || []).length};walletAddressError='';repaintWallet();return;}
+    if(act==='wallet-address-edit'){if(saved)walletAddressEdit={...saved};walletAddressError='';repaintWallet();return;}
+    if(act==='wallet-address-cancel'){walletAddressEdit=null;walletAddressError='';repaintWallet();return;}
+    let payload,action;
+    if(act==='wallet-address-save'){
+      const form=b.closest('form');if(!form?.reportValidity())return;
+      payload={id:walletAddressEdit?.id};for(const k of ['label','recipient','line1','line2','city','region','postalCode','country'])payload[k]=$('#wallet-address-'+k)?.value || '';
+      payload.isDefault=$('#wallet-address-default')?.checked===true;action='save';walletAddressEdit={...payload};
+    }else if(act==='wallet-address-default' && saved){payload={...saved,isDefault:true};action='save';}
+    else if(act==='wallet-address-delete' && saved){payload={id:saved.id};action='delete';}
+    else return;
+    belnaWalletBusy=true;b.disabled=true;
+    window.LingonAuth.api('/api/shipping-addresses/'+action,{method:'POST',body:JSON.stringify(payload)}).then(j=>{if(owner===scopeBelnaWallet()){walletAddresses=j.addresses;walletAddressEdit=null;walletAddressError='';toast(action==='delete'?'Address removed.':'Address saved.');}}).catch(e=>{if(owner===scopeBelnaWallet())walletAddressError=e.message || 'Could not save address.';}).finally(()=>{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}});return;
+  }
+  if (act === 'belna-wallet-refresh'){ refreshBelnaWallet(true); return; }
+  if (act === 'belna-wallet-copy-link'){
+    scopeBelnaWallet();
+    if (belnaReceiveLink) navigator.clipboard.writeText(belnaReceiveLink.url).then(() => toast('Payment link copied.')).catch(() => toast('Could not copy the link. Open it to copy the address.'));
+    return;
+  }
+  if (act.startsWith('belna-wallet-')){
+    const owner = scopeBelnaWallet();
+    if (!owner || belnaWalletBusy) return;
+    let action, payload = {};
+    if (act === 'belna-wallet-setup') { action='setup'; payload={ country:$('#belna-wallet-country')?.value || '' }; }
+    else if (act === 'belna-wallet-verify') action='verify';
+    else if (act === 'belna-wallet-card-connect') action='card-connect';
+    else if (act === 'belna-wallet-limit') { action='controls'; payload={ dailyLimitUsd:Number($('#belna-wallet-limit')?.value) }; }
+    else if (act === 'belna-wallet-freeze') { action='controls'; payload={ frozen:b.dataset.frozen === 'true' }; }
+    else if (act === 'belna-wallet-deposit') action='deposit';
+    else if (act === 'belna-wallet-receive') { action='receive'; const title=$('#belna-wallet-receive-title')?.value || '', amount=Number($('#belna-wallet-receive-amount')?.value); if (!belnaReceiveAttempt || belnaReceiveAttempt.title !== title || belnaReceiveAttempt.amount !== amount) belnaReceiveAttempt={ title, amount, requestKey:crypto.randomUUID() }; payload=belnaReceiveAttempt; }
+    else if (act === 'belna-wallet-quote') { action='quote'; payload={ recipient:$('#belna-wallet-recipient')?.value || '', amount:Number($('#belna-wallet-send-amount')?.value) }; }
+    else if (act === 'belna-wallet-transfer-check') { action='send'; payload={ quoteId:b.dataset.id, confirm:true }; }
+    else if (act === 'belna-wallet-send' && belnaTransferQuote) { action='send'; payload={ quoteId:belnaTransferQuote.quoteId, confirm:true }; }
+    else return;
+    belnaWalletBusy = true;
+    b.disabled = true;
+    window.LingonAuth.api('/api/belna-wallet/' + action, { method:'POST', body:JSON.stringify(payload) }).then(j => {
+      if (owner !== scopeBelnaWallet()) return;
+      if (j.wallet) { belnaWalletCache=j; belnaWalletError=''; }
+      // A new wallet becomes the active one only when nothing else pays: switching away from a
+      // connected existing card is the owner's choice, made in Wallet settings.
+      const existingCard=walletPreferences?.activeMethod==='existing_card' || shopPaySnapshot().connected || walletPreferences?.merchantEnabled;
+      if(action==='setup'){walletConnectOpen=false;if(!existingCard)window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})}).then(p=>{if(owner===scopeBelnaWallet()){walletPreferences=p;repaintWallet();}}).catch(e=>toast(e.message));}
+      if (action === 'receive') { belnaReceiveLink=j; toast('Payment link ready to share.'); }
+      else if (action === 'quote') belnaTransferQuote=j;
+      else if (action === 'send') { belnaTransferQuote=j; toast(j.status === 'succeeded' ? 'Money sent.' : j.status === 'failed' ? 'Transfer failed.' : 'Transfer processing.'); refreshBelnaWallet(true); }
+      else if (j.url) window.location.assign(j.url);
+      else if (action === 'controls') { if (payload.dailyLimitUsd != null) walletLimitEdit=false; toast(payload.frozen === true ? 'Card spending paused.' : payload.frozen === false ? 'Card spending resumed.' : 'Daily card allowance saved.'); }
+      else toast(action === 'setup' ? `Wallet created. Complete your identity check to set up your card.${existingCard ? ' Your existing card stays active until you switch in Wallet settings.' : ''}` : 'Card setup updated.');
+    }).catch(e => { if (owner === scopeBelnaWallet()) toast(e.message || 'Could not update your wallet.'); }).finally(() => {
+      if (owner !== scopeBelnaWallet()) return;
+      belnaWalletBusy=false;
+      b.disabled=false;
+      repaintWallet();
+    });
+    return;
+  }
   if (act === 'payments-stripe-apps'){
     state.appQuery = 'stripe'; state.appFilter = 'all'; state.view = 'apps';
     save(); renderApp(); refreshComposioApps(true); return;
@@ -7105,7 +7745,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'shop-pay-refresh'){ refreshShopPay(true); return; }
-  if (act === 'payments-refresh'){ refreshShopPay(true); refreshComposioApps(true); return; }
+  if (act === 'payments-refresh'){ refreshShopPay(true); refreshBelnaWallet(true); return; }
   if (act === 'app-filter'){ state.appFilter = b.dataset.f === 'connected' ? 'connected' : 'all'; save(); paintApps(document.getElementById('main')); return; }
   if (act === 'app-focus'){
     const tk = String(b.dataset.toolkit || '');
@@ -7113,6 +7753,33 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'toggle-connector'){ openConnector(b.dataset.toolkit); return; }
+  // The owner's own APIs and MCP servers.
+  if (act === 'cc-save'){ ccSave(b.closest('.cc-form')); return; }
+  if (act === 'toggle-cc'){ ccToggle(b.dataset.id); return; }
+  if (act === 'cc-check'){ ccCheck(b.dataset.id); return; }
+  if (act === 'cc-rekey'){
+    ccRekeyId = ccRekeyId === b.dataset.id ? null : b.dataset.id;
+    paintApps($('#main'));
+    if (ccRekeyId) $('[data-cc-rekey]')?.focus();
+    return;
+  }
+  if (act === 'cc-rekey-save'){ ccRekeySave(b.dataset.id, b.closest('.cc-rekey')); return; }
+  if (act === 'cc-remove'){ ccRemove(b.dataset.id); return; }
+  if (act === 'cc-perm'){
+    const on = b.getAttribute('aria-checked') !== 'true';
+    ccSetPermissions(b.dataset.id, (p) => p.slug === b.dataset.slug ? on : p.enabled);
+    return;
+  }
+  if (act === 'cc-perm-kind'){
+    const on = b.getAttribute('aria-checked') !== 'true';
+    ccSetPermissions(b.dataset.id, (p) => p.kind === b.dataset.kind ? on : p.enabled);
+    return;
+  }
+  if (act === 'cc-open'){
+    mobileNavOpen = false; state.view = 'apps'; state.appOpen = ccKey(b.dataset.id); state.appFilter = 'all'; state.appQuery = '';
+    save(); switchView(); refreshComposioApps();
+    return;
+  }
   if (act === 'perm-toggle'){
     const on = b.getAttribute('aria-checked') !== 'true';
     toggleConnectorPermission(b.dataset.toolkit, b.dataset.slug, on);
@@ -7148,8 +7815,8 @@ document.addEventListener('click', async e => {
   if(act==='import-memory'){$('#browser-memory-file')?.click();return;}
   if(act==='browser-reset-agent'){
     if(!window.confirm('Reset your agent’s name and appearance to the defaults? Your chats and memory will stay.'))return;
-    state.agent={...state.agent,name:'Your agent',color:'lingon',pers:'Playful'};save();paintSide();paintCanvas();
-    try{await persistAgentContext({...editableAgentDocuments(),identity:'# Identity\n\nName: Your agent\nStyle: Playful'});paintSettings($('#main'));toast('Agent profile reset.');}
+    state.agent={...state.agent,name:'Your agent',color:'lingon'};save();paintSide();paintCanvas();
+    try{await persistAgentContext({...editableAgentDocuments(),identity:'# Identity\n\nName: Your agent'});paintSettings($('#main'));toast('Agent profile reset.');}
     catch(err){toast(err.message || 'Could not save agent reset.');}
     return;
   }
@@ -7644,6 +8311,44 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'managed-resume') { await Engine.resume(makeRT(chat())); return; }
+  if (m?.card?.type === 'connector' && ['connector-save','connector-skip'].includes(act)) {
+    if (!signedIn()) { renderAuth(); return; }
+    if (m.card.status !== 'pending') return;
+    const allow = act === 'connector-save';
+    b.disabled = true;
+    try {
+      // Add it first, so the agent finds it when it resumes. A retry after a failed resume
+      // reuses the connector already added.
+      if (allow && !m.card.connectorId) {
+        const node = document.querySelector(`[data-mid="${m.id}"]`);
+        const keyInput = node?.querySelector('[data-f="key"]'), userInput = node?.querySelector('[data-f="username"]');
+        const auth = m.card.auth || { type:'none' };
+        if (auth.type !== 'none' && !keyInput?.value.trim()) { toast('Paste the key first.'); keyInput?.focus(); return; }
+        b.textContent = 'Connecting…';
+        let added;
+        try {
+          added = ccAdopt(await window.LingonAuth.api('/api/connectors', { method:'POST', body:JSON.stringify({
+            kind:m.card.kind, name:m.card.name, url:m.card.url, description:m.card.description || '', testPath:m.card.testPath || '', docsUrl:m.card.docsUrl || '',
+            auth:{ ...auth, ...(auth.type === 'basic' && userInput?.value.trim() ? { username:userInput.value.trim() } : {}) },
+            secret:auth.type === 'none' ? '' : keyInput.value }) }));
+        } catch (err) {
+          // A wrong key or address stays on the card, which waits for another try.
+          m.card.error = err.message || 'Could not connect.';
+          replaceNode(c, m); save();
+          return;
+        }
+        m.card.connectorId = added.id; m.card.tools = ccToolCount(added); m.card.error = '';
+        save();
+      }
+      if (m.card.taskId) await Engine.controlTask(makeRT(c), m.card.taskId, 'decide', { callId:m.card.managedCallId, allow, version:m.card.taskVersion });
+      else if (m.card.managedCallId) await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow });
+      m.card.status = allow ? 'connected' : 'skipped';
+      replaceNode(c, m); save(); paintSide();
+      if (allow) toast(`${m.card.name} connected.`);
+    } catch (err) { toast(err.message || 'Could not finish connecting.'); }
+    finally { b.disabled = false; }
+    return;
+  }
   if (m?.card?.managedCallId && ['save-secret','skip-secret'].includes(act)) {
     if (!signedIn()) { renderAuth(); return; }
     const allow = act === 'save-secret';
@@ -7807,12 +8512,14 @@ document.addEventListener('click', async e => {
   if (act === 'delete-credential'){
     const ids=JSON.parse(b.dataset.ids || '[]');
     const secrets=ids.map(id=>state.vault.secrets.find(s=>s.id===id)).filter(Boolean);
-    if(!secrets.length || !window.confirm(`Delete “${b.dataset.name}”? Your agent will no longer be able to use it.`))return;
+    if(!secrets.length || !window.confirm(b.dataset.connector ? `Delete the key for “${b.dataset.name}”? The ${b.dataset.name} connector is removed too.` : `Delete “${b.dataset.name}”? Your agent will no longer be able to use it.`))return;
     b.disabled=true;
     try{
       for(const secret of secrets){
         if(secret.backend && signedIn())await window.LingonAuth.api('/api/secrets/'+encodeURIComponent(secret.id),{method:'DELETE'});
         state.vault.secrets=state.vault.secrets.filter(s=>s.id!==secret.id);
+        // A connector goes with its key.
+        state.customConnectors=(state.customConnectors || []).filter(c=>c.secretId!==secret.id);
       }
       save();repaintSettings();paintSide();toast('Credential deleted');
     }catch(err){save();repaintSettings();toast(err.message || 'Could not delete that credential.');}
@@ -8006,7 +8713,6 @@ document.addEventListener('click', async e => {
 
   /* profile / appearance (shared by Settings + right slider) */
   if (act === 'p-color'){ state.agent.color = b.dataset.c; save();persistAgentContext().catch(()=>{}); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
-  if (act === 'p-pers'){ state.agent.pers = b.dataset.p; save();persistAgentContext().catch(()=>{}); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
   if (act === 'reset'){
     if (confirm('Release this agent? This deletes the claim, chats, vault and memory on this device.')){
       localStorage.removeItem(LS); location.reload();

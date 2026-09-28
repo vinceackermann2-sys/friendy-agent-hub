@@ -781,12 +781,16 @@ const LIVE_REALTIME_URL = /^wss:\/\/[a-z0-9-]+\.supabase\.(co|in)\/realtime\/v1\
 const LIVE_TOPIC = /^live-[A-Za-z0-9_-]{32,64}$/;
 function liveRealtimeArgs(live) {
   if (!live) return null;
-  const url = String(live.url || ''), key = String(live.key || ''), topic = String(live.topic || '');
-  if (!LIVE_REALTIME_URL.test(url) || !/^[A-Za-z0-9._-]{20,400}$/.test(key) || !LIVE_TOPIC.test(topic)) {
+  const url = String(live.url || ''), key = String(live.key || ''), topic = String(live.topic || ''), cmdKey = String(live.cmdKey || '');
+  if (!LIVE_REALTIME_URL.test(url) || !/^[A-Za-z0-9._-]{20,400}$/.test(key) || !LIVE_TOPIC.test(topic) || (cmdKey && !/^[a-f0-9]{64}$/.test(cmdKey))) {
     throw Object.assign(new Error('Invalid live view channel.'), { code: 'BAD_INPUT' });
   }
-  return { url, key, topic };
+  return cmdKey ? { url, key, topic, cmdKey } : { url, key, topic };
 }
+// The streamer build a VM runs. A streamer from another build, or holding another step key,
+// is replaced at the next browser step: it would ignore signed steps, and each would wait for it.
+const LIVE_STREAMER_BUILD = 'steps-1';
+const liveStreamerVersion = (live) => `${LIVE_STREAMER_BUILD}-${crypto.createHash('sha256').update(String(live.cmdKey || '')).digest('hex').slice(0, 12)}`;
 function liveStreamer(kit, profileRuntime, cfg, load) {
   const proc = load('process');
   const fs = load('fs');
@@ -795,7 +799,7 @@ function liveStreamer(kit, profileRuntime, cfg, load) {
   const loadVmModule = (name) => load(vmModules + name);
   const WebSocket = loadVmModule('ws');
   const puppeteer = loadVmModule('puppeteer-core');
-  const dir = path.join('/var/lib/lingon-browser/sessions', cfg.sessionId);
+  const dir = path.join(cfg.root || '/var/lib/lingon-browser/sessions', cfg.sessionId);
   const takeoverFile = path.join(dir, 'takeover');
   const topic = `realtime:${cfg.topic}`;
   // A viewer says it is watching every 10 s; frames stop 30 s after the last one,
@@ -834,8 +838,61 @@ function liveStreamer(kit, profileRuntime, cfg, load) {
       if (Date.now() - lastViewer < VIEWER_MS) send('agent', agentNow);
     } catch {}
   }, 150).unref?.();
+  // Agent browser steps sent over the channel run here, in the browser this streamer already
+  // holds, instead of a new VM command per step (many seconds each). A step counts only when it
+  // is signed with the key the server gave this streamer at launch, has not expired and was not
+  // seen before. Its result goes to a private upload link in the step, never to the channel; a
+  // vault value never comes this way.
+  const crypto = load('crypto');
+  const BLOB = /^https:\/\/[a-z0-9]{3,24}\.blob\.core\.windows\.net\//;
+  const stateFile = path.join(dir, 'state.json');
+  const seenSteps = new Map();
+  let stepQueue = Promise.resolve(), agentState = null, browserRef = null;
+  const stepSignature = (p) => crypto.createHmac('sha256', String(cfg.cmdKey)).update(JSON.stringify([p.id, p.action, p.url || '', p.event || null, p.uploadUrl, p.resultUrl, p.exp])).digest('hex');
+  const validStep = (p) => {
+    if (!cfg.cmdKey || !p || typeof p.id !== 'string' || p.id.length > 80 || seenSteps.has(p.id)) return false;
+    if (!(Number(p.exp) > Date.now()) || Number(p.exp) > Date.now() + 5 * 60000) return false;
+    if (!['navigate', 'input', 'inspect'].includes(p.action) || (p.event && p.event.secret)) return false;
+    if (!BLOB.test(String(p.uploadUrl || '')) || !BLOB.test(String(p.resultUrl || ''))) return false;
+    const expected = Buffer.from(stepSignature(p)), given = Buffer.from(String(p.sig || ''));
+    return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+  };
+  const runStep = (p) => {
+    seenSteps.set(p.id, Date.now());
+    for (const [id, at] of seenSteps) if (Date.now() - at > 10 * 60000) seenSteps.delete(id);
+    lastActivity = Date.now();
+    const report = (body, first) => fetch(p.resultUrl, { method: 'PUT', headers: { 'content-type': 'application/json', 'x-ms-blob-type': 'BlockBlob', ...(first ? { 'If-None-Match': '*' } : {}) }, body: JSON.stringify(body) });
+    // Taking the step creates its result blob. The server, giving up waiting, tries to create
+    // the same blob; whoever creates it first owns the step, so it never runs twice.
+    const taken = report({ ack: true }, true).then((r) => r.status === 201).catch(() => false);
+    stepQueue = stepQueue.then(async () => {
+      if (!(await taken)) return;
+      let result;
+      kit.setAnnouncer((info) => { agentNow = { ...info, at: Date.now() }; if (Date.now() - lastViewer < VIEWER_MS) send('agent', agentNow); });
+      try {
+        if (takeover) throw new Error('The owner has taken over this browser in the live view. Wait until they hand it back, then continue.');
+        if (!page) throw new Error('The session page is gone.');
+        if (!agentState) { agentState = {}; await kit.setupPage(page, agentState); }
+        if (p.action === 'navigate') { const host = new URL(p.url).hostname; kit.note('Opening ' + (host.startsWith('www.') ? host.slice(4) : host)); await kit.open(page, p.url); }
+        else if (p.action === 'input') await kit.act(page, p.event || {});
+        const snap = await kit.snapshot(page, agentState);
+        kit.note('Looking at the page');
+        const screenshot = await page.screenshot({ type: 'jpeg', quality: 60 });
+        const upload = await fetch(p.uploadUrl, { method: 'PUT', headers: { 'content-type': 'image/jpeg', 'x-ms-blob-type': 'BlockBlob' }, body: screenshot });
+        if (!upload.ok) throw new Error('Screenshot upload failed: HTTP ' + upload.status);
+        fs.writeFileSync(stateFile, JSON.stringify({ url: snap.url, title: snap.title, scrollY: snap.scrollY }));
+        if (browserRef) await profileRuntime.saveCookies(browserRef).catch(() => {});
+        result = { ok: true, ...snap, screenshotBytes: screenshot.length };
+      } catch (error) { result = { ok: false, error: String(error.message || error) }; }
+      finally { kit.setAnnouncer(null); }
+      await report({ done: true, ...result }).catch(() => {});
+      lastActivity = Date.now();
+      meta();
+    });
+  };
   const onBroadcast = (event, p) => {
     lastActivity = Date.now();
+    if (event === 'step') { if (validStep(p)) runStep(p); return; }
     if (event === 'watch') { lastViewer = Date.now(); startCast(); meta(); if (agentNow) send('agent', agentNow); }
     else if (event === 'control') { setTakeover(p.takeover === true); meta(); }
     else if (event === 'input' && takeover && p.ev && typeof p.ev === 'object') {
@@ -865,6 +922,7 @@ function liveStreamer(kit, profileRuntime, cfg, load) {
   (async () => {
     const browser = await profileRuntime.connectExisting(puppeteer);
     if (!browser) throw new Error('The browser is not running.');
+    browserRef = browser;
     const targetId = fs.readFileSync(path.join(dir, 'target-id'), 'utf8').trim();
     page = (await browser.pages()).find((item) => item.target()._targetId === targetId);
     if (!page) throw new Error('The session page is gone.');
@@ -986,6 +1044,39 @@ function buildBrowserSessionScript(action, args = {}) {
   ].join('\n');
 }
 // Starts this session's live streamer after a browser step, unless it is running.
+// This upload capability imports a reviewed checkout into a separate, trusted
+// browser. Neither payment credentials nor the checkout server key enter a VM.
+function buildCheckoutExportScript(sessionId, website, uploadUrl) {
+  const payloadB64=Buffer.from(JSON.stringify({sessionId,website,uploadUrl})).toString('base64');
+  const source=[
+    "const fs=require('fs'),path=require('path');",
+    `const kit=(${browserKit.toString()})();`,
+    `const profiles=(${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions',require);`,
+    "const input=JSON.parse(Buffer.from(process.env.LINGON_CHECKOUT_IMPORT,'base64').toString());",
+    "(async()=>{const browser=await profiles.connectExisting(require('/opt/lingon/node_modules/puppeteer-core'));if(!browser)throw Error();try{",
+    "const dir=path.join('/var/lib/lingon-browser/sessions',input.sessionId);const targetId=fs.readFileSync(path.join(dir,'target-id'),'utf8').trim();const page=(await browser.pages()).find(p=>p.target()._targetId===targetId);if(!page || page.url()!==input.website)throw Error();",
+    "const snapshot=await kit.snapshot(page);if(snapshot.sensitivePresent)throw Error();",
+    "const state=await page.evaluate(()=>({url:location.href,scrollY,localStorage:Object.fromEntries(Object.entries(localStorage)),sessionStorage:Object.fromEntries(Object.entries(sessionStorage)),fields:[...document.querySelectorAll('input,select,textarea')].filter(e=>(e.id||e.name)&&!/password|cc-|card|cvc|cvv|iban|one-time-code|otp/i.test([e.type,e.autocomplete,e.name,e.id].join(' '))).map(e=>({id:e.id,name:e.name,value:e.value}))}));",
+    "const host=new URL(input.website).hostname;state.cookies=(await browser.cookies()).filter(c=>{const domain=c.domain.replace(/^\\./,'');return domain===host||host.endsWith('.'+domain);});state.sensitivePresent=false;",
+    "const reply=await fetch(input.uploadUrl,{method:'POST',redirect:'error',signal:AbortSignal.timeout(60000),headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});if(!reply.ok || (await reply.json()).created!==true)throw Error();process.stdout.write('PRIVATE_CHECKOUT_IMPORTED');",
+    "}finally{browser.disconnect();}})().catch(()=>{process.stdout.write('PRIVATE_CHECKOUT_FAILED');process.exitCode=1;}).finally(()=>setTimeout(()=>process.exit(),1000).unref());"
+  ].join('\n');
+  const codeB64=Buffer.from(source).toString('base64');
+  return ['set -e',...BROWSER_NETWORK_GUARD,'install -d -m 755 -o root -g root /run/lingon',
+    `echo '${codeB64}' | base64 -d > /run/lingon/checkout-export.js`,
+    'chown root:root /run/lingon/checkout-export.js && chmod 644 /run/lingon/checkout-export.js',OWN_SCOPE,
+    `$SCOPE runuser -u lingon-browser -- timeout -k 5 90 env LINGON_CHECKOUT_IMPORT='${payloadB64}' node /run/lingon/checkout-export.js`,
+    'rm -f /run/lingon/checkout-export.js'].join('\n');
+}
+async function exportCheckout(userId, sessionId, approved, {uploadUrl}) {
+  const fail=()=>Error('Your reviewed checkout could not be opened privately. Review it again before paying.');
+  try {
+    const endpoint=new URL(uploadUrl), configured=new URL(process.env.PRIVATE_CHECKOUT_URL||'');
+    if(configured.protocol!=='https:' || endpoint.origin!==configured.origin || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || !/^\/imports\/[a-f0-9-]{36}$/.test(endpoint.pathname) || !sessionId || new URL(approved.website).protocol!=='https:')throw fail();
+    const result=await runCommand(userId,buildCheckoutExportScript(toolBrowserSessionId(userId,sessionId),approved.website,endpoint.href),{maxStdout:1000});
+    if(!String(result.stdout||'').includes('PRIVATE_CHECKOUT_IMPORTED'))throw fail();
+  }catch{throw fail();}
+}
 function liveStreamerLaunch(sessionId, live) {
   const root = `/run/lingon/${sessionId}`;
   const stateRoot = `/var/lib/lingon-browser/sessions/${sessionId}`;
@@ -996,8 +1087,10 @@ function liveStreamerLaunch(sessionId, live) {
   ].join('\n');
   const codeB64 = Buffer.from(source, 'utf8').toString('base64');
   const payloadB64 = Buffer.from(JSON.stringify({ sessionId, ...live }), 'utf8').toString('base64');
+  const version = liveStreamerVersion(live);
   return [
-    `if [ -f '${stateRoot}/target-id' ] && ! { [ -f '${root}/live.pid' ] && kill -0 "$(cat '${root}/live.pid')" 2>/dev/null; }; then`,
+    `if [ -f '${stateRoot}/target-id' ] && ! { [ -f '${root}/live.pid' ] && kill -0 "$(cat '${root}/live.pid')" 2>/dev/null && [ "$(cat '${root}/live.version' 2>/dev/null)" = '${version}' ]; }; then`,
+    `  if [ -f '${root}/live.pid' ]; then kill "$(cat '${root}/live.pid')" 2>/dev/null || true; fi`,
     '  if [ ! -d /opt/lingon/node_modules/ws ]; then npm install --prefix /opt/lingon ws@8.21.3 >/dev/null 2>&1; fi',
     `  install -d -m 755 -o root -g root '${root}'`,
     `  echo '${codeB64}' | base64 -d > '${root}/live.js'`,
@@ -1005,7 +1098,8 @@ function liveStreamerLaunch(sessionId, live) {
     `  ${OWN_SCOPE}`,
     `  $SCOPE runuser -u lingon-browser -- env LINGON_LIVE_PAYLOAD='${payloadB64}' nohup node '${root}/live.js' >> '${root}/live.log' 2>&1 < /dev/null &`,
     `  echo $! > '${root}/live.pid'`,
-    `  chown root:root '${root}/live.pid' '${root}/live.log' 2>/dev/null || true`,
+    `  echo '${version}' > '${root}/live.version'`,
+    `  chown root:root '${root}/live.pid' '${root}/live.version' '${root}/live.log' 2>/dev/null || true`,
     'fi',
   ];
 }
@@ -1044,7 +1138,9 @@ async function pollAsync(cfg, url, timeoutMs = 240000) {
     if (['failed', 'canceled', 'cancelled'].includes(st)) {
       throw Object.assign(new Error(data.error?.message || 'Azure operation failed.'), { code: 'AZURE_ARM' });
     }
-    await new Promise((ok) => setTimeout(ok, 3000));
+    // Most commands on a running VM finish within seconds, so the first checks come
+    // sooner; a long operation (a cold start, a backup) is checked less often.
+    await new Promise((ok) => setTimeout(ok, Date.now() - start < 20000 ? 1500 : 3000));
   }
   throw Object.assign(new Error('Azure operation timed out.'), { code: 'AZURE_TIMEOUT' });
 }
@@ -1386,13 +1482,21 @@ function blobServiceSas({ account, accountKey, container, blob, permissions = 'r
   return `https://${account}.blob.core.windows.net/${container}/${encodedBlob}?${query}`;
 }
 
-async function createScreenshotTransfer(userId, sessionId) {
+// The screenshot store and its key, kept ten minutes: looking them up took three Azure
+// management calls on every browser step.
+let screenshotStorageCache = { accountId: '', accountKey: '', storage: null, exp: 0 };
+async function createScreenshotTransfer(userId, sessionId, ext = 'jpg') {
   const cfg = azureConfig();
-  const storage = await ensureScreenshotStorage(cfg);
-  const keys = await arm(cfg, 'POST', `${storage.accountId}/listKeys`, {}, STORAGE_API);
-  const accountKey = (keys.keys || []).find((key) => key.value)?.value;
-  if (!accountKey) throw Object.assign(new Error('Azure Storage account key was not returned.'), { code: 'AZURE_STORAGE' });
-  const blob = `${userHash(userId)}/${browserSessionId(sessionId)}-${crypto.randomUUID()}.jpg`;
+  const accountId = `${rgPath(cfg)}/providers/Microsoft.Storage/storageAccounts/${storageAccountName(cfg)}`;
+  if (screenshotStorageCache.accountId !== accountId || Date.now() >= screenshotStorageCache.exp) {
+    const storage = await ensureScreenshotStorage(cfg);
+    const keys = await arm(cfg, 'POST', `${storage.accountId}/listKeys`, {}, STORAGE_API);
+    const accountKey = (keys.keys || []).find((key) => key.value)?.value;
+    if (!accountKey) throw Object.assign(new Error('Azure Storage account key was not returned.'), { code: 'AZURE_STORAGE' });
+    screenshotStorageCache = { accountId, accountKey, storage, exp: Date.now() + 10 * 60000 };
+  }
+  const { storage, accountKey } = screenshotStorageCache;
+  const blob = `${userHash(userId)}/${browserSessionId(sessionId)}-${crypto.randomUUID()}.${ext}`;
   const url = blobServiceSas({ ...storage, accountKey, blob });
   return { ...storage, blob, url };
 }
@@ -1637,7 +1741,7 @@ async function ensureVm(userId, { create = false } = {}) {
       networkProfile: { networkInterfaces: [{ id: nic.id || nicPath, properties: { primary: true } }] },
     },
   }, COMPUTE_API);
-  return { vmName: name, id: vm.id, vmId: vm.properties?.vmId || null, provisioningState: vm.properties?.provisioningState || 'Creating' };
+  return { vmName: name, id: vm.id, vmId: vm.properties?.vmId || null, provisioningState: vm.properties?.provisioningState || 'Creating', created: true };
 }
 
 function parseRunOutput(data, { maxStdout = 12000, maxStderr = 4000 } = {}) {
@@ -1747,7 +1851,7 @@ async function waitPower(userId, want, timeoutMs = 180000) {
   while (Date.now() - start < timeoutMs) {
     const st = await powerState(userId);
     if (st === want) return st;
-    await new Promise((ok) => setTimeout(ok, 4000));
+    await new Promise((ok) => setTimeout(ok, 2000));
   }
   throw Object.assign(new Error(`Azure VM did not reach ${want} in time.`), { code: 'AZURE_TIMEOUT' });
 }
@@ -1807,7 +1911,8 @@ async function acquireLease(userId, { leaseId, kind = 'app' } = {}) {
   }
   await requireVmTokens(userId);
   const expiresAt = Date.now() + LEASE_TTL_MS;
-  let acquired = false;
+  const began = Date.now(), timing = {};
+  let acquired = false, recorded = '';
   // A shutdown in progress counts as stale after five minutes (see acquire_agent_vm_lease), so
   // new work waits a little longer than that rather than failing while the VM stops.
   for (let attempt = 0; attempt < 220 && !acquired; attempt++) {
@@ -1818,17 +1923,31 @@ async function acquireLease(userId, { leaseId, kind = 'app' } = {}) {
       p_vm_name: vmNameForUser(userId),
       p_expires_at: new Date(expiresAt).toISOString(),
     });
-    acquired = !!(Array.isArray(result) ? result[0]?.acquired : result?.acquired);
+    const row = Array.isArray(result) ? result[0] : result;
+    acquired = !!row?.acquired;
+    recorded = String(row?.power_state || '');
     if (!acquired) await new Promise((resolve) => setTimeout(resolve, 1500));
   }
+  timing.leaseMs = Date.now() - began;
   if (!acquired) throw Object.assign(new Error('VM is still stopping; retry shortly.'), { code: 'AZURE_BUSY' });
   try {
     const vm = await ensureRunning(userId, { create: azureConfig().autoProvision });
+    timing.startMs = Date.now() - began - timing.leaseMs;
+    timing.started = vm.started;
     const workerKey = String(userId);
     if (workerReadyState.get(workerKey) && vm.vmId && workerReadyState.get(workerKey) !== vm.vmId) workerReadyState.delete(workerKey);
-    await restoreDurableState(userId, { vmId: vm.vmId });
+    // A VM recorded as running was restored when it started (it is marked running only after
+    // that), and its disk keeps the files while it runs. Only a VM that had to start or was
+    // just created restores; repeating it on every step cost a VM command each time.
+    if (vm.started || vm.created || recorded !== 'running') {
+      const restoreAt = Date.now();
+      await restoreDurableState(userId, { vmId: vm.vmId });
+      timing.restoreMs = Date.now() - restoreAt;
+    } else if (vm.vmId) restoredState.set(String(userId), vm.vmId);
     await supabaseRpc('mark_agent_vm_running', { p_user_id: String(userId) });
     await meterVm(userId);
+    timing.totalMs = Date.now() - began;
+    if (timing.started || timing.totalMs > 5000) console.info('[vm] lease', { vm: vmNameForUser(userId), ...timing });
   } catch (error) {
     await releaseLease(userId, { leaseId: id, skipSnapshot: true }).catch(() => {});
     throw error;
@@ -1940,9 +2059,45 @@ async function ensureRunning(userId, { create = true } = {}) {
   const key = String(userId);
   if (workerReadyState.get(key) && vm.vmId && workerReadyState.get(key) !== vm.vmId) workerReadyState.delete(key);
   const st = await powerState(userId);
-  if (st !== 'running') await startVm(userId);
+  // A VM already starting (see prewarm) only needs waiting for; a second start request
+  // could conflict with the one in progress.
+  if (st === 'starting') await waitPower(userId, 'running');
+  else if (st !== 'running') await startVm(userId);
   else touchActivity(userId);
-  return { vmName: vmNameForUser(userId), vmId: vm.vmId, power: 'running' };
+  return { vmName: vmNameForUser(userId), vmId: vm.vmId, power: 'running', started: st !== 'running', created: !!vm.created };
+}
+
+// Starts the VM ahead of work that will need it, without waiting for it to boot. A task
+// that will use the browser or shell calls this while its first plan is written, so the
+// minute a cold start takes overlaps with that. The lease and its release leave the usual
+// idle window, after which an unused VM is stopped as always. It never creates a VM, and
+// a VM that is stopping is left to stop.
+async function prewarm(userId) {
+  if (!userId || !isAzureConfigured() || !isLeaseStoreConfigured()) return { started: false };
+  let power;
+  try { power = await powerState(userId); }
+  catch (error) { if (error.code === 'AZURE_NOT_FOUND') return { started: false, power: 'missing' }; throw error; }
+  await requireVmTokens(userId);
+  const cfg = azureConfig();
+  const leaseId = `warm-${userHash(userId).slice(0, 24)}`;
+  const result = await supabaseRpc('acquire_agent_vm_lease', {
+    p_user_id: String(userId), p_lease_id: leaseId, p_kind: 'warm', p_vm_name: vmNameForUser(userId),
+    p_expires_at: new Date(Date.now() + LEASE_TTL_MS).toISOString(),
+  });
+  const row = Array.isArray(result) ? result[0] : result;
+  if (!row?.acquired) return { started: false, power: row?.power_state || 'stopping' };
+  try {
+    // Already up: the lease and its release only keep it from stopping before the task needs it.
+    if (['running', 'starting'].includes(power)) return { started: false, power };
+    await arm(cfg, 'POST', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${vmNameForUser(userId)}/start`, undefined, COMPUTE_API, { wait: false });
+    console.info('[vm] prewarm', { vm: vmNameForUser(userId) });
+    return { started: true, power: 'starting' };
+  } finally {
+    await supabaseRpc('release_agent_vm_lease', {
+      p_user_id: String(userId), p_lease_id: leaseId, p_claim_token: crypto.randomUUID(),
+      p_idle_until: new Date(Date.now() + cfg.idleMinutes * 60000).toISOString(),
+    }).catch(() => {});
+  }
 }
 
 let idleTimer = null;
@@ -2142,7 +2297,68 @@ async function createSecretTransfer(userId, sessionId, value) {
   return { writeUrl, readUrl: blobServiceSas({ ...storage, accountKey, blob, permissions: 'rd', minutes: 2 }) };
 }
 
+// A browser step sent to the live streamer already running on the VM, over the session's
+// Realtime channel: about a second plus the action, where a Run Command takes many seconds.
+// The step is signed with a key only the server and that streamer hold; the streamer reports
+// to a private blob. Null when no streamer takes the step within STEP_ACK_MS (none running
+// yet, or an old one), so the caller runs it as a VM command. Once taken, the step is never
+// run a second way: a lost result is an outcome to check, not a retry.
+const STEP_ACK_MS = 2500, STEP_DONE_MS = 75000;
+function realtimeBroadcastUrl(live) {
+  return String(live.url).replace(/^wss:/, 'https:').replace(/\/realtime\/v1\/websocket$/, '/realtime/v1/api/broadcast');
+}
+async function streamerBrowserStep(userId, sb, args, live) {
+  if (!live?.cmdKey || (args.event && args.event.secret)) return null;
+  const [shot, report] = await Promise.all([createScreenshotTransfer(userId, args.sessionId), createScreenshotTransfer(userId, args.sessionId, 'json')]);
+  const drop = () => Promise.all([shot, report].map((t) => fetch(t.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {})));
+  const step = { id: crypto.randomUUID(), action: args.action, url: String(args.url || ''), event: args.event && typeof args.event === 'object' ? args.event : null,
+    uploadUrl: shot.url, resultUrl: report.url, exp: Date.now() + STEP_DONE_MS };
+  step.sig = crypto.createHmac('sha256', live.cmdKey).update(JSON.stringify([step.id, step.action, step.url, step.event, step.uploadUrl, step.resultUrl, step.exp])).digest('hex');
+  const sent = await fetch(realtimeBroadcastUrl(live), { method: 'POST', headers: { apikey: live.key, Authorization: `Bearer ${live.key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: [{ topic: live.topic, event: 'step', payload: step, private: false }] }) }).catch(() => null);
+  if (!sent || !sent.ok) { await drop(); return null; }
+  const started = Date.now();
+  let taken = false, claimAt = STEP_ACK_MS;
+  for (;;) {
+    const waited = Date.now() - started;
+    if (!taken && waited > claimAt) {
+      // Giving up creates the step's result blob first, unless the streamer just did: then it
+      // owns the step and its result is awaited, so the step never runs a second way.
+      const cancel = await fetch(report.url, { method: 'PUT', headers: { 'x-ms-version': BLOB_API, 'x-ms-blob-type': 'BlockBlob', 'content-type': 'application/json', 'If-None-Match': '*' }, body: '{"cancelled":true}' }).catch(() => null);
+      if (cancel && cancel.status === 201) { await drop(); return null; }
+      // Only "it already exists" means the streamer owns the step. A network or storage
+      // error says nothing either way, so the claim is tried again shortly.
+      if (cancel && (cancel.status === 409 || cancel.status === 412)) taken = true;
+      else claimAt = waited + 1000;
+    }
+    if (waited > STEP_DONE_MS) {
+      await drop();
+      throw Object.assign(new Error(taken
+        ? 'The browser took this step but did not report its result. Check the page before repeating it.'
+        : 'Whether the browser took this step could not be checked. Check the page before repeating it.'), { code: 'AZURE_BROWSER' });
+    }
+    await new Promise((resolve) => setTimeout(resolve, waited < 4000 ? 200 : 400));
+    const got = await fetch(report.url, { headers: { 'x-ms-version': BLOB_API } }).catch(() => null);
+    if (!got || !got.ok) continue;
+    const body = await got.json().catch(() => ({}));
+    taken = true;
+    if (!body.done) continue;
+    await fetch(report.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {});
+    const { done, ...parsed } = body;
+    if (parsed.ok === false) {
+      await drop();
+      throw Object.assign(new Error(parsed.error || 'Browser step failed on the user VM.'), { code: 'AZURE_BROWSER' });
+    }
+    const screenshot = await readAndDeleteScreenshot(shot);
+    console.info('[vm] browser step', { via: 'streamer', action: step.action, ms: Date.now() - started });
+    return { mode: 'azure', vmName: sb.vmName, ...parsed, screenshot };
+  }
+}
+
 async function runBrowserSession(userId, sb, args) {
+  const live = args.live ? liveRealtimeArgs(args.live) : null;
+  const fast = live ? await streamerBrowserStep(userId, sb, args, live) : null;
+  if (fast) return fast;
   const transfer = await createScreenshotTransfer(userId, args.sessionId);
   let secretTransfer = null;
   try {
@@ -2213,15 +2429,19 @@ async function execInSandbox(userId, tool, args = {}, { alreadyRunning = false, 
   // A newly acquired agent lease already confirmed power state. Other callers
   // still verify it here before touching the VM.
   if (!alreadyRunning) await ensureRunning(userId);
-  if (tool === 'code_run') {
-    await waitWorkerReady(userId);
-    const out = await runCommand(userId, buildRunScript(args.language, args.code, taskId));
-    return { mode: 'azure', vmName: sb.vmName, language: String(args.language || 'js'), ...out };
-  }
-  if (tool === 'shell') {
-    await waitWorkerReady(userId);
-    const out = await runCommand(userId, buildShellScript(args.command, taskId));
-    return { mode: 'azure', vmName: sb.vmName, tool: 'shell', ...out };
+  if (tool === 'code_run' || tool === 'shell') {
+    const script = tool === 'shell' ? buildShellScript(args.command, taskId) : buildRunScript(args.language, args.code, taskId);
+    // The script checks the worker image itself, so a ready VM needs one command, not a
+    // readiness check first. Only a first boot still preparing the image waits for it.
+    let out = await runCommand(userId, script);
+    if (/Worker container (?:runtime|image) is not ready/.test(out.stderr || '')) {
+      workerReadyState.delete(String(userId));
+      await waitWorkerReady(userId);
+      out = await runCommand(userId, script);
+    }
+    return tool === 'shell'
+      ? { mode: 'azure', vmName: sb.vmName, tool: 'shell', ...out }
+      : { mode: 'azure', vmName: sb.vmName, language: String(args.language || 'js'), ...out };
   }
   if (tool === 'browser_open' || tool === 'computer_screenshot') {
     return runBrowserSession(userId, sb, {
@@ -2274,6 +2494,8 @@ module.exports = {
   startDesktopRelay,
   stopDesktopRelay,
   buildBrowserSessionScript,
+  buildCheckoutExportScript,
+  exportCheckout,
   buildBrowserRelayScript,
   buildBrowserRelayStopScript,
   cloudInit,
@@ -2288,6 +2510,7 @@ module.exports = {
   ensureInfrastructure,
   ensureVm,
   ensureRunning,
+  prewarm,
   waitWorkerReady,
   acquireLease,
   renewLease,

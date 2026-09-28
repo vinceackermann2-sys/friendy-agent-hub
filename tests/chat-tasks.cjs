@@ -58,22 +58,13 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await assert.rejects(h.runtime.details('a',id,'different'),/not found/);
   console.log(`controlled concurrency: foreground reply ${replyMs.toFixed(2)}ms with worker held; 1 main model call per message, 0 narrator calls`);
 
-  // Clear requests for worker-only capabilities start a durable task without
-  // spending a coordinator model call. Capability questions stay in chat.
+  // Clear worker jobs that need none of the owner's accounts (building, code, research)
+  // start a durable task without spending a coordinator model call.
   const directRequests=[
-    'Check my Gmail inbox',
-    'Check my Dropbox files',
-    'Check my connected Trello account',
-    'Schedule a meeting in Google Calendar',
-    'Send a message in Slack',
-    'Review my GitHub pull requests',
-    'Buy headphones with Shop Pay',
-    'Browse the merchant website and fill the form',
     'Generate an image of a fox',
+    'Make me a tic tac toe game',
     'Run this code in my workspace',
     'Research current flight prices',
-    'Remind me every day to take a break',
-    'What did I get in my inbox today?',
   ];
   for(const prompt of directRequests) {
     const routed=setup(),routedEvents=[];let modelCalls=0;
@@ -86,8 +77,13 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
     assert.ok(task,`${prompt} should start a task`);
     assert.equal(routed.rows.get(task.task.id).state.instructions,prompt);
   }
-  // Shop Pay status and orders are read-only chat lookups now, so they stay in chat too.
-  for(const prompt of ['What is the capital of France?','Why can’t you use my Gmail?','How do I connect Gmail?','Can you use Gmail?','What is the best way to use Shopify?','What is my Shop Pay daily limit?','Where is my Shop Pay order?']) {
+  // Capability questions stay in chat. Anything in the owner's accounts, a purchase or a
+  // website goes through the coordinator, which checks what is connected first: sent
+  // straight to a worker, "check my facebook messages" started the VM to sign in.
+  for(const prompt of ['What is the capital of France?','Why can’t you use my Gmail?','How do I connect Gmail?','Can you use Gmail?','What is the best way to use Shopify?','What is my Shop Pay daily limit?','Where is my Shop Pay order?',
+    'can you check my facebook messages','Check my Gmail inbox','Check my Dropbox files','Check my connected Trello account','Schedule a meeting in Google Calendar','Send a message in Slack',
+    'Review my GitHub pull requests','Buy headphones with Shop Pay','Browse the merchant website and fill the form','Remind me every day to take a break','What did I get in my inbox today?',
+    'Build a summary of my unread emails']) {
     const routed=setup(),routedEvents=[];let modelCalls=0;
     const coordinator=createCoordinator({tasks:routed.runtime,model:async()=>{modelCalls++;return {text:'Direct answer'};},schemas:[],tools:{},azure:routed.d.azure,
       store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',ensureCredit:async()=>{},logUsage:async()=>{},
@@ -172,6 +168,8 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   m.answers.push({functionCalls:[{name:'report_milestone',args:{summary:'Found the answer',evidenceIds:[ref]}}]});await m.runtime.step('a',mid);
   m.answers.push({functionCalls:[{name:'report_milestone',args:{summary:'Duplicate evidence',evidenceIds:[ref]}},{name:'report_milestone',args:{summary:'Invented',evidenceIds:['fake']}}]});await m.runtime.step('a',mid);
   assert.equal(m.rows.get(mid).state.events.length,1);
+  const update=m.rows.get(mid).state.events[0];
+  assert.deepEqual([update.type,update.phase,update.text],['message','task_update','Found the answer'],'an update reaches the chat as the agent\'s message');
   await m.runtime.step('a',mid);assert.equal(m.rows.get(mid).state.status,'completed');
   assert.equal(m.rows.get(mid).state.events.at(-1).phase,'task_answer');
   const failedEvidence=setup();failedEvidence.d.tools.lookup={run:async()=>[{ok:false,error:'Could not fetch'}]};
@@ -408,5 +406,170 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   const autoRow=await capped.runtime.create({userId:'a',chatId:'chat',requestKey:'auto',instructions:'Check news',context:{automation:true,maxRounds:3}});
   const cappedState=await runToEnd(capped,autoRow.id);
   assert.equal(cappedState.status,'partial');assert.equal(cappedState.result,'Automation summary.');
-  console.log('chat tasks: concurrent replies, steering, exact approvals, recovery, owner scoping, milestones, stop, no round cap, stall guard: ok');
+
+  // A long task keeps the owner posted. Once they have heard nothing for a while and there
+  // are new results, an update is written from those results while the worker plans its
+  // next step; the worker's own prompt stays as it was.
+  const quiet=setup(),progressCalls=[];
+  quiet.d.tools.lookup={run:async a=>({finding:`Three flights under 2000 kr ${a.q || ''}`})};
+  quiet.d.progress=async req=>{progressCalls.push(req);return req.lastUpdate?'Two of them include a checked bag.':'Found three flights under 2000 kr so far.';};
+  const advance=id=>quiet.runtime.step('a',id);
+  const quietId=await planned(quiet,'lookup');await advance(quietId);
+  quiet.answers.push({functionCalls:[{name:'lookup',args:{q:1}}]});await advance(quietId);
+  assert.equal(progressCalls.length,0,'no update right after the start');
+  const quietRow=await quiet.create();quiet.rows.get(quietRow.id).state.startedAt=Date.now()-30000;
+  quiet.answers.push({functionCalls:[{name:'lookup',args:{}}]});await advance(quietRow.id);
+  assert.equal(progressCalls.length,0,'no update without new results');
+  await advance(quietRow.id);
+  quiet.answers.push({functionCalls:[{name:'lookup',args:{q:2}}]});await advance(quietRow.id);
+  assert.equal(progressCalls.length,1,'a quiet task with new results sends an update');
+  assert.equal(progressCalls[0].request,'Research the topic');
+  assert.match(progressCalls[0].results[0].text,/Three flights under 2000 kr/);
+  assert.deepEqual(quiet.rows.get(quietRow.id).state.events.filter(e=>e.phase==='task_update').map(e=>e.text),['Found three flights under 2000 kr so far.']);
+  assert.equal(quiet.rows.get(quietRow.id).state.summary,'Found three flights under 2000 kr so far.','the chat sees the latest update');
+  assert.ok(!quiet.calls.filter(c=>c.model).some(c=>/heard from you|update to the owner/.test(c.model.prompt)),'the worker prompt is unchanged');
+  // The next update waits for a long stretch and covers only results since the last one.
+  await advance(quietRow.id);
+  quiet.rows.get(quietRow.id).state.lastUpdateAt=Date.now()-60000;
+  quiet.answers.push({functionCalls:[{name:'lookup',args:{q:3}}]});await advance(quietRow.id);
+  assert.equal(progressCalls.length,1,'no second update within 90 seconds');
+  await advance(quietRow.id);
+  quiet.rows.get(quietRow.id).state.lastUpdateAt=Date.now()-100000;
+  quiet.answers.push({functionCalls:[{name:'lookup',args:{q:4}}]});await advance(quietRow.id);
+  assert.equal(progressCalls.length,2);
+  assert.equal(progressCalls[1].lastUpdate,'Found three flights under 2000 kr so far.');
+  assert.deepEqual(progressCalls[1].results.map(o=>o.text.match(/kr (\d)/)?.[1]),['2','3']);
+  // An update written as the task finishes is not sent: the answer arrives instead.
+  await advance(quietRow.id);
+  quiet.rows.get(quietRow.id).state.lastUpdateAt=Date.now()-100000;
+  await advance(quietRow.id);
+  assert.equal(progressCalls.length,3);
+  assert.equal(quiet.rows.get(quietRow.id).state.status,'completed');
+  assert.deepEqual(quiet.rows.get(quietRow.id).state.events.filter(e=>e.phase==='task_update').map(e=>e.text),['Found three flights under 2000 kr so far.','Two of them include a checked bag.']);
+  // Automations post no updates to the chat.
+  const autoQuiet=await quiet.runtime.create({userId:'a',chatId:'chat',requestKey:'auto-quiet',instructions:'Check news',context:{automation:true}});
+  quiet.rows.get(autoQuiet.id).state.startedAt=Date.now()-60000;
+  quiet.answers.push({functionCalls:[{name:'lookup',args:{}}]});
+  for(let i=0;i<3;i++) await advance(autoQuiet.id);
+  assert.equal(quiet.rows.get(autoQuiet.id).state.observations.length,1);
+  assert.equal(progressCalls.length,3,'automations send no updates');
+  // Nothing worth telling yet: no message, and the next look waits and reads only newer results.
+  const empty=setup(),emptyCalls=[];empty.d.tools.lookup=quiet.d.tools.lookup;empty.d.progress=async req=>{emptyCalls.push(req);return '';};
+  const emptyRow=await empty.create();empty.rows.get(emptyRow.id).state.startedAt=Date.now()-30000;
+  empty.answers.push({functionCalls:[{name:'lookup',args:{}}]},{functionCalls:[{name:'lookup',args:{q:2}}]},{functionCalls:[{name:'lookup',args:{q:3}}]});
+  for(let i=0;i<6;i++) await empty.runtime.step('a',emptyRow.id);
+  assert.equal(emptyCalls.length,1,'an empty look is not repeated at once');
+  empty.rows.get(emptyRow.id).state.updateCheckedAt=Date.now()-20000;
+  await empty.runtime.step('a',emptyRow.id);
+  assert.deepEqual(emptyCalls[1].results.map(o=>o.text.match(/kr (\d)/)?.[1]),['2','3']);
+  assert.equal(empty.rows.get(emptyRow.id).state.events.filter(e=>e.phase==='task_update').length,0);
+  // A failed update is simply not sent; the task goes on.
+  const flaky=setup();flaky.d.tools.lookup=quiet.d.tools.lookup;flaky.d.progress=async()=>{throw Error('provider down');};
+  const flakyRow=await flaky.create();flaky.rows.get(flakyRow.id).state.startedAt=Date.now()-30000;
+  flaky.answers.push({functionCalls:[{name:'lookup',args:{}}]},{functionCalls:[{name:'lookup',args:{q:2}}]});
+  for(let i=0;i<5;i++) await flaky.runtime.step('a',flakyRow.id);
+  assert.equal(flaky.rows.get(flakyRow.id).state.status,'completed');
+  assert.equal(flaky.rows.get(flakyRow.id).state.events.filter(e=>e.phase==='task_update').length,0);
+
+  // A started task is confirmed in words written for the request, not a fixed sentence.
+  const ackBase=(h,extra)=>({tasks:h.runtime,schemas:[],tools:{},azure:h.d.azure,store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',
+    ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:h.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],...extra});
+  const acks=[];let ackModelCalls=0;
+  const writeAck=async({prompt,title})=>{acks.push({prompt,title});return 'Building your tic tac toe game now.';};
+  const directAck=setup(),directEvents=[];
+  await createCoordinator(ackBase(directAck,{model:async()=>{ackModelCalls++;return {text:'x'};},acknowledge:writeAck}))
+    .run({userId:'a',chatId:'chat',requestId:'ack-direct',prompt:'Make me a tic tac toe game',onEvent:e=>directEvents.push(e)});
+  assert.equal(ackModelCalls,0,'a direct task still needs no coordinator call');
+  assert.deepEqual(acks[0],{prompt:'Make me a tic tac toe game',title:'Make me a tic tac toe game'});
+  assert.equal(directEvents.find(e=>e.type==='message').text,'Building your tic tac toe game now.');
+  assert.ok(directEvents.findIndex(e=>e.type==='task')<directEvents.findIndex(e=>e.type==='message'),'the task starts before its confirmation is written');
+  const failedAck=setup(),failedEvents=[];
+  await createCoordinator(ackBase(failedAck,{model:async()=>({text:'x'}),acknowledge:async()=>{throw Error('provider down');}}))
+    .run({userId:'a',chatId:'chat',requestId:'ack-failed',prompt:'Make me a tic tac toe game',onEvent:e=>failedEvents.push(e)});
+  assert.ok(failedEvents.find(e=>e.type==='message').text.length>0,'a failed confirmation still gets a short reply');
+  assert.doesNotMatch(failedEvents.find(e=>e.type==='message').text,/keep asking questions/);
+  // A task the chat model starts is confirmed the same way, for the task it started.
+  const chatAck=setup(),chatAckEvents=[];acks.length=0;
+  await createCoordinator(ackBase(chatAck,{model:async()=>({functionCalls:[{name:'delegate_task',args:{title:'Lisbon hotels',instructions:'Find hotels'}}]}),acknowledge:writeAck}))
+    .run({userId:'a',chatId:'chat',requestId:'ack-chat',prompt:'Find me a hotel in Lisbon for next weekend',onEvent:e=>chatAckEvents.push(e)});
+  assert.deepEqual(acks,[{prompt:'Find me a hotel in Lisbon for next weekend',title:'Lisbon hotels'}]);
+  assert.equal(chatAckEvents.find(e=>e.type==='message').text,'Building your tic tac toe game now.');
+  // Steering keeps its own reply and needs no confirmation call.
+  acks.length=0;const steerEvents=[];
+  const steerable=[...chatAck.rows.values()].at(-1);
+  await createCoordinator(ackBase(chatAck,{model:async()=>({functionCalls:[{name:'steer_task',args:{taskId:steerable.id,version:1,instruction:'Only Alfama'}}]}),acknowledge:writeAck}))
+    .run({userId:'a',chatId:'chat',requestId:'ack-steer',prompt:'Only Alfama please',onEvent:e=>steerEvents.push(e)});
+  assert.equal(acks.length,0);
+  assert.match(steerEvents.find(e=>e.type==='message').text,/added your changes/);
+
+  // A task that will use the browser starts the VM while its first plan is written, once;
+  // research that reads pages through search never starts it.
+  const warm=setup(),warmed=[];
+  warm.d.azure.prewarm=async userId=>{warmed.push(userId);return {started:true};};
+  const browserSchema=name=>({name,description:name,parameters:{type:'object',properties:{}}});
+  warm.d.schemas=['browser_open','web_search'].map(browserSchema);
+  warm.d.tools.web_search={run:async()=>({text:'Opening hours 17-23'})};
+  warm.answers.push({functionCalls:[{name:'web_search',args:{query:'Pizzeria Bella'}}]},{text:'Booked.'});
+  const booking=await warm.runtime.create({userId:'a',chatId:'chat',requestKey:'book',instructions:'Book a table at Pizzeria Bella for 4 at 7pm',history:[]});
+  for(let i=0;i<4;i++) await warm.runtime.step('a',booking.id);
+  assert.equal(warm.rows.get(booking.id).state.status,'completed');
+  assert.deepEqual(warmed,['a'],'the VM is started once, during the first plan');
+  const reader=setup(),researched=[];
+  reader.d.azure.prewarm=async userId=>{researched.push(userId);return {started:true};};
+  reader.d.schemas=warm.d.schemas;
+  const plain=await reader.create();await reader.runtime.step('a',plain.id);
+  assert.deepEqual(researched,[],'research does not start the VM');
+  // Reads planned in one round run at once, in one step: three searches take the time of one.
+  const par=setup();let inFlight=0,peak=0;
+  par.d.tools.web_search={run:async a=>{inFlight++;peak=Math.max(peak,inFlight);await new Promise(r=>setTimeout(r,40));inFlight--;return [{url:`search:${a.query}`,ok:true,text:`found ${a.query}`}];}};
+  par.d.tools.shell={run:async()=>({stdout:'ran'})};
+  par.answers.push({functionCalls:[{name:'web_search',args:{query:'a'}},{name:'web_search',args:{query:'b'}},{name:'web_search',args:{query:'c'}}]},{text:'Done.'});
+  const parRow=await par.create();
+  await par.runtime.step('a',parRow.id);
+  assert.equal(par.rows.get(parRow.id).state.pending.length,3);
+  await par.runtime.step('a',parRow.id);
+  const parState=par.rows.get(parRow.id).state;
+  assert.equal(peak,3,'the three searches ran at the same time');
+  assert.deepEqual(parState.pending,[]);
+  assert.deepEqual(parState.observations.map(o=>o.text.split('\n')[0]),['[{"url":"search:a","ok":true,"text":"found a"}]','[{"url":"search:b","ok":true,"text":"found b"}]','[{"url":"search:c","ok":true,"text":"found c"}]']);
+  assert.equal(parState.inflight,null);
+  // One advance request runs the silent steps back to back (plan, searches, plan) and returns
+  // with the answer, instead of one request per step.
+  const adv=setup();adv.d.tools.web_search=par.d.tools.web_search;
+  adv.answers.push({functionCalls:[{name:'web_search',args:{query:'x'}},{name:'web_search',args:{query:'y'}}]},{text:'Here is what I found.'});
+  const advRow=await adv.create();
+  const advanced=await adv.runtime.advance('a',advRow.id,{after:0});
+  assert.equal(advanced.state.status,'completed','plan, parallel searches and answer in one request');
+  assert.equal(advanced.state.result,'Here is what I found.');
+  // It returns as soon as the owner has something new to see.
+  const shown=setup();shown.d.tools.shell={run:async()=>({stdout:'ok'})};
+  shown.answers.push({functionCalls:[{name:'shell',args:{command:'ls'}}]},{functionCalls:[{name:'shell',args:{command:'pwd'}}]},{text:'Done.'});
+  const shownRow=await shown.create();
+  const firstAdvance=await shown.runtime.advance('a',shownRow.id,{after:0});
+  assert.equal(firstAdvance.state.status,'running');
+  assert.equal(firstAdvance.state.observations.length,1,'stops after the step that showed the computer card');
+  assert.equal(shown.calls.filter(c=>c.model).length,1,'the next plan waits for the next request');
+  // A plan with an action in it keeps one call per step.
+  const mixed=setup();mixed.d.tools.web_search=par.d.tools.web_search;mixed.d.tools.shell=par.d.tools.shell;
+  mixed.answers.push({functionCalls:[{name:'shell',args:{command:'ls'}},{name:'web_search',args:{query:'d'}}]});
+  const mixedRow=await mixed.create();
+  await mixed.runtime.step('a',mixedRow.id);await mixed.runtime.step('a',mixedRow.id);
+  assert.deepEqual(mixed.rows.get(mixedRow.id).state.observations.map(o=>o.name),['shell']);
+  // Reasoning effort follows the job: research thinks at medium, building and acting on a site
+  // at high, and the round after a failed step at high.
+  const {workerEffort}=require('../server/agents/task-runtime');
+  const effortState={version:1,context:{},observations:[{name:'web_search',ok:true,version:1}]};
+  assert.equal(workerEffort({state:effortState,tools:['web_search','present']}),'medium');
+  assert.equal(workerEffort({state:effortState,tools:['web_search','build_page']}),'high');
+  assert.equal(workerEffort({state:effortState,tools:['browser_open']}),'high');
+  assert.equal(workerEffort({state:{...effortState,observations:[{name:'web_search',ok:false,version:1}]},tools:['web_search']}),'high');
+  process.env.AZURE_FOUNDRY_WORKER_EFFORT='xhigh';
+  assert.equal(workerEffort({state:effortState,tools:['web_search']}),'xhigh','one effort for every task when set');
+  delete process.env.AZURE_FOUNDRY_WORKER_EFFORT;
+  assert.equal(warm.calls.find(c=>c.model)?.model.reasoningEffort,'high','a booking plans at high effort');
+  // The owner's words decide, not the brief the chat wrote ("do not book anything").
+  const weekend=await reader.runtime.create({userId:'a',chatId:'chat',requestKey:'plan',instructions:'Plan the weekend with times and places. Do not book anything.',context:{originalPrompt:'Plan a 2 day trip to Gothenburg'},history:[]});
+  await reader.runtime.step('a',weekend.id);
+  assert.deepEqual(researched,[],'a brief that says not to book does not start the VM');
+  console.log('chat tasks: concurrent replies, steering, exact approvals, recovery, owner scoping, milestones, updates, confirmations, VM prewarm, stop, no round cap, stall guard: ok');
 })().catch(e=>{console.error(e);process.exitCode=1;});

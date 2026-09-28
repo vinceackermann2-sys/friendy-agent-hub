@@ -138,6 +138,9 @@ function approvalView(name, args = {}, detail) {
   switch (name) {
     case 'mail_send': return emailView('mailbox', args);
     case 'composio_execute': return appActionView(args.tool, args.args || {});
+    // The owner's own API or MCP server: its name and the request, from connectors.approvalDetail.
+    case 'connector_call': return { kind: 'app_action', app: '', appName: str(parsed.appName || args.connector, 80) || 'your connector', action: str(parsed.action, 120) || 'Use',
+      fields: (Array.isArray(parsed.fields) ? parsed.fields : []).slice(0, 10).map((f) => ({ k: str(f?.k, 80), v: str(f?.v, 600) })) };
     case 'shop_purchase': {
       const items = (Array.isArray(parsed.items) ? parsed.items : []).slice(0, 8).map((item) => ({
         title: str(item.title, 140) || 'Item', quantity: Number(item.quantity) || 1, price: money(item.price, parsed.currency) }));
@@ -166,6 +169,11 @@ function approvalView(name, args = {}, detail) {
         : trigger.type === 'app' ? `When ${toolkitName(trigger.app)} has new activity` : trigger.type === 'subagent' ? 'After another automation runs' : '';
       return { kind: 'automation', name: str(args.name, 120), prompt: str(args.prompt, 600), when };
     }
+    // Money the owner approves: the exact amount and recipient from the approved detail, never raw JSON.
+    case 'wallet_send': return { kind: 'money', action: 'send', amount: money(parsed.amount, parsed.currency), to: str(parsed.recipient, 200), note: str(parsed.fees, 200) };
+    case 'wallet_receive': return { kind: 'money', action: 'link', amount: money(parsed.amount, parsed.currency), title: str(parsed.title, 120) };
+    case 'wallet_set_limit': return { kind: 'money', action: 'limit', amount: money(parsed.dailyLimitUsd, parsed.currency) };
+    case 'wallet_pause': return { kind: 'money', action: parsed.paused === false ? 'resume' : 'pause' };
     default: return { kind: 'generic' };
   }
 }
@@ -181,6 +189,7 @@ const HEADLINES = {
   search: (v) => (v.query ? 'Search the web' : 'Read these websites'),
   web_action: (v) => (v.surface === 'computer' ? 'Use the computer' : 'Interact with this website'),
   automation: () => 'Create this automation',
+  money: (v) => (v.action === 'send' ? `Send ${v.amount}${v.to ? ` to ${v.to}` : ''}` : v.action === 'link' ? `Create a ${v.amount} payment link` : v.action === 'limit' ? `Set your daily card limit to ${v.amount}` : v.action === 'resume' ? 'Resume card spending' : 'Pause card spending'),
 };
 function approvalCard(name, args = {}, detail = '', tool = {}, key) {
   if (name === 'ask_user') return { ...questionArgs(args), status: 'pending' };

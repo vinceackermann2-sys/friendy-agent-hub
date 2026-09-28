@@ -1,7 +1,8 @@
 const store = require('../store');
+const connectors = require('../connectors');
 
 const WEB_TOOLS = new Set(['web_search','browser_open','browser_action','browser_submit','browser_fill_secret','computer_screenshot','computer_action','computer_submit','computer_fill_secret']);
-const CONNECTOR_TOOLS = new Set(['composio_apps','composio_tools','composio_execute']);
+const CONNECTOR_TOOLS = new Set(['composio_apps','composio_tools','composio_execute','connector_tools','connector_call']);
 const READ_PREFIX = /(?:^|_)(?:LIST|GET|FETCH|SEARCH|READ|DOWNLOAD|EXPORT|LOOKUP|FIND)(?:_|$)/;
 const WRITE_VERB = /(?:^|_)(?:SEND|CREATE|UPDATE|DELETE|POST|WRITE|INSERT|REMOVE|TRASH|ARCHIVE|MODIFY|REPLY|FORWARD|UPLOAD|PUBLISH|INVITE|EDIT|PATCH|MOVE|RENAME|SHARE|MERGE|APPROVE|CANCEL|SCHEDULE|BOOK|PAY|CHARGE|TRANSFER|SET)(?:_|$)/;
 function hostOf(url){try {const u=new URL(String(url || ''));return /^https?:$/.test(u.protocol)?u.hostname.toLowerCase():'';}catch{return '';}}
@@ -11,6 +12,12 @@ async function permissionDecision(userId, name, args = {}, tool = {}) {
   const p=await store.getAgentPermissions(userId);
   if(CONNECTOR_TOOLS.has(name)){
     if(p.connectors==='always_ask')return {required:true,detail:`Connected app action: ${name} ${JSON.stringify(args).slice(0,1400)}`};
+    // The owner's own APIs and MCP servers: GET and read-only tools run when asked; every
+    // other method and tool asks, unknown tools included.
+    if(name==='connector_call'){
+      const kind=await connectors.callKind(userId,args).catch(()=>'write');
+      return {required:kind!=='read'};
+    }
     if(name!=='composio_execute')return {required:false};
     const slug=String(args.tool || '').toUpperCase();
     const read=connectorRead(slug);

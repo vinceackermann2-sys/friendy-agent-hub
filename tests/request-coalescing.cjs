@@ -11,6 +11,7 @@ assert.ok(start >= 0 && end > start);
 (async () => {
   let appCalls = 0;
   let optionCalls = 0;
+  let customCalls = 0;
   const state = { view: 'apps', composioApps: [], composioLoading: false, triggerOptions: {} };
   const context = vm.createContext({
     Date, Promise, state,
@@ -18,6 +19,7 @@ assert.ok(start >= 0 && end > start);
     $: () => ({}),
     save: () => {},
     toast: () => {},
+    refreshCustomConnectors: () => { customCalls++; return Promise.resolve(); },
     paintApps: () => {
       if (!state.composioApps.length && !state.composioLoading) context.refreshComposioApps();
     },
@@ -33,9 +35,11 @@ assert.ok(start >= 0 && end > start);
   await Promise.resolve();
   assert.equal(appCalls, 1, 'empty Apps page must not refetch on every paint');
   assert.equal(optionCalls, 0, 'ordinary Apps load must not refetch trigger options');
+  assert.equal(customCalls, 1, "the owner's own connectors load with the apps, not on every paint");
   await context.refreshComposioApps(true);
   assert.equal(appCalls, 2, 'manual Refresh must still fetch');
   assert.equal(optionCalls, 1, 'manual Refresh updates app triggers');
+  assert.equal(customCalls, 2, "manual Refresh reloads the owner's own connectors too");
 
   const syncStart = app.indexOf('let backendSyncPending = null;');
   const syncEnd = app.indexOf('let subAgentsPending = null;', syncStart);

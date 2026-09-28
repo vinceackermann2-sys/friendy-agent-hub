@@ -4,6 +4,13 @@ const crypto = require('crypto');
 // the owner's Updates chat (see task-runtime.js); it is a permission, not a tool.
 const UPKEEP_DEFINITIONS = Object.freeze([
   {
+    kind:'personal_email', name:'Personal check-in', intervalMinutes:2880, scheduleLabel:'Every other day · a personal email from your agent',
+    // It emails quotes from the owner's conversations, so it stays off until they turn it on.
+    optIn:true,
+    description:'Your agent emails your account address with one thoughtful observation from recent conversations. Off until you turn it on; skips when there is nothing meaningful to share.', allowedTools:[], maxRounds:2,
+    prompt:'Write a short personal email from the owner’s agent using ONLY the supplied recent user-authored excerpts. Notice one specific goal, interest, effort, or milestone and offer a thoughtful, useful next step or encouragement grounded in what the owner actually said. Match the owner’s language. Be warm and concrete, never generic flattery, invented progress, intrusive speculation, guilt, or claims of intimacy. Do not mention secrets, credentials, medical, financial, sexual, or other sensitive details. Avoid repeating previous check-ins. Return ONLY valid JSON: {"subject":"short personal subject","body":"40–100 words including a short exact quote from the owner’s excerpt","evidence":"that exact quote"}. The evidence must be at least 12 characters and appear verbatim in both the body and a supplied excerpt. If no meaningful, non-sensitive observation is supported, return {"skip":true}. Do not send email or claim it was sent; the app handles delivery to the account owner only.',
+  },
+  {
     kind:'memory', name:'Memory upkeep', intervalMinutes:60, scheduleLabel:'Hourly · when there is new signal',
     description:'Consolidates durable facts and corrections from recent conversations without reprocessing unchanged chats.', allowedTools:['memory_search','memory_get','memory_write','memory_update'],
     prompt:'Review the supplied recent user-authored conversation excerpts for durable facts, preferences, commitments, and corrections. Search memory before writing. Use memory_write for a genuinely new durable fact and memory_update when a supplied correction clearly supersedes an existing memory. Never store secrets, guesses, assistant claims, or passing chatter. If nothing should change, finish with exactly “No memory changes needed.” Keep the final result under 120 words.',
@@ -53,9 +60,9 @@ function upkeepId(userId, kind) {
 function upkeepRows(userId, now = Date.now()) {
   return UPKEEP_DEFINITIONS.map((item, index) => ({
     id:upkeepId(userId,item.kind), userId, chatId:`upkeep_${item.kind}_${crypto.createHash('md5').update(String(userId)).digest('hex').slice(0,12)}`,
-    name:item.name, prompt:item.prompt, description:item.description, systemKind:item.kind, enabled:true,
+    name:item.name, prompt:item.prompt, description:item.description, systemKind:item.kind, enabled:!item.optIn,
     trigger:{type:'schedule',intervalMinutes:item.intervalMinutes,label:item.scheduleLabel},
-    nextRunAt:new Date(now + (index + 1) * 60_000).toISOString(),
+    nextRunAt:new Date(now + (item.kind === 'personal_email' ? item.intervalMinutes * 60_000 : (index + 1) * 60_000)).toISOString(),
   }));
 }
 

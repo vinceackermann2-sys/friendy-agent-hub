@@ -3,6 +3,7 @@
    may read its inbox; every send waits for owner approval. */
 const crypto = require('crypto');
 const store = require('./store');
+const auth = require('./auth');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_SEND_PER_DAY = 40;
@@ -91,7 +92,12 @@ function renderBodyHtml(bodyText) {
     .join('');
 }
 
-function brandEmailHtml({ bodyText, agentName, agentAddress } = {}) {
+function mascotUrl(color) {
+  const safe = ['lingon','blueberry','moss','sun','lavender','rose','charcoal'].includes(color) ? color : 'lingon';
+  return `https://belna.se/lingon/mascot/email-${safe}.png`;
+}
+
+function brandEmailHtml({ bodyText, agentName, agentAddress, agentColor, personalCheckIn = false } = {}) {
   const name = escapeHtml(String(agentName || '').trim() || 'Your agent');
   const address = escapeHtml(String(agentAddress || '').trim());
   const content = renderBodyHtml(bodyText);
@@ -125,7 +131,8 @@ function brandEmailHtml({ bodyText, agentName, agentAddress } = {}) {
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                 <tr>
                   <td style="padding-bottom:26px;border-bottom:1px solid #EFEFF1;">
-                    <div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#9A9CA3;">Message from a Belna agent</div>
+                    <img src="${mascotUrl(agentColor)}" width="64" height="64" alt="${name}" style="display:block;border:0;margin-bottom:12px;width:64px;height:64px;">
+                    <div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#9A9CA3;">${personalCheckIn ? 'A little note, just for you' : 'Message from a Belna agent'}</div>
                     <div style="margin-top:5px;font-size:21px;line-height:28px;font-weight:750;letter-spacing:-0.4px;color:#17181A;">${name}</div>
                     ${address ? `<div style="margin-top:3px;font-size:13px;line-height:19px;color:#6E7076;">${address}</div>` : ''}
                   </td>
@@ -139,6 +146,7 @@ function brandEmailHtml({ bodyText, agentName, agentAddress } = {}) {
           <tr>
             <td style="padding:18px 4px 0;font-size:12px;line-height:18px;color:#9A9CA3;">
               Sent by ${name}, a Belna agent. Replies go directly to this agent's mailbox.<br>
+              ${personalCheckIn ? '<a href="https://belna.se/app" style="color:#6E7076;">Pause personal check-ins in Automations</a><br>' : ''}
               <a href="https://belna.se" style="color:#6E7076;text-decoration:none;">belna.se</a> · Swedish safe AI agents
             </td>
           </tr>
@@ -278,7 +286,7 @@ async function saveDraft(userId, input) {
   }));
 }
 
-async function rfetch(path, { method = 'GET', body } = {}) {
+async function rfetch(path, { method = 'GET', body, idempotencyKey } = {}) {
   if (!configured()) {
     const e = new Error('Agent mail is not configured (RESEND_API_KEY).');
     e.code = 'NO_RESEND';
@@ -286,7 +294,7 @@ async function rfetch(path, { method = 'GET', body } = {}) {
   }
   const r = await fetch('https://api.resend.com' + path, {
     method,
-    headers: { Authorization: 'Bearer ' + apiKey(), 'Content-Type': 'application/json' },
+    headers: { Authorization: 'Bearer ' + apiKey(), 'Content-Type': 'application/json', ...(idempotencyKey ? {'Idempotency-Key':idempotencyKey} : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await r.text();
@@ -327,6 +335,7 @@ async function send(userId, input) {
     throw e;
   }
   const from = (box.displayName ? box.displayName + ' ' : '') + '<' + box.address + '>';
+  const context = await store.getAgentContext(userId);
   const headers = {};
   if (input.inReplyTo) {
     headers['In-Reply-To'] = String(input.inReplyTo);
@@ -334,12 +343,13 @@ async function send(userId, input) {
   }
   const sent = await rfetch('/emails', {
     method: 'POST',
+    idempotencyKey: input.idempotencyKey,
     body: {
       from,
       to,
       subject,
       text: bodyText,
-      html: brandEmailHtml({ bodyText, agentName: box.displayName, agentAddress: box.address }),
+      html: brandEmailHtml({ bodyText, agentName: box.displayName, agentAddress: box.address, agentColor:context.agent?.color, personalCheckIn:input.personalCheckIn === true }),
       headers: Object.keys(headers).length ? headers : undefined,
     },
   });
@@ -360,6 +370,25 @@ async function send(userId, input) {
   });
   if (input.draftId) await store.deleteMailDraft(userId, input.draftId).catch(() => {});
   return publicMessage(row, { full: true });
+}
+
+// The model cannot choose a recipient. Only a still-enabled built-in routine
+// may deliver to the owner's verified account email, never a contact or memory.
+async function sendPersonalCheckIn(userId, { subAgentId, runId, subject, body }) {
+  const routine = await store.getSubAgent(userId, subAgentId);
+  if (routine?.systemKind !== 'personal_email' || !routine.enabled) return {skipped:true};
+  const run = await store.getAutomationRunByDedupeKey(userId, runId);
+  if (!run || (run.sub_agent_id || run.subAgentId) !== subAgentId || run.status !== 'running') return {skipped:true};
+  // Resend deduplicates for 24 hours. Never replay an old pending delivery
+  // after that window, when its prior outcome can no longer be guaranteed.
+  if (Date.now() - Date.parse(run.started_at || run.startedAt || 0) > 23 * 60 * 60_000) throw new Error('Personal check-in expired; no email resent.');
+  const client = auth.adminClient();
+  if (!client) throw new Error('Personal check-ins need a verified account email.');
+  const {data, error} = await client.auth.admin.getUserById(userId);
+  if (error || !data?.user?.email || !data.user.email_confirmed_at) throw new Error('Personal check-ins need a verified account email.');
+  const context = await store.getAgentContext(userId);
+  return send(userId, {to:data.user.email, subject, body, agentName:context.agent.name, confirm:true,
+    personalCheckIn:true, idempotencyKey:`personal-check-in/${run.id}`});
 }
 
 function verifyWebhook(raw, headers) {
@@ -466,6 +495,8 @@ module.exports = {
   parseRecipients,
   parseAddressList,
   brandEmailHtml,
+  mascotUrl,
+  sendPersonalCheckIn,
   publicMailbox,
   publicMessage,
   ensureMailbox,

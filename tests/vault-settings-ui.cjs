@@ -34,7 +34,7 @@ const { chromium } = require('playwright');
     await page.goto('http://127.0.0.1:8080/app');
     await page.locator('.vault-add-form').waitFor();
     assert.equal(await page.locator('.vault-hero, .vault-steps').count(),0,'intro block is gone');
-    assert.equal(await page.locator('.vault-kind').count(),3);
+    assert.equal(await page.locator('.vault-kind').count(),5,'login, API key, API connection, MCP server and other');
     assert.equal(await page.locator('[data-act="vault-kind"][data-k="card"]').count(),0);
     assert.equal(await page.locator('.vault-payment, [data-pm], [data-act="save-merchant-card"]').count(),0,'no card details are collected in settings');
 

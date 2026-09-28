@@ -19,6 +19,26 @@ task's findings can require a second call. Delegation acknowledgement needs no
 extra model call. There is no separate router, idle question agent, or update
 model running in the background.
 
+Only plain worker jobs that need none of the owner's accounts (building
+something, running code, deep research) skip the coordinator call. Requests
+about the owner's accounts, messages, purchases or a website go through it, and
+it calls `composio_apps` first. That tool lists the connected apps, the apps
+that can be connected, and what a connection cannot do (for example, Facebook
+connects Pages only, not personal Messenger). When nothing covers the request,
+the agent says so and asks before it opens the site for the owner to sign in.
+
+It also lists, under `custom`, the owner's own connectors: remote MCP servers
+and REST APIs (`server/connectors.js`, table `custom_connectors`). The owner
+asks in chat and a task adds one with `connector_setup`: the worker finds the
+address and sign-in in the service's docs, and a chat card shows the owner
+where the key goes and takes it (Settings > Secrets has a manual form too).
+Workers see what one can do with `connector_tools` and use it with
+`connector_call`. Requests go from
+the server, not the VM, because the VM's job containers have no network. The
+credential stays in the vault and is added per request; results are scrubbed
+of it. GET requests and read-only MCP tools follow the connected-app read
+rule, and everything else asks first.
+
 If task storage is unavailable, ordinary chat continues with a direct answer.
 The coordinator withholds delegation and task-control tools for that request
 and logs the storage error, so it cannot claim background work was started.
@@ -27,7 +47,29 @@ and logs the storage error, so it cannot claim background work was started.
 reply has a separate request and cancellation scope, so asking a question does
 not cancel or replay task work. Workers use the existing tools, memory ranking,
 credit checks, response guards, approvals and per-user Azure VM. Opening the app
-does not warm compute. Task code gets a separate working directory and each
+does not warm compute. A task that will need the browser or shell (it signs in,
+books, fills in a form or runs code) starts the VM while its first plan is
+written (`azure.prewarm`). The start request is not awaited, and the usual idle
+window still stops a VM the task never uses. A step on a VM that is already
+running sends no restore command. A shell or code step is one Run Command, with
+no separate readiness check. `[vm] lease` logs record how long each phase of
+getting a VM took.
+
+On the hosted app (Realtime live view), a browser step goes to the live streamer
+already running on the VM instead of a new Run Command. The step is broadcast on
+the session's channel and signed with a per-channel key that only the server and
+that streamer hold (`cmdKey`). The streamer runs it in the browser it holds and
+writes the result to a private blob. Taking the step means creating its result
+blob first (`If-None-Match: *`). A server that hears nothing for 2.5 seconds
+creates that blob itself and runs the step as a Run Command, so a step never runs
+twice. Vault fills still go by Run Command. `[vm] browser step` logs show which
+way a step went. `tests/browser-steps.cjs` runs this on real Chrome.
+
+Tasks think at medium effort, or high when they build something, drive a
+website or purchase, or just had a step fail (`workerEffort`;
+`AZURE_FOUNDRY_WORKER_EFFORT` sets one level for all). Read-only calls planned
+in one round run at once. `/api/agent/tasks/advance` runs steps back to back
+until there is something new to show (at most 6 steps or 20 seconds). Task code gets a separate working directory and each
 task has a separate browser session on that VM.
 
 The database allows two worker steps per owner at once. It serializes task VM
@@ -51,8 +93,19 @@ or uncertain task action is never automatically replayed.
   its state is `partial`, with findings retained and a **Continue task** control.
   No wall-clock timer produces a progress card or a claimed completion.
 - Milestones must cite successful observations and pass duplicate-evidence
-  checks. Existing cards remain in chat. Model/context/tool/VM stage events do
-  not produce progress cards. Task and foreground results have separate IDs.
+  checks. Model/context/tool/VM stage events do not produce progress cards.
+  Task and foreground results have separate IDs.
+- A long chat task posts updates as the agent's own messages (subtasks,
+  automations and upkeep post none). When the owner has heard nothing for 20
+  seconds (90 after an update) and there are new results, a small call writes
+  one or two sentences from those results while the worker plans its next step,
+  so the task loses no time; it may find nothing worth telling yet. An update
+  written as the task finishes is dropped. Worker milestones post the same way.
+  The worker's prompt does not ask for updates: asked, it kept working after it
+  had the answer, or ignored the request.
+- A started task is confirmed in words written for the request, in the owner's
+  language, by one small call that sees only the owner's message and the task
+  title. It runs after the task has started, and falls back to a short reply.
 - Polls return metadata and unseen events, excluding private model state and
   previously delivered outputs. Earlier context remains readable on demand.
 - Three-dot typing appears immediately for a foreground request. Worker updates

@@ -86,15 +86,35 @@ const ctx = { trace: () => {} };
   assert.match(parsed.results[1].text, /^Plain text page/, 'redirects are followed');
   assert.match(parsed.results[2].text, /only exists after JavaScript/, 'a page without text is scraped by Firecrawl');
   assert.deepEqual(scrapes, ['https://app.example.se/'], 'pages with text cost no Firecrawl credits');
-  assert.equal(parsed.results[3].text, undefined, 'only the top three results are read');
-  assert.ok(!pageRequests.some((r) => r.url.includes('unread')));
+  assert.equal(parsed.results[3].text, undefined, 'a result that could not be read has no text');
+  assert.ok(pageRequests.some((r) => r.url.includes('unread')), 'the top five results are read');
   assert.ok(pageRequests.every((r) => r.lookup === sandbox.safeLookup), 'every page request resolves through the guard');
 
-  // The chat reply (quick) reads the top three results too, and never waits for a scrape.
+  // The chat reply (quick) reads the top five results too, and never waits for a scrape.
   pageRequests.length = 0; scrapes.length = 0;
   await TOOLS.web_search.run({ query: 'quick' }, { ...ctx, quick: true });
-  assert.deepEqual([...new Set(pageRequests.map((r) => new URL(r.url).hostname))].sort(), ['app.example.se', 'bibliotek.example.se', 'final.example.se', 'redirect.example.se']);
+  assert.deepEqual([...new Set(pageRequests.map((r) => new URL(r.url).hostname))].sort(), ['app.example.se', 'bibliotek.example.se', 'final.example.se', 'redirect.example.se', 'unread.example.se']);
   assert.equal(scrapes.length, 0);
+
+  // A page keeps the passage about the query, not its first characters: a weather page opens
+  // with menus and current conditions, and the forecast asked for came after the cut. Encoded
+  // app data and near-empty pages are skipped, and at most three pages keep text in a chat reply.
+  const menu = Array.from({ length: 60 }, (_, i) => `<li>City ${i} weather</li>`).join('');
+  pages.set('https://wx.example.se/', { status: 200, body: `<title>Weather Stockholm</title><ul>${menu}</ul><p>Current conditions 16 degrees.</p><p>Tomorrow, Monday 28 September: cloudy, highs of 17, winds from the south.</p><p>${'Other text about climate. '.repeat(80)}</p>` });
+  pages.set('https://encoded.example.se/', { status: 200, body: `<div data-x="${'%7B%22a%22%3A1%7D'.repeat(60)}"></div><p>${'%22b%22'.repeat(40)}</p>` });
+  pages.set('https://thin.example.se/', { status: 200, body: '<p>Enable JavaScript to see this page.</p>' });
+  const firecrawlReply = searchReply;
+  searchReply = () => new Response(JSON.stringify({ success: true, data: { web: [
+    { url: 'https://encoded.example.se/', title: 'App data' }, { url: 'https://thin.example.se/', title: 'Thin' }, { url: 'https://wx.example.se/', title: 'Weather' },
+    { url: 'https://bibliotek.example.se/', title: 'Library' }, { url: 'https://final.example.se/page', title: 'Plain' },
+  ] } }), { status: 200 });
+  const weather = JSON.parse((await TOOLS.web_search.run({ query: 'weather Stockholm tomorrow' }, { ...ctx, quick: true }))[0].text).results;
+  assert.match(weather[2].text, /Tomorrow, Monday 28 September: cloudy, highs of 17/, 'the forecast past the first 1500 characters is kept');
+  assert.ok(weather[2].text.length <= 1500);
+  assert.equal(weather[0].text, undefined, 'encoded app data is not text');
+  assert.equal(weather[1].text, undefined, 'a near-empty page is skipped');
+  assert.equal(weather.filter((r) => r.text).length, 3, 'at most three pages keep text in a chat reply');
+  searchReply = firecrawlReply;
 
   // render reads a page as a browser shows it through Firecrawl, without a direct read first,
   // so prices that load with JavaScript need no VM browser. Private addresses still never leave.

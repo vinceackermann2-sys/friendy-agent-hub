@@ -55,6 +55,16 @@ const live = open({ kind:'card', chatId:'chat-1', msgId:'browser-2' });
 assert.equal(live.live, 'live-123', 'a browser with a live session plays it');
 assert.equal(live.key, 'live:live-123', 'card updates never restart a live view');
 assert.match(live.html, /id="livecanvas"/);
+// A finished task's browser (its stream is gone, the VM stops) shows its last screen and says
+// so, instead of "connecting" and offering a takeover.
+const ended = { id:'browser-rt', kind:'card', at:6000, card:{ type:'browser', liveId:'rt:live-done', taskId:'t9', url:'https://example.net', status:'done', screenshot:'data:image/jpeg;base64,AA==' } };
+state.chats.push({ id:'chat-3', title:'Done', updatedAt:6000, messages:[ended], managedTasks:{ t9:{ status:'completed' } } });
+const endedBody = open({ kind:'card', chatId:'chat-3', msgId:'browser-rt' });
+assert.equal(endedBody.live, undefined, 'a finished task does not connect to its stream');
+assert.doesNotMatch(endedBody.html, /id="livecanvas"|takeover/);
+assert.match(endedBody.html, /last screen it showed/);
+assert.match(endedBody.html, /src="data:image\/jpeg;base64,AA=="/);
+state.chats.pop();
 const shot = open({ kind:'card', chatId:'chat-1', msgId:'browser-3' });
 assert.equal(shot.live, undefined);
 assert.match(shot.html, /src="data:image\/jpeg;base64,AA=="/, 'a browser without a live session shows its picture');

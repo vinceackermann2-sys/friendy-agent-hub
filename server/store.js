@@ -10,6 +10,8 @@ const crypto = require('crypto');
 const { upkeepRows } = require('./agents/upkeep');
 const { forbiddenPaymentSecret } = require('./agents/payment-safety');
 const { createClientStateStore } = require('./client-state');
+const { createCustomConnectorStore } = require('./custom-connector-store');
+const { createBelnaWalletStore } = require('./belna-wallet-store');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 
@@ -121,7 +123,7 @@ function agentPatch(agent) {
 function defaultAgentDocuments(agent = {}) {
   const a = cleanAgent(agent);
   return {
-    identity: `# Identity\n\nName: ${a.name}\nStyle: ${a.pers}`,
+    identity: `# Identity\n\nName: ${a.name}`,
     soul: '# Soul\n\nBe warm, candid, practical, and reliable. Adapt detail to the user and keep promises explicit.',
     user: '# User\n\nAdd stable preferences, background, language, and timezone here.',
     agents: '# Working agreement\n\nPlan substantial work, verify results with evidence, surface uncertainty, and ask before irreversible external actions.',
@@ -360,6 +362,7 @@ async function delSecret(userId, id) {
   }
   const d = loadLocal();
   d.secrets = d.secrets.filter((x) => !(x.id === id && x.userId === userId));
+  dropConnectorsForSecret(d, userId, id);
   saveLocal(d);
 }
 
@@ -802,7 +805,7 @@ async function ensureSystemSubAgents(userId) {
       for (const agent of wanted) {
         const row = {
           id:agent.id,user_id:userId,chat_id:agent.chatId,name:agent.name,prompt:agent.prompt,
-          description:agent.description,system_kind:agent.systemKind,enabled:true,
+          description:agent.description,system_kind:agent.systemKind,enabled:agent.enabled,
           trigger_type:'schedule',trigger_config:agent.trigger,next_run_at:agent.nextRunAt,
         };
         const { error:insertError } = await s.from('sub_agents').upsert(row,{onConflict:'id',ignoreDuplicates:true});
@@ -1977,9 +1980,12 @@ const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfil
 const { createPersonalStore } = require('./personal-store');
 const personalStore = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 const getTokenWallet = tokenWallet.tokenWallet;
+const belnaWalletStore = createBelnaWalletStore({ supa, ensureProfile });
 const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureProfile, listChatMessages });
+const { dropConnectorsForSecret, ...customConnectorStore } = createCustomConnectorStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
 module.exports = {
+  ...belnaWalletStore,
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
   listMemories, memoryStats, searchMemories, getMemory, addMemory, updateMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret, secretsEncrypted,
@@ -2001,6 +2007,7 @@ module.exports = {
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
   countUnreadMail, countOutboundMailToday, listMailDrafts, upsertMailDraft, deleteMailDraft,
   getConnectorPermissions, setConnectorPermissions,
+  ...customConnectorStore,
   getAgentPermissions, setAgentPermissions, rememberBrowserHost,
   getShopPayAccount, findShopPayByOAuthState, upsertShopPayAccount, deleteShopPayAccount,
   listShopPayOrders, getShopPayOrder, reserveShopPaySpend, updateShopPayOrder,

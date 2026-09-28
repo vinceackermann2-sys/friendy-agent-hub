@@ -7,6 +7,7 @@ const { MODEL_DEFAULT } = require('../foundry');
 const { checkPrompt, protectAgentResponse } = require('./guardrails');
 const { eventMatches, MAX_CHAIN_DEPTH, nextRunAt } = require('./triggers');
 const { definitionFor, prepareUpkeepSignal, nextUpkeepRun } = require('./upkeep');
+const mail = require('../mail');
 
 const MAX_AUTOMATION_STEPS = 48;
 
@@ -31,9 +32,21 @@ async function settleAutomationRun({ userId, subAgent, run, event, task, upkeepS
     return { runId:run.id, chatId:subAgent.chatId, taskId:task.id, status:'running' };
   }
   const failed = ['failed', 'needs_review', 'stopped'].includes(status);
-  const output = failed ? '' : protectAgentResponse(subAgent.prompt, text || (status === 'partial' ? 'The automation reached its work limit before it could finish.' : 'The automation finished without a reportable result.'));
-  const finalStatus = failed ? 'error' : status === 'partial' ? 'partial' : 'done';
-  const errorText = failed ? (text || `Automation task ended with status ${status}.`) : null;
+  let output = failed ? '' : protectAgentResponse(subAgent.prompt, text || (status === 'partial' ? 'The automation reached its work limit before it could finish.' : 'The automation finished without a reportable result.'));
+  let finalStatus = failed ? 'error' : status === 'partial' ? 'partial' : 'done';
+  let errorText = failed ? (text || `Automation task ended with status ${status}.`) : null;
+  if (!failed && subAgent.systemKind === 'personal_email') {
+    try {
+      if (status !== 'completed') throw new Error('Personal check-in was incomplete; no email sent.');
+      const note = parsePersonalCheckIn(text, event.payload?.recentUserMessages || []);
+      if (!note) { finalStatus='idle'; output='No meaningful new personal check-in to send.'; }
+      else {
+        const sent = await mail.sendPersonalCheckIn(userId, {subAgentId:subAgent.id,runId:event.dedupeKey, ...note});
+        output=sent.skipped ? 'Personal check-in paused; no email sent.' : `Emailed you: ${note.subject}\n\n${note.body}`;
+        if (sent.skipped) finalStatus='idle';
+      }
+    } catch (error) { finalStatus='error'; errorText=error.message; output=''; }
+  }
   if (!failed && !subAgent.systemKind) {
     const messages = await store.listChatMessages(userId, subAgent.chatId, 30);
     if (!messages.some(message => message.role === 'agent' && message.metadata?.taskId === task.id)) {
@@ -55,12 +68,24 @@ async function settleAutomationRun({ userId, subAgent, run, event, task, upkeepS
   return { runId:run.id, chatId:subAgent.chatId, taskId:task.id, output, status:finalStatus, ...(errorText ? {error:errorText} : {}) };
 }
 
+function parsePersonalCheckIn(text, messages) {
+  const note = JSON.parse(String(text || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, ''));
+  if (note?.skip === true) return null;
+  if (typeof note?.subject !== 'string' || !note.subject.trim() || note.subject.length > 120 || /[\r\n]/.test(note.subject) ||
+      typeof note.body !== 'string' || !note.body.trim() || note.body.length > 2000 ||
+      typeof note.evidence !== 'string' || note.evidence.trim().length < 12 ||
+      !note.body.includes(note.evidence) || !messages.some(message => String(message.text || '').includes(note.evidence))) {
+    throw new Error('Personal check-in lacked grounded evidence; no email sent.');
+  }
+  return {subject:note.subject.trim(),body:note.body.trim()};
+}
+
 function eventText(event) {
-  const safe = JSON.stringify(event?.payload || {}).slice(0, 4000);
+  const safe = JSON.stringify(event?.payload || {}).slice(0, event?.payload?.recentUserMessages ? 40000 : 4000);
   if (event?.type === 'schedule') return `Scheduled check-in at ${event.firedAt || new Date().toISOString()}.${safe && safe !== '{}' ? ` New signal: ${safe}` : ''}`;
   if (event?.type === 'app') return `Connected app event: ${event.app}:${event.event}. Payload: ${safe}`;
   if (event?.type === 'subagent') return `Sub-agent ${event.sourceAgentName || event.sourceAgentId} completed. Result: ${String(event.output || '').slice(0, 4000)}`;
-  return 'Manual run requested by the owner.';
+  return `Manual run requested by the owner.${event?.payload?.recentUserMessages ? ` Supplied conversation context: ${safe}` : ''}`;
 }
 
 async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, depth = 0 }) {
@@ -82,8 +107,15 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
       return {skipped:true,status:'idle',reason:upkeepSignal.reason,nextRunAt:next};
     }
     event={...event,signalAt:upkeepSignal.latestAt,payload:{...(event.payload || {}),recentUserMessages:upkeepSignal.messages}};
+    if (subAgent.systemKind === 'personal_email') {
+      const recent = await store.listMailMessages(userId, {folder:'sent',limit:5});
+      // Keep the entire note brief and its freshest evidence inside the task's
+      // 12,000-character instruction budget, without cutting JSON in half.
+      event.payload={recentUserMessages:upkeepSignal.messages.slice(-6),previousCheckIns:recent.slice(0,3).map(message=>({subject:message.subject,body:String(message.bodyText || '').slice(0,300)}))};
+    }
   }
   const dedupeKey = event.dedupeKey || `${subAgent.id}:${event.type}:${crypto.randomUUID()}`;
+  event = {...event, dedupeKey};
   const run = await store.beginAutomationRun(userId, subAgent.id, subAgent.chatId, dedupeKey, event);
   if (!run) {
     if (event.type === 'schedule') {
@@ -104,7 +136,9 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
     await Runner.ensureCredit(userId);
     const previous = subAgent.systemKind ? [] : await store.listChatMessages(userId, subAgent.chatId, 24);
     const triggerContext = eventText(event);
-    const userTurn = `[${triggerContext}]\n\nAutomation task: ${subAgent.prompt}`;
+    const userTurn = subAgent.systemKind === 'personal_email'
+      ? `Automation task: ${subAgent.prompt}\n\n[${triggerContext}]`
+      : `[${triggerContext}]\n\nAutomation task: ${subAgent.prompt}`;
     if(!subAgent.systemKind)await store.saveTurn(userId, subAgent.chatId, 'user', userTurn, {
       title: subAgent.name, source: 'automation', subAgentId: subAgent.id,
       metadata: { automationRunId: run.id, triggerType: event.type },
@@ -218,4 +252,4 @@ function startAutomationWorker() {
   return timer;
 }
 
-module.exports = { AUTOMATION_SYSTEM, dispatchAppEvent, executeSubAgent, startAutomationWorker, tick };
+module.exports = { AUTOMATION_SYSTEM, dispatchAppEvent, executeSubAgent, parsePersonalCheckIn, startAutomationWorker, tick };

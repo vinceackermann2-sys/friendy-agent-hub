@@ -9,8 +9,15 @@ import { entry } from './tracing.js';
 import { publicUrlProblem, readPage, readHtml, searchDuckDuckGo } from './public-web.js';
 import { searchProducts } from './product-search.js';
 import * as store from '../store.js';
+import { createWalletTools } from './wallet-tools.js';
+import { createBelnaWallet } from '../belna-wallet.js';
+import { createPrivateCheckoutClient } from '../private-checkout-client.js';
+import { exportCheckout } from './azure-vm.js';
+const privateCheckout = createPrivateCheckoutClient({exportCheckout});
+const belnaWallet = createBelnaWallet({ store,secureCheckout:privateCheckout.factory });
 import { normalizeSubAgent, nextRunAt } from './triggers.js';
 import * as composio from '../composio.js';
+import * as connectors from '../connectors.js';
 import * as mail from '../mail.js';
 import * as shoppay from '../shoppay.js';
 import { execInSandbox, isAzureConfigured } from './azure-vm.js';
@@ -28,7 +35,7 @@ const liveForPurchase = {
   forTool: async (userId, sessionId) => execInSandbox(userId, 'browser_action', { event:{type:'wait',ms:1,agent:true}, sessionId }),
   content: async (session) => session,
 };
-const purchaseFlow = createPurchaseFlow({ live:liveForPurchase });
+const purchaseFlow = createPurchaseFlow({ live:liveForPurchase, wallet:belnaWallet });
 function safeBrowserResult(out, ctx) {
   const result = { ...(out || {}) };
   const redact = (value) => {
@@ -62,7 +69,11 @@ async function liveChannel(ctx) {
   const mac = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, enc.encode(`live:${ctx.userId}:${ctx.sessionId}`)));
   const topic = `live-${btoa(String.fromCharCode(...mac)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
   ctx.liveTopic = topic;
-  return { url, key, topic };
+  // The key that signs browser steps sent to this channel's streamer on the VM (see
+  // streamerBrowserStep in azure-vm.js); it never goes over the channel.
+  const step = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, enc.encode(`step:${topic}`)));
+  const cmdKey = [...step].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return { url, key, topic, cmdKey };
 }
 // The task's live channel, known before a step runs, so the live view can open while it works.
 const liveIdFor = async (ctx) => { const live = await liveChannel({ ...ctx }); return live ? `rt:${live.topic}` : null; };
@@ -100,26 +111,92 @@ function pageSlice(page, from, size) {
 async function searchWeb(query, { country } = {}, ctx) {
   const q = String(query).slice(0, 400);
   let results = null, provider = 'firecrawl', failure = null;
+  const relaxed = undatedQuery(q);
   if (firecrawlKey()) {
-    try { results = await firecrawlSearch(q, country, ctx); }
+    // The undated query's pages are read directly, not scraped: it costs no page credits.
+    try {
+      const [primary, extra] = await Promise.all([firecrawlSearch(q, country, ctx), relaxed ? firecrawlSearch(relaxed, country, { ...ctx, quick: true }).catch(() => []) : []]);
+      results = mergeResults(primary, extra);
+    }
     catch (error) { if (ctx.signal?.aborted) throw error; failure = error; }
   }
   // Without Firecrawl, or when it fails, a free web search and direct page reads stand in.
   if (!results) {
-    try { results = await searchDuckDuckGo(q, { signal: ctx.signal }); provider = 'duckduckgo'; }
+    try {
+      const [primary, extra] = await Promise.all([searchDuckDuckGo(q, { signal: ctx.signal }), relaxed ? searchDuckDuckGo(relaxed, { signal: ctx.signal }).catch(() => []) : []]);
+      results = mergeResults(primary, extra); provider = 'duckduckgo';
+    }
     catch (error) { throw failure || error; }
   }
-  // The top three pages are read directly (free) and at once, so a chat answer rests on
-  // pages, not snippets. A page's preview image lets a pick show a photo on its card.
-  await Promise.all(results.slice(0, 3).filter((item) => !item.text).map(async (item) => {
+  await readSearchResults(results, q, ctx);
+  const text = results.length ? JSON.stringify({ results }) : JSON.stringify({ note: 'No results found for this query.' });
+  return { url: 'search:' + q, provider, text };
+}
+// A query with a full date or year ("weather Stockholm Monday September 28 2026") finds pages
+// that happen to print that date (long-range and archive pages), not the forecast or listing
+// that answers it. The same query without them also runs, at once, and both result lists are
+// read; the model kept writing dated queries even when told not to.
+const MONTHS = 'january|february|march|april|may|june|july|august|september|october|november|december|januari|februari|mars|maj|juni|juli|augusti|oktober|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|okt|nov|dec';
+const DATED = new RegExp(`\\b(?:19|20)\\d{2}\\b|\\b\\d{1,2}(?:st|nd|rd|th|:e|:a)?\\.?\\s+(?:${MONTHS})\\b|\\b(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, 'gi');
+function undatedQuery(query) {
+  const q = String(query || '');
+  const relaxed = q.replace(DATED, ' ').replace(/\s+/g, ' ').trim();
+  return relaxed !== q.trim() && relaxed.split(' ').length >= 2 ? relaxed : '';
+}
+// The first three results of the query as asked, then those only the undated query found, then the rest.
+function mergeResults(primary = [], extra = []) {
+  const seen = new Set(primary.map((item) => item.url));
+  const added = extra.filter((item) => item.url && !seen.has(item.url) && seen.add(item.url));
+  return [...primary.slice(0, 3), ...added.slice(0, 3), ...primary.slice(3), ...added.slice(3)].slice(0, 8);
+}
+// Words too common to say what a passage is about.
+const EXCERPT_STOP = new Set('the and for what how with from this that are was will can you your och att det som för med hur vad var den kan jag der die das und les des pour que los las para una por'.split(' '));
+const queryTerms = (query) => [...new Set(foldText(query).split(/[^a-z0-9]+/).filter((t) => (t.length > 2 || /^\d+$/.test(t)) && !EXCERPT_STOP.has(t)))];
+const queryHits = (text, terms) => { const f = foldText(text); return terms.reduce((n, t) => n + (f.includes(t) ? 1 : 0), 0); };
+// The passage of a page that answers the query: its lines that name the query's words, each
+// with the line after it (a heading, then its data), in page order. The first characters
+// alone were menus and "current conditions" on weather pages, and the forecast was cut off.
+function focusedExcerpt(text, query, max) {
+  const all = String(text || '').trim();
+  if (all.length <= max) return all;
+  const terms = queryTerms(query);
+  const parts = all.split(/\n+/).flatMap((line) => (line.length <= 400 ? [line] : line.match(/[^.!?]{1,300}[.!?]*\s*/g) || [line])).map((p) => p.trim()).filter(Boolean);
+  const score = parts.map((p) => queryHits(p, terms));
+  if (!score.some(Boolean)) return all.slice(0, max);
+  const keep = new Set();
+  let size = 0;
+  const add = (i) => { if (i < 0 || i >= parts.length || keep.has(i) || size + parts[i].length > max) return; keep.add(i); size += parts[i].length + 1; };
+  // A short opening line names what the page is.
+  if (parts[0].length < 200) add(0);
+  for (const i of parts.map((_, i) => i).sort((a, b) => score[b] - score[a] || a - b)) {
+    if (!score[i] || size >= max * 0.95) break;
+    add(i); add(i + 1);
+  }
+  return [...keep].sort((a, b) => a - b).map((i) => parts[i]).join('\n');
+}
+// Text a reader can use: not a near-empty page built by JavaScript, nor encoded app data.
+const readableText = (text) => { const t = String(text || '').trim(); return t.length >= 200 && !t.startsWith('<') && (t.match(/%[0-9a-f]{2}/gi) || []).length * 30 < t.length; };
+// The top five results are read at once, directly (free) with a short timeout, so an answer
+// rests on pages, not snippets; three (four for a task) keep their passage about the query,
+// the most relevant first. A page's preview image lets a pick show a photo on its card. Pages
+// the search already rendered (a task's Firecrawl search) are only trimmed to that passage.
+async function readSearchResults(results, query, ctx) {
+  const rendered = new Set(results.filter((item) => item.text));
+  await Promise.all(results.slice(0, undatedQuery(query) ? 6 : 5).filter((item) => !item.text).map(async (item) => {
     try {
-      const page = await readPage(item.url, { signal: ctx.signal, timeoutMs: ctx.quick ? 4000 : 7000, maxChars: ctx.quick ? 1500 : 1800 });
+      const page = await readPage(item.url, { signal: ctx.signal, timeoutMs: ctx.quick ? 4000 : 7000, maxChars: 30000 });
       item.text = page.text || undefined;
       if (page.image) item.image = page.image;
     } catch {}
   }));
-  const text = results.length ? JSON.stringify({ results }) : JSON.stringify({ note: 'No results found for this query.' });
-  return { url: 'search:' + q, provider, text };
+  const terms = queryTerms(query);
+  const read = results.filter((item) => rendered.has(item) || readableText(item.text)).map((item) => {
+    item.text = focusedExcerpt(item.text, query, ctx.quick ? 1500 : 1800);
+    return { item, hits: queryHits(item.text, terms) };
+  });
+  const kept = new Set(read.sort((a, b) => b.hits - a.hits).slice(0, ctx.quick ? 3 : 4).map((r) => r.item));
+  for (const item of results) if (!kept.has(item)) delete item.text;
+  return results;
 }
 // Web results for product_search: Firecrawl, or DuckDuckGo's results page without it or when it fails.
 async function productWebSearch({ query, country, signal }) {
@@ -144,7 +221,7 @@ async function firecrawlSearch(q, country, ctx) {
   if (!r.ok || json.success === false) throw new Error('Firecrawl search failed: ' + String(json.error || 'HTTP ' + r.status).slice(0, 200));
   const seen = new Set();
   return (json.data?.web || []).filter((item) => item.url && !seen.has(item.url) && seen.add(item.url)).slice(0, 8)
-    .map((item) => ({ title: String(item.title || '').slice(0, 200), url: item.url, snippet: String(item.description || '').slice(0, 400), text: item.markdown ? String(item.markdown).slice(0, 1800) : undefined,
+    .map((item) => ({ title: String(item.title || '').slice(0, 200), url: item.url, snippet: String(item.description || '').slice(0, 400), text: item.markdown ? String(item.markdown).slice(0, 30000) : undefined,
       image: /^https:\/\//i.test(String(item.metadata?.ogImage || '')) ? String(item.metadata.ogImage).slice(0, 600) : undefined }));
 }
 async function scrapePage(url, signal, timeoutMs = 20000) {
@@ -162,7 +239,7 @@ async function scrapePage(url, signal, timeoutMs = 20000) {
 // A page the agent asked to read counts as thin (likely built by JavaScript) under this
 // many characters; search-result reads only fall back when a page has no text, to save credits.
 const THIN_PAGE = 1500;
-async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, thin = 200, render = false } = {}) {
+async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, fallback = true, thin = 200, render = false } = {}) {
   let page = null, failure = null;
   // render reads the page as a browser shows it (prices, listings and tables that load
   // with JavaScript) in a few seconds, instead of starting the VM browser for it.
@@ -176,7 +253,7 @@ async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, th
   try { page = await readPage(url, { signal, timeoutMs, maxChars }); } catch (error) { failure = error; }
   // Private addresses are refused outright, never sent to Firecrawl.
   if (failure?.code === 'HOST_BLOCKED') throw failure;
-  if (!rendered && (!page || page.text.trim().length < thin) && firecrawlKey()) {
+  if (fallback && !rendered && (!page || page.text.trim().length < thin) && firecrawlKey()) {
     // Pages built by JavaScript (pricing tables, listings) return little text directly;
     // the rendered version is kept when it has more.
     try {
@@ -191,6 +268,24 @@ async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, th
 
 const BROWSER_ACTIONS = new Set(['click', 'double_click', 'right_click', 'click_text', 'hover', 'type', 'key', 'scroll', 'select', 'drag', 'back', 'forward', 'reload', 'wait']);
 const badInput = (message) => Object.assign(new Error(message), { code: 'BAD_INPUT' });
+// What a connection cannot do, so the agent tells the owner instead of trying another way in.
+// Facebook, Instagram and WhatsApp are Composio's own descriptions; the Telegram connection
+// is a bot, and the LinkedIn one has no messaging actions.
+const APP_LIMITS = {
+  facebook: 'Facebook Pages the owner manages only (posts, comments, Page messages); not a personal profile or personal Messenger chats.',
+  instagram: 'Instagram Business and Creator accounts only; not personal accounts.',
+  whatsapp: 'WhatsApp Business accounts only; not personal WhatsApp chats.',
+  telegram: 'A Telegram bot the owner sets up; not their personal Telegram chats.',
+  linkedin: 'Posts, comments and profile only; not LinkedIn messages.',
+};
+// The slug of an app the owner can connect here ("google_calendar" is "googlecalendar"),
+// or null when it cannot be connected. When the list cannot be read, the card still tries.
+async function connectableToolkit(toolkit) {
+  const configs = await composio.listAuthConfigs().catch(() => null);
+  if (!configs) return toolkit;
+  const flat = (s) => String(s || '').replace(/[^a-z0-9]/g, '');
+  return configs.find((c) => flat(c.toolkit) === flat(toolkit))?.toolkit || null;
+}
 const inViewport = (x, y) => Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1280 && y >= 0 && y <= 900;
 const elementRef = (value) => (value == null || value === '' ? null : Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : NaN);
 // Validates a model browser action into a relay input event. Agent events are
@@ -365,7 +460,7 @@ const TOOLS = {
       return Promise.all(urls.slice(0, 4).map(async (u) => {
         const t0 = Date.now();
         try {
-          const page = await readWebPage(u, { signal: ctx.signal, maxChars: from + size + 1, thin: THIN_PAGE, render: render === true });
+          const page = await readWebPage(u, { signal: ctx.signal, maxChars: from + size + 1, thin: THIN_PAGE, render: render === true && ctx.scrape !== false, fallback: ctx.scrape !== false });
           ctx.trace(entry('globe', `web_search: ${new URL(page.url).hostname} · ${Date.now() - t0}ms`));
           return pageSlice(page, from, size);
         } catch (e) {
@@ -399,12 +494,59 @@ const TOOLS = {
   },
   composio_apps: {
     name: 'composio_apps', type: 'function', approval: false,
-    description: 'List the user’s Composio-connected apps.',
+    description: 'List the apps the owner connected, the apps they can connect, what a connection cannot do, and the owner\'s own APIs and MCP servers.',
     run: async (_, ctx) => {
-      const connected = await composio.listConnected(ctx.userId);
-      const active = connected.filter((c) => String(c.status).toUpperCase() === 'ACTIVE');
-      ctx.trace(entry('box', `composio_apps: ${active.length} connected`));
-      return active;
+      // The owner's own APIs and MCP servers are listed even where the app catalog is not set up.
+      const [connected, configs, custom] = await Promise.all([composio.configured() ? composio.listConnected(ctx.userId) : [], composio.listAuthConfigs().catch(() => null), connectors.forAgent(ctx.userId).catch(() => [])]);
+      const active = connected.filter((c) => String(c.status).toUpperCase() === 'ACTIVE')
+        .map(({ id, toolkit, email, name, alias }) => ({ id, toolkit, account: email || name || alias || undefined }));
+      const have = new Set(active.map((c) => c.toolkit));
+      const offered = new Set([...have, ...(configs || []).map((c) => c.toolkit)]);
+      ctx.trace(entry('box', `composio_apps: ${active.length} connected${custom.length ? `, ${custom.length} own` : ''}`));
+      const note = [
+        configs ? 'Only the apps listed here can be connected. Anything else, or anything a limit excludes, is reachable only through the website in your browser, where the owner signs in themselves.' : '',
+        custom.length ? 'custom lists the owner\'s own APIs and MCP servers: see what one can do with connector_tools, then use it with connector_call.' : '',
+      ].filter(Boolean).join(' ');
+      return {
+        connected: active,
+        canConnect: configs ? configs.map((c) => c.toolkit).filter((t) => !have.has(t)) : undefined,
+        limits: Object.fromEntries(Object.entries(APP_LIMITS).filter(([toolkit]) => offered.has(toolkit))),
+        ...(custom.length ? { custom } : {}),
+        note: note || undefined,
+      };
+    },
+  },
+  connector_tools: {
+    name: 'connector_tools', type: 'function', approval: false,
+    description: 'Show what one of the owner\'s own connectors (an API or MCP server they added) can do: its enabled tools and arguments, or its base URL, methods and notes.',
+    run: async ({ connector, query }, ctx) => {
+      const out = await connectors.describe(ctx.userId, connector, String(query || '').slice(0, 120));
+      ctx.trace(entry('box', `connector_tools: ${out.connector}`));
+      return out;
+    },
+  },
+  connector_call: {
+    name: 'connector_call', type: 'function', approval: true,
+    description: 'Use one of the owner\'s own connectors: call an MCP server tool, or send an HTTP request to their API. The saved credential is added for you. Reads run when the owner asked; changes follow the connected-app approval setting.',
+    approvalDetail: async (args, { userId }) => connectors.approvalDetail(userId, args),
+    run: async (args, ctx) => {
+      const out = await connectors.call(ctx.userId, args || {}, { signal: ctx.signal });
+      ctx.trace(entry('box', `connector_call: ${out.label}`));
+      return out.result;
+    },
+  },
+  // The agent adds one of the owner's APIs or MCP servers: a chat card shows where the key goes and
+  // takes it; the card saves it straight to the vault and adds the connector. Already added: no card.
+  connector_setup: {
+    name: 'connector_setup', type: 'function', approval: true, sideEffects: false,
+    description: 'Add an API or MCP server the owner wants to use. The owner pastes the key into a secure card; you never see it.',
+    needsApproval: async (args, ctx) => { try { return (await connectors.findSetup(ctx.userId, args))?.status !== 'connected'; } catch { return true; } },
+    approvalDetail: async (args) => connectors.setupDetail(args),
+    approvalCard: (args) => connectors.setupCard(args),
+    run: async (args, ctx) => {
+      const out = await connectors.setupResult(ctx.userId, args || {});
+      ctx.trace(entry('box', `connector_setup: ${out.connector}`));
+      return out;
     },
   },
   composio_tools: {
@@ -495,7 +637,10 @@ const TOOLS = {
       const event = browserEvent(args || {});
       if (!String(args.summary || '').trim()) throw badInput('browser_submit needs a summary of what the action will do.');
       await purchaseFlow.beforeSubmit(args, ctx);
+      if (args.purchase?.payment?.method === 'belna_wallet') return belnaWallet.executePurchase(ctx.userId,JSON.parse(ctx.approvedDetail),{sessionId:ctx.sessionId});
       const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId, live: await liveChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      // Only a click that happened goes in the purchase history.
+      if (args.purchase) await belnaWallet.recordExistingPurchase(ctx.userId, JSON.parse(ctx.approvedDetail)).catch(() => {});
       ctx.trace(entry('globe', `browser_submit: ${event.type} on ${out.vmName}`));
       return safeBrowserResult(out, ctx);
     },
@@ -614,11 +759,17 @@ const TOOLS = {
   connect_app: {
     name: 'connect_app', type: 'function', approval: true, sideEffects: false,
     description: 'Ask the owner to connect an app (e.g. gmail, googlecalendar, slack, github, notion) with secure OAuth when a request needs it and it is not connected. Waits until they connect or decline.',
-    // An app that is already connected needs no card; the call returns at once.
-    needsApproval: async (args, ctx) => !(await composio.isToolkitConnected(ctx.userId, connectArgs(args).toolkit).catch(() => false)),
+    // An app that is already connected, or that cannot be connected here, needs no card;
+    // the call returns at once.
+    needsApproval: async (args, ctx) => {
+      const toolkit = await connectableToolkit(connectArgs(args).toolkit);
+      return !!toolkit && !(await composio.isToolkitConnected(ctx.userId, toolkit).catch(() => false));
+    },
     run: async (args, ctx) => {
-      const { toolkit, name } = connectArgs(args);
-      if (!/^[a-z0-9_-]{2,60}$/.test(toolkit)) throw badInput('Valid toolkit required.');
+      const { toolkit: asked, name } = connectArgs(args);
+      if (!/^[a-z0-9_-]{2,60}$/.test(asked)) throw badInput('Valid toolkit required.');
+      const toolkit = await connectableToolkit(asked);
+      if (!toolkit) return { toolkit: asked, name, connected: false, available: false, note: `${name} cannot be connected here. Tell the owner plainly, and offer what remains, such as the website in your browser where they sign in themselves.` };
       const connected = await composio.isToolkitConnected(ctx.userId, toolkit);
       ctx.trace(entry('box', `connect_app: ${toolkit} ${connected ? 'connected' : 'not connected'}`));
       return { toolkit, name, connected, note: connected ? 'Connected. Continue with composio_tools and composio_execute.' : 'Not connected yet. Tell the owner and continue without it.' };
@@ -710,6 +861,8 @@ const TOOLS = {
     description: 'Complete a Shop Pay UCP checkout after owner approval. Never collect card numbers.',
     approvalDetail: async ({ merchant, checkoutId }, { userId }) => JSON.stringify(await shoppay.purchaseQuote(userId, { merchant, checkoutId })),
     run: async ({ merchant, checkoutId }, ctx) => {
+      const selection=await belnaWallet.preferences(ctx.userId);
+      if(selection.spendingMethod!=='existing_card')throw new Error('Existing card is inactive. Select it in Settings before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
@@ -798,10 +951,12 @@ const TOOL_KEYWORDS = {
   vault: /(log ?in|sign ?in|password|passcode|credential|api ?key|access token|secret|account|checkout|pay\b|payment|card|logga in|inloggning|losenord|konto|betala|betalning|kort|logg inn|passord|log ind|adgangskode|anmelden|einloggen|passwort|konto|zahlung|karte|connexion|mot de passe|compte|paiement|carte|iniciar sesion|contrasena|cuenta|pago|tarjeta)/,
   memory:/(remember|memory|memories|forget|forgot|correct that|actually|used to|no longer|kom ihag|minns|minne|glom|husk|glem|merk dir|erinner|vergiss|gedachtnis|souviens|rappelle-toi|oublie|memoire|recuerda|olvida|memoria)/,
   apps: /(gmail|slack|calendar|kalender|calendrier|calendario|agenda|notion|drive|sheet|github|\bpr\b|pull request|repo|diff|code review|tweet|linkedin|hubspot|stripe|task|issue|ticket|arende|outlook|teams|linear|dropbox|sharepoint|microsoft 365|connected app)/,
+  // The owner's own APIs and MCP servers; their names are the owner's, so the words around them.
+  connectors: /(\bapi\b|\bapis\b|\bmcp\b|connector|endpoint|integration|webhook|koppling|integrasjon|schnittstelle)/,
   mail: /(email|e-mail|e-post|epost|inbox|inkorg|innboks|indbakke|posteingang|mailbox|mail |reply to|send (a |an )?mail|skriv (ett )?mejl|mejl|courriel|boite de reception|correo)/,
   page: /(build|landing|page|site|website|dashboard|game|\bapp\b|calculator|quiz|widget|\bhtml\b|\bspel|\bspill\b|\bspiel\b|\bjeu\b|juego|bygg|webbsida|hemsida|landningssida|nettside|hjemmeside|webseite|pagina|sitio)/,
   image: /(generate|create|make|draw|design|skapa|gor|rita|generera|designa|lag|tegn|erstell|zeichne|generier|genere|cree|creer|dessine|crea|dibuja|genera).{0,30}(image|picture|photo|illustration|artwork|logo|bild|foto|logga|logotyp|bilde|billede|dessin|imagen|dibujo|ilustracion)|\b(image|picture|photo|illustration)\s+(?:of|for)\b/,
-  browser: /(browse|browser|website|web page|fill|form|book|reservation|sign in|log in|surfa|webblasare|webbsida|hemsida|fyll i|formular|boka|reserv|logga in|nettleser|nettside|hjemmeside|skjema|bestill|logg inn|log ind|webseite|ausfull|buchen|anmeld|einlogg|navigat|site web|formulaire|rempli|connecte|connexion|naveg|sitio web|pagina web|formulario|rellen|inicia sesion|inicie sesion)/,
+  browser: /(browse|browser|website|web page|\bfill\b|\bforms?\b|\bbook|reservation|sign in|log in|surfa|webblasare|webbsida|hemsida|fyll i|formular|boka|reserv|logga in|nettleser|nettside|hjemmeside|skjema|bestill|logg inn|log ind|webseite|ausfull|buchen|anmeld|einlogg|navigat|site web|formulaire|rempli|connecte|connexion|naveg|sitio web|pagina web|formulario|rellen|inicia sesion|inicie sesion)/,
   code: /(code|script|terminal|shell|file|workspace|python|javascript|debug|compile|install|kod|skript|fil\b|filen|filer|datei|programm|fichier|codigo|archivo|instala)/,
   history: /(earlier|yesterday|last (week|time|chat)|we (talked|discussed)|discussed|previous|igar|i gar|forra veckan|senast|vi pratade|diskuterade|tidigare|forrige uke|sidste uge|snakket|talte om|tidligere|gestern|letzte woche|besprochen|vorhin|la semaine derniere|on a parle|discute|precedent|ayer|la semana pasada|hablamos|discutimos|anterior)/,
   triggers: /(trigger|watch|schedule|recurring|every (?:hour|day|week)|sub.?agent|automation|schemalagg|varje (?:timme|dag|vecka)|aterkommande|bevaka|automatiser|paminn|hver (?:time|dag|uke|uge)|overvak|zeitplan|jede (?:stunde|woche)|jeden tag|wiederkehrend|automatisier|uberwach|chaque (?:heure|jour|semaine)|planifi|recurren|automatis|surveill|cada (?:hora|dia|semana)|programa|automatiz|vigila)/,
@@ -814,6 +969,7 @@ function pickTools(task) {
   const names = new Set(['memory_write','capability_search','web_search']);
   if (TOOL_KEYWORDS.memory.test(t)) { names.add('memory_search'); names.add('memory_get'); names.add('memory_update'); names.add('memory_delete'); }
   if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); names.add('connect_app'); }
+  if (TOOL_KEYWORDS.connectors.test(t)) { names.add('composio_apps'); names.add('connector_tools'); names.add('connector_call'); names.add('connector_setup'); }
   if (TOOL_KEYWORDS.mail.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
   if (TOOL_KEYWORDS.page.test(t)) names.add('build_page');
   if (TOOL_KEYWORDS.image.test(t)) names.add('image_generate');
@@ -829,14 +985,17 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
   for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
+  if (/buy|purchase|order|shop|wallet|shipping|delivery|address|amazon|köp|adress|leverans/.test(t)) names.add('shipping_addresses');
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
+  if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_receive'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
   return [...names].map((n) => TOOLS[n]).filter((tool) => tool && tool.available !== false);
 }
 
 // Goals and Library tools, plus Library copies of generated pages, Canvas files and images.
 Object.assign(TOOLS, PERSONAL_TOOLS);
+Object.assign(TOOLS, createWalletTools(belnaWallet));
 withLibraryAutosave(TOOLS);
 
 async function runParallel(calls, ctx) {

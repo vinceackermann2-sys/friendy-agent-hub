@@ -12,6 +12,8 @@ import { creditsForCost, PLANS, REFERRAL_TOKENS_EACH } from './plans.js';
 import { createTokenWallet } from './token-wallet.js';
 import { createPersonalStore } from './personal-store.js';
 import { createClientStateStore } from './client-state.js';
+import { createCustomConnectorStore } from './custom-connector-store.js';
+import { createBelnaWalletStore } from './belna-wallet-store.js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
@@ -115,7 +117,7 @@ function agentPatch(agent) {
 function defaultAgentDocuments(agent = {}) {
   const a=cleanAgent(agent);
   return {
-    identity:`# Identity\n\nName: ${a.name}\nStyle: ${a.pers}`,
+    identity:`# Identity\n\nName: ${a.name}`,
     soul:'# Soul\n\nBe warm, candid, practical, and reliable. Adapt detail to the user and keep promises explicit.',
     user:'# User\n\nAdd stable preferences, background, language, and timezone here.',
     agents:'# Working agreement\n\nPlan substantial work, verify results with evidence, surface uncertainty, and ask before irreversible external actions.',
@@ -236,6 +238,7 @@ async function delSecret(userId, id) {
   }
   const d = loadLocal();
   d.secrets = d.secrets.filter((x) => !(x.id === id && x.userId === userId));
+  dropConnectorsForSecret(d, userId, id);
   saveLocal(d);
 }
 
@@ -607,7 +610,7 @@ async function ensureSystemSubAgents(userId) {
     try{
       await ensureProfile(userId);
       for(const agent of wanted){
-        const row={id:agent.id,user_id:userId,chat_id:agent.chatId,name:agent.name,prompt:agent.prompt,description:agent.description,system_kind:agent.systemKind,enabled:true,trigger_type:'schedule',trigger_config:agent.trigger,next_run_at:agent.nextRunAt};
+        const row={id:agent.id,user_id:userId,chat_id:agent.chatId,name:agent.name,prompt:agent.prompt,description:agent.description,system_kind:agent.systemKind,enabled:agent.enabled,trigger_type:'schedule',trigger_config:agent.trigger,next_run_at:agent.nextRunAt};
         const {error:insertError}=await s.from('sub_agents').upsert(row,{onConflict:'id',ignoreDuplicates:true});if(insertError)throw insertError;
         const {error:updateError}=await s.from('sub_agents').update({name:agent.name,prompt:agent.prompt,description:agent.description,system_kind:agent.systemKind,trigger_type:'schedule',trigger_config:agent.trigger,updated_at:new Date().toISOString()}).eq('id',agent.id).eq('user_id',userId);if(updateError)throw updateError;
       }
@@ -1664,13 +1667,20 @@ async function getSignupAt(userId) {
   return d.signupDates[userId];
 }
 const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, getSignupAt, uid, plans: PLANS });
+const { getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers, claimWalletPurchase, saveWalletPurchase, listWalletPurchases, getWalletPurchase, listPendingWalletPurchases, getWalletPurchaseByCard, listPendingWalletConnections, walletRecoveryReady, listShippingAddresses, saveShippingAddress, deleteShippingAddress, getWalletPreferences, saveWalletPreferences, recordExistingPurchase, listExistingPurchases } = createBelnaWalletStore({ supa, ensureProfile });
 const { addTokenGrant, ensureMonthlyTokens, tokenWallet: getTokenWallet,
   claimTokenDaily, releaseTokenDaily, chargeRawTokens, freePeriod } = tokenWallet;
 const { GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal, LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem } = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureProfile, listChatMessages, durableOnly:true });
 const { list: listClientState, save: saveClientState, removeChat: deleteClientChat } = clientState;
+const { listCustomConnectors, addCustomConnector, updateCustomConnector, deleteCustomConnector, dropConnectorsForSecret } = createCustomConnectorStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
 export {
+  recordExistingPurchase, listExistingPurchases,
+  getWalletPreferences, saveWalletPreferences,
+  listShippingAddresses, saveShippingAddress, deleteShippingAddress,
+  claimWalletPurchase, saveWalletPurchase, listWalletPurchases, getWalletPurchase, listPendingWalletPurchases, getWalletPurchaseByCard, listPendingWalletConnections, walletRecoveryReady,
+  getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers,
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
   GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal,
   LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,
@@ -1693,6 +1703,7 @@ export {
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
   countUnreadMail, countOutboundMailToday,   listMailDrafts, upsertMailDraft, deleteMailDraft,
   getConnectorPermissions, setConnectorPermissions,
+  listCustomConnectors, addCustomConnector, updateCustomConnector, deleteCustomConnector,
   getAgentPermissions, setAgentPermissions, rememberBrowserHost,
   getShopPayAccount, findShopPayByOAuthState, upsertShopPayAccount, deleteShopPayAccount,
   listShopPayOrders, getShopPayOrder, reserveShopPaySpend, updateShopPayOrder,

@@ -57,4 +57,14 @@ assert.equal(chat.messages.find(m=>m.managedId==='live-answer').text,'Hello');
 third.managedEvent({type:'message_delta',id:'draft-answer',delta:'Nope'});
 third.managedEvent({type:'message_retract',id:'draft-answer'});
 assert.equal(chat.messages.some(m=>m.managedId==='draft-answer'),false,'tool-bound drafts are retracted');
+// An update from a working task reads as the agent's own message and keeps the task running.
+const updating={id:'task-2',chatId:'chat',title:'Flights',status:'running',version:1,revision:1,sequence:1,
+  events:[{id:'task-2:update:1',seq:1,type:'message',phase:'task_update',text:'Found three flights; checking baggage rules now.'}]};
+first.managedTask(updating);
+const update=chat.messages.find(m=>m.managedId==='task-2:update:1');
+assert.deepEqual([update.role,update.kind,update.text],['agent','text','Found three flights; checking baggage rules now.']);
+assert.equal(chat.managedTasks['task-2'].status,'running');
+first.managedTask({...updating,status:'completed',revision:2,sequence:2,events:[...updating.events,{id:'task-2:answer:v1',seq:2,type:'message',phase:'task_answer',text:'Two direct flights fit.'}]});
+assert.equal(chat.messages.filter(m=>m.managedId==='task-2:update:1').length,1,'an update is shown once');
+assert.equal(chat.messages.find(m=>m.managedId==='task-2:answer:v1').text,'Two direct flights fit.');
 console.log('managed cards: milestone-only updates, persistent history, replay dedupe, independent task/main status: ok');

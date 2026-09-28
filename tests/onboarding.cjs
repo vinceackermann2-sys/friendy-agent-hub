@@ -94,6 +94,7 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       assert.equal(final.onboarded, true);
       assert.equal(final.agent.name, mode === 'oauth' ? 'Rosa' : 'Sora');
       assert.equal(final.agent.color, 'rose');
+      assert.equal(final.agent.pers, undefined, 'setup does not assign a personality preset');
       assert.equal(final.canvasTab, 'canvas');
       if (mode === 'signin') assert.equal(runs.length, 0, 'setup without a saved request stays ready for chat');
       else {
@@ -112,6 +113,7 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
       await page.click('[data-act="nav"][data-view="settings"]');
       assert.equal(await page.locator('[data-act="stab"][data-t="library"]').count(), 0);
       assert.equal(await page.locator('[data-act="stab"][data-t="theme"]').count(), 0);
+      assert.equal(await page.locator('[data-act="p-pers"]').count(), 0, 'settings has no personality presets');
       assert.match(await page.locator('.psec').allInnerTexts().then(items => items.join('\n')), /Theme[\s\S]*Chat color/);
       await page.click('[data-act="open-library"]');
       await page.waitForSelector('.lib-head h1');
