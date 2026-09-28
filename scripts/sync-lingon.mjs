@@ -103,6 +103,22 @@ function syncStripeProvider() {
 
 syncStripeProvider();
 
+{
+  const src = readFileSync(join(root, 'server/agents/wallet-tools.js'), 'utf8');
+  writeFileSync(join(root, 'src/lingon-server/agents/wallet-tools.js'), src.replace('module.exports = { createWalletTools };', 'export { createWalletTools };'), 'utf8');
+}
+
+for (const [name, factory] of [['belna-wallet', 'createBelnaWallet'], ['belna-wallet-store', 'createBelnaWalletStore'], ['wallet-purchases','createWalletPurchases'], ['private-checkout-client','createPrivateCheckoutClient']]) {
+  const src = readFileSync(join(root, `server/${name}.js`), 'utf8');
+  const esm = src.replace(`module.exports = { ${factory} };`, `export { ${factory} };`).replace("const { createWalletPurchases } = require('./wallet-purchases');", "import { createWalletPurchases } from './wallet-purchases.js';");
+  if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted Belna wallet module');
+  writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');
+}
+{
+  const src = readFileSync(join(root, 'server/whop-webhook.js'), 'utf8');
+  writeFileSync(join(root, 'src/lingon-server/whop-webhook.js'), src.replace('module.exports = { verifyWhopWebhook };', 'export { verifyWhopWebhook };'), 'utf8');
+}
+
 // The wallet uses injected persistence dependencies, so its implementation is
 // identical in the Express and edge runtimes.
 {

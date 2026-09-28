@@ -986,6 +986,39 @@ function buildBrowserSessionScript(action, args = {}) {
   ].join('\n');
 }
 // Starts this session's live streamer after a browser step, unless it is running.
+// This upload capability imports a reviewed checkout into a separate, trusted
+// browser. Neither payment credentials nor the checkout server key enter a VM.
+function buildCheckoutExportScript(sessionId, website, uploadUrl) {
+  const payloadB64=Buffer.from(JSON.stringify({sessionId,website,uploadUrl})).toString('base64');
+  const source=[
+    "const fs=require('fs'),path=require('path');",
+    `const kit=(${browserKit.toString()})();`,
+    `const profiles=(${browserProfileRuntime.toString()})('/var/lib/lingon-browser/sessions',require);`,
+    "const input=JSON.parse(Buffer.from(process.env.LINGON_CHECKOUT_IMPORT,'base64').toString());",
+    "(async()=>{const browser=await profiles.connectExisting(require('/opt/lingon/node_modules/puppeteer-core'));if(!browser)throw Error();try{",
+    "const dir=path.join('/var/lib/lingon-browser/sessions',input.sessionId);const targetId=fs.readFileSync(path.join(dir,'target-id'),'utf8').trim();const page=(await browser.pages()).find(p=>p.target()._targetId===targetId);if(!page || page.url()!==input.website)throw Error();",
+    "const snapshot=await kit.snapshot(page);if(snapshot.sensitivePresent)throw Error();",
+    "const state=await page.evaluate(()=>({url:location.href,scrollY,localStorage:Object.fromEntries(Object.entries(localStorage)),sessionStorage:Object.fromEntries(Object.entries(sessionStorage)),fields:[...document.querySelectorAll('input,select,textarea')].filter(e=>(e.id||e.name)&&!/password|cc-|card|cvc|cvv|iban|one-time-code|otp/i.test([e.type,e.autocomplete,e.name,e.id].join(' '))).map(e=>({id:e.id,name:e.name,value:e.value}))}));",
+    "const host=new URL(input.website).hostname;state.cookies=(await browser.cookies()).filter(c=>{const domain=c.domain.replace(/^\\./,'');return domain===host||host.endsWith('.'+domain);});state.sensitivePresent=false;",
+    "const reply=await fetch(input.uploadUrl,{method:'POST',redirect:'error',signal:AbortSignal.timeout(60000),headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});if(!reply.ok || (await reply.json()).created!==true)throw Error();process.stdout.write('PRIVATE_CHECKOUT_IMPORTED');",
+    "}finally{browser.disconnect();}})().catch(()=>{process.stdout.write('PRIVATE_CHECKOUT_FAILED');process.exitCode=1;}).finally(()=>setTimeout(()=>process.exit(),1000).unref());"
+  ].join('\n');
+  const codeB64=Buffer.from(source).toString('base64');
+  return ['set -e',...BROWSER_NETWORK_GUARD,'install -d -m 755 -o root -g root /run/lingon',
+    `echo '${codeB64}' | base64 -d > /run/lingon/checkout-export.js`,
+    'chown root:root /run/lingon/checkout-export.js && chmod 644 /run/lingon/checkout-export.js',OWN_SCOPE,
+    `$SCOPE runuser -u lingon-browser -- timeout -k 5 90 env LINGON_CHECKOUT_IMPORT='${payloadB64}' node /run/lingon/checkout-export.js`,
+    'rm -f /run/lingon/checkout-export.js'].join('\n');
+}
+async function exportCheckout(userId, sessionId, approved, {uploadUrl}) {
+  const fail=()=>Error('Your reviewed checkout could not be opened privately. Review it again before paying.');
+  try {
+    const endpoint=new URL(uploadUrl), configured=new URL(process.env.PRIVATE_CHECKOUT_URL||'');
+    if(configured.protocol!=='https:' || endpoint.origin!==configured.origin || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || !/^\/imports\/[a-f0-9-]{36}$/.test(endpoint.pathname) || !sessionId || new URL(approved.website).protocol!=='https:')throw fail();
+    const result=await runCommand(userId,buildCheckoutExportScript(toolBrowserSessionId(userId,sessionId),approved.website,endpoint.href),{maxStdout:1000});
+    if(!String(result.stdout||'').includes('PRIVATE_CHECKOUT_IMPORTED'))throw fail();
+  }catch{throw fail();}
+}
 function liveStreamerLaunch(sessionId, live) {
   const root = `/run/lingon/${sessionId}`;
   const stateRoot = `/var/lib/lingon-browser/sessions/${sessionId}`;
@@ -2274,6 +2307,8 @@ export {
   startDesktopRelay,
   stopDesktopRelay,
   buildBrowserSessionScript,
+  buildCheckoutExportScript,
+  exportCheckout,
   buildBrowserRelayScript,
   buildBrowserRelayStopScript,
   cloudInit,

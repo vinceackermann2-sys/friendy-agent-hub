@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { upkeepRows } = require('./agents/upkeep');
 const { forbiddenPaymentSecret } = require('./agents/payment-safety');
 const { createClientStateStore } = require('./client-state');
+const { createBelnaWalletStore } = require('./belna-wallet-store');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 
@@ -1977,9 +1978,11 @@ const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfil
 const { createPersonalStore } = require('./personal-store');
 const personalStore = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 const getTokenWallet = tokenWallet.tokenWallet;
+const belnaWalletStore = createBelnaWalletStore({ supa, ensureProfile });
 const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureProfile, listChatMessages });
 
 module.exports = {
+  ...belnaWalletStore,
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
   listMemories, memoryStats, searchMemories, getMemory, addMemory, updateMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret, secretsEncrypted,

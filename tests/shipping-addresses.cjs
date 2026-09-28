@@ -1,0 +1,46 @@
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const {PGlite}=require('@electric-sql/pglite');
+const {createBelnaWallet}=require('../server/belna-wallet');
+const {createPurchaseFlow}=require('../server/agents/purchase');
+const {createWalletTools}=require('../server/agents/wallet-tools');
+(async()=>{
+ const db=new PGlite();
+ try{
+  await db.exec("create role anon;create role authenticated;create role service_role;create table profiles(id text primary key);insert into profiles values('u1'),('u2');");
+  await db.exec(fs.readFileSync('supabase/migrations/20260927170000_shipping_addresses.sql','utf8'));
+  const list=async user=>(await db.query('select * from belna_shipping_addresses where user_id=$1 order by is_default desc,created_at,id',[user])).rows;
+  const store={getWalletPreferences:async()=>({active_method:'existing_card',merchant_enabled:true}),listShippingAddresses:list,saveShippingAddress:async(u,a)=>{await db.query('select save_shipping_address($1,$2::jsonb)',[u,JSON.stringify(a)]);return list(u);},deleteShippingAddress:async(u,id)=>{await db.query('select delete_shipping_address($1,$2)',[u,id]);return list(u);}};
+  const wallet=createBelnaWallet({store,env:{}});
+  const home={label:'Home',recipient:'Ada Lovelace',line1:'Main Street 1',line2:'Apartment 2',city:'Stockholm',postalCode:'11122',country:'SE'};
+  await assert.rejects(wallet.saveAddress('u1',{...home,line1:''}),/line1/);
+  const first=(await wallet.saveAddress('u1',home)).addresses[0];assert.equal(first.isDefault,true);
+  assert.equal(first.formatted,'Ada Lovelace, Main Street 1, Apartment 2, 11122 Stockholm, SE');
+  assert.equal((await wallet.addresses('u2')).addresses.length,0,'other owner never sees the address');
+  await assert.rejects(wallet.saveAddress('u2',{...home,id:first.id}),/ADDRESS_NOT_FOUND/);
+  const second=(await wallet.saveAddress('u1',{...home,label:'Office',isDefault:true})).addresses[0];assert.notEqual(first.id,second.id);
+  assert.equal((await list('u1')).filter(x=>x.is_default).length,1);
+  await wallet.deleteAddress('u2',{id:second.id});assert.equal((await list('u1')).length,2,'other owner cannot remove an address');
+  const restored=(await wallet.deleteAddress('u1',{id:second.id})).addresses;assert.equal(restored[0].isDefault,true);
+  const tool=createWalletTools(wallet).shipping_addresses;
+  assert.equal(tool.approval,false);assert.equal((await tool.run({}, {userId:'u1'})).addresses[0].id,first.id);
+  const changes=[];
+  const limitTool=createWalletTools({updateCard:async(u,args)=>changes.push({u,args})}).wallet_set_limit;
+  assert.throws(()=>limitTool.run({dailyLimitUsd:100},{userId:'u1'}),/Approve this exact/);
+  const approvedLimit=await limitTool.approvalDetail({dailyLimitUsd:100});
+  assert.throws(()=>limitTool.run({dailyLimitUsd:200},{userId:'u1',approvedDetail:approvedLimit}),/Approve this exact/);
+  await limitTool.run({dailyLimitUsd:100},{userId:'u1',approvedDetail:approvedLimit});
+  assert.deepEqual(changes,[{u:'u1',args:{dailyLimitUsd:100}}]);
+  const session={url:'https://shop.example/checkout',text:'Checkout Visa ending in 4242',elements:['[7] Place order']};
+  const flow=createPurchaseFlow({wallet,live:{forTool:async()=>session,content:async()=>session}});
+  const args={type:'click',ref:7,summary:'Place order',purchase:{website:session.url,items:[{title:'Lamp',quantity:1,price:10}],amount:10,currency:'USD',shippingAddress:first.formatted,shippingAddressId:first.id,payment:{method:'saved_card',label:'Visa ending in 4242'}}};
+  const ctx={userId:'u1',sessionId:'test'};
+  const approved=await flow.approvalDetail(args,ctx);assert.equal(JSON.parse(approved).shippingAddressId,first.id);
+  await flow.beforeSubmit(args,{...ctx,approvedDetail:approved});
+  await assert.rejects(flow.approvalDetail({...args,purchase:{...args.purchase,shippingAddress:'Wrong Street 99'}},ctx),/current saved address/);
+  await wallet.saveAddress('u1',{...home,id:first.id,line1:'New Street 2'});
+  await assert.rejects(flow.beforeSubmit(args,{...ctx,approvedDetail:approved}),/current saved address/,'editing an address invalidates the old purchase approval');
+  const permissions=(await db.query("select has_table_privilege('authenticated','belna_shipping_addresses','SELECT') as readable,has_function_privilege('anon','save_shipping_address(text,jsonb)','EXECUTE') as executable")).rows[0];
+  assert.equal(permissions.readable,false);assert.equal(permissions.executable,false);
+  console.log('Shipping addresses: owner isolation, defaults, CRUD, agent lookup and changed-address purchase approvals passed');
+ }finally{await db.close();}
+})().catch(e=>{console.error(e);process.exit(1);});

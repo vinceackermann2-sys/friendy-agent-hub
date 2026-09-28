@@ -9,6 +9,12 @@ import { entry } from './tracing.js';
 import { publicUrlProblem, readPage, readHtml, searchDuckDuckGo } from './public-web.js';
 import { searchProducts } from './product-search.js';
 import * as store from '../store.js';
+import { createWalletTools } from './wallet-tools.js';
+import { createBelnaWallet } from '../belna-wallet.js';
+import { createPrivateCheckoutClient } from '../private-checkout-client.js';
+import { exportCheckout } from './azure-vm.js';
+const privateCheckout = createPrivateCheckoutClient({exportCheckout});
+const belnaWallet = createBelnaWallet({ store,secureCheckout:privateCheckout.factory });
 import { normalizeSubAgent, nextRunAt } from './triggers.js';
 import * as composio from '../composio.js';
 import * as mail from '../mail.js';
@@ -28,7 +34,7 @@ const liveForPurchase = {
   forTool: async (userId, sessionId) => execInSandbox(userId, 'browser_action', { event:{type:'wait',ms:1,agent:true}, sessionId }),
   content: async (session) => session,
 };
-const purchaseFlow = createPurchaseFlow({ live:liveForPurchase });
+const purchaseFlow = createPurchaseFlow({ live:liveForPurchase, wallet:belnaWallet });
 function safeBrowserResult(out, ctx) {
   const result = { ...(out || {}) };
   const redact = (value) => {
@@ -495,6 +501,8 @@ const TOOLS = {
       const event = browserEvent(args || {});
       if (!String(args.summary || '').trim()) throw badInput('browser_submit needs a summary of what the action will do.');
       await purchaseFlow.beforeSubmit(args, ctx);
+      if (args.purchase?.payment?.method === 'belna_wallet') return belnaWallet.executePurchase(ctx.userId,JSON.parse(ctx.approvedDetail),{sessionId:ctx.sessionId});
+      if(args.purchase)await belnaWallet.recordExistingPurchase(ctx.userId,JSON.parse(ctx.approvedDetail));
       const out = await execInSandbox(ctx.userId, 'browser_action', { event, sessionId: ctx.sessionId, live: await liveChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('globe', `browser_submit: ${event.type} on ${out.vmName}`));
       return safeBrowserResult(out, ctx);
@@ -710,6 +718,8 @@ const TOOLS = {
     description: 'Complete a Shop Pay UCP checkout after owner approval. Never collect card numbers.',
     approvalDetail: async ({ merchant, checkoutId }, { userId }) => JSON.stringify(await shoppay.purchaseQuote(userId, { merchant, checkoutId })),
     run: async ({ merchant, checkoutId }, ctx) => {
+      const selection=await belnaWallet.preferences(ctx.userId);
+      if(selection.activeMethod!=='existing_card')throw new Error('Existing card is inactive. Select it in Settings before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
@@ -829,14 +839,17 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
   for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
+  if (/buy|purchase|order|shop|wallet|shipping|delivery|address|amazon|köp|adress|leverans/.test(t)) names.add('shipping_addresses');
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
+  if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money/.test(t)) { names.add('wallet_status'); names.add('wallet_receive'); names.add('wallet_send'); names.add('wallet_set_limit'); }
   return [...names].map((n) => TOOLS[n]).filter((tool) => tool && tool.available !== false);
 }
 
 // Goals and Library tools, plus Library copies of generated pages, Canvas files and images.
 Object.assign(TOOLS, PERSONAL_TOOLS);
+Object.assign(TOOLS, createWalletTools(belnaWallet));
 withLibraryAutosave(TOOLS);
 
 async function runParallel(calls, ctx) {

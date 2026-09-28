@@ -10,6 +10,9 @@ const { searchProducts } = require('./product-search');
 const { entry } = require('./tracing');
 const composio = require('../composio');
 const store = require('../store');
+const { createWalletTools } = require('./wallet-tools');
+const privateCheckout = require('../private-checkout-client').createPrivateCheckoutClient({exportCheckout:require('./azure-vm').exportCheckout});
+const belnaWallet = require('../belna-wallet').createBelnaWallet({ store,secureCheckout:privateCheckout.factory });
 const { PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave } = require('./personal-tools');
 const azure = require('./azure-vm');
 const live = require('./live');
@@ -19,7 +22,7 @@ const { PLANS } = require('../plans');
 const { questionArgs, presentArgs, connectArgs } = require('./cards');
 const { forbiddenPaymentSecret, cardNumberIn } = require('./payment-safety');
 const { createPurchaseFlow } = require('./purchase');
-const purchaseFlow = createPurchaseFlow({ live });
+const purchaseFlow = createPurchaseFlow({ live, wallet:belnaWallet });
 const safePageText = (value, s) => {
   let out = String(value || '');
   for (const secret of s.sensitiveValues || []) if (secret) out = out.split(secret).join('[protected]');
@@ -94,6 +97,8 @@ async function pageAction(name, args, ctx) {
   if (name === 'browser_submit' && !String(args.summary || '').trim()) throw badInput('browser_submit needs a summary of what the action will do.');
   if (name === 'browser_submit') await purchaseFlow.beforeSubmit(args, ctx);
   else await purchaseFlow.beforeAction(args, ctx);
+  if (name === 'browser_submit' && args.purchase?.payment?.method === 'belna_wallet') return belnaWallet.executePurchase(ctx.userId,JSON.parse(ctx.approvedDetail),{sessionId:ctx.sessionId});
+  if(name==='browser_submit' && args.purchase)await belnaWallet.recordExistingPurchase(ctx.userId,JSON.parse(ctx.approvedDetail));
   const session = await live.forTool(ctx.userId, ctx.sessionId, ctx.trace, false);
   const out = browserResult(await live.agentInput(session, event, ctx.trace));
   ctx.trace(entry('globe', `${name}: ${event.type}`));
@@ -755,6 +760,8 @@ const TOOLS = {
     },
     run: async ({ merchant, checkoutId }, ctx) => {
       const shoppay = require('../shoppay');
+      const selection=await belnaWallet.preferences(ctx.userId);
+      if(selection.activeMethod!=='existing_card')throw new Error('Existing card is inactive. Select it in Settings before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
@@ -882,14 +889,17 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
   for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
+  if (/buy|purchase|order|shop|wallet|shipping|delivery|address|amazon|köp|adress|leverans/.test(t)) names.add('shipping_addresses');
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
+  if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money/.test(t)) { names.add('wallet_status'); names.add('wallet_receive'); names.add('wallet_send'); names.add('wallet_set_limit'); }
   return [...names].map((n) => TOOLS[n]).filter((tool) => tool && tool.available !== false);
 }
 
 // Goals and Library tools, plus Library copies of generated pages, Canvas files and images.
 Object.assign(TOOLS, PERSONAL_TOOLS);
+Object.assign(TOOLS, createWalletTools(belnaWallet));
 withLibraryAutosave(TOOLS);
 
 async function runParallel(calls, ctx) {

@@ -118,7 +118,7 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
   }
 
   // Product pages are read on demand, not carried in the system prompt.
-  assert.deepEqual(READ_DOC_SCHEMA.parameters.properties.page.enum.sort(),['approvals','automations','billing','capabilities','connected-apps','mailbox','memory-and-files','privacy-and-credentials']);
+  assert.deepEqual(READ_DOC_SCHEMA.parameters.properties.page.enum.sort(),['approvals','automations','billing','capabilities','connected-apps','mailbox','memory-and-files','privacy-and-credentials','wallet']);
   assert.match(readDoc('billing').text,/Free: 50 million tokens a month/);
   assert.match(readDoc('nope').error,/Unknown page/);
   const docs=reply({functionCalls:[{name:'read_doc',args:{page:'approvals'}}]},{text:'New sites ask first.'});

@@ -43,6 +43,17 @@ function publicUrlProblem(value) {
   return '';
 }
 
+// For fetches that cannot take safeLookup (the owner's own connectors): every address the
+// name resolves to must be public. Throws when the name does not resolve.
+async function hostResolvesPublic(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '');
+  if (net.isIP(host)) return isPublicAddress(host);
+  let addresses;
+  try { addresses = await dns.promises.lookup(host, { all: true }); }
+  catch { throw Object.assign(new Error(`Could not find ${host}.`), { code: 'HOST_BLOCKED' }); }
+  return addresses.length > 0 && addresses.every((a) => isPublicAddress(a.address));
+}
+
 function safeLookup(hostname, options, callback) {
   dns.lookup(hostname, { ...options, all: true }, (error, addresses) => {
     if (error) return callback(error);
@@ -234,4 +245,4 @@ async function fetchAllowlisted(url, opts = {}, timeoutMs = 9000) {
   }
 }
 
-module.exports = { ALLOW_HOSTS, hostAllowed, fetchAllowlisted, fetchPublic, readPage, readHtml, searchDuckDuckGo, publicUrlProblem, isPublicAddress, safeLookup, htmlToText };
+module.exports = { ALLOW_HOSTS, hostAllowed, fetchAllowlisted, fetchPublic, readPage, readHtml, searchDuckDuckGo, publicUrlProblem, isPublicAddress, hostResolvesPublic, safeLookup, htmlToText };

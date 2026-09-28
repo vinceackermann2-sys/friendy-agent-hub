@@ -24,7 +24,10 @@
     "test:agent-chat": "node tests/agent-chat.real.cjs",
     "test:memory": "node tests/memory-auto.js",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test:wallet": "node tests/belna-wallet.cjs && node tests/belna-wallet-sql.cjs && node tests/wallet-purchases.cjs && node tests/wallet-recovery-health.cjs && node scripts/bundle-wallet-recovery.mjs && node tests/wallet-recovery-worker.cjs && node tests/whop-webhook.cjs && node tests/wallet-webhook-queue.cjs && node tests/shipping-addresses.cjs && node tests/wallet-preferences.cjs",
+    "test:wallet-ui": "node tests/wallet-ui.cjs",
+    "test:private-checkout": "node tests/private-checkout.cjs"
   },
   "overrides": {
     "rolldown": "1.2.1"

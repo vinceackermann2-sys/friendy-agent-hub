@@ -12,6 +12,7 @@ import { creditsForCost, PLANS, REFERRAL_TOKENS_EACH } from './plans.js';
 import { createTokenWallet } from './token-wallet.js';
 import { createPersonalStore } from './personal-store.js';
 import { createClientStateStore } from './client-state.js';
+import { createBelnaWalletStore } from './belna-wallet-store.js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
@@ -1664,6 +1665,7 @@ async function getSignupAt(userId) {
   return d.signupDates[userId];
 }
 const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, getSignupAt, uid, plans: PLANS });
+const { getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers, claimWalletPurchase, saveWalletPurchase, listWalletPurchases, getWalletPurchase, listPendingWalletPurchases, getWalletPurchaseByCard, listPendingWalletConnections, walletRecoveryReady, listShippingAddresses, saveShippingAddress, deleteShippingAddress, getWalletPreferences, saveWalletPreferences, recordExistingPurchase, listExistingPurchases } = createBelnaWalletStore({ supa, ensureProfile });
 const { addTokenGrant, ensureMonthlyTokens, tokenWallet: getTokenWallet,
   claimTokenDaily, releaseTokenDaily, chargeRawTokens, freePeriod } = tokenWallet;
 const { GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal, LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem } = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
@@ -1671,6 +1673,11 @@ const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureP
 const { list: listClientState, save: saveClientState, removeChat: deleteClientChat } = clientState;
 
 export {
+  recordExistingPurchase, listExistingPurchases,
+  getWalletPreferences, saveWalletPreferences,
+  listShippingAddresses, saveShippingAddress, deleteShippingAddress,
+  claimWalletPurchase, saveWalletPurchase, listWalletPurchases, getWalletPurchase, listPendingWalletPurchases, getWalletPurchaseByCard, listPendingWalletConnections, walletRecoveryReady,
+  getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers,
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
   GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal,
   LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,
