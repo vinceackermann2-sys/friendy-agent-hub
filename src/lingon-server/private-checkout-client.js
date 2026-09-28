@@ -13,7 +13,7 @@ function createPrivateCheckoutClient({env=process.env,fetchImpl=(...args)=>fetch
   async function call(path,body,method='POST',timeout=25000){
     const c=config();if(!c)throw fail();
     try {
-      const res=await fetchImpl(c.origin+path,{method,redirect:'error',signal:AbortSignal.timeout(timeout),
+      const res=await fetchImpl(c.origin+path,{method,redirect:'manual',signal:AbortSignal.timeout(timeout),
         headers:{Authorization:'Bearer '+c.token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
       if(!res.ok)throw fail();
       return await res.json();

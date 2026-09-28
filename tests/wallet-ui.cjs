@@ -50,9 +50,11 @@ const {chromium}=require('playwright');
   await page.locator('.wallet-address').waitFor();assert.match(await page.locator('.wallet-address').innerText(),/Default/);
   await page.locator('[data-act="wallet-address-edit"]').click();await page.locator('#wallet-address-line1').fill('New Street 2');await page.getByRole('button',{name:'Save address',exact:true}).click();
   await page.getByText('Ada Lovelace, New Street 2, 11122 Stockholm, SE',{exact:true}).waitFor();
-  // Belna Wallet set up from the Settings choice becomes the way the agent pays.
+  // Belna Wallet set up in Settings does not replace the card already paying; the owner switches to it.
   await option('belna_wallet').locator('.wpay-side [data-act="wallet-connect-belna"]').click();await page.locator('#belna-wallet-country').selectOption('SE');
-  await page.getByRole('button',{name:'Create wallet',exact:true}).click();await page.locator('.wpay-opt.on').filter({hasText:'Belna Wallet'}).waitFor();
+  await page.getByRole('button',{name:'Create wallet',exact:true}).click();await option('belna_wallet').locator('.wpay-main[data-act="wallet-switch"]').waitFor();
+  assert.equal(await option('existing_card').getAttribute('class').then(c=>/\bon\b/.test(c)),true,'the card already paying stays active');
+  await option('belna_wallet').locator('.wpay-main').click();await page.locator('.wpay-opt.on').filter({hasText:'Belna Wallet'}).waitFor();
   assert.deepEqual(requests.find(x=>x.path.endsWith('/setup')).body,{country:'SE'});
   await page.getByRole('button',{name:'Back to chat',exact:true}).click();await page.locator('.wallet-panel [data-act="belna-wallet-card-connect"]').waitFor();
   assert.match(await page.locator('.wl-balance').innerText(),/Available\s+\$12\.50/);

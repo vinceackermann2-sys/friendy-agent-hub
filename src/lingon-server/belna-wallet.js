@@ -19,14 +19,27 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     const base = environment() === 'sandbox' ? 'https://sandbox-api.whop.com/api/v1' : 'https://api.whop.com/api/v1';
     let response;
     try {
-      response = await fetchImpl(base + path, { method, redirect:'error', signal:AbortSignal.timeout(20000),
+      response = await fetchImpl(base + path, { method, redirect:'manual', signal:AbortSignal.timeout(20000),
         headers:{ Authorization:'Bearer ' + setting('WHOP_COMPANY_API_KEY'), 'Api-Version-Date':'2026-09-25', 'Content-Type':'application/json', ...(key ? { 'Idempotency-Key':key } : {}) },
         ...(body ? { body:JSON.stringify(body) } : {}) });
-    } catch { throw fail('Your wallet could not be reached. Please try again.', 'PROVIDER'); }
+    } catch (error) {
+      console.error('belna-wallet-provider-transport', {
+        name: String(error?.name || '').slice(0, 40),
+        causeCode: String(error?.cause?.code || '').slice(0, 40),
+        message: String(error?.message || '').replaceAll(setting('WHOP_COMPANY_API_KEY'), '[redacted]').slice(0, 160),
+      });
+      throw fail('Your wallet could not be reached. Please try again.', 'PROVIDER');
+    }
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       // Provider errors may contain account details; only classified, friendly copy leaves here.
       const message = String(data?.error?.message || '').toLowerCase();
+      // Whop returns 400 before an owner has an issuer account. This specific
+      // provider error on the card list means no cards exist yet.
+      // Keep every other provider failure blocking recovery.
+      if (response.status===400 && method==='GET' && path.startsWith('/cards?') && /^no rain account found\b/.test(message)) return {data:[]};
+      console.error('belna-wallet-provider-rejection', { status:response.status,
+        reason:/no rain account found/.test(message)?'NO_CARD_ACCOUNT':/rain account is not approved/.test(message)?'CARD_NOT_APPROVED':/identity|verification/.test(message)?'IDENTITY_REQUIRED':/not authorized|permission/.test(message)?'PERMISSION':'OTHER' });
       if (/verification|identity/.test(message)) throw fail('Complete your identity check before creating your card.', 'VERIFY');
       if (/application|approved/.test(message)) throw fail('Your card application is being reviewed. Refresh after it is approved.', 'REVIEW');
       throw Object.assign(fail('Your wallet request could not be completed. Please try again.', 'PROVIDER'),{providerStatus:response.status});
@@ -49,7 +62,12 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
   async function snapshot(userId) {
     if (!configured()) return { wallet:{ configured:false, status:'unavailable', cardProgramAvailable:false, card:null, balance:null }, transactions:[] };
     const row = await record(userId);
-    if (!row?.account_id) return { wallet:{ configured:true, status:row ? 'setup_pending' : 'not_created', cardProgramAvailable:cardProgramAvailable(), card:null, balance:null }, transactions:[] };
+    if (!row?.account_id) {
+      // Check the live server key before offering setup. Merely having an
+      // environment value is not evidence that the provider accepts it.
+      await checkProviderConnection();
+      return { wallet:{ configured:true, status:row ? 'setup_pending' : 'not_created', cardProgramAvailable:cardProgramAvailable(), card:null, balance:null }, transactions:[] };
+    }
     const account = await request('/accounts/' + encodeURIComponent(row.account_id));
     if (account.parent_account?.id !== platformAccountId()) throw fail('Your wallet account does not belong to this Belna connection.', 'PROVIDER');
     if(String(row.application_status||'').startsWith('connection_')){
@@ -176,7 +194,10 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
           const account=await request('/accounts/'+encodeURIComponent(row.account_id));
           if(account.capabilities?.card_issuing==='active')await store.saveBelnaWallet(row.user_id,{application_status:'approved'});
         }
-      } catch { unresolved++; }
+      } catch (error) {
+        unresolved++;
+        console.error('belna-wallet-connection-recovery', { code:error?.code || 'STORE', providerStatus:error?.providerStatus || null });
+      }
       finally {
         try { await store.saveBelnaWallet(row.user_id,{last_connection_check_at:new Date().toISOString()}); }
         catch { unresolved++; }

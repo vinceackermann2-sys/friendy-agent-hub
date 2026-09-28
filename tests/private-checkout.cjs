@@ -52,7 +52,7 @@ async function launch(){
  }finally{await runtime.closeAll();}
  const token='server-only-test-key'.repeat(3),calls=[];
  const client=createPrivateCheckoutClient({env:{PRIVATE_CHECKOUT_URL:'https://pay.example',PRIVATE_CHECKOUT_TOKEN:token},exportCheckout:async(...args)=>calls.push(args),fetchImpl:async(url,options)=>{
-  assert.equal(options.headers.Authorization,'Bearer '+token);assert.equal(options.redirect,'error');return Response.json(url.endsWith('/imports')?{uploadId:crypto.randomUUID()}:url.endsWith('/health')?{ok:true,protocol:1,browserSandbox:true}:url.endsWith('/verify')?{verified:true}:url.endsWith('/submit')?{submitted:true,ownerActionRequired:true}:{closed:true});
+  assert.equal(options.headers.Authorization,'Bearer '+token);assert.equal(options.redirect,'manual');return Response.json(url.endsWith('/imports')?{uploadId:crypto.randomUUID()}:url.endsWith('/health')?{ok:true,protocol:1,browserSandbox:true}:url.endsWith('/verify')?{verified:true}:url.endsWith('/submit')?{submitted:true,ownerActionRequired:true}:{closed:true});
  }});
  assert.equal(await client.factory.available(),true);const executor=await client.factory({userId,approved,purchaseId:id,context:{sessionId:'chat'}});assert.ok(!JSON.stringify(calls).includes(token));await executor.verify(approved);await executor.submit({approved,card:{}});await executor.close();
  const failed=createPrivateCheckoutClient({env:{PRIVATE_CHECKOUT_URL:'https://pay.example',PRIVATE_CHECKOUT_TOKEN:token},fetchImpl:async()=>{throw Error('PAN 4242424242424242 '+token);}});await assert.rejects(failed.ownerState(id,userId),e=>!e.message.includes(token)&&!e.message.includes('424242'));

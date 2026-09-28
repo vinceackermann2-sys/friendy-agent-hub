@@ -20,10 +20,12 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     walletRecoveryReady:async()=>recoveryReady,
   };
   const fetchImpl=async (url, init) => {
+    assert.equal(init.redirect, 'manual');
     const path=new URL(url).pathname.replace('/api/v1',''), body=init.body ? JSON.parse(init.body) : null;
     calls.push({path,method:init.method,key:init.headers['Idempotency-Key'],body,version:init.headers['Api-Version-Date']});
     let data;
     if(path==='/accounts' && init.method==='POST') data={id:'biz_one',owner:{id:'user_owner'},parent_account:{id:'biz_timewarp'}};
+    else if(path==='/accounts/biz_timewarp') data={id:'biz_timewarp'};
     else if(path==='/accounts/biz_one') data={parent_account:{id:wrongParent?'biz_other':'biz_timewarp'},balances:[{symbol:'USD',breakdown:{available:'100.25',pending:'2.50'}}],capabilities:{card_issuing:cardCapability,transfer:'active'}};
     else if(path==='/cards' && init.method==='POST') data=applicationUrl?{object:'card_application',id:'ciac_one',status:'needs_verification',hosted_url:applicationUrl}:card={object:'card',id:'icrd_one',status:'active',last4:'4242',name:body.name,user_id:'user_owner',secrets:{card_number:'4242424242424242',cvc:'123'}};
     else if(path==='/cards') data={data:card ? [card] : []};
@@ -41,6 +43,14 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   const wallet=createBelnaWallet({store,fetchImpl,env:{WHOP_COMPANY_API_KEY:'secret',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp',WHOP_SANDBOX:'true',WHOP_CARD_ISSUING_ENABLED:'true'}});
   await assert.rejects(createBelnaWallet({store,fetchImpl,env:{WHOP_COMPANY_API_KEY:'secret',WHOP_SANDBOX:'true'}}).connectCard('u1'),/not available/);
   assert.equal((await createBelnaWallet({store,env:{}}).snapshot('u1')).wallet.configured,false);
+  assert.equal((await wallet.snapshot('new-owner')).wallet.status,'not_created');
+  await assert.rejects(createBelnaWallet({store,env:{WHOP_COMPANY_API_KEY:'rejected',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp'},fetchImpl:async()=>({ok:false,status:401,json:async()=>({})})}).snapshot('new-owner'),/could not be completed/);
+  for (const [status,message,expected] of [[400,'No Rain account found',0],[400,'No Rain account found. Please apply for a card first.',0],[400,'Invalid account',1],[401,'No Rain account found',1]]) {
+    const pendingWallet=createBelnaWallet({env:{WHOP_COMPANY_API_KEY:'secret',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp'},
+      store:{supaConfigured:()=>true,listPendingWalletConnections:async()=>[{account_id:'biz_pending'}],saveBelnaWallet:async()=>{}},
+      fetchImpl:async(url,init)=>{assert.equal(init.redirect,'manual');assert.ok(url.includes('/cards?'));return {ok:false,status,json:async()=>({error:{message}})};}});
+    assert.equal((await pendingWallet.reconcileConnectionCards()).unresolved,expected,'only the precise pre-issuer no-account response is an empty card list');
+  }
   const owner={id:'u1',email:'a@example.com',email_confirmed_at:'2026-09-01T00:00:00Z'};
   await assert.rejects(wallet.setup(owner,{country:'Sweden'}),/country code/);
   await assert.rejects(wallet.setup({id:'u1',email:'a@example.com'},{country:'SE'}),/Confirm your email/,'an unconfirmed email never becomes a wallet address');
