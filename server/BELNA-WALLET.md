@@ -24,16 +24,19 @@ account and issuer identity/card approval. The owner controls all funds.
   as `WHOP_COMPANY_API_KEY` in the Lingon Agent Helper Lovable project. It adds
   the three bank withdrawal scopes to the previous wallet scopes and expires
   28 September 2027. `WHOP_PLATFORM_ACCOUNT_ID` and `WHOP_SANDBOX=false` are saved.
-  The new app key still needs live authentication after this release is published.
+  A signed-in request on the published site now authenticates against the live
+  TimeWarp platform account and returns the unconnected-wallet state.
 - The private checkout source, agent session bridge and owner-only bank challenge
   screen are implemented and tested with a fake card in an isolated browser.
   The dedicated Azure host passed authenticated HTTPS health with a sandboxed
   browser; anonymous health returned 401. Its server token exists only on that
-  host and in Supabase Vault. Lovable's checkout origin and token are still
-  pending. No Whop or app execution credential goes to the payment host.
-- This source release must be published in Lovable before its routes appear
-  on the live site. Live purchase card issuing remains disabled until a
-  consenting owner's issuer and merchant tests pass.
+  host, in Supabase Vault and as a Lovable server secret. The checkout origin is
+  also saved in Lovable. No Whop or app execution credential goes to the payment
+  host. The host is not yet tested from an actual issuer-approved purchase.
+- The wallet source release and edge-compatible provider/checkout requests are
+  published on `belna.se`. Signed-in Wallet and Settings views load. Owner card
+  applications and withdrawal UI are enabled. Live purchase card issuing stays
+  explicitly disabled until a consenting owner's issuer and merchant tests pass.
 
 Secrets belong only in server stores; never use VITE_ variables or chat.
 Lovable preview receives secret changes immediately, while the live app requires
@@ -111,19 +114,15 @@ bank challenges, redirects and merchant confirmation need live validation.
 
 ## Activation and live validation
 
-1. Publish the wallet release in Lovable and verify the new app key against the
-   live TimeWarp account. Install/configure the dedicated private host and save
-   `PRIVATE_CHECKOUT_URL` and `PRIVATE_CHECKOUT_TOKEN` only as Lovable server secrets.
-2. Enable owner card applications and bank withdrawal UI only with the required
-   provider scopes. A consenting owner must create their wallet, complete KYC
-   and receive issuer approval themselves. Do not infer card access from the
+1. A consenting owner must create their wallet, complete KYC and receive issuer
+   approval themselves. Do not infer connected-account card access from the
    team-member dashboard or promise every country is eligible.
-3. Check live signed card event ingestion/deduplication, issuer cancellation,
+2. Check live signed card event ingestion/deduplication, issuer cancellation,
    later capture/refund, connection-card cleanup and recovery failures. Activate
    Vault `wallet_recovery_enabled` only after validating the recovery paths.
    Monitor queue age and unresolved attempts; current recovery processes five
    queued events and up to 100 pending cards per run.
-4. With explicit merchant/item/maximum-budget approval, test a small purchase,
+3. With explicit merchant/item/maximum-budget approval, test a small purchase,
    decline, expiry, owner pause, bank challenge and unknown outcome. Enable
    `WHOP_CARD_ISSUING_ENABLED=true` only after these gates are met. Missing or stale
    recovery or private host health still blocks card creation automatically.
