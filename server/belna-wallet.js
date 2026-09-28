@@ -26,6 +26,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       console.error('belna-wallet-provider-transport', {
         name: String(error?.name || '').slice(0, 40),
         causeCode: String(error?.cause?.code || '').slice(0, 40),
+        message: String(error?.message || '').replaceAll(setting('WHOP_COMPANY_API_KEY'), '[redacted]').slice(0, 160),
       });
       throw fail('Your wallet could not be reached. Please try again.', 'PROVIDER');
     }
