@@ -185,5 +185,6 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   assert.deepEqual(cardChanges.pop(),['u1',{frozen:false}]);
   assert.equal(cardChanges.length,0);
   await require('./wallet-owner-isolation.cjs')();
+  await require('./wallet-card-connection.cjs')();
   console.log('Belna wallet: ownership, private USD activity, card privacy, KYC connection cancellation, approval binding, pause/resume and safe retries passed');
 })().catch(e=>{console.error(e);process.exit(1);});

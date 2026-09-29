@@ -9,13 +9,13 @@ const {chromium}=require('playwright');
    localStorage.setItem('lingon.session',JSON.stringify({access_token:'ui-audit',user:{id:'ui-audit',email:'audit@example.invalid'}}));
    if(!localStorage.getItem('lingon.v1'))localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'ui-audit',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet-chat',chats:[{id:'wallet-chat',title:'Wallet setup',messages:[],at:Date.now()}],canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
   });
-  const requests=[],wallet={configured:true,status:'not_created',cardProgramAvailable:true,card:null,balance:null};let addresses=[],prefs={activeMethod:null,merchantEnabled:false},identityApproved=false;
+  const requests=[],wallet={configured:true,status:'not_created',cardProgramAvailable:true,card:null,balance:null};let addresses=[],prefs={activeMethod:null,merchantEnabled:false},identityApproved=false,cardApplicationState=null;
   await context.route('**/api/**',async route=>{
    const req=route.request(),path=new URL(req.url()).pathname,body=req.postData()?JSON.parse(req.postData()):{};let result={};
    if(req.method()==='POST')requests.push({path,body});
    if(path==='/api/wallet-preferences'){if(req.method()==='POST')prefs={...prefs,...body};result=prefs;}
    else if(path==='/api/wallet-history')result={history:[{title:'Amazon',amount:29,currency:'USD',status:'awaiting_confirmation'}]};
-   else if(path==='/api/belna-wallet'){if(identityApproved&&!wallet.cardReady)Object.assign(wallet,{status:'card_required',identityVerified:true,verificationStatus:'approved'});result={wallet,activity:[{title:'Deposit',amount:12.5,status:'recorded'}]};}
+   else if(path==='/api/belna-wallet'){if(identityApproved&&!wallet.cardReady)Object.assign(wallet,{status:cardApplicationState==='unavailable'?'card_unavailable':['needs_verification','needs_information'].includes(cardApplicationState)?'card_action_required':['pending','manual_review','approved'].includes(cardApplicationState)?'review':['denied','locked','canceled'].includes(cardApplicationState)?'denied':'card_required',cardApplicationStatus:cardApplicationState,identityVerified:true,verificationStatus:'approved'});result={wallet,activity:[{title:'Deposit',amount:12.5,status:'recorded'}]};}
    else if(path==='/api/shop-pay')result={shopPay:{configured:true,connected:false},orders:[]};
    else if(path==='/api/belna-wallet/setup'){Object.assign(wallet,{status:'verification_required',identityVerified:false,verificationStatus:'pending',cardReady:false,balance:{available:12.5,pending:3},agentCardPayments:false,dailyCardLimitUsd:50,paused:false});result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/card-connect'){Object.assign(wallet,{status:'ready',cardReady:true});result={wallet,activity:[]};}
@@ -74,6 +74,16 @@ const {chromium}=require('playwright');
   assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-verify"]').count(),0);
   await page.getByRole('button',{name:'Check status',exact:true}).click();
   await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).waitFor();
+  for(const [issuer,copy,canContinue] of [['needs_verification','Finish the card issuer’s verification',true],['needs_information','The card issuer needs more information',true],['pending','Your card application is in review',false],['denied','The issuer has not approved your card application',false],['unavailable','The issuer has not approved card issuing',true]]){
+    cardApplicationState=issuer;await page.getByRole('button',{name:'Check status',exact:true}).click();
+    await page.locator('.wl-setup').getByText(copy,{exact:false}).waitFor();
+    assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-card-connect"]').count(),canContinue?1:0);
+    assert.equal(await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).count(),1,'issuer verification never resets wallet KYC');
+  }
+  await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.getByText('Card issuing not approved · retry setup or contact card support',{exact:true}).waitFor();
+  if(await page.getByRole('button',{name:'Back to chat',exact:true}).count())await page.getByRole('button',{name:'Back to chat',exact:true}).click();
+  else {await page.getByRole('button',{name:'Back to Settings',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();}
+  cardApplicationState=null;await page.getByRole('button',{name:'Check status',exact:true}).click();
   await page.getByRole('button',{name:'Connect card',exact:true}).click();await page.getByText('Card payments are on',{exact:true}).waitFor();
   await page.locator('.wallet-panel').getByRole('button',{name:'Send',exact:true}).click();await page.locator('#belna-wallet-recipient').fill('friend@example.com');await page.locator('#belna-wallet-send-amount').fill('5');
   await page.getByRole('button',{name:'Review send',exact:true}).click();await page.getByRole('button',{name:'Confirm send',exact:true}).waitFor();assert.equal(requests.filter(x=>x.path.endsWith('/send')).length,0);

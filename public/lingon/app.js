@@ -5440,7 +5440,7 @@ function refreshReturningWallet(){
 function scheduleWalletSetupRefresh(){
   clearTimeout(walletSetupRefreshTimer);
   const w=belnaWalletCache?.wallet;
-  if(!walletVisible() || !['verification_required','card_required','review'].includes(w?.status))return;
+  if(!walletVisible() || !['verification_required','card_required','card_action_required','card_unavailable','review'].includes(w?.status))return;
   if(!walletSetupRefreshUntil)walletSetupRefreshUntil=Date.now()+120000;
   if(Date.now()>=walletSetupRefreshUntil)return;
   const owner=belnaWalletOwner;
@@ -5614,7 +5614,9 @@ function walletCardStatus(w){
   if (w.cardProgramAvailable === false) return { text:'Not available yet' };
   if (w.cardReady ?? w.status === 'ready') return w.paused ? { text:'Paused', tone:'warn' } : { text:'On · one-time card per approved purchase' };
   if (w.status === 'denied') return { text:'Not approved', tone:'warn' };
-  if (w.status === 'review') return { text:'In review' };
+  if (w.status === 'review') return { text:w.cardApplicationStatus==='approved'?'Approved · activating card issuing':'In review with the card issuer' };
+  if (w.status === 'card_action_required') return { text:w.cardApplicationStatus==='needs_information'?'Card issuer needs more information':'Finish card issuer verification', tone:'warn' };
+  if (w.status === 'card_unavailable') return { text:'Card issuing not approved · retry setup or contact card support', tone:'warn' };
   if (w.identityVerified) return { text:'Identity verified · connect card' };
   return { text:'Identity check needed', tone:'warn' };
 }
@@ -5622,8 +5624,8 @@ function walletBelnaGroup(){
   const { w, created } = belnaWalletState();
   if (!created) return '';
   const card = walletCardStatus(w), ready = w.cardReady ?? w.status === 'ready', busy = belnaWalletBusy ? ' disabled' : '';
-  const cardActions = w.cardProgramAvailable === false || ready || w.status === 'denied' ? ''
-    : `<span class="wset-actions">${!w.identityVerified && w.verificationStatus!=='manual_review' ? `<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>Verify identity</button>` : ''}<button type="button" class="btn ${!w.identityVerified ? 'ghost ' : ''}small" data-act="belna-wallet-card-connect"${busy}>Connect card</button><button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></span>`;
+  const cardActions = w.cardProgramAvailable === false || ready ? ''
+    : `<span class="wset-actions">${!w.identityVerified && w.verificationStatus!=='manual_review' ? `<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>Verify identity</button>` : ''}${!['review','denied'].includes(w.status)?`<button type="button" class="btn ${!w.identityVerified ? 'ghost ' : ''}small" data-act="belna-wallet-card-connect"${busy}>${w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':'Connect card'}</button>`:''}${['denied','card_unavailable'].includes(w.status)?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a>':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></span>`;
   const limit = Number(w.dailyCardLimitUsd);
   const limitRow = walletLimitEdit
     ? `<div class="wset-row wset-edit wset-limit"><label class="wl-field">Daily card allowance (USD)<input class="field" id="belna-wallet-limit" type="number" min="1" max="2000" step="0.01" value="${Number.isFinite(limit) ? limit : ''}"></label><span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-limit"${busy}>Save</button><button type="button" class="btn ghost small" data-act="wallet-limit-cancel">Cancel</button></span></div>`
@@ -5721,12 +5723,18 @@ function walletSetupContent(w){
     ? `<div class="wl-note warn">${icon('lock', 17)}<span><b>Card spending is paused</b><small>Resume it in wallet settings.</small></span><button type="button" class="btn ghost small" data-act="wallet-manage">Settings</button></div>`
     : `<div class="wl-note ok">${icon('shieldcheck', 17)}<span><b>Card payments are on</b><small>${w.agentCardPayments ? `${esc(state.agent.name)} gets a one-time card for each purchase you approve.` : 'Agent card checkout isn’t available yet.'}</small></span></div>`;
   const busy = belnaWalletBusy ? ' disabled' : '', review = w.status === 'review', denied = w.status === 'denied', verified=w.identityVerified===true;
+  const cardCopy = denied ? 'The issuer has not approved your card application. Contact card support for the next step.'
+    : review ? w.cardApplicationStatus==='approved'?'Your card application is approved. Waiting for card issuing to activate.':'Your card application is in review with the issuer. Check status after it is approved.'
+    : w.status==='card_action_required' ? w.cardApplicationStatus==='needs_information'?'The card issuer needs more information. Continue in its private setup page.':'Finish the card issuer’s verification in its private setup page.'
+    : w.status==='card_unavailable' ? 'The issuer has not approved card issuing for this wallet. Retry setup or contact card support.'
+    : `Then ${esc(state.agent.name)} gets a one-time card for each purchase you approve.`;
+  const cardAction = denied || review ? '' : `<button type="button" class="btn ${verified?'':'ghost '}small" data-act="belna-wallet-card-connect"${busy}>${w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':'Connect card'}</button>`;
   const identityCopy=verified?'Verified with our payment partner':w.verificationStatus==='manual_review'?'In review with our payment partner':w.verificationStatus==='action_required'?'Our payment partner needs more information':w.verificationStatus==='rejected'?'Identity check was declined. Retry with our payment partner.':'Opens with our payment partner';
   const step = (n, done, title, sub, action = '') => `<li class="wl-step${done ? ' done' : ''}"><span class="wl-step-n" aria-hidden="true">${done ? icon('check', 12) : n}</span><span class="wl-copy"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${action}</li>`;
   return `<section class="wl-setup" aria-label="Card setup"><div class="wl-setup-head"><b>Let ${esc(state.agent.name)} buy things</b><small>${verified?2:1} of 3 done</small></div><div class="wl-progress" aria-hidden="true"><span${verified?' style="width:66.67%"':''}></span></div>
     <ol>${step(1, true, 'Create your wallet', '')}
     ${step(2, verified, verified?'Identity verified':'Verify your identity', identityCopy, verified||w.verificationStatus==='manual_review'?'':`<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>${w.verificationStatus==='pending'||w.verificationStatus==='action_required'?'Continue':'Start'}</button>`)}
-    ${step(3, false, 'Connect your card', denied ? 'Your card application wasn’t approved.' : review?'Your card application is in review with the issuer.':`Then ${esc(state.agent.name)} gets a one-time card for each purchase you approve.`, denied ? '' : `<button type="button" class="btn ${verified?'':'ghost '}small" data-act="belna-wallet-card-connect"${busy}>${review?'Continue card setup':'Connect card'}</button>`)}</ol><button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></section>`;
+    ${step(3, false, 'Connect your card', cardCopy, cardAction)}</ol>${denied||w.status==='card_unavailable'?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a> ':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></section>`;
 }
 function walletExistingPanel(){
   const shop = shopPaySnapshot(), home = walletDefaultAddress(), busy = belnaWalletBusy ? ' disabled' : '';

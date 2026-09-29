@@ -34,6 +34,11 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if (!response.ok) {
       // Provider errors may contain account details; only classified, friendly copy leaves here.
       const message = String(data?.error?.message || '').toLowerCase();
+      const rejected = (message, code='PROVIDER') => Object.assign(fail(message,code),{
+        providerStatus:response.status,
+        idempotentReplayed:response.headers?.get?.('Idempotent-Replayed') === 'true',
+        cardNotApproved:method==='POST' && path==='/cards' && response.status===409 && /rain account is not approved|card application.*not approved/.test(String(data?.error?.message || '').toLowerCase()),
+      });
       // Whop returns 400 before an owner has an issuer account. This specific
       // provider error on the card list means no cards exist yet.
       // Keep every other provider failure blocking recovery.
@@ -41,9 +46,9 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       console.error('belna-wallet-provider-rejection', { status:response.status,
         reason:/no rain account found/.test(message)?'NO_CARD_ACCOUNT':/rain account is not approved/.test(message)?'CARD_NOT_APPROVED':/identity|verification/.test(message)?'IDENTITY_REQUIRED':/not authorized|permission/.test(message)?'PERMISSION':'OTHER' });
       if(response.status===403 && path==='/checkout_configurations')throw fail('Payment links need additional Whop permissions. Ask the app owner to finish connecting checkout links.','NOT_SET_UP');
-      if (/verification|identity/.test(message)) throw fail('Complete your identity check before creating your card.', 'VERIFY');
-      if (/application|approved/.test(message)) throw fail('Your card application is being reviewed. Refresh after it is approved.', 'REVIEW');
-      throw Object.assign(fail('Your wallet request could not be completed. Please try again.', 'PROVIDER'),{providerStatus:response.status});
+      if (/verification|identity/.test(message)) throw rejected('Complete your identity check before creating your card.', 'VERIFY');
+      if (/application|approved/.test(message)) throw rejected('The card issuer has not approved card issuing for this wallet.', 'REVIEW');
+      throw rejected('Your wallet request could not be completed. Please try again.');
     }
     if (!data || typeof data !== 'object') throw fail('Your wallet returned an incomplete response. Please try again.', 'PROVIDER');
     return data;
@@ -75,6 +80,11 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     const status = ['approved','pending','manual_review','rejected','action_required','not_started'].includes(profile?.status) ? profile.status : 'not_started';
     return { status };
   }
+  function cardApplicationStatus(account, row) {
+    const saved = String(row.application_status || '').replace(/^connection_application_/, '');
+    const status = account.cards?.status || saved;
+    return ['approved','pending','manual_review','denied','locked','canceled','needs_verification','needs_information'].includes(status) ? status : null;
+  }
   async function snapshot(userId) {
     if (!configured()) return { wallet:{ configured:false, status:'unavailable', cardProgramAvailable:false, card:null, balance:null }, transactions:[] };
     const row = await record(userId);
@@ -102,9 +112,13 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       const card = (cards.data || []).find(x => x.user_id === row.owner_provider_id && (row.card_id ? x.id === row.card_id : x.name === 'Belna agent card'));
       if (card) { row.card_id=card.id; row.card_status = card.status; row.card_last4 = card.last4; await store.saveBelnaWallet(userId, { card_id:card.id, card_status:card.status, card_last4:card.last4 }); }
     }
+    const application = cardApplicationStatus(account,row);
     const status = account.capabilities?.card_issuing === 'active' ? 'ready'
-      : account.cards?.status === 'denied' ? 'denied'
-      : account.cards ? 'review' : verification.status === 'approved' ? 'card_required' : 'verification_required';
+      : ['denied','locked','canceled'].includes(application) ? 'denied'
+      : ['needs_verification','needs_information'].includes(application) ? 'card_action_required'
+      : application ? 'review'
+      : row.application_status === 'connection_refused' ? 'card_unavailable'
+      : verification.status === 'approved' ? 'card_required' : 'verification_required';
     const transactions = row.card_id ? await request('/card_transactions?account_id=' + encodeURIComponent(row.account_id) + '&card_id=' + encodeURIComponent(row.card_id) + '&first=5') : { data:[] };
     const feed=await request('/financial_activity?account_id='+encodeURIComponent(row.account_id)+'&include_resource=false&exclude_internal_movements=true');
     const activity=(feed.data || []).filter(x=>String(x.currency?.code).toLowerCase()==='usd' && x.usd_amount!=null && Number.isFinite(Number(x.usd_amount))).slice(0,20).map(x=>{
@@ -114,7 +128,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       const status=/pending|processing|review|requested|authorized/.test(rawStatus)?'pending':/failed|denied/.test(rawStatus)?'failed':/cancel|void|revers/.test(rawStatus)?'canceled':x.available_at && Date.parse(x.available_at)>Date.now()?'pending':'recorded';
       return {title,amount:Number(x.usd_amount),currency:'USD',status,at:x.posted_at || null};
     });
-    return { activity, wallet:{ configured:true, status, verificationStatus:verification.status, identityVerified:verification.status === 'approved', withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance:balanceView(account), dailyCardLimitUsd:Number(row.daily_card_limit),
+    return { activity, wallet:{ configured:true, status, cardApplicationStatus:application, verificationStatus:verification.status, identityVerified:verification.status === 'approved', withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance:balanceView(account), dailyCardLimitUsd:Number(row.daily_card_limit),
       // Pausing works before a purchase card exists, so it is reported from the owner's record.
       paused:row.card_status==='frozen', country:/^[A-Z]{2}$/.test(row.country || '') ? row.country : null,
       // A secure merchant payment bridge must be integrated before agent card spending is enabled.
@@ -185,15 +199,44 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     const account=await request('/accounts/'+encodeURIComponent(row.account_id));
     if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
     if(account.capabilities?.card_issuing==='active')return snapshot(userId);
+    const application=cardApplicationStatus(account,row);
+    if(['pending','manual_review','denied','locked','canceled'].includes(application))return snapshot(userId);
     if(['connection_card','connection_card_provisioning','connection_card_invitation'].includes(row.application_status))return snapshot(userId);
     // The first request starts the human owner's card application. No reusable
     // card credentials or card number are exposed by this connection flow.
     // Persist the intent before the network call. A lost create response can
     // still leave an issued card, so recovery must know which account to poll.
     await store.saveBelnaWallet(userId,{application_status:'connection_pending',application_requested_at:new Date().toISOString()});
-    const result=await request('/cards',{method:'POST',key:row.card_request_key,body:{account_id:row.account_id,assigned_user_id:row.owner_provider_id,name:'Belna card connection',spend_limit:1,spend_limit_frequency:'one_time'}});
+    const start=key=>request('/cards',{method:'POST',key,body:{account_id:row.account_id,assigned_user_id:row.owner_provider_id,name:'Belna card connection',spend_limit:1,spend_limit_frequency:'one_time'}});
+    // Concurrent retries of the same refused operation must agree on one new
+    // key, so they cannot issue separate cards if approval arrives meanwhile.
+    const retryKey=async key=>'card-connect-'+Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode('card-refused:'+key))),b=>b.toString(16).padStart(2,'0')).join('');
+    if(application==='approved' && row.application_status!=='connection_pending'){
+      // Whop's first POST filed the application. Approval requires a distinct
+      // POST to issue a card; replaying the application key only returns 202.
+      row.card_request_key=await retryKey(row.card_request_key);
+      await store.saveBelnaWallet(userId,{card_request_key:row.card_request_key,application_status:'connection_pending'});
+    }
+    let result;
+    try { result=await start(row.card_request_key); }
+    catch(error) {
+      // Whop caches 4xx responses for 24 hours too. Only this explicit refusal
+      // proves no card was issued. Keep the original key on timeouts, 5xx and
+      // conflicts from requests still processing: their outcome is unknown.
+      if(!error.cardNotApproved)throw error;
+      const freshKey=await retryKey(row.card_request_key);
+      await store.saveBelnaWallet(userId,{card_request_key:freshKey,application_status:'connection_refused'});
+      if(!error.idempotentReplayed)return snapshot(userId);
+      try { result=await start(freshKey); }
+      catch(retryError) {
+        if(!retryError.cardNotApproved)throw retryError;
+        await store.saveBelnaWallet(userId,{card_request_key:await retryKey(freshKey),application_status:'connection_refused'});
+        return snapshot(userId);
+      }
+    }
     if(!['card','card_application','card_provisioning','card_invitation'].includes(result.object))throw fail('Card connection is pending. Please refresh before trying again.','PROVIDER');
-    await store.saveBelnaWallet(userId,{application_status:'connection_'+result.object});
+    await store.saveBelnaWallet(userId,{application_status:result.object==='card_application' && ['approved','pending','manual_review','denied','locked','canceled','needs_verification','needs_information'].includes(result.status)
+      ? 'connection_application_'+result.status : 'connection_'+result.object});
     if(result.object==='card'){
       if(!/^icrd_[a-zA-Z0-9]+$/.test(result.id||''))throw fail('Card connection is pending. Please refresh.','PROVIDER');
       await request('/cards/'+encodeURIComponent(result.id),{method:'PATCH',body:{account_id:row.account_id,canceled:true}});
