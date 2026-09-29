@@ -88,11 +88,14 @@ Stripe remains only for Belna subscription billing.
 
 Payment links create an inline checkout plan using `plan.company_id`, the owner's
 connected account, and validate the returned owner, USD currency, one-time plan
-and exact amount before sharing its URL. The live twelve-scope wallet key does
-not yet include the checkout prerequisites `plan:create`, `access_pass:create`,
-`access_pass:update` and `checkout_configuration:basic:read`; `checkout_configuration:create`
-alone is insufficient. The live unpaid $1 link test was rejected. These additional
-commerce permissions require the owner's authorization before changing the key.
+and exact amount before sharing its URL. The initial live unpaid $1 link test
+was rejected because `checkout_configuration:create` alone is insufficient.
+On 29 September, the owner approved adding `plan:create`, `access_pass:create`,
+`access_pass:update` and `checkout_configuration:basic:read` to the existing app
+server key. The owner completed Whop's additional email security check, and the
+saved key now has sixteen scopes. Live deposit and embedded bank setup screens
+load for the owner's wallet, and an unpaid $1 checkout link was successfully
+created from the published app. Completed funding and payouts still need real funds.
 
 Card connection starts the human owner's issuer application. Whop may send the
 owner to Whop, Sumsub or `verify.raincards.xyz` for verification. Connection-only
