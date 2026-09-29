@@ -7,14 +7,16 @@ module.exports = async function cardConnection() {
   const store={supaConfigured:()=>true,getBelnaWallet:async()=>({...row}),saveBelnaWallet:async(id,p)=>{assert.equal(id,'owner');if(p.card_request_key)keys++;Object.assign(row,p);return {...row};},listBelnaWalletTransfers:async()=>[]};
   const fetchImpl=async(url,init)=>{
     const path=new URL(url).pathname.replace('/api/v1','');
-    const key=init.headers['Idempotency-Key'];calls.push({path,key,method:init.method});
+    const key=init.headers['Idempotency-Key'];calls.push({path,key,method:init.method,body:init.body?JSON.parse(init.body):null});
     let data;
     if(path==='/accounts/biz_owner')data={parent_account:{id:'biz_platform'},verification:{individual:{status:'approved'}},cards:application?{status:application}:null,capabilities:{card_issuing:cardActive?'active':'inactive'},balances:[]};
     else if(path==='/cards'&&init.method==='POST'){
       if(mode==='timeout')throw Error('lost response');
       if(mode==='unknown')return{ok:false,status:409,headers:{get:()=>null},json:async()=>({error:{message:'Idempotency key is still processing'}})};
       if(mode==='replayed'&&key==='old-rejected-key')return{ok:false,status:409,headers:{get:n=>n.toLowerCase()==='idempotent-replayed'?'true':null},json:async()=>({error:{message:'Rain account is not approved'}})};
+      if(mode==='legacy-400'&&key==='old-400-key')return{ok:false,status:400,headers:{get:()=>null},json:async()=>({error:{message:'Card issuing has not been approved'}})};
       if(mode==='fresh-rejected')return{ok:false,status:409,headers:{get:()=>null},json:async()=>({error:{message:'Rain account is not approved'}})};
+      if(mode==='provisioning')return{ok:true,status:202,headers:{get:()=>null},json:async()=>({object:'card_provisioning',provisioning_job_id:'job_owner'})};
       if(mode==='issued'){
         data={object:'card',id:'icrd_issued',status:'active',type:'virtual',user_id:'user_owner',last4:'4242',name:'Belna card connection'};
         cardActive=true;
@@ -34,6 +36,10 @@ module.exports = async function cardConnection() {
   assert.equal(connected.wallet.status,'card_action_required');
   assert.equal(connected.wallet.cardReady,false);
   assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.key),['old-rejected-key',row.card_request_key]);
+  assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.body),[
+    {account_id:'biz_owner',assigned_user_id:'user_owner'},
+    {account_id:'biz_owner',assigned_user_id:'user_owner'},
+  ],'the first call files only the account-owner application, without card issuance options');
   assert.match(row.card_request_key,/^card-connect-[a-f0-9]{64}$/);
   assert.ok(!JSON.stringify(await wallet.snapshot('owner')).includes('onboarding/'),'private issuer URL is absent from snapshots and agent status');
   const before=keys;
@@ -53,6 +59,7 @@ module.exports = async function cardConnection() {
   const issued=await wallet.connectCard('owner');
   assert.equal(issued.wallet.status,'ready');
   assert.notEqual(row.card_request_key,applicationKey,'approved application gets a distinct issuance key');
+  assert.deepEqual(calls.filter(x=>x.method==='POST').at(-1).body,{account_id:'biz_owner',assigned_user_id:'user_owner',name:'Belna card connection',spend_limit:1,spend_limit_frequency:'one_time'},'the second call issues the approved virtual connection card');
   assert.ok(calls.some(x=>x.path==='/cards/icrd_issued'&&x.method==='PATCH'),'connection card is immediately canceled');
   assert.equal((await wallet.connectCard('owner')).wallet.status,'ready','active issuer does not create another card');
   cardActive=false;
@@ -66,6 +73,23 @@ module.exports = async function cardConnection() {
   assert.equal(refused.wallet.cardReady,false);
   assert.equal(refused.wallet.status,'card_unavailable','an unapproved account is not proof of a review');
   assert.notEqual(row.card_request_key,timeoutKey,'confirmed refusal can be retried with a fresh key on the next owner attempt');
+  application=null;row.application_status='connection_pending';row.card_request_key='old-400-key';calls=[];mode='legacy-400';
+  const filed=await wallet.connectCard('owner');
+  assert.equal(filed.wallet.status,'card_action_required','a prior HTTP 400 must not leave the application permanently unfiled');
+  assert.equal(filed.wallet.cardApplicationStatus,'needs_verification');
+  assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.key),['old-400-key',row.card_request_key]);
+  assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.body),Array(2).fill({account_id:'biz_owner',assigned_user_id:'user_owner'}));
+  application=null;row.application_status=null;row.card_request_key='provisioning-key';calls=[];mode='provisioning';
+  const provisioning=await wallet.connectCard('owner');
+  assert.equal(provisioning.wallet.status,'review','Whop HTTP 202 keeps the application in review');
+  assert.equal(provisioning.wallet.cardApplicationStatus,'pending');
+  assert.equal(row.application_status,'connection_application_pending');
+  const provisioningCalls=calls.filter(x=>x.method==='POST').length;
+  await wallet.connectCard('owner');
+  assert.equal(calls.filter(x=>x.method==='POST').length,provisioningCalls,'pending provisioning does not file a duplicate application');
+  application='approved';mode='issued';
+  assert.equal((await wallet.connectCard('owner')).wallet.status,'ready','approved provisioning can proceed to card issuance');
+  cardActive=false;
   application=null;row.application_status=null;row.card_request_key='old-rejected-key';calls=[];mode='replayed';
   await Promise.all([wallet.connectCard('owner'),wallet.connectCard('owner')]);
   assert.equal(new Set(calls.filter(x=>x.method==='POST'&&x.key!=='old-rejected-key').map(x=>x.key)).size,1,'concurrent retries use one replacement key');

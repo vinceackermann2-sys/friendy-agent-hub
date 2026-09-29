@@ -116,7 +116,7 @@ module.exports = async function walletOwnerIsolation() {
   assert.equal((await wallet.reconcilePurchaseCard('biz_alice',submitted[1].cardId)).matched,false,'Alice’s webhook cannot settle Bob’s card');
   cardIssuing=false;
   await wallet.connectCard('bob',forged);
-  const connection = calls.find(x => x.body?.name === 'Belna card connection');
+  const connection = calls.findLast(x => x.path === '/cards' && x.method === 'POST');
   assert.equal(connection.body.account_id,'biz_bob'); assert.equal(connection.body.assigned_user_id,'user_bob');
   assert.equal(cards.get('icrd_2').status,'canceled');
   cardIssuing=true;

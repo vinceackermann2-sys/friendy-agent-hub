@@ -5616,7 +5616,7 @@ function walletCardStatus(w){
   if (w.status === 'denied') return { text:'Not approved', tone:'warn' };
   if (w.status === 'review') return { text:w.cardApplicationStatus==='approved'?'Approved · activating card issuing':'In review with the card issuer' };
   if (w.status === 'card_action_required') return { text:w.cardApplicationStatus==='needs_information'?'Card issuer needs more information':'Finish card issuer verification', tone:'warn' };
-  if (w.status === 'card_unavailable') return { text:'Card issuing not approved · retry setup or contact card support', tone:'warn' };
+  if (w.status === 'card_unavailable') return { text:'Card application not filed · retry setup or contact card support', tone:'warn' };
   if (w.identityVerified) return { text:'Identity verified · connect card' };
   return { text:'Identity check needed', tone:'warn' };
 }
@@ -5726,7 +5726,7 @@ function walletSetupContent(w){
   const cardCopy = denied ? 'The issuer has not approved your card application. Contact card support for the next step.'
     : review ? w.cardApplicationStatus==='approved'?'Your card application is approved. Waiting for card issuing to activate.':'Your card application is in review with the issuer. Check status after it is approved.'
     : w.status==='card_action_required' ? w.cardApplicationStatus==='needs_information'?'The card issuer needs more information. Continue in its private setup page.':'Finish the card issuer’s verification in its private setup page.'
-    : w.status==='card_unavailable' ? 'The issuer has not approved card issuing for this wallet. Retry setup or contact card support.'
+    : w.status==='card_unavailable' ? 'Whop could not file your card application. Retry setup or contact card support.'
     : `Then ${esc(state.agent.name)} gets a one-time card for each purchase you approve.`;
   const cardAction = denied || review ? '' : `<button type="button" class="btn ${verified?'':'ghost '}small" data-act="belna-wallet-card-connect"${busy}>${w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':'Connect card'}</button>`;
   const identityCopy=verified?'Verified with our payment partner':w.verificationStatus==='manual_review'?'In review with our payment partner':w.verificationStatus==='action_required'?'Our payment partner needs more information':w.verificationStatus==='rejected'?'Identity check was declined. Retry with our payment partner.':'Opens with our payment partner';

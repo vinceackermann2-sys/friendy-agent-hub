@@ -74,13 +74,13 @@ const {chromium}=require('playwright');
   assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-verify"]').count(),0);
   await page.getByRole('button',{name:'Check status',exact:true}).click();
   await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).waitFor();
-  for(const [issuer,copy,canContinue] of [['needs_verification','Finish the card issuer’s verification',true],['needs_information','The card issuer needs more information',true],['pending','Your card application is in review',false],['denied','The issuer has not approved your card application',false],['unavailable','The issuer has not approved card issuing',true]]){
+  for(const [issuer,copy,canContinue] of [['needs_verification','Finish the card issuer’s verification',true],['needs_information','The card issuer needs more information',true],['pending','Your card application is in review',false],['denied','The issuer has not approved your card application',false],['unavailable','Whop could not file your card application',true]]){
     cardApplicationState=issuer;await page.getByRole('button',{name:'Check status',exact:true}).click();
     await page.locator('.wl-setup').getByText(copy,{exact:false}).waitFor();
     assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-card-connect"]').count(),canContinue?1:0);
     assert.equal(await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).count(),1,'issuer verification never resets wallet KYC');
   }
-  await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.getByText('Card issuing not approved · retry setup or contact card support',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.getByText('Card application not filed · retry setup or contact card support',{exact:true}).waitFor();
   if(await page.getByRole('button',{name:'Back to chat',exact:true}).count())await page.getByRole('button',{name:'Back to chat',exact:true}).click();
   else {await page.getByRole('button',{name:'Back to Settings',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();}
   cardApplicationState=null;await page.getByRole('button',{name:'Check status',exact:true}).click();
