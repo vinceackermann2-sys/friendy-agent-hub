@@ -4,7 +4,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
 
 (async () => {
   const rows = new Map(), quotes = new Map(), calls = [];
-  let card = null, transferCalls=0, timeout=false,cardCapability='active',verificationUrl='https://verify.sumsub.com/session/abc',recoveryReady=false,applicationUrl=null,wrongParent=false;
+  let card = null, transferCalls=0, timeout=false,cardCapability='active',verificationUrl='https://verify.sumsub.com/session/abc',recoveryReady=false,applicationUrl=null,wrongParent=false,identityStatus='pending',verificationResultStatus='pending';
   const store = {
     supaConfigured:() => true,
     getBelnaWallet:async id => rows.get(id),
@@ -32,7 +32,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     else if(path==='/cards/icrd_one') data=card={...card,status:body.canceled?'canceled':body.frozen ? 'frozen' : 'active'};
     else if(path==='/card_transactions') data={data:[{merchant_name:'Store',usd_amount:5.25,status:'completed',secrets:'LEAK'}]};
     else if(path==='/financial_activity') data={data:[{line_type:'onchain_deposit',currency:{code:'usd'},usd_amount:'25.10',posted_at:'2026-01-01',source:{secrets:'LEAK'}},{line_type:'payment_gross',currency:{code:'btc'},usd_amount:'20'}]};
-    else if(path==='/verifications') data={session_url:verificationUrl};
+    else if(path==='/verifications') {data=init.method==='GET' ? {data:[{kind:'business',status:'approved'},{kind:'individual',status:identityStatus,first_name:'PRIVATE',date_of_birth:'PRIVATE',session_url:verificationUrl}]} : {status:verificationResultStatus,session_url:verificationResultStatus==='approved'?undefined:verificationUrl};if(init.method==='POST'&&verificationResultStatus==='approved')identityStatus='approved';}
     else if(path==='/deposits') data={hosted_url:'https://whop.com/deposit/biz_one'};
     else if(path==='/checkout_configurations') data={purchase_url:'https://whop.com/checkout/ch_one'};
     else if(path==='/access_tokens')data={token:'owner-only-withdrawal-token-'.repeat(3),expires_at:body.expires_at};
@@ -78,6 +78,29 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   assert.ok(!JSON.stringify(account).includes('4242424242424242'));
   assert.ok(!JSON.stringify(rows.get('u1')).includes('secrets'));
   assert.equal(calls.filter(c=>c.path==='/cards' && c.method==='POST').length,0);
+  cardCapability='inactive';identityStatus='pending';
+  assert.equal((await wallet.snapshot('u1')).wallet.identityVerified,false,'business verification cannot complete the human identity step');
+  identityStatus='approved';
+  const verified=await wallet.snapshot('u1');
+  assert.equal(verified.wallet.identityVerified,true);
+  assert.equal(verified.wallet.verificationStatus,'approved');
+  assert.equal(verified.wallet.status,'card_required','approved KYC advances to card connection, even before an issuer account exists');
+  assert.equal(verified.wallet.cardReady,false);
+  assert.equal(verified.wallet.agentCardPayments,false);
+  assert.ok(!JSON.stringify(verified).includes('PRIVATE'),'verified personal data never leaves the provider adapter');
+  assert.ok(!JSON.stringify(verified).includes(verificationUrl),'identity session is owner-action only');
+  const verificationPosts=calls.filter(c=>c.path==='/verifications'&&c.method==='POST').length;
+  assert.equal((await wallet.verify('u1')).wallet.identityVerified,true,'a completed verification has no session URL and must not be restarted');
+  assert.equal(calls.filter(c=>c.path==='/verifications'&&c.method==='POST').length,verificationPosts);
+  identityStatus='pending';verificationResultStatus='approved';
+  const immediate=await wallet.verify('u1');
+  assert.equal(immediate.wallet.identityVerified,true,'approval without a session URL advances identity setup');
+  assert.equal(immediate.wallet.cardReady,false,'immediate approval does not grant card access');
+  identityStatus='rejected';verificationResultStatus='pending';
+  assert.equal((await wallet.snapshot('u1')).wallet.identityVerified,false);
+  await wallet.verify('u1');
+  assert.deepEqual(calls.filter(c=>c.path==='/verifications'&&c.method==='POST').at(-1).body,{kind:'individual',restart:true},'only declined KYC is restarted');
+  identityStatus='pending';cardCapability='active';
   assert.ok(calls.every(c=>c.version==='2026-09-25'));
   await assert.rejects(wallet.updateCard('u2',{frozen:true}),/Create your/);
   await assert.rejects(wallet.updateCard('u1',{dailyLimitUsd:0}),/amount/);

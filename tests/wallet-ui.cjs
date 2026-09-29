@@ -9,15 +9,15 @@ const {chromium}=require('playwright');
    localStorage.setItem('lingon.session',JSON.stringify({access_token:'ui-audit',user:{id:'ui-audit',email:'audit@example.invalid'}}));
    if(!localStorage.getItem('lingon.v1'))localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'ui-audit',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet-chat',chats:[{id:'wallet-chat',title:'Wallet setup',messages:[],at:Date.now()}],canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
   });
-  const requests=[],wallet={configured:true,status:'not_created',cardProgramAvailable:true,card:null,balance:null};let addresses=[],prefs={activeMethod:null,merchantEnabled:false};
+  const requests=[],wallet={configured:true,status:'not_created',cardProgramAvailable:true,card:null,balance:null};let addresses=[],prefs={activeMethod:null,merchantEnabled:false},identityApproved=false;
   await context.route('**/api/**',async route=>{
    const req=route.request(),path=new URL(req.url()).pathname,body=req.postData()?JSON.parse(req.postData()):{};let result={};
    if(req.method()==='POST')requests.push({path,body});
    if(path==='/api/wallet-preferences'){if(req.method()==='POST')prefs={...prefs,...body};result=prefs;}
    else if(path==='/api/wallet-history')result={history:[{title:'Amazon',amount:29,currency:'USD',status:'awaiting_confirmation'}]};
-   else if(path==='/api/belna-wallet')result={wallet,activity:[{title:'Deposit',amount:12.5,status:'recorded'}]};
+   else if(path==='/api/belna-wallet'){if(identityApproved&&!wallet.cardReady)Object.assign(wallet,{status:'card_required',identityVerified:true,verificationStatus:'approved'});result={wallet,activity:[{title:'Deposit',amount:12.5,status:'recorded'}]};}
    else if(path==='/api/shop-pay')result={shopPay:{configured:true,connected:false},orders:[]};
-   else if(path==='/api/belna-wallet/setup'){Object.assign(wallet,{status:'verification_required',cardReady:false,balance:{available:12.5,pending:3},agentCardPayments:false,dailyCardLimitUsd:50,paused:false});result={wallet,activity:[]};}
+   else if(path==='/api/belna-wallet/setup'){Object.assign(wallet,{status:'verification_required',identityVerified:false,verificationStatus:'pending',cardReady:false,balance:{available:12.5,pending:3},agentCardPayments:false,dailyCardLimitUsd:50,paused:false});result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/card-connect'){Object.assign(wallet,{status:'ready',cardReady:true});result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/controls'){if(body.dailyLimitUsd!=null)wallet.dailyCardLimitUsd=body.dailyLimitUsd;if(typeof body.frozen==='boolean')wallet.paused=body.frozen;result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/quote')result={quoteId:'test-transfer',recipient:body.recipient,amount:body.amount,fees:'Partner fees may apply.'};
@@ -56,6 +56,12 @@ const {chromium}=require('playwright');
   assert.equal(await option('existing_card').getAttribute('class').then(c=>/\bon\b/.test(c)),true,'the card already paying stays active');
   await option('belna_wallet').locator('.wpay-main').click();await page.locator('.wpay-opt.on').filter({hasText:'Belna Wallet'}).waitFor();
   assert.deepEqual(requests.find(x=>x.path.endsWith('/setup')).body,{country:'SE'});
+  assert.equal(await page.locator('[data-act="belna-wallet-verify"]').count(),1);
+  identityApproved=true;
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await page.getByText('Identity verified · connect card',{exact:true}).waitFor();
+  assert.equal(await page.locator('[data-act="belna-wallet-verify"]').count(),0,'returning from KYC refreshes Wallet settings and removes repeat verification');
+  assert.equal(wallet.cardReady,false,'identity approval does not enable card spending');
   await page.getByRole('button',{name:'Back to chat',exact:true}).click();await page.locator('.wallet-panel [data-act="belna-wallet-card-connect"]').waitFor();
   assert.match(await page.locator('.wl-balance').innerText(),/Available\s+\$12\.50/);
   assert.match(await page.locator('.wl-head').innerText(),/Audit pays with Belna Wallet/);
@@ -63,7 +69,11 @@ const {chromium}=require('playwright');
   assert.equal(await page.locator('.wallet-panel [role="radiogroup"]').count(),0,'the Belna panel has no payment switcher');
   assert.equal(await page.locator('.wallet-panel').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
   assert.equal(await page.locator('.wallet-panel').locator('.wallet-virtual-card,#belna-wallet-limit,#shoppaylimit').count(),0);
-  assert.match(await page.locator('.wl-setup').innerText(),/1 of 3 done/);
+  assert.match(await page.locator('.wl-setup').innerText(),/2 of 3 done/);
+  await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).waitFor();
+  assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-verify"]').count(),0);
+  await page.getByRole('button',{name:'Check status',exact:true}).click();
+  await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Connect card',exact:true}).click();await page.getByText('Card payments are on',{exact:true}).waitFor();
   await page.locator('.wallet-panel').getByRole('button',{name:'Send',exact:true}).click();await page.locator('#belna-wallet-recipient').fill('friend@example.com');await page.locator('#belna-wallet-send-amount').fill('5');
   await page.getByRole('button',{name:'Review send',exact:true}).click();await page.getByRole('button',{name:'Confirm send',exact:true}).waitFor();assert.equal(requests.filter(x=>x.path.endsWith('/send')).length,0);

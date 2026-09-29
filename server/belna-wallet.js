@@ -59,6 +59,14 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     const amount = (value) => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
     return { currency:'USD', available:amount(usd?.breakdown?.available), pending:amount(usd?.breakdown?.pending) };
   }
+  async function identityVerification(row) {
+    // KYC and issuer approval are independent. Read the individual profile,
+    // never infer successful verification from a card application or balance.
+    const result = await request('/verifications?account_id=' + encodeURIComponent(row.account_id));
+    const profile = (result.data || []).find(x => x.kind === 'individual');
+    const status = ['approved','pending','rejected','action_required','not_started'].includes(profile?.status) ? profile.status : 'not_started';
+    return { status };
+  }
   async function snapshot(userId) {
     if (!configured()) return { wallet:{ configured:false, status:'unavailable', cardProgramAvailable:false, card:null, balance:null }, transactions:[] };
     const row = await record(userId);
@@ -70,6 +78,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     }
     const account = await request('/accounts/' + encodeURIComponent(row.account_id));
     if (account.parent_account?.id !== platformAccountId()) throw fail('Your wallet account does not belong to this Belna connection.', 'PROVIDER');
+    const verification = await identityVerification(row);
     if(String(row.application_status||'').startsWith('connection_')){
       const connectionCards=await request('/cards?account_id='+encodeURIComponent(row.account_id));
       for(const card of connectionCards.data || []){
@@ -87,7 +96,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     }
     const status = account.capabilities?.card_issuing === 'active' ? 'ready'
       : account.cards?.status === 'denied' ? 'denied'
-      : account.cards ? 'review' : 'verification_required';
+      : account.cards ? 'review' : verification.status === 'approved' ? 'card_required' : 'verification_required';
     const transactions = row.card_id ? await request('/card_transactions?account_id=' + encodeURIComponent(row.account_id) + '&card_id=' + encodeURIComponent(row.card_id) + '&first=5') : { data:[] };
     const feed=await request('/financial_activity?account_id='+encodeURIComponent(row.account_id)+'&include_resource=false&exclude_internal_movements=true');
     const activity=(feed.data || []).filter(x=>String(x.currency?.code).toLowerCase()==='usd' && x.usd_amount!=null && Number.isFinite(Number(x.usd_amount))).slice(0,20).map(x=>{
@@ -97,7 +106,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       const status=/pending|processing|review|requested|authorized/.test(rawStatus)?'pending':/failed|denied/.test(rawStatus)?'failed':/cancel|void|revers/.test(rawStatus)?'canceled':x.available_at && Date.parse(x.available_at)>Date.now()?'pending':'recorded';
       return {title,amount:Number(x.usd_amount),currency:'USD',status,at:x.posted_at || null};
     });
-    return { activity, wallet:{ configured:true, status, withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance:balanceView(account), dailyCardLimitUsd:Number(row.daily_card_limit),
+    return { activity, wallet:{ configured:true, status, verificationStatus:verification.status, identityVerified:verification.status === 'approved', withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance:balanceView(account), dailyCardLimitUsd:Number(row.daily_card_limit),
       // Pausing works before a purchase card exists, so it is reported from the owner's record.
       paused:row.card_status==='frozen', country:/^[A-Z]{2}$/.test(row.country || '') ? row.country : null,
       // A secure merchant payment bridge must be integrated before agent card spending is enabled.
@@ -151,7 +160,12 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
   }
   async function verify(userId) {
     const row = await owned(userId);
-    const result = await request('/verifications?account_id=' + encodeURIComponent(row.account_id), { method:'POST', body:{} });
+    const current = await identityVerification(row);
+    if (current.status === 'approved') return snapshot(userId);
+    const result = await request('/verifications?account_id=' + encodeURIComponent(row.account_id), { method:'POST', body:{kind:'individual', ...(current.status === 'rejected' ? {restart:true} : {})} });
+    // Approved profiles no longer have a session_url. Returning status lets
+    // the UI advance without treating that valid response as a broken link.
+    if (result.status === 'approved') return snapshot(userId);
     return { url:hostedUrl(result.session_url, true) };
   }
   async function connectCard(userId) {

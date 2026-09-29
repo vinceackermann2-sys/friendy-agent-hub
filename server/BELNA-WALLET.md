@@ -52,6 +52,16 @@ in Lovable's server runtime. Dashboard sign-in alone does not configure it.
 
 ## Owner experience
 
+Identity completion is read from Whop's individual verification profile, separately
+from the card issuer's approval. An approved identity with no issuer account moves
+to card connection; it does not enable card spending. Approved profiles have no
+verification session URL, so Verify returns current wallet status instead of
+opening another identity check. Wallet settings and the Payments panel refresh
+on return from the provider, check pending setup for two minutes while visible,
+and provide a Check status button. Only verification status leaves the adapter;
+legal names, birth dates, documents and verification session links are excluded
+from wallet snapshots.
+
 Settings → Wallet retains both Belna Wallet and Existing card connections,
 with Active/Inactive status, switching and saved shipping addresses. Switching
 preserves balances, history and signed-in merchant sessions. The agent rechecks
