@@ -17,12 +17,17 @@ automatically. Previous business wallets are no longer displayed in Belna. The
 archive retains their financial records; the migration refuses changes while
 existing money movements remain unsettled.
 
-Card setup calls POST `/cards` with the authenticated owner's `user_id`. A 202
-application is shown as pending or requiring verification; approved applications
-can be submitted again to issue a virtual card. KYC alone is not treated as an
-issued card. Permanent card controls and agent purchase cards are owner-scoped.
-Agent checkout still requires an active card, fresh recovery, healthy private
-checkout, funds and explicit approval of the exact purchase budget.
+Whop's live `POST /cards` for the owner's `user_id` returned HTTP 400:
+"Card applications are only supported for accounts, not user wallets." Its
+card-issuing tutorial likewise uses connected `biz_` accounts. Personal card
+applications and agent card checkout are therefore disabled behind separate
+`WHOP_PERSONAL_CARD_APPLICATIONS_ENABLED` and
+`WHOP_PERSONAL_CARD_ISSUING_ENABLED` flags. Do not enable either until Whop
+confirms a supported consumer-card route and a live card application and
+purchase are verified. The existing company-card flags do not enable this.
+The app shows the provider limitation instead of claiming an application is
+under review. Existing business-card balances and cards are not moved into
+the personal wallet.
 
 Add money and Withdraw embed Whop's elements using short-lived owner tokens.
 Get paid creates a reviewed transfer request payable by another connected Belna
@@ -34,8 +39,8 @@ The database migration and recovery/webhook workers are deployed. Authenticated
 recovery returned HTTP 200 with personal-wallet support healthy. Automated tests
 exercise PKCE, ownership, application transitions, exact-budget purchases,
 cancellation, SQL and desktop/mobile UI. These checks do not establish live
-consumer card eligibility, issuance or successful merchant payment; those need
-the human owner's Whop authorization, issuer approval and a funded live test.
+consumer card eligibility, issuance or successful merchant payment. The live
+provider response currently blocks new personal cards altogether.
 
 The sections below document the retained legacy connected-account integration.
 

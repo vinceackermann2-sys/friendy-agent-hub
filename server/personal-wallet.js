@@ -19,8 +19,8 @@ function createPersonalWallet({store,env=process.env,fetchImpl=(...a)=>fetch(...
   const fail=(message,code='BAD_INPUT')=>Object.assign(new Error(message),{code});
   const personal=id=>/^user_[A-Za-z0-9]+$/.test(id||'');
   const configured=()=>auth.configured();
-  const cardProgramAvailable=()=>setting('WHOP_CARD_APPLICATIONS_ENABLED')==='true' || setting('WHOP_CARD_ISSUING_ENABLED')==='true';
-  const checkoutAvailable=async()=>environment()==='live' && setting('WHOP_CARD_ISSUING_ENABLED')==='true' && typeof secureCheckout==='function' &&
+  const cardProgramAvailable=()=>setting('WHOP_PERSONAL_CARD_APPLICATIONS_ENABLED')==='true';
+  const checkoutAvailable=async()=>environment()==='live' && setting('WHOP_PERSONAL_CARD_ISSUING_ENABLED')==='true' && typeof secureCheckout==='function' &&
     await store.walletRecoveryReady(setting('WHOP_PLATFORM_ACCOUNT_ID'),environment(),'personal') && (!secureCheckout.available || await secureCheckout.available());
   async function owned(userId){
     const row=await store.getBelnaWallet(userId);
@@ -40,7 +40,8 @@ function createPersonalWallet({store,env=process.env,fetchImpl=(...a)=>fetch(...
     if(!res.ok){
       const message=String(data?.error?.message||'').toLowerCase();
       if(res.status===400 && method==='GET' && path.startsWith('/cards?') && /^no rain account found\b/.test(message))return {data:[]};
-      const error=fail(res.status===401?'Reconnect your personal Whop wallet.':res.status===403?'Whop has not granted this wallet permission. Reconnect your personal wallet or ask Belna to finish its OAuth setup.':/verification|identity/.test(message)?'Complete the personal identity check to continue.':/application|approved/.test(message)?'The card issuer has not approved your personal card application yet.':'Your personal wallet request could not be completed. Try again.',res.status===401?'RECONNECT':'PROVIDER');
+      const unsupportedCard=path==='/cards' && method==='POST' && res.status===400 && message.includes('card applications are only supported for accounts, not user wallets');
+      const error=fail(unsupportedCard?'Whop does not currently support issuing cards from personal user wallets.':res.status===401?'Reconnect your personal Whop wallet.':res.status===403?'Whop has not granted this wallet permission. Reconnect your personal wallet or ask Belna to finish its OAuth setup.':/verification|identity/.test(message)?'Complete the personal identity check to continue.':/application|approved/.test(message)?'The card issuer has not approved your personal card application yet.':'Your personal wallet request could not be completed. Try again.',unsupportedCard?'PERSONAL_CARDS_UNSUPPORTED':res.status===401?'RECONNECT':'PROVIDER');
       error.providerStatus=res.status;throw error;
     }
     if(!data || typeof data!=='object')throw fail('Your personal wallet returned an incomplete response.','PROVIDER');
@@ -51,7 +52,8 @@ function createPersonalWallet({store,env=process.env,fetchImpl=(...a)=>fetch(...
     const cash=me.balance?.cash?.find(x=>String(x.currency).toLowerCase()==='usd');
     const amount=x=>x==null || !Number.isFinite(Number(x))?null:Number(x);
     // Company and crypto totals in the user profile are not personal USD.
-    return {currency:'USD',available:amount(cash?.total_withdrawable_balance),pending:amount(cash?.pending_balance_usd)};
+    const emptyCash=Array.isArray(me.balance?.cash) && me.balance.cash.length===0 && amount(me.balance.cash_usd)===0;
+    return {currency:'USD',available:emptyCash?0:amount(cash?.total_withdrawable_balance),pending:emptyCash && amount(me.balance.pending_usd)===0?0:amount(cash?.pending_balance_usd)};
   }
   const cardName=row=>'Belna personal card '+row.setup_key;
   async function cardFor(userId){const row=await owned(userId),cards=await request('/cards?user_id='+row.account_id,{userId});return (cards.data||[]).find(c=>c.user_id===row.account_id && c.type==='virtual' && (row.card_id?c.id===row.card_id:c.name===cardName(row))) || null;}
@@ -79,7 +81,7 @@ function createPersonalWallet({store,env=process.env,fetchImpl=(...a)=>fetch(...
     const application=row.application_status || null;
     const status=ready?'ready':['denied','locked','canceled'].includes(application)?'denied':['needs_verification','needs_information','card_invitation'].includes(application)?'card_action_required':application?'review':verification==='approved'?'card_required':'verification_required';
     let movements=[],activityError=null;try{movements=await activity(userId);}catch{activityError='Wallet activity is temporarily unavailable. Check again shortly.';}
-    return {activity:movements,activityError,wallet:{kind:'personal',configured:configured(),status,legacyWallet:!!row.legacy_account_id,verificationStatus:verification,identityVerified:verification==='approved',cardApplicationStatus:application,cardProgramAvailable:cardProgramAvailable(),cardReady:ready,
+    return {activity:movements,activityError,wallet:{kind:'personal',configured:configured(),status,legacyWallet:!!row.legacy_account_id,verificationStatus:verification,identityVerified:verification==='approved',cardApplicationStatus:application,cardProgramAvailable:ready || application!=='unsupported_personal_wallet' && cardProgramAvailable(),cardReady:ready,
       sandbox:environment()==='sandbox',withdrawalsAvailable:setting('WHOP_WITHDRAWALS_ENABLED')==='true',dailyCardLimitUsd:Number(row.daily_card_limit),paused:row.card_status==='frozen' || card?.status==='frozen',country:row.country,
       card:card?{last4:/^\d{4}$/.test(card.last4||'')?card.last4:null,status:card.status,dailyLimitUsd:Number(row.daily_card_limit)}:null,balance:balanceView(me),agentCardPayments:card?.status==='active' && row.card_status!=='frozen' && await checkoutAvailable()},
       purchases:(await store.listWalletPurchases(userId)).filter(x=>x.account_id===row.account_id).map(purchases.view),transactions:[],
@@ -93,10 +95,15 @@ function createPersonalWallet({store,env=process.env,fetchImpl=(...a)=>fetch(...
     if(!cardProgramAvailable())throw fail('Personal card issuing is not available yet.','NOT_SET_UP');
     const row=await owned(userId),existing=await cardFor(userId);
     if(existing || row.application_status==='card_provisioning')return snapshot(userId);
+    if(row.application_status==='unsupported_personal_wallet')return snapshot(userId);
     if(['denied','locked','canceled'].includes(row.application_status))return snapshot(userId);
     let result;
     try{result=await request('/cards',{userId,method:'POST',key:row.card_request_key,body:{user_id:row.account_id,name:cardName(row),spend_limit:Number(row.daily_card_limit),spend_limit_frequency:'daily'}});}
     catch(error){
+      if(error.code==='PERSONAL_CARDS_UNSUPPORTED'){
+        await store.saveBelnaWallet(userId,{application_status:'unsupported_personal_wallet'});
+        return snapshot(userId);
+      }
       // A confirmed refusal issued no card; a later approved application must
       // not replay that refusal forever. Transport/5xx retries keep the key.
       if(error.providerStatus>=400 && error.providerStatus<500)await store.saveBelnaWallet(userId,{card_request_key:await nextCardKey(row.card_request_key)});

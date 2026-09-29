@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 const {createBelnaWallet}=require('../server/belna-wallet');
 const {createWhopUserAuth}=require('../server/whop-user-auth');
 (async()=>{
-  const env={WHOP_OAUTH_CLIENT_ID:'app_test',WHOP_OAUTH_REDIRECT_URI:'https://belna.se/app',WHOP_OAUTH_SCOPES:'openid profile user:balance:read payout:account:read payout:account:update payout:transfer_funds identity:write',WHOP_SANDBOX:'false',ENCRYPTION_KEY:'test-encryption-key-only-not-a-production-key',WHOP_CARD_APPLICATIONS_ENABLED:'true',WHOP_WITHDRAWALS_ENABLED:'true',WHOP_COMPANY_API_KEY:'company-must-not-be-used',WHOP_PLATFORM_ACCOUNT_ID:'biz_platform'};
+  const env={WHOP_OAUTH_CLIENT_ID:'app_test',WHOP_OAUTH_REDIRECT_URI:'https://belna.se/app',WHOP_OAUTH_SCOPES:'openid profile user:balance:read payout:account:read payout:account:update payout:transfer_funds identity:write',WHOP_SANDBOX:'false',ENCRYPTION_KEY:'test-encryption-key-only-not-a-production-key',WHOP_PERSONAL_CARD_APPLICATIONS_ENABLED:'true',WHOP_WITHDRAWALS_ENABLED:'true',WHOP_COMPANY_API_KEY:'company-must-not-be-used',WHOP_PLATFORM_ACCOUNT_ID:'biz_platform'};
   const states=new Map(),authRows=new Map(),wallets=new Map(),quotes=new Map(),requests=new Map(),calls=[],cards=new Map();
   const store={supaConfigured:()=>true,getBelnaWallet:async id=>wallets.get(id),getWhopWalletAuth:async id=>authRows.get(id),
     saveWhopWalletOAuthState:async(id,fields)=>states.set(id,{user_id:id,...fields}),
@@ -14,6 +14,7 @@ const {createWhopUserAuth}=require('../server/whop-user-auth');
     addBelnaWalletQuote:async(id,fields)=>{const q={user_id:id,status:'quoted',...fields};quotes.set(q.id,q);return q;},getBelnaWalletQuote:async(id,key)=>quotes.get(key)?.user_id===id?quotes.get(key):null,
     beginBelnaWalletTransfer:async(id,key)=>{const q=quotes.get(key);assert.equal(q.user_id,id);q.status='processing';return q;},saveBelnaWalletTransfer:async(id,key,fields)=>Object.assign(quotes.get(key),fields),
     saveWalletPaymentRequest:async(id,fields)=>{if(!requests.has(fields.id))requests.set(fields.id,{user_id:id,created_at:new Date().toISOString(),...fields});return requests.get(fields.id);},getWalletPaymentRequest:async id=>requests.get(id),getWalletTransferByRequest:async id=>[...quotes.values()].find(q=>q.payment_request_id===id)};
+  let personalBalance={cash:[{currency:'usd',total_withdrawable_balance:60,pending_balance_usd:2}],cash_usd:60,businesses_total_usd:9000,total_usd:9060};
   let cardResponse='application',failTransferReadback=false,submitted=0,tx=[];
   const purchaseRows=new Map();
   store.claimWalletPurchase=async(id,data)=>{const old=[...purchaseRows.values()].find(p=>p.user_id===id && p.approval_key===data.approval_key);if(old)return {claimed:false,purchase:old};const p={...data,user_id:id,status:'issuing'};purchaseRows.set(p.id,p);return {claimed:true,purchase:p};};
@@ -28,11 +29,12 @@ const {createWhopUserAuth}=require('../server/whop-user-auth');
     if(parsed.pathname==='/oauth/userinfo')return response({sub:whopId});
     assert.ok(token.startsWith('personal-access-token-'),'personal APIs must use OAuth, never company key');
     assert.equal(body?.account_id,undefined);assert.equal(body?.assigned_user_id,undefined);assert.equal(parsed.searchParams.get('account_id'),null);
-    if(parsed.pathname==='/api/v1/users/me')return response({id:whopId,verification:{individual:{status:'approved'}},balance:{cash:[{currency:'usd',total_withdrawable_balance:60,pending_balance_usd:2}],cash_usd:60,businesses_total_usd:9000,total_usd:9060}});
+    if(parsed.pathname==='/api/v1/users/me')return response({id:whopId,verification:{individual:{status:'approved'}},balance:personalBalance});
     if(parsed.pathname==='/api/v1/cards' && !body)return response({data:cards.get(whopId)||[]});
     if(parsed.pathname==='/api/v1/financial_activity'){assert.equal(parsed.searchParams.get('user_id'),whopId);assert.equal(parsed.searchParams.get('include_owned_accounts'),'false');return response({data:[{id:'activity1',line_type:'transfer_incoming',currency:{code:'usd'},usd_amount:10,posted_at:new Date().toISOString()}]});}
     if(parsed.pathname==='/api/v1/cards'){
       assert.equal(body.user_id,whopId);
+      if(cardResponse==='unsupported')return response({error:{type:'bad_request',message:'Card applications are only supported for accounts, not user wallets.'}},400);
       if(cardResponse==='application')return response({object:'card_application',status:'pending'},202);
       if(cardResponse==='approved')return response({object:'card_application',status:'approved'},202);
       const card={id:'icrd_'+whopId.slice(5)+(cards.get(whopId)||[]).length,object:'card',user_id:whopId,type:'virtual',status:'active',last4:'1234',name:body.name,limit:{amount:body.spend_limit,frequency:body.spend_limit_frequency},expiration_month:12,expiration_year:2099,secrets:{card_number:'4242424242421234',cvc:'123'}};cards.set(whopId,[...(cards.get(whopId)||[]),card]);return response(card,201);
@@ -63,6 +65,15 @@ const {createWhopUserAuth}=require('../server/whop-user-auth');
   await wallet.connectCard('alice');const firstKey=calls.filter(x=>x.path==='/api/v1/cards'&&x.body).at(-1).key;
   assert.equal((await wallet.snapshot('alice')).wallet.status,'review');
   cardResponse='approved';await wallet.connectCard('alice');assert.notEqual(calls.filter(x=>x.path==='/api/v1/cards'&&x.body).at(-1).key,firstKey,'approval polls do not replay initial 202');
+  const fundedBalance=personalBalance;personalBalance={cash:[],cash_usd:'0.00',pending_usd:'0.00',businesses_total_usd:'9000.00'};
+  assert.deepEqual((await wallet.snapshot('alice')).wallet.balance,{currency:'USD',available:0,pending:0},'confirmed empty personal cash is zero, excluding business funds');
+  personalBalance={cash:[]};assert.equal((await wallet.snapshot('alice')).wallet.balance.available,null,'missing provider balance remains unavailable');
+  personalBalance=fundedBalance;
+  cardResponse='unsupported';const blockedUser=await wallet.connectCard('bob');
+  assert.equal(blockedUser.wallet.cardApplicationStatus,'unsupported_personal_wallet');
+  assert.equal(blockedUser.wallet.cardProgramAvailable,false);
+  const blockedCalls=calls.filter(x=>x.path==='/api/v1/cards'&&x.body).length;
+  await wallet.connectCard('bob');assert.equal(calls.filter(x=>x.path==='/api/v1/cards'&&x.body).length,blockedCalls,'unsupported personal application is not retried');
   cardResponse='card';const ready=await wallet.connectCard('alice');assert.equal(ready.wallet.cardReady,true);assert.ok(!JSON.stringify(ready).includes('secrets'));assert.ok(!JSON.stringify(ready).includes('must never return'));
   const [deposit,withdraw,card]=await Promise.all([wallet.deposit('alice'),wallet.withdrawalSession('bob'),wallet.cardSession('alice')]);
   assert.equal(deposit.accountId,'user_alice');assert.equal(withdraw.accountId,'user_bob');assert.equal(card.accountId,'user_alice');
@@ -74,7 +85,7 @@ const {createWhopUserAuth}=require('../server/whop-user-auth');
   const pay=await wallet.transferQuote('alice',{amount:1,paymentRequestId:'personal-payment-request-001'});assert.equal(pay.amount,20,'payer cannot alter requested amount');assert.equal(quotes.get(pay.quoteId).destination_id,'user_bob');
   const secureCheckout=async()=>({verify:async()=>{},submit:async({card})=>{submitted++;assert.equal(card.secrets.card_number,'4242424242421234');assert.equal(card.secrets.pin,undefined);return {submitted:true};},close:async()=>{}});
   secureCheckout.available=async()=>true;store.walletRecoveryReady=async()=>true;
-  const spend=createBelnaWallet({store,env:{...env,WHOP_CARD_ISSUING_ENABLED:'true'},fetchImpl,secureCheckout});
+  const spend=createBelnaWallet({store,env:{...env,WHOP_PERSONAL_CARD_ISSUING_ENABLED:'true'},fetchImpl,secureCheckout});
   const approved={paymentMethod:'belna_wallet',checkoutKey:'a'.repeat(64),website:'https://shop.example/checkout',amount:12.34,currency:'USD'};
   const purchase=await spend.executePurchase('alice',approved);assert.equal(submitted,1);assert.equal(purchase.status,'submitted');
   const issued=calls.filter(c=>c.path==='/api/v1/cards' && c.body).at(-1);assert.equal(issued.body.user_id,'user_alice');assert.equal(issued.body.spend_limit,12.34);assert.equal(issued.body.spend_limit_frequency,'one_time');assert.equal(issued.token,'personal-access-token-alice');

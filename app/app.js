@@ -5676,7 +5676,7 @@ function walletMethodPicker(){
       right: shop.connected ? `<span class="wl-ok">${icon('check', 13)} Connected</span>` : `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured ? ' disabled' : ''}>Connect Shop Pay</button>` })}${walletRow({ ic:'bag', title:'Cards saved in stores', sub:'Like Amazon. You sign in when ' + esc(state.agent.name) + ' opens the store.',
       right: walletPreferences?.merchantEnabled ? `<span class="wl-ok">${icon('check', 13)} On</span>` : `<button type="button" class="btn ghost small" data-act="wallet-merchant-connect"${busy}>Turn on</button>` })}</div>` : '';
   return `<div class="wpay" role="radiogroup" aria-label="${esc(state.agent.name)} pays with">
-    ${option('belna_wallet', 'belna', 'Belna Wallet', 'Your personal Whop balance. One-time card per approved purchase.', created, belnaSide, belnaSetup)}
+    ${option('belna_wallet', 'belna', 'Belna Wallet', w?.cardProgramAvailable===false?'Your personal Whop balance. Card purchases are unavailable.':'Your personal Whop balance. One-time card per approved purchase.', created, belnaSide, belnaSetup)}
     ${option('existing_card', 'card', 'A card you already use', 'Shop Pay or a card saved in a store you sign in to.', existing, existingSide, existingSetup)}
     ${option(null, 'off', 'Off', esc(state.agent.name) + ' can find products and prices, but can’t pay.', true, '')}
   </div>`;
@@ -5684,6 +5684,7 @@ function walletMethodPicker(){
 
 /* ----- Settings › Wallet ----- */
 function walletCardStatus(w){
+  if (w.cardApplicationStatus === 'unsupported_personal_wallet') return { text:'Whop does not issue cards from personal wallets', tone:'warn' };
   if (w.cardProgramAvailable === false) return { text:'Not available yet' };
   if (w.cardReady ?? w.status === 'ready') return w.paused ? { text:'Paused', tone:'warn' } : { text:'On · one-time card per approved purchase' };
   if (w.status === 'denied') return { text:'Not approved', tone:'warn' };
@@ -5708,8 +5709,8 @@ function walletBelnaGroup(){
   return `<section class="wset-sec"><h4 class="wset-label">Belna Wallet</h4><div class="wset-group">
     <button type="button" class="wset-row wset-link" data-act="wallet-open-panel"><span class="wset-copy"><b>Balance</b><small>${esc([pending > 0 ? walletMoney(pending) + ' pending' : '', 'USD', country].filter(Boolean).join(' · '))}</small></span><span class="wset-value">${esc(walletMoney(w.balance?.available))}</span>${icon('chevr', 16)}</button>
     <div class="wset-row"><span class="wset-copy"><b>Card payments</b><small${card.tone ? ` class="${card.tone}"` : ''}>${esc(card.text)}</small></span>${cardActions}</div>
-    ${limitRow}
-    <div class="wset-row"><span class="wset-copy"><b>Pause card spending</b><small>Also cancels purchase cards that are waiting.</small></span>${walletSwitch(!!w.paused, 'belna-wallet-freeze', 'Pause card spending', `data-frozen="${!w.paused}"`)}</div>
+    ${w.cardProgramAvailable === false ? '' : limitRow}
+    ${w.cardProgramAvailable === false ? '' : `<div class="wset-row"><span class="wset-copy"><b>Pause card spending</b><small>Also cancels purchase cards that are waiting.</small></span>${walletSwitch(!!w.paused, 'belna-wallet-freeze', 'Pause card spending', `data-frozen="${!w.paused}"`)}</div>`}
   </div></section>`;
 }
 function walletExistingGroup(){
@@ -5795,7 +5796,7 @@ function walletActionContent(){
   return '';
 }
 function walletSetupContent(w){
-  if (w.cardProgramAvailable === false) return `<div class="wl-note">${icon('card', 17)}<span><b>Card payments aren’t available for your wallet yet</b><small>Your balance, sends and payment links work as usual.</small></span></div>`;
+  if (w.cardProgramAvailable === false) return `<div class="wl-note">${icon('card', 17)}<span><b>Card payments aren’t available for your wallet yet</b><small>${w.cardApplicationStatus==='unsupported_personal_wallet'?'Whop does not issue cards from personal user wallets. Your agent cannot use this wallet for card purchases.':'Your balance, sends and payment links work as usual.'}</small></span></div>`;
   if (w.cardReady ?? w.status === 'ready') return w.paused
     ? `<div class="wl-note warn">${icon('lock', 17)}<span><b>Card spending is paused</b><small>Resume it in wallet settings.</small></span><button type="button" class="btn ghost small" data-act="wallet-manage">Settings</button></div>`
     : `<div class="wl-note ok">${icon('shieldcheck', 17)}<span><b>Card payments are on</b><small>${w.agentCardPayments ? `${esc(state.agent.name)} gets a one-time card for each purchase you approve.` : 'Agent card checkout isn’t available yet.'}</small></span></div>`;
