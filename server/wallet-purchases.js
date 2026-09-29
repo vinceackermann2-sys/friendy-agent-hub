@@ -68,11 +68,12 @@ function createWalletPurchases({ store, request, owned, balanceView, environment
       // to the isolated executor. Never return its page or raw result to tools.
       await executor.verify(approved);
       const stillOwned = await owned(userId);
-      if (stillOwned.account_id !== wallet.account_id || stillOwned.card_status === 'frozen' || now() >= Date.parse(p.expires_at))
+      if (stillOwned.account_id !== wallet.account_id || stillOwned.owner_provider_id !== wallet.owner_provider_id || stillOwned.card_status === 'frozen' || now() >= Date.parse(p.expires_at))
         throw fail('This purchase is no longer available.');
       const secretCard = card.secrets?.card_number ? card : await request('/cards/' + encodeURIComponent(card.id) + '?account_id=' + encodeURIComponent(wallet.account_id));
       const month = Number(secretCard.expiration_month), year = Number(secretCard.expiration_year);
-      if (secretCard.id !== card.id || secretCard.status !== 'active' || secretCard.user_id !== wallet.owner_provider_id ||
+      if (secretCard.id !== card.id || secretCard.status !== 'active' || secretCard.type !== 'virtual' || secretCard.user_id !== wallet.owner_provider_id ||
+        Number(secretCard.limit?.amount) !== approved.amount || secretCard.limit?.frequency !== 'one_time' ||
         !/^\d{13,19}$/.test(secretCard.secrets?.card_number || '') || !/^\d{3,4}$/.test(secretCard.secrets?.cvc || '') ||
         !Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2200 ||
         Date.UTC(year,month,1) <= now() || secretCard.secrets.card_number.slice(-4) !== card.last4 || now() >= Date.parse(p.expires_at))

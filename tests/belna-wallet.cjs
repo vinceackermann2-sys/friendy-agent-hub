@@ -34,7 +34,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     else if(path==='/card_transactions') data={data:[{merchant_name:'Store',usd_amount:5.25,status:'completed',secrets:'LEAK'}]};
     else if(path==='/financial_activity') data={data:[{line_type:'onchain_deposit',currency:{code:'usd'},usd_amount:'25.10',posted_at:'2026-01-01',source:{secrets:'LEAK'}},{line_type:'payment_gross',currency:{code:'btc'},usd_amount:'20'}]};
     else if(path==='/verifications') {if(init.method==='GET')return {ok:false,status:403,json:async()=>({error:{message:'Missing identity read permission'}})};data={status:verificationResultStatus,session_url:verificationResultStatus==='approved'?undefined:verificationUrl};if(verificationResultStatus==='approved')identityStatus='approved';}
-    else if(path==='/deposits') data={hosted_url:'https://whop.com/deposit/biz_one'};
+    else if(path==='/deposits') data={account_id:'biz_one',hosted_url:'https://whop.com/deposit/biz_one'};
     else if(path==='/checkout_configurations') {assert.equal(body.plan.company_id,'biz_one','inline checkout plans must belong to the connected owner');assert.equal(body.account_id,undefined);assert.equal(body.plan.account_id,undefined);data={account_id:'biz_one',plan:{currency:'usd',initial_price:body.plan.initial_price,plan_type:'one_time'},purchase_url:'https://whop.com/checkout/ch_one',...checkoutOverride};}
     else if(path==='/access_tokens')data={token:'owner-only-withdrawal-token-'.repeat(3),expires_at:body.expires_at};
     else if(path==='/transfers') { transferCalls++; if(timeout){timeout=false;throw Error('timeout');} data={object:'transfer',id:'ctt_one',status:'succeeded'}; }
@@ -184,5 +184,6 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   await pauseTools.wallet_pause.run({paused:false},{userId:'u1',approvedDetail:await pauseTools.wallet_pause.approvalDetail({paused:false})});
   assert.deepEqual(cardChanges.pop(),['u1',{frozen:false}]);
   assert.equal(cardChanges.length,0);
+  await require('./wallet-owner-isolation.cjs')();
   console.log('Belna wallet: ownership, private USD activity, card privacy, KYC connection cancellation, approval binding, pause/resume and safe retries passed');
 })().catch(e=>{console.error(e);process.exit(1);});

@@ -49,7 +49,13 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     return data;
   }
   async function record(userId) {
+    if (typeof userId !== 'string' || !userId) throw fail('Sign in to use your wallet.');
     const row = await store.getBelnaWallet(userId);
+    // The server key manages children of the platform account. It is never
+    // an owner's funding source, even if a stored mapping is misconfigured.
+    if (row && (row.user_id !== userId || row.account_id &&
+        (!/^biz_[A-Za-z0-9]+$/.test(row.account_id) || row.account_id === platformAccountId() || !/^user_[A-Za-z0-9]+$/.test(row.owner_provider_id || ''))))
+      throw fail('Your wallet connection could not be confirmed.', 'PROVIDER');
     if (row && row.environment !== environment()) throw fail('Your wallet is unavailable in this environment.', 'NOT_SET_UP');
     return row;
   }
@@ -93,7 +99,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     // Only list cards: GET /cards/:id exposes live credentials and is deliberately unused.
     if (row.card_id || ['card_provisioning','card_invitation'].includes(row.application_status)) {
       const cards = await request('/cards?account_id=' + encodeURIComponent(row.account_id));
-      const card = (cards.data || []).find(x => row.card_id ? x.id === row.card_id : x.name === 'Belna agent card' && x.user_id === row.owner_provider_id);
+      const card = (cards.data || []).find(x => x.user_id === row.owner_provider_id && (row.card_id ? x.id === row.card_id : x.name === 'Belna agent card'));
       if (card) { row.card_id=card.id; row.card_status = card.status; row.card_last4 = card.last4; await store.saveBelnaWallet(userId, { card_id:card.id, card_status:card.status, card_last4:card.last4 }); }
     }
     const status = account.capabilities?.card_issuing === 'active' ? 'ready'
@@ -130,7 +136,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if (!row.account_id) {
       const account = await request('/accounts', { method:'POST', key:row.setup_key,
         body:{ email:user.email, country:row.country, title:'Belna Wallet ' + row.setup_key.slice(0,8), send_customer_emails:false, metadata:{ external_id:user.id } } });
-      if (!/^biz_[a-zA-Z0-9]+$/.test(account.id || '') || !/^user_[a-zA-Z0-9]+$/.test(account.owner?.id || '') || account.parent_account?.id !== platformAccountId())
+      if (!/^biz_[a-zA-Z0-9]+$/.test(account.id || '') || account.id === platformAccountId() || !/^user_[a-zA-Z0-9]+$/.test(account.owner?.id || '') || account.parent_account?.id !== platformAccountId())
         throw fail('Your wallet setup could not be confirmed for Belna. Please try again.', 'PROVIDER');
       row = await store.saveBelnaWallet(user.id, { account_id:account.id, owner_provider_id:account.owner.id });
     }
@@ -177,6 +183,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if (!cardProgramAvailable()) throw fail('Card payments are not available for your wallet yet.', 'NOT_SET_UP');
     const row=await owned(userId);
     const account=await request('/accounts/'+encodeURIComponent(row.account_id));
+    if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
     if(account.capabilities?.card_issuing==='active')return snapshot(userId);
     if(['connection_card','connection_card_provisioning','connection_card_invitation'].includes(row.application_status))return snapshot(userId);
     // The first request starts the human owner's card application. No reusable
@@ -242,6 +249,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
   async function deposit(userId) {
     const row = await owned(userId);
     const result = await request('/deposits', { method:'POST', body:{ destination:row.account_id } });
+    if (result.account_id !== row.account_id) throw fail('Your deposit destination could not be confirmed. Please try again.', 'PROVIDER');
     return { url:hostedUrl(result.hosted_url) };
   }
   // Owner UI only. Never register this method as an agent tool. The token is
@@ -269,7 +277,8 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if (!/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey || '')) throw fail('Refresh your wallet and try again.');
     const result = await request('/checkout_configurations', { method:'POST', key:requestKey,
       body:{ mode:'payment', plan:{ company_id:row.account_id, currency:'usd', initial_price:amount, plan_type:'one_time', title, release_method:'buy_now' } } });
-    if((result.account_id || result.company_id)!==row.account_id || result.plan?.currency!=='usd' || result.plan?.plan_type!=='one_time' || Number(result.plan?.initial_price)!==amount)
+    const paymentOwners = [result.account_id, result.company_id].filter(id => id != null);
+    if(!paymentOwners.length || paymentOwners.some(id => id !== row.account_id) || result.plan?.currency!=='usd' || result.plan?.plan_type!=='one_time' || Number(result.plan?.initial_price)!==amount)
       throw fail('Your payment link could not be confirmed. Please try again.','PROVIDER');
     return { url:hostedUrl(result.purchase_url), amount, currency:'USD', title };
   }
@@ -281,8 +290,9 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     recipient = String(recipient || '').trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) throw fail('Enter the recipient’s Belna account email.');
     const target = await store.findBelnaWalletRecipient(recipient);
-    if (!target?.account_id || target.environment !== environment() || target.user_id === userId) throw fail('The recipient needs their own Belna Wallet.');
+    if (!/^biz_[A-Za-z0-9]+$/.test(target?.account_id || '') || target.account_id === platformAccountId() || target.account_id === row.account_id || target.environment !== environment() || target.user_id === userId) throw fail('The recipient needs their own Belna Wallet.');
     const account = await request('/accounts/' + encodeURIComponent(row.account_id));
+    if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
     if (account.capabilities?.transfer !== 'active') throw fail('Sending money is not enabled for your wallet yet. Complete your identity check first.');
     const available = balanceView(account).available;
     if (available == null || available < amount) throw fail('Your available dollar balance is too low for this transfer.');

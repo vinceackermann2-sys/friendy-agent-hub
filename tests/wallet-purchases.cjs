@@ -110,6 +110,14 @@ const fs=require('node:fs');
     await assert.rejects(claim('u1',{...input,id:'p3',approval_key:'key3'}),/PURCHASE_LIMIT/,'a closed card still holds its amount for 24 hours');
     const access=(await db.query("select has_table_privilege('authenticated','belna_wallet_purchases','SELECT') as readable,has_function_privilege('anon','claim_wallet_purchase(text,jsonb)','EXECUTE') as executable")).rows[0];
     assert.equal(access.readable,false);assert.equal(access.executable,false);
+    await db.exec("insert into belna_wallets(user_id,owner_email,setup_key,card_request_key,country,environment,account_id,daily_card_limit)values('u2','b@b.c','setup2','card2','SE','sandbox','biz_b',20);");
+    await assert.rejects(claim('u2',{...input,id:'owner2'}),/WALLET_NOT_FOUND/,'another owner’s provider account cannot fund a purchase');
+    await assert.rejects(claim('u2',{...input,id:'owner2',account_id:'biz_b',environment:'live'}),/WALLET_NOT_FOUND/,'live and sandbox approvals cannot cross');
+    const other=(await claim('u2',{...input,id:'owner2',account_id:'biz_b'})).rows[0].result;
+    assert.equal(other.claimed,true,'another owner has a separate allowance and approval key');
+    assert.equal(other.purchase.user_id,'u2');
+    assert.equal(other.purchase.account_id,'biz_b','SQL takes the account from the authenticated owner');
+    assert.equal(other.purchase.environment,'sandbox');
   }finally{await db.close();}
   console.log('Wallet purchase cards: exact budget, private credentials, duplicate prevention, cancellation recovery, expiry, SQL owner/limit/access checks passed');
 })().catch(e=>{console.error(e);process.exit(1);});
