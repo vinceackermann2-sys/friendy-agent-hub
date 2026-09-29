@@ -5848,7 +5848,8 @@ function paymentsTabContent(){
     const loading = (belnaWalletLoading && !belnaWalletCache) || (walletPreferencesLoading && !walletPreferences);
     body += loading ? '<p class="wl-empty">Loading your wallet…</p>' : `<p class="wl-lede">Choose how ${esc(state.agent.name)} pays. You approve every purchase, and ${esc(state.agent.name)} never sees a card number.</p>${walletMethodPicker()}`;
   }
-  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${name ? `<p>${esc(state.agent.name)} pays with ${name}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${walletRequestContent()}${body}</div>`;
+  const heading = active === 'belna_wallet' && created && w?.cardProgramAvailable === false ? 'Belna Wallet connected · card payments unavailable' : name ? `${esc(state.agent.name)} pays with ${name}` : '';
+  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${heading ? `<p>${heading}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${walletRequestContent()}${body}</div>`;
 }
 
 const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
