@@ -5430,7 +5430,7 @@ let walletAddresses=null, walletAddressesLoading=false, walletAddressEdit=null, 
 let belnaWalletOwner = null, belnaWalletCache = null, belnaWalletLoading = false, belnaWalletError = '', belnaWalletBusy = false, belnaReceiveLink = null, belnaTransferQuote = null, belnaReceiveAttempt = null;
 let walletWithdrawalClose=null, walletCardSetupClose=null, walletElementsLoading=null, walletVerificationClose=null, walletLimitEdit=false;
 let walletSetupRefreshTimer=null, walletSetupRefreshUntil=0;
-let walletLegacy=null,walletIncomingRequest=null,personalWalletReturnRunning=null;
+let walletIncomingRequest=null,personalWalletReturnRunning=null;
 function capturePersonalWalletReturn(){
   const q=new URLSearchParams(location.search);
   try{
@@ -5516,11 +5516,11 @@ function loadWalletElements(){
     script.onerror=()=>{clearTimeout(timer);script.remove();walletElementsLoading=null;reject(Error('The secure bank connection could not load. Please try again.'));};document.head.append(script);
   });return walletElementsLoading;
 }
-async function openWalletWithdrawal(kind='withdraw',legacy=false){
+async function openWalletWithdrawal(kind='withdraw'){
   const owner=scopeBelnaWallet();if(!owner)return;
   walletWithdrawalClose?.();
   const previous=document.activeElement;
-  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">'+(kind==='deposit'?'Add money to your personal wallet':legacy?'Withdraw from your previous wallet':'Withdraw to your bank')+'</h3><p>'+(kind==='deposit'?'Choose a funding method. Money goes to your own Whop wallet.':'Choose your bank, review fees and arrival time, then confirm.')+'</p></div><button class="btn ghost small" aria-label="Close bank withdrawal">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure wallet connection…</div><div id="wallet-withdraw-element"></div></section></div>');
+  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">'+(kind==='deposit'?'Add money to your personal wallet':'Withdraw to your bank')+'</h3><p>'+(kind==='deposit'?'Choose a funding method. Money goes to your own Whop wallet.':'Choose your bank, review fees and arrival time, then confirm.')+'</p></div><button class="btn ghost small" aria-label="Close bank withdrawal">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure wallet connection…</div><div id="wallet-withdraw-element"></div></section></div>');
   let element,group,expiryTimer,identityTimer,closed=false;
   const close=()=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearInterval(identityTimer);try{element?.destroy?.();group?.destroy?.();}catch{}overlay.remove();document.removeEventListener('keydown',onKey);if(walletWithdrawalClose===close)walletWithdrawalClose=null;previous?.focus?.();};
   const onKey=e=>{if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const focusable=[...overlay.querySelectorAll('button,iframe,[tabindex="0"]')];const first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
@@ -5528,10 +5528,10 @@ async function openWalletWithdrawal(kind='withdraw',legacy=false){
   identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close();},1000);
   try{
     // Never persist this token in app state/storage or send it to the agent.
-    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/'+(kind==='deposit'?'deposit':legacy?'legacy-withdraw-session':'withdraw-session'),{method:'POST',body:'{}'}),loadWalletElements()]);
+    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/'+(kind==='deposit'?'deposit':'withdraw-session'),{method:'POST',body:'{}'}),loadWalletElements()]);
     if(closed || owner!==billingIdentity()){close();return;}
     const expires=Date.parse(session.expiresAt);
-    if(!(legacy?/^biz_[A-Za-z0-9]+$/:/^user_[A-Za-z0-9]+$/).test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your wallet session expired. Open it again.');
+    if(!/^user_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your wallet session expired. Open it again.');
     group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance:{theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}}});
     element=group.create(kind,{...(kind==='withdraw'?{availableBalance:Number(session.availableBalance)||0,payoutCountry:session.payoutCountry||'US'}:{}),onDismissed:()=>close(),onDone:()=>{close();refreshBelnaWallet(true);},onDepositConfirmed:()=>{refreshBelnaWallet(true);},onIdentityVerificationRequested:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Close this window and choose Verify identity in your wallet, then reopen Add money.';},onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your wallet connection could not load. Close and try again.';}});
     element.mount('#wallet-withdraw-element');overlay.querySelector('.wallet-withdraw-status').textContent='You stay in control. Bank details are handled in the secure connection.';
@@ -5573,7 +5573,7 @@ function scopeBelnaWallet(){
     walletWithdrawalClose?.();
     walletCardSetupClose?.(false);
     walletVerificationClose?.();
-    walletLegacy=null;walletIncomingRequest=null;
+    walletIncomingRequest=null;
     walletHistory=[];walletPreferences=null;walletPreferencesLoading=false;walletConnectOpen=false;walletExistingOpen=false;walletAction=null;walletLimitEdit=false;
     walletAddresses=null; walletAddressesLoading=false; walletAddressEdit=null; walletAddressError='';
     belnaWalletOwner = owner; belnaWalletCache = null; belnaWalletLoading = false; belnaWalletError = ''; belnaWalletBusy = false; belnaReceiveLink = null; belnaTransferQuote=null; belnaReceiveAttempt=null;
@@ -5598,7 +5598,6 @@ function refreshBelnaWallet(force = false){
   repaintWallet();
   return completePersonalWalletReturn().then(()=>window.LingonAuth.api('/api/belna-wallet')).then(j => {
     if (owner === scopeBelnaWallet()) belnaWalletCache = j;
-    if(j.wallet?.legacyWallet)return window.LingonAuth.api('/api/belna-wallet/legacy',{method:'POST',body:'{}'}).then(previous=>{if(owner===scopeBelnaWallet())walletLegacy=previous.wallet;}).catch(()=>{});
   }).catch(e => {
     if (owner === scopeBelnaWallet()) belnaWalletError = e.message || 'Could not load your wallet. Refresh to try again.';
   }).finally(() => {
@@ -5754,10 +5753,6 @@ function setWalletPreferences(payload){
  const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy)return;
  belnaWalletBusy=true;repaintWallet();window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify(payload)}).then(j=>{if(owner===scopeBelnaWallet()){walletPreferences=j;walletExistingOpen=false;}}).catch(e=>{if(owner===scopeBelnaWallet())toast(e.message || 'Could not switch wallet.');}).finally(()=>{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}});
 }
-function walletLegacyContent(){
-  if(!belnaWalletCache?.wallet?.legacyWallet)return '';
-  return `<section class="wset-sec"><h4 class="wset-label">Previous business wallet</h4><div class="wset-group"><div class="wset-row"><span class="wset-copy"><b>${esc(walletMoney(walletLegacy?.balance?.available))}</b><small>Your previous balance stays in this wallet. Connecting a personal wallet does not move it.</small></span>${walletLegacy?.withdrawalsAvailable?'<button type="button" class="btn ghost small" data-act="wallet-legacy-withdraw">Withdraw previous balance</button>':''}</div></div></section>`;
-}
 function walletRequestContent(){
   const p=walletIncomingRequest;if(!p)return '';
   return `<section class="wl-form"><b>Payment request</b><p>${esc(p.title)} · ${esc(walletMoney(p.amount))} to ${esc(p.recipient)}</p><button type="button" class="btn small" data-act="belna-wallet-pay-request">Review payment</button><p class="wl-hint">Connect your personal wallet, then review and confirm this payment.</p></section>`;
@@ -5768,7 +5763,6 @@ function walletSettingsContent(){
     ${belnaWalletError ? `<p class="wl-error" role="alert">${esc(belnaWalletError)}</p>` : ''}
     <section class="wset-sec"><h4 class="wset-label">${esc(state.agent.name)} pays with</h4>${walletMethodPicker()}<p class="wset-foot">Applies to future purchases. Switching never deletes a connection, balance or history.</p></section>
     ${walletBelnaGroup()}
-    ${walletLegacyContent()}
     ${walletExistingGroup()}
     <section class="wset-sec" id="wallet-shipping-section">${walletShippingContent()}</section>
   </div>`;
@@ -5853,7 +5847,7 @@ function paymentsTabContent(){
     const loading = (belnaWalletLoading && !belnaWalletCache) || (walletPreferencesLoading && !walletPreferences);
     body += loading ? '<p class="wl-empty">Loading your wallet…</p>' : `<p class="wl-lede">Choose how ${esc(state.agent.name)} pays. You approve every purchase, and ${esc(state.agent.name)} never sees a card number.</p>${walletMethodPicker()}`;
   }
-  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${name ? `<p>${esc(state.agent.name)} pays with ${name}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${walletRequestContent()}${body}${walletLegacyContent()}</div>`;
+  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${name ? `<p>${esc(state.agent.name)} pays with ${name}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${walletRequestContent()}${body}</div>`;
 }
 
 const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
@@ -7785,7 +7779,6 @@ document.addEventListener('click', async e => {
   }
   if (act === 'belna-wallet-refresh'){ refreshBelnaWallet(true); return; }
   if(act==='wallet-view-card'){openWalletCardSetup();return;}
-  if(act==='wallet-legacy-withdraw'){openWalletWithdrawal('withdraw',true);return;}
   if (act === 'belna-wallet-copy-link'){
     scopeBelnaWallet();
     if (belnaReceiveLink) navigator.clipboard.writeText(belnaReceiveLink.url).then(() => toast('Payment link copied.')).catch(() => toast('Could not copy the link. Open it to copy the address.'));

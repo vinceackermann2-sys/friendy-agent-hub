@@ -13,8 +13,9 @@ leases and single-use callback state are service-only and bound to both owners.
 
 Migration `20260929180000_personal_whop_wallets.sql` is applied. Connecting a
 personal wallet archives the previous business wallet; funds are not transferred
-automatically. Its balance and owner withdrawal screen remain accessible. The
-migration refuses changes while existing money movements remain unsettled.
+automatically. Previous business wallets are no longer displayed in Belna. The
+archive retains their financial records; the migration refuses changes while
+existing money movements remain unsettled.
 
 Card setup calls POST `/cards` with the authenticated owner's `user_id`. A 202
 application is shown as pending or requiring verification; approved applications
