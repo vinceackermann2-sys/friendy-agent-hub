@@ -209,19 +209,21 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     // card credentials or card number are exposed by this connection flow.
     // Persist the intent before the network call. A lost create response can
     // still leave an issued card, so recovery must know which account to poll.
-    await store.saveBelnaWallet(userId,{application_status:'connection_pending',application_requested_at:new Date().toISOString()});
+    const issuing=application==='approved';
+    const issuancePending=row.application_status==='connection_issuance_pending';
     const start=key=>request('/cards',{method:'POST',key,body:application==='approved'
       ? {account_id:row.account_id,assigned_user_id:row.owner_provider_id,name:'Belna card connection',spend_limit:1,spend_limit_frequency:'one_time'}
       : {account_id:row.account_id,assigned_user_id:row.owner_provider_id}});
     // Concurrent retries of the same refused operation must agree on one new
     // key, so they cannot issue separate cards if approval arrives meanwhile.
     const retryKey=async key=>'card-connect-'+Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode('card-refused:'+key))),b=>b.toString(16).padStart(2,'0')).join('');
-    if(application==='approved' && row.application_status!=='connection_pending'){
+    if(issuing && !issuancePending){
       // Whop's first POST filed the application. Approval requires a distinct
       // POST to issue a card; replaying the application key only returns 202.
       row.card_request_key=await retryKey(row.card_request_key);
-      await store.saveBelnaWallet(userId,{card_request_key:row.card_request_key,application_status:'connection_pending'});
+      await store.saveBelnaWallet(userId,{card_request_key:row.card_request_key,application_status:'connection_issuance_pending',application_requested_at:new Date().toISOString()});
     }
+    if(!issuing)await store.saveBelnaWallet(userId,{application_status:'connection_pending',application_requested_at:new Date().toISOString()});
     let result;
     try { result=await start(row.card_request_key); }
     catch(error) {

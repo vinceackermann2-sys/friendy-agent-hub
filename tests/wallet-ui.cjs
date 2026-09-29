@@ -75,10 +75,11 @@ const {chromium}=require('playwright');
   assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-verify"]').count(),0);
   await page.getByRole('button',{name:'Check status',exact:true}).click();
   await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).waitFor();
-  for(const [issuer,copy,canContinue] of [['needs_verification','Finish the card issuer’s verification',true],['needs_information','The card issuer needs more information',true],['pending','Your card application is in review',false],['denied','The issuer has not approved your card application',false],['unavailable','Whop could not file your card application',true]]){
+  for(const [issuer,copy,canContinue] of [['needs_verification','Finish the card issuer’s verification',true],['needs_information','The card issuer needs more information',true],['pending','Your card application is in review',false],['approved','Your card application is approved',true],['denied','The issuer has not approved your card application',false],['unavailable','Whop could not file your card application',true]]){
     cardApplicationState=issuer;await page.getByRole('button',{name:'Check status',exact:true}).click();
     await page.locator('.wl-setup').getByText(copy,{exact:false}).waitFor();
     assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-card-connect"]').count(),canContinue?1:0);
+    if(issuer==='approved')await page.locator('.wl-setup').getByRole('button',{name:'Activate virtual card',exact:true}).waitFor();
     assert.equal(await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).count(),1,'issuer verification never resets wallet KYC');
     if(issuer==='needs_verification'){
       await page.getByRole('button',{name:'Continue card setup',exact:true}).click();

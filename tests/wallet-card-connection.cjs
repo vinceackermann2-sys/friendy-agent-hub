@@ -61,13 +61,18 @@ module.exports = async function cardConnection() {
   assert.equal(calls.filter(x=>x.method==='POST'&&x.path==='/cards').length,count,'in-flight review refreshes status instead of resubmitting an application');
   application='approved';mode='issued';
   const applicationKey=row.card_request_key;
+  row.application_status='connection_pending';
   const issued=await wallet.connectCard('owner');
   assert.equal(issued.wallet.status,'ready');
   assert.notEqual(row.card_request_key,applicationKey,'approved application gets a distinct issuance key');
+  assert.equal(row.application_status,'connection_card','issued connection card is recorded');
   assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').at(-1).body,{account_id:'biz_owner',assigned_user_id:'user_owner',name:'Belna card connection',spend_limit:1,spend_limit_frequency:'one_time'},'the second call issues the approved virtual connection card');
   assert.ok(calls.some(x=>x.path==='/cards/icrd_issued'&&x.method==='PATCH'),'connection card is immediately canceled');
   assert.equal((await wallet.connectCard('owner')).wallet.status,'ready','active issuer does not create another card');
   cardActive=false;
+  row.application_status='connection_issuance_pending';mode='timeout';const issuanceKey=row.card_request_key;
+  await assert.rejects(wallet.connectCard('owner'),/could not be reached/);
+  assert.equal(row.card_request_key,issuanceKey,'an uncertain approved issuance reuses its key');
   application=null;row.application_status=null;mode='timeout';const timeoutKey=row.card_request_key;
   await assert.rejects(wallet.connectCard('owner'),/could not be reached/);
   assert.equal(row.card_request_key,timeoutKey,'uncertain issuance never rotates its key');
