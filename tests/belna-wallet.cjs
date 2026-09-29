@@ -26,13 +26,13 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     let data;
     if(path==='/accounts' && init.method==='POST') data={id:'biz_one',owner:{id:'user_owner'},parent_account:{id:'biz_timewarp'}};
     else if(path==='/accounts/biz_timewarp') data={id:'biz_timewarp'};
-    else if(path==='/accounts/biz_one') data={parent_account:{id:wrongParent?'biz_other':'biz_timewarp'},balances:[{symbol:'USD',breakdown:{available:'100.25',pending:'2.50'}}],capabilities:{card_issuing:cardCapability,transfer:'active'}};
+    else if(path==='/accounts/biz_one') data={parent_account:{id:wrongParent?'biz_other':'biz_timewarp'},verification:{business:{status:'approved'},individual:{status:identityStatus}},balances:[{symbol:'USD',breakdown:{available:'100.25',pending:'2.50'}}],capabilities:{card_issuing:cardCapability,transfer:'active'}};
     else if(path==='/cards' && init.method==='POST') data=applicationUrl?{object:'card_application',id:'ciac_one',status:'needs_verification',hosted_url:applicationUrl}:card={object:'card',id:'icrd_one',status:'active',last4:'4242',name:body.name,user_id:'user_owner',secrets:{card_number:'4242424242424242',cvc:'123'}};
     else if(path==='/cards') data={data:card ? [card] : []};
     else if(path==='/cards/icrd_one') data=card={...card,status:body.canceled?'canceled':body.frozen ? 'frozen' : 'active'};
     else if(path==='/card_transactions') data={data:[{merchant_name:'Store',usd_amount:5.25,status:'completed',secrets:'LEAK'}]};
     else if(path==='/financial_activity') data={data:[{line_type:'onchain_deposit',currency:{code:'usd'},usd_amount:'25.10',posted_at:'2026-01-01',source:{secrets:'LEAK'}},{line_type:'payment_gross',currency:{code:'btc'},usd_amount:'20'}]};
-    else if(path==='/verifications') {data=init.method==='GET' ? {data:[{kind:'business',status:'approved'},{kind:'individual',status:identityStatus,first_name:'PRIVATE',date_of_birth:'PRIVATE',session_url:verificationUrl}]} : {status:verificationResultStatus,session_url:verificationResultStatus==='approved'?undefined:verificationUrl};if(init.method==='POST'&&verificationResultStatus==='approved')identityStatus='approved';}
+    else if(path==='/verifications') {if(init.method==='GET')return {ok:false,status:403,json:async()=>({error:{message:'Missing identity read permission'}})};data={status:verificationResultStatus,session_url:verificationResultStatus==='approved'?undefined:verificationUrl};if(verificationResultStatus==='approved')identityStatus='approved';}
     else if(path==='/deposits') data={hosted_url:'https://whop.com/deposit/biz_one'};
     else if(path==='/checkout_configurations') data={purchase_url:'https://whop.com/checkout/ch_one'};
     else if(path==='/access_tokens')data={token:'owner-only-withdrawal-token-'.repeat(3),expires_at:body.expires_at};
@@ -91,6 +91,10 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   assert.ok(!JSON.stringify(verified).includes(verificationUrl),'identity session is owner-action only');
   const verificationPosts=calls.filter(c=>c.path==='/verifications'&&c.method==='POST').length;
   assert.equal((await wallet.verify('u1')).wallet.identityVerified,true,'a completed verification has no session URL and must not be restarted');
+  assert.equal(calls.filter(c=>c.path==='/verifications'&&c.method==='POST').length,verificationPosts);
+  assert.ok(!calls.some(c=>c.path==='/verifications'&&c.method==='GET'),'status uses the account summary and never needs private identity-read access');
+  identityStatus='manual_review';
+  assert.equal((await wallet.verify('u1')).wallet.verificationStatus,'manual_review','a review is polled, never restarted');
   assert.equal(calls.filter(c=>c.path==='/verifications'&&c.method==='POST').length,verificationPosts);
   identityStatus='pending';verificationResultStatus='approved';
   const immediate=await wallet.verify('u1');

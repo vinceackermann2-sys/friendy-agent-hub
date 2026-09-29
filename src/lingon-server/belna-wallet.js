@@ -59,12 +59,13 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     const amount = (value) => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
     return { currency:'USD', available:amount(usd?.breakdown?.available), pending:amount(usd?.breakdown?.pending) };
   }
-  async function identityVerification(row) {
+  function identityVerification(account) {
     // KYC and issuer approval are independent. Read the individual profile,
     // never infer successful verification from a card application or balance.
-    const result = await request('/verifications?account_id=' + encodeURIComponent(row.account_id));
-    const profile = (result.data || []).find(x => x.kind === 'individual');
-    const status = ['approved','pending','rejected','action_required','not_started'].includes(profile?.status) ? profile.status : 'not_started';
+    // The account includes a status-only summary under the existing account
+    // read scope. GET /verifications requires access to private identity data.
+    const profile = account.verification?.individual;
+    const status = ['approved','pending','manual_review','rejected','action_required','not_started'].includes(profile?.status) ? profile.status : 'not_started';
     return { status };
   }
   async function snapshot(userId) {
@@ -78,7 +79,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     }
     const account = await request('/accounts/' + encodeURIComponent(row.account_id));
     if (account.parent_account?.id !== platformAccountId()) throw fail('Your wallet account does not belong to this Belna connection.', 'PROVIDER');
-    const verification = await identityVerification(row);
+    const verification = identityVerification(account);
     if(String(row.application_status||'').startsWith('connection_')){
       const connectionCards=await request('/cards?account_id='+encodeURIComponent(row.account_id));
       for(const card of connectionCards.data || []){
@@ -160,8 +161,11 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
   }
   async function verify(userId) {
     const row = await owned(userId);
-    const current = await identityVerification(row);
+    const account = await request('/accounts/' + encodeURIComponent(row.account_id));
+    if (account.parent_account?.id !== platformAccountId()) throw fail('Your wallet connection could not be confirmed.', 'PROVIDER');
+    const current = identityVerification(account);
     if (current.status === 'approved') return snapshot(userId);
+    if (current.status === 'manual_review') return snapshot(userId);
     const result = await request('/verifications?account_id=' + encodeURIComponent(row.account_id), { method:'POST', body:{kind:'individual', ...(current.status === 'rejected' ? {restart:true} : {})} });
     // Approved profiles no longer have a session_url. Returning status lets
     // the UI advance without treating that valid response as a broken link.
