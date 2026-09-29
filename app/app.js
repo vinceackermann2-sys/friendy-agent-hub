@@ -5427,7 +5427,7 @@ let walletHistory=[];
 let walletPreferences=null,walletPreferencesLoading=false,walletConnectOpen=false,walletExistingOpen=false,walletAction=null;
 let walletAddresses=null, walletAddressesLoading=false, walletAddressEdit=null, walletAddressError='';
 let belnaWalletOwner = null, belnaWalletCache = null, belnaWalletLoading = false, belnaWalletError = '', belnaWalletBusy = false, belnaReceiveLink = null, belnaTransferQuote = null, belnaReceiveAttempt = null;
-let walletWithdrawalClose=null, walletElementsLoading=null, walletVerificationClose=null, walletLimitEdit=false;
+let walletWithdrawalClose=null, walletCardSetupClose=null, walletElementsLoading=null, walletVerificationClose=null, walletLimitEdit=false;
 let walletSetupRefreshTimer=null, walletSetupRefreshUntil=0;
 function walletVisible(){
   return document.visibilityState !== 'hidden' && ((state.view==='settings' && state.settingsTab==='wallet') || (state.view==='chat' && state.canvasOpen && state.canvasTab==='payments'));
@@ -5495,11 +5495,38 @@ async function openWalletWithdrawal(){
     expiryTimer=setTimeout(()=>{close();toast('Your secure bank session expired. Open Withdraw again.');},Math.min(15*60000,expires-Date.now()));
   }catch(e){if(!closed){overlay.querySelector('.wallet-withdraw-status').textContent=e.message||'Could not open your bank connection. Please try again.';}}
 }
+async function openWalletCardSetup(){
+  const owner=scopeBelnaWallet();if(!owner)return;
+  walletCardSetupClose?.();
+  const previous=document.activeElement;
+  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-card-setup-title"><header><div><h3 id="wallet-card-setup-title">Continue card setup</h3><p>Whop handles your private card issuer verification. Your agent cannot see it.</p></div><button class="btn ghost small" aria-label="Close card setup">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening secure card setup…</div><div id="wallet-card-setup-element"></div></section></div>');
+  let element,cards,group,expiryTimer,identityTimer,closed=false;
+  const close=(refresh=true)=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearInterval(identityTimer);try{element?.destroy?.();cards?.destroy?.();group?.destroy?.();}catch{}overlay.remove();document.removeEventListener('keydown',onKey);if(walletCardSetupClose===close)walletCardSetupClose=null;previous?.focus?.();if(refresh)refreshBelnaWallet(true);};
+  const onKey=e=>{if(e.key==='Escape'){e.preventDefault();close();}};
+  walletCardSetupClose=close;overlay.querySelector('header button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};document.addEventListener('keydown',onKey);document.body.append(overlay);overlay.querySelector('button').focus();
+  identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close(false);},1000);
+  try{
+    // The token stays in this owner-only modal and expires after fifteen minutes.
+    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/card-session',{method:'POST',body:'{}'}),loadWalletElements()]);
+    if(closed || owner!==billingIdentity()){close();return;}
+    const expires=Date.parse(session.expiresAt);
+    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your card setup session expired. Open it again.');
+    group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance:{theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}}});
+    cards=group.create('cards',{accessToken:session.accessToken});
+    element=cards.create('cards',{hideAddButton:true,disableRedirect:true,
+      onVerificationRequested:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Continue in Whop’s private verification page.';},
+      onReady:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Use Whop’s verification control below to continue card setup.';},
+      onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Whop card setup could not load. Close and try again.';}});
+    element.mount('#wallet-card-setup-element');
+    expiryTimer=setTimeout(()=>{close();toast('Your secure card setup expired. Open it again.');},Math.min(15*60000,expires-Date.now()));
+  }catch(e){if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent=e.message||'Could not open secure card setup. Please try again.';}
+}
 function scopeBelnaWallet(){
   const owner = billingIdentity();
   if (owner !== belnaWalletOwner) {
     clearTimeout(walletSetupRefreshTimer);walletSetupRefreshUntil=0;
     walletWithdrawalClose?.();
+    walletCardSetupClose?.(false);
     walletVerificationClose?.();
     walletHistory=[];walletPreferences=null;walletPreferencesLoading=false;walletConnectOpen=false;walletExistingOpen=false;walletAction=null;walletLimitEdit=false;
     walletAddresses=null; walletAddressesLoading=false; walletAddressEdit=null; walletAddressError='';
@@ -7709,6 +7736,7 @@ document.addEventListener('click', async e => {
   if (act.startsWith('belna-wallet-')){
     const owner = scopeBelnaWallet();
     if (!owner || belnaWalletBusy) return;
+    if (act === 'belna-wallet-card-connect' && ['needs_verification','needs_information'].includes(belnaWalletCache?.wallet?.cardApplicationStatus)) { openWalletCardSetup(); return; }
     let action, payload = {};
     if (act === 'belna-wallet-setup') { action='setup'; payload={ country:$('#belna-wallet-country')?.value || '' }; }
     else if (act === 'belna-wallet-verify') action='verify';
@@ -7736,7 +7764,7 @@ document.addEventListener('click', async e => {
       else if (j.url) window.location.assign(j.url);
       else if (action === 'controls') { if (payload.dailyLimitUsd != null) walletLimitEdit=false; toast(payload.frozen === true ? 'Card spending paused.' : payload.frozen === false ? 'Card spending resumed.' : 'Daily card allowance saved.'); }
       else toast(action === 'setup' ? `Wallet created. Complete your identity check to set up your card.${existingCard ? ' Your existing card stays active until you switch in Wallet settings.' : ''}` : 'Card setup updated.');
-    }).catch(e => { if (owner === scopeBelnaWallet()) toast(e.message || 'Could not update your wallet.'); }).finally(() => {
+    }).catch(e => { if (owner === scopeBelnaWallet()) { toast(e.message || 'Could not update your wallet.');if(action==='card-connect')refreshBelnaWallet(true); } }).finally(() => {
       if (owner !== scopeBelnaWallet()) return;
       belnaWalletBusy=false;
       b.disabled=false;

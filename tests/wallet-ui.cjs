@@ -5,7 +5,7 @@ const {chromium}=require('playwright');
  try{for(const width of [1280,390]){
   const context=await browser.newContext({viewport:{width,height:1000}});
   await context.addInitScript(()=>{
-   window.WhopElements=()=>({wallet:{create:()=>({create:()=>({mount:selector=>{document.querySelector(selector).innerHTML='<p>Secure bank connection · review fees and confirm</p>';},destroy:()=>{}}),destroy:()=>{}})}});
+   window.WhopElements=()=>({wallet:{create:()=>({create:kind=>kind==='cards'?{create:()=>({mount:selector=>{document.querySelector(selector).innerHTML='<p>Whop card verification</p>';},destroy:()=>{}}),destroy:()=>{}}:{mount:selector=>{document.querySelector(selector).innerHTML='<p>Secure bank connection · review fees and confirm</p>';},destroy:()=>{}},destroy:()=>{}})}});
    localStorage.setItem('lingon.session',JSON.stringify({access_token:'ui-audit',user:{id:'ui-audit',email:'audit@example.invalid'}}));
    if(!localStorage.getItem('lingon.v1'))localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'ui-audit',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet-chat',chats:[{id:'wallet-chat',title:'Wallet setup',messages:[],at:Date.now()}],canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
   });
@@ -19,6 +19,7 @@ const {chromium}=require('playwright');
    else if(path==='/api/shop-pay')result={shopPay:{configured:true,connected:false},orders:[]};
    else if(path==='/api/belna-wallet/setup'){Object.assign(wallet,{status:'verification_required',identityVerified:false,verificationStatus:'pending',cardReady:false,balance:{available:12.5,pending:3},agentCardPayments:false,dailyCardLimitUsd:50,paused:false});result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/card-connect'){Object.assign(wallet,{status:'ready',cardReady:true});result={wallet,activity:[]};}
+   else if(path==='/api/belna-wallet/card-session')result={accountId:'biz_test',accessToken:'owner-card-verification-token',expiresAt:new Date(Date.now()+15*60000).toISOString()};
    else if(path==='/api/belna-wallet/controls'){if(body.dailyLimitUsd!=null)wallet.dailyCardLimitUsd=body.dailyLimitUsd;if(typeof body.frozen==='boolean')wallet.paused=body.frozen;result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/quote')result={quoteId:'test-transfer',recipient:body.recipient,amount:body.amount,fees:'Partner fees may apply.'};
    else if(path==='/api/belna-wallet/send')result={status:'succeeded'};
@@ -79,6 +80,12 @@ const {chromium}=require('playwright');
     await page.locator('.wl-setup').getByText(copy,{exact:false}).waitFor();
     assert.equal(await page.locator('.wl-setup [data-act="belna-wallet-card-connect"]').count(),canContinue?1:0);
     assert.equal(await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).count(),1,'issuer verification never resets wallet KYC');
+    if(issuer==='needs_verification'){
+      await page.getByRole('button',{name:'Continue card setup',exact:true}).click();
+      await page.getByText('Whop card verification',{exact:true}).waitFor();
+      assert.equal(requests.filter(x=>x.path==='/api/belna-wallet/card-session').length,1,'issuer verification gets an owner-scoped Whop session');
+      await page.getByRole('button',{name:'Close card setup',exact:true}).click();
+    }
   }
   await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.getByText('Card application not filed · retry setup or contact card support',{exact:true}).waitFor();
   if(await page.getByRole('button',{name:'Back to chat',exact:true}).count())await page.getByRole('button',{name:'Back to chat',exact:true}).click();

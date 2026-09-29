@@ -7,7 +7,7 @@ module.exports = async function cardConnection() {
   const store={supaConfigured:()=>true,getBelnaWallet:async()=>({...row}),saveBelnaWallet:async(id,p)=>{assert.equal(id,'owner');if(p.card_request_key)keys++;Object.assign(row,p);return {...row};},listBelnaWalletTransfers:async()=>[]};
   const fetchImpl=async(url,init)=>{
     const path=new URL(url).pathname.replace('/api/v1','');
-    const key=init.headers['Idempotency-Key'];calls.push({path,key,method:init.method,body:init.body?JSON.parse(init.body):null});
+    const key=init.headers['Idempotency-Key'],body=init.body?JSON.parse(init.body):null;calls.push({path,key,method:init.method,body});
     let data;
     if(path==='/accounts/biz_owner')data={parent_account:{id:'biz_platform'},verification:{individual:{status:'approved'}},cards:application?{status:application}:null,capabilities:{card_issuing:cardActive?'active':'inactive'},balances:[]};
     else if(path==='/cards'&&init.method==='POST'){
@@ -24,7 +24,8 @@ module.exports = async function cardConnection() {
       }
       application=application||'needs_verification';
       data={object:'card_application',id:'ciac_owner',status:application,hosted_url:application.startsWith('needs_')?'https://verify.raincards.xyz/onboarding/owner':null};
-    }else if(path==='/cards/icrd_issued'&&init.method==='PATCH')data={id:'icrd_issued',status:'canceled'};
+    }else if(path==='/access_tokens')data={token:'owner-card-verification-token-'.repeat(2),expires_at:body.expires_at};
+    else if(path==='/cards/icrd_issued'&&init.method==='PATCH')data={id:'icrd_issued',status:'canceled'};
     else if(path==='/cards'||path==='/financial_activity')data={data:[]};
     else throw Error('Unexpected '+path);
     return{ok:true,headers:{get:()=>null},json:async()=>data};
@@ -35,8 +36,12 @@ module.exports = async function cardConnection() {
   assert.equal(connected.wallet.cardApplicationStatus,'needs_verification');
   assert.equal(connected.wallet.status,'card_action_required');
   assert.equal(connected.wallet.cardReady,false);
-  assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.key),['old-rejected-key',row.card_request_key]);
-  assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.body),[
+  const cardSession=await wallet.cardSession('owner');
+  assert.equal(cardSession.accountId,'biz_owner');
+  assert.equal(cardSession.accessToken,'owner-card-verification-token-'.repeat(2));
+  assert.deepEqual(calls.find(x=>x.path==='/access_tokens').body.scoped_actions,['payout:account:read','identity:write'],'card verification token has only Whop Cards element scopes');
+  assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').map(x=>x.key),['old-rejected-key',row.card_request_key]);
+  assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').map(x=>x.body),[
     {account_id:'biz_owner',assigned_user_id:'user_owner'},
     {account_id:'biz_owner',assigned_user_id:'user_owner'},
   ],'the first call files only the account-owner application, without card issuance options');
@@ -51,15 +56,15 @@ module.exports = async function cardConnection() {
     assert.equal(snapshot.wallet.cardApplicationStatus,state);
     assert.equal(snapshot.wallet.status,state.startsWith('needs_')?'card_action_required':['denied','locked','canceled'].includes(state)?'denied':'review');
   }
-  application='pending';mode='accepted';const count=calls.filter(x=>x.method==='POST').length;
+  application='pending';mode='accepted';const count=calls.filter(x=>x.method==='POST'&&x.path==='/cards').length;
   await wallet.connectCard('owner');
-  assert.equal(calls.filter(x=>x.method==='POST').length,count,'in-flight review refreshes status instead of resubmitting an application');
+  assert.equal(calls.filter(x=>x.method==='POST'&&x.path==='/cards').length,count,'in-flight review refreshes status instead of resubmitting an application');
   application='approved';mode='issued';
   const applicationKey=row.card_request_key;
   const issued=await wallet.connectCard('owner');
   assert.equal(issued.wallet.status,'ready');
   assert.notEqual(row.card_request_key,applicationKey,'approved application gets a distinct issuance key');
-  assert.deepEqual(calls.filter(x=>x.method==='POST').at(-1).body,{account_id:'biz_owner',assigned_user_id:'user_owner',name:'Belna card connection',spend_limit:1,spend_limit_frequency:'one_time'},'the second call issues the approved virtual connection card');
+  assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').at(-1).body,{account_id:'biz_owner',assigned_user_id:'user_owner',name:'Belna card connection',spend_limit:1,spend_limit_frequency:'one_time'},'the second call issues the approved virtual connection card');
   assert.ok(calls.some(x=>x.path==='/cards/icrd_issued'&&x.method==='PATCH'),'connection card is immediately canceled');
   assert.equal((await wallet.connectCard('owner')).wallet.status,'ready','active issuer does not create another card');
   cardActive=false;
@@ -77,22 +82,22 @@ module.exports = async function cardConnection() {
   const filed=await wallet.connectCard('owner');
   assert.equal(filed.wallet.status,'card_action_required','a prior HTTP 400 must not leave the application permanently unfiled');
   assert.equal(filed.wallet.cardApplicationStatus,'needs_verification');
-  assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.key),['old-400-key',row.card_request_key]);
-  assert.deepEqual(calls.filter(x=>x.method==='POST').map(x=>x.body),Array(2).fill({account_id:'biz_owner',assigned_user_id:'user_owner'}));
+  assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').map(x=>x.key),['old-400-key',row.card_request_key]);
+  assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').map(x=>x.body),Array(2).fill({account_id:'biz_owner',assigned_user_id:'user_owner'}));
   application=null;row.application_status=null;row.card_request_key='provisioning-key';calls=[];mode='provisioning';
   const provisioning=await wallet.connectCard('owner');
   assert.equal(provisioning.wallet.status,'review','Whop HTTP 202 keeps the application in review');
   assert.equal(provisioning.wallet.cardApplicationStatus,'pending');
   assert.equal(row.application_status,'connection_application_pending');
-  const provisioningCalls=calls.filter(x=>x.method==='POST').length;
+  const provisioningCalls=calls.filter(x=>x.method==='POST'&&x.path==='/cards').length;
   await wallet.connectCard('owner');
-  assert.equal(calls.filter(x=>x.method==='POST').length,provisioningCalls,'pending provisioning does not file a duplicate application');
+  assert.equal(calls.filter(x=>x.method==='POST'&&x.path==='/cards').length,provisioningCalls,'pending provisioning does not file a duplicate application');
   application='approved';mode='issued';
   assert.equal((await wallet.connectCard('owner')).wallet.status,'ready','approved provisioning can proceed to card issuance');
   cardActive=false;
   application=null;row.application_status=null;row.card_request_key='old-rejected-key';calls=[];mode='replayed';
   await Promise.all([wallet.connectCard('owner'),wallet.connectCard('owner')]);
-  assert.equal(new Set(calls.filter(x=>x.method==='POST'&&x.key!=='old-rejected-key').map(x=>x.key)).size,1,'concurrent retries use one replacement key');
+  assert.equal(new Set(calls.filter(x=>x.method==='POST'&&x.path==='/cards'&&x.key!=='old-rejected-key').map(x=>x.key)).size,1,'concurrent retries use one replacement key');
   cardActive=true;
   assert.equal((await wallet.snapshot('owner')).wallet.status,'ready','real issuer activation enables virtual cards');
   console.log('Card connection: cached refusals, private onboarding, issuer state distinctions, terminal states and uncertain retry safety passed');

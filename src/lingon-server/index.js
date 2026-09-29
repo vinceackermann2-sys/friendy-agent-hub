@@ -1036,7 +1036,7 @@ app.get('/api/belna-wallet', requireAuth(async (req, res) => {
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
   catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
 }));
-for (const action of ['setup', 'verify', 'card-connect', 'controls', 'deposit', 'withdraw-session', 'receive', 'quote', 'send']) {
+for (const action of ['setup', 'verify', 'card-connect', 'card-session', 'controls', 'deposit', 'withdraw-session', 'receive', 'quote', 'send']) {
   app.post('/api/belna-wallet/' + action, rateLimit(10, 60000), requireAuth(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
@@ -1046,6 +1046,7 @@ for (const action of ['setup', 'verify', 'card-connect', 'controls', 'deposit', 
         : action === 'controls' ? await belnaWallet.updateCard(req.user.id, req.body || {})
         : action === 'deposit' ? await belnaWallet.deposit(req.user.id)
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
+        : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
         : action === 'send' ? await belnaWallet.confirmTransfer(req.user.id, req.body || {})
         : await belnaWallet.receive(req.user.id, req.body || {});

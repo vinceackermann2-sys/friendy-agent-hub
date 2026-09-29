@@ -322,6 +322,22 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       throw fail('Your bank connection session could not be started. Please try again.','PROVIDER');
     return {accountId:row.account_id,accessToken:result.token,expiresAt:result.expires_at,currency:'usd'};
   }
+  // A short-lived owner-only token lets Whop's Cards element start or resume
+  // the issuer's private verification page. It cannot create or reveal cards.
+  async function cardSession(userId) {
+    if(!cardProgramAvailable())throw fail('Card setup is not available for your wallet yet.','NOT_SET_UP');
+    const row=await owned(userId);
+    const account=await request('/accounts/'+encodeURIComponent(row.account_id));
+    if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
+    if(['denied','locked','canceled'].includes(cardApplicationStatus(account,row)))throw fail('The card issuer has not approved your application. Contact card support.','REVIEW');
+    const expiresAt=new Date(Date.now()+15*60000).toISOString();
+    const result=await request('/access_tokens',{method:'POST',body:{account_id:row.account_id,expires_at:expiresAt,
+      scoped_actions:['payout:account:read','identity:write']}});
+    const expires=Date.parse(result.expires_at);
+    if(typeof result.token!=='string' || result.token.length<32 || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.parse(expiresAt)+1000)
+      throw fail('Your secure card setup could not be started. Please try again.','PROVIDER');
+    return {accountId:row.account_id,accessToken:result.token,expiresAt:result.expires_at};
+  }
   async function receive(userId, { amount, title, requestKey }) {
     const row = await owned(userId);
     amount = validateLimit(amount);
@@ -413,7 +429,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if(durable())await store.recordExistingPurchase(userId,approved);
   }
   async function existingHistory(userId){return {history:durable() ? (await store.listExistingPurchases(userId)).map(x=>({title:x.merchant,amount:Number(x.amount),currency:x.currency,status:x.status,at:x.created_at})) : []};}
-  return { configured, snapshot, setup, verify, connectCard, updateCard, deposit, withdrawalSession, receive, transferQuote, send, confirmTransfer,
+  return { configured, snapshot, setup, verify, connectCard, cardSession, updateCard, deposit, withdrawalSession, receive, transferQuote, send, confirmTransfer,
     preferences,savePreferences,
     recordExistingPurchase,existingHistory,
     addresses,saveAddress,deleteAddress,
