@@ -86,6 +86,14 @@ provider fees may be additional. Manual card limit fields and permanent card
 previews are absent. The agent can request an allowance change with approval.
 Stripe remains only for Belna subscription billing.
 
+Payment links create an inline checkout plan using `plan.company_id`, the owner's
+connected account, and validate the returned owner, USD currency, one-time plan
+and exact amount before sharing its URL. The live twelve-scope wallet key does
+not yet include the checkout prerequisites `plan:create`, `access_pass:create`,
+`access_pass:update` and `checkout_configuration:basic:read`; `checkout_configuration:create`
+alone is insufficient. The live unpaid $1 link test was rejected. These additional
+commerce permissions require the owner's authorization before changing the key.
+
 Card connection starts the human owner's issuer application. Whop may send the
 owner to Whop, Sumsub or `verify.raincards.xyz` for verification. Connection-only
 cards are canceled by refresh/recovery and never presented as saved cards.

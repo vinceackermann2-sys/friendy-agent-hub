@@ -40,6 +40,7 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
       if (response.status===400 && method==='GET' && path.startsWith('/cards?') && /^no rain account found\b/.test(message)) return {data:[]};
       console.error('belna-wallet-provider-rejection', { status:response.status,
         reason:/no rain account found/.test(message)?'NO_CARD_ACCOUNT':/rain account is not approved/.test(message)?'CARD_NOT_APPROVED':/identity|verification/.test(message)?'IDENTITY_REQUIRED':/not authorized|permission/.test(message)?'PERMISSION':'OTHER' });
+      if(response.status===403 && path==='/checkout_configurations')throw fail('Payment links need additional Whop permissions. Ask the app owner to finish connecting checkout links.','NOT_SET_UP');
       if (/verification|identity/.test(message)) throw fail('Complete your identity check before creating your card.', 'VERIFY');
       if (/application|approved/.test(message)) throw fail('Your card application is being reviewed. Refresh after it is approved.', 'REVIEW');
       throw Object.assign(fail('Your wallet request could not be completed. Please try again.', 'PROVIDER'),{providerStatus:response.status});
@@ -267,7 +268,9 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if (!title || title.length > 120) throw fail('Describe what the payment is for, in 120 characters or less.');
     if (!/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey || '')) throw fail('Refresh your wallet and try again.');
     const result = await request('/checkout_configurations', { method:'POST', key:requestKey,
-      body:{ account_id:row.account_id, mode:'payment', plan:{ account_id:row.account_id, currency:'usd', initial_price:amount, plan_type:'one_time', title, release_method:'buy_now' } } });
+      body:{ mode:'payment', plan:{ company_id:row.account_id, currency:'usd', initial_price:amount, plan_type:'one_time', title, release_method:'buy_now' } } });
+    if((result.account_id || result.company_id)!==row.account_id || result.plan?.currency!=='usd' || result.plan?.plan_type!=='one_time' || Number(result.plan?.initial_price)!==amount)
+      throw fail('Your payment link could not be confirmed. Please try again.','PROVIDER');
     return { url:hostedUrl(result.purchase_url), amount, currency:'USD', title };
   }
   const publicQuote = (q) => ({ quoteId:q.id, recipient:q.recipient_email, amount:Number(q.amount), currency:'USD', fees:'Payment partner fees may apply in addition to this amount.' });
