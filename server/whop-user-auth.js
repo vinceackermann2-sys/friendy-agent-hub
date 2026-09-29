@@ -47,7 +47,9 @@ function createWhopUserAuth({store,env=process.env,fetchImpl=(...a)=>fetch(...a)
     const state=random(),verifier=random();
     await store.saveWhopWalletOAuthState(user.id,{state_hash:hex(await digest(state)),encrypted_verifier:await seal(user.id,'oauth',{verifier,country}),expires_at:new Date(now()+10*60000).toISOString(),environment:environment()});
     const challenge=btoa(String.fromCharCode(...await digest(verifier))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-    const params=new URLSearchParams({client_id:setting('WHOP_OAUTH_CLIENT_ID'),redirect_uri:redirectUri(),response_type:'code',scope:scopes().join(' '),state,code_challenge:challenge,code_challenge_method:'S256'});
+    // Whop requires a nonce for the openid scope. Identity is read from the
+    // authenticated userinfo endpoint; an unverified ID token is never used.
+    const params=new URLSearchParams({client_id:setting('WHOP_OAUTH_CLIENT_ID'),redirect_uri:redirectUri(),response_type:'code',scope:scopes().join(' '),state,nonce:random(),code_challenge:challenge,code_challenge_method:'S256'});
     // No company_id: authorizing a business would produce the wrong token.
     return {url:base()+'/oauth/authorize?'+params,state};
   }

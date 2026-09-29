@@ -48,6 +48,7 @@ const {createWhopUserAuth}=require('../server/whop-user-auth');
   const auth=createWhopUserAuth({store,env,fetchImpl});
   const startA=await auth.start(a,{country:'SE'}),startB=await auth.start(b,{country:'US'});
   const uri=new URL(startA.url);assert.equal(uri.searchParams.get('company_id'),null);assert.equal(uri.searchParams.get('code_challenge_method'),'S256');assert.equal(uri.searchParams.get('redirect_uri'),'https://belna.se/app');
+  assert.match(uri.searchParams.get('nonce'),/^[a-f0-9]{64}$/);assert.notEqual(uri.searchParams.get('nonce'),new URL(startB.url).searchParams.get('nonce'),'OpenID nonce is unique per sign-in');
   assert.ok(!JSON.stringify(states.get('alice')).includes('verifier":"'),'PKCE verifier encrypted');
   await assert.rejects(auth.finish(b,{state:startA.state,code:'alice'}),/expired/);
   await auth.finish(a,{state:startA.state,code:'alice'});await auth.finish(b,{state:startB.state,code:'bob'});
