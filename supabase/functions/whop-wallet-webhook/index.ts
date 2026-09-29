@@ -15,9 +15,11 @@ Deno.serve(async req => {
   } catch { return new Response('Invalid signature', { status:401 }); }
   if (!/^card_transaction\.(created|completed|declined|updated|reversed)$/.test(event.type))
     return Response.json({ ok:true, ignored:true });
-  const accountId = event.account_id || event.company_id;
+  // Personal events can also name the platform company. Route by the human
+  // cardholder first; recovery verifies ownership and settlement with Whop.
+  const accountId = event.data?.cardholder_id || event.data?.user_id || event.user_id || event.account_id || event.company_id;
   const cardId = event.data?.card_id;
-  if (!/^biz_[A-Za-z0-9]+$/.test(accountId || '') || !/^icrd_[A-Za-z0-9]+$/.test(cardId || ''))
+  if (!/^(biz|user)_[A-Za-z0-9]+$/.test(accountId || '') || !/^icrd_[A-Za-z0-9]+$/.test(cardId || ''))
     return new Response('Incomplete card event', { status:400 });
   const url = Deno.env.get('SUPABASE_URL'), key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!url || !key) return new Response('Wallet queue is not configured', { status:503 });

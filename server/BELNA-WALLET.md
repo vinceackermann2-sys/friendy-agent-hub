@@ -1,10 +1,42 @@
 # Belna Wallet production setup
 
-Belna uses Whop's connected-account, card and payment APIs through TimeWarp
-(`biz_CpeJbprflNa2ju`), with Supabase authentication, owner permissions, activity
-and recovery. Whop's Neobank blueprint is a starter architecture for those APIs;
-Belna does not deploy that template. Each human owner needs their own connected
-account and issuer identity/card approval. The owner controls all funds.
+Belna connects each human owner's personal Whop `user_` wallet through public
+OAuth with PKCE. Deposits, cards, transfers, balance and withdrawals use that
+owner's encrypted OAuth credentials. The company key cannot impersonate them.
+
+## Personal wallet release — 29 September 2026
+
+The private OAuth app `app_EsliBHi4tywWVQ` is configured as Public with callback
+`https://belna.se/app`. The service-only `whop_personal_wallet_config` Vault secret
+contains its public settings and the shared token encryption key. Tokens, refresh
+leases and single-use callback state are service-only and bound to both owners.
+
+Migration `20260929180000_personal_whop_wallets.sql` is applied. Connecting a
+personal wallet archives the previous business wallet; funds are not transferred
+automatically. Its balance and owner withdrawal screen remain accessible. The
+migration refuses changes while existing money movements remain unsettled.
+
+Card setup calls POST `/cards` with the authenticated owner's `user_id`. A 202
+application is shown as pending or requiring verification; approved applications
+can be submitted again to issue a virtual card. KYC alone is not treated as an
+issued card. Permanent card controls and agent purchase cards are owner-scoped.
+Agent checkout still requires an active card, fresh recovery, healthy private
+checkout, funds and explicit approval of the exact purchase budget.
+
+Add money and Withdraw embed Whop's elements using short-lived owner tokens.
+Get paid creates a reviewed transfer request payable by another connected Belna
+personal wallet. It does not provide public merchant card checkout. Personal
+activity excludes owned business accounts. Card details appear only in the
+owner's Whop element or the private purchase executor, never agent outputs.
+
+The database migration and recovery/webhook workers are deployed. Authenticated
+recovery returned HTTP 200 with personal-wallet support healthy. Automated tests
+exercise PKCE, ownership, application transitions, exact-budget purchases,
+cancellation, SQL and desktop/mobile UI. These checks do not establish live
+consumer card eligibility, issuance or successful merchant payment; those need
+the human owner's Whop authorization, issuer approval and a funded live test.
+
+The sections below document the retained legacy connected-account integration.
 
 ## Deployment status — 28 September 2026
 

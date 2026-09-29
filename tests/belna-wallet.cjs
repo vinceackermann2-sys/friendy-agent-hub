@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { createBelnaWallet } = require('../server/belna-wallet');
+const { createBusinessWallet: createBelnaWallet } = require('../server/belna-wallet');
 const { createWalletTools } = require('../server/agents/wallet-tools');
 
 (async () => {

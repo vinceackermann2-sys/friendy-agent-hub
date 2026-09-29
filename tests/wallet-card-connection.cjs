@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const {createBelnaWallet} = require('../server/belna-wallet');
+const {createBusinessWallet:createBelnaWallet} = require('../server/belna-wallet');
 
 module.exports = async function cardConnection() {
   let row={user_id:'owner',account_id:'biz_owner',owner_provider_id:'user_owner',environment:'live',card_request_key:'old-rejected-key',daily_card_limit:50};

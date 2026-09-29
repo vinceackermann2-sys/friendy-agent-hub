@@ -1668,6 +1668,7 @@ async function getSignupAt(userId) {
 }
 const tokenWallet = createTokenWallet({ supa, loadLocal, saveLocal, ensureProfile, getSignupAt, uid, plans: PLANS });
 const { getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers, claimWalletPurchase, saveWalletPurchase, listWalletPurchases, getWalletPurchase, listPendingWalletPurchases, getWalletPurchaseByCard, listPendingWalletConnections, walletRecoveryReady, listShippingAddresses, saveShippingAddress, deleteShippingAddress, getWalletPreferences, saveWalletPreferences, recordExistingPurchase, listExistingPurchases } = createBelnaWalletStore({ supa, ensureProfile });
+const {getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest}=createBelnaWalletStore({supa,ensureProfile});
 const { addTokenGrant, ensureMonthlyTokens, tokenWallet: getTokenWallet,
   claimTokenDaily, releaseTokenDaily, chargeRawTokens, freePeriod } = tokenWallet;
 const { GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal, LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem } = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
@@ -1676,6 +1677,7 @@ const { list: listClientState, save: saveClientState, removeChat: deleteClientCh
 const { listCustomConnectors, addCustomConnector, updateCustomConnector, deleteCustomConnector, dropConnectorsForSecret } = createCustomConnectorStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
 export {
+  getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest,
   recordExistingPurchase, listExistingPurchases,
   getWalletPreferences, saveWalletPreferences,
   listShippingAddresses, saveShippingAddress, deleteShippingAddress,

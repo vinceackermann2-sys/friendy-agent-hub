@@ -1104,6 +1104,7 @@ async function handleConnectedAppReturn(){
   let tk = '';
   try {
     const q = new URLSearchParams(window.location.search);
+    await completePersonalWalletReturn();
     tk = String(q.get('connected_app') || '').toLowerCase().trim();
     if (tk && tk !== 'app') {
       q.delete('connected_app');
@@ -5429,6 +5430,48 @@ let walletAddresses=null, walletAddressesLoading=false, walletAddressEdit=null, 
 let belnaWalletOwner = null, belnaWalletCache = null, belnaWalletLoading = false, belnaWalletError = '', belnaWalletBusy = false, belnaReceiveLink = null, belnaTransferQuote = null, belnaReceiveAttempt = null;
 let walletWithdrawalClose=null, walletCardSetupClose=null, walletElementsLoading=null, walletVerificationClose=null, walletLimitEdit=false;
 let walletSetupRefreshTimer=null, walletSetupRefreshUntil=0;
+let walletLegacy=null,walletIncomingRequest=null,personalWalletReturnRunning=null;
+function capturePersonalWalletReturn(){
+  const q=new URLSearchParams(location.search);
+  try{
+    if(q.get('wallet_request'))sessionStorage.setItem('belna.walletRequest',q.get('wallet_request'));
+    const pending=JSON.parse(sessionStorage.getItem('belna.whopConnect')||'null');
+    if(pending && q.get('state') && (q.has('code') || q.has('error'))){
+      if(q.get('state')===pending.state)sessionStorage.setItem('belna.whopCallback',JSON.stringify({...pending,code:q.get('code'),error:q.get('error')}));
+      for(const key of ['code','state','error','error_description'])q.delete(key);
+      history.replaceState(null,'',location.pathname+(q.size?'?'+q:'')+location.hash);
+    }
+  }catch{}
+}
+capturePersonalWalletReturn();
+function completePersonalWalletReturn(){
+  if(personalWalletReturnRunning)return personalWalletReturnRunning;
+  personalWalletReturnRunning=processPersonalWalletReturn().finally(()=>{personalWalletReturnRunning=null;});return personalWalletReturnRunning;
+}
+async function processPersonalWalletReturn(){
+  const owner=billingIdentity();if(!owner)return;
+  try{
+    const callback=JSON.parse(sessionStorage.getItem('belna.whopCallback')||'null');
+    if(callback){
+      sessionStorage.removeItem('belna.whopCallback');sessionStorage.removeItem('belna.whopConnect');
+      if(callback.owner!==owner || callback.error || !callback.code)throw Error('Personal wallet connection was canceled or the Belna account changed. Connect again.');
+      const result=await window.LingonAuth.api('/api/belna-wallet/oauth-finish',{method:'POST',body:JSON.stringify({state:callback.state,code:callback.code})});
+      if(owner!==billingIdentity())return;
+      belnaWalletOwner=owner;belnaWalletCache=result;belnaWalletError='';walletConnectOpen=false;
+      const pref=await window.LingonAuth.api('/api/wallet-preferences');
+      if(owner!==billingIdentity())return;
+      if(!pref.selectionSaved && !pref.activeMethod)await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})});
+      state.view='chat';state.canvasOpen=true;state.canvasTab='payments';save();renderApp();
+      toast('Your personal Whop wallet is connected. Set up your virtual card next.');
+    }
+    const requestId=sessionStorage.getItem('belna.walletRequest');
+    if(requestId && walletIncomingRequest?.requestId!==requestId && /^[a-zA-Z0-9_-]{16,100}$/.test(requestId)){
+      const payment=await window.LingonAuth.api('/api/belna-wallet/payment-request',{method:'POST',body:JSON.stringify({requestId})});
+      if(owner!==billingIdentity())return;
+      walletIncomingRequest=payment;state.view='chat';state.canvasOpen=true;state.canvasTab='payments';save();renderApp();refreshBelnaWallet(true);
+    }
+  }catch(e){toast(e.message||'Your personal wallet could not be connected.');}
+}
 function walletVisible(){
   return document.visibilityState !== 'hidden' && ((state.view==='settings' && state.settingsTab==='wallet') || (state.view==='chat' && state.canvasOpen && state.canvasTab==='payments'));
 }
@@ -5473,11 +5516,11 @@ function loadWalletElements(){
     script.onerror=()=>{clearTimeout(timer);script.remove();walletElementsLoading=null;reject(Error('The secure bank connection could not load. Please try again.'));};document.head.append(script);
   });return walletElementsLoading;
 }
-async function openWalletWithdrawal(){
+async function openWalletWithdrawal(kind='withdraw',legacy=false){
   const owner=scopeBelnaWallet();if(!owner)return;
   walletWithdrawalClose?.();
   const previous=document.activeElement;
-  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">Withdraw to your bank</h3><p>Choose your bank, review fees and arrival time, then confirm.</p></div><button class="btn ghost small" aria-label="Close bank withdrawal">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure bank connection…</div><div id="wallet-withdraw-element"></div></section></div>');
+  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">'+(kind==='deposit'?'Add money to your personal wallet':legacy?'Withdraw from your previous wallet':'Withdraw to your bank')+'</h3><p>'+(kind==='deposit'?'Choose a funding method. Money goes to your own Whop wallet.':'Choose your bank, review fees and arrival time, then confirm.')+'</p></div><button class="btn ghost small" aria-label="Close bank withdrawal">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure wallet connection…</div><div id="wallet-withdraw-element"></div></section></div>');
   let element,group,expiryTimer,identityTimer,closed=false;
   const close=()=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearInterval(identityTimer);try{element?.destroy?.();group?.destroy?.();}catch{}overlay.remove();document.removeEventListener('keydown',onKey);if(walletWithdrawalClose===close)walletWithdrawalClose=null;previous?.focus?.();};
   const onKey=e=>{if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const focusable=[...overlay.querySelectorAll('button,iframe,[tabindex="0"]')];const first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
@@ -5485,12 +5528,12 @@ async function openWalletWithdrawal(){
   identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close();},1000);
   try{
     // Never persist this token in app state/storage or send it to the agent.
-    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/withdraw-session',{method:'POST',body:'{}'}),loadWalletElements()]);
+    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/'+(kind==='deposit'?'deposit':legacy?'legacy-withdraw-session':'withdraw-session'),{method:'POST',body:'{}'}),loadWalletElements()]);
     if(closed || owner!==billingIdentity()){close();return;}
     const expires=Date.parse(session.expiresAt);
-    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your bank connection expired. Open Withdraw again.');
+    if(!(legacy?/^biz_[A-Za-z0-9]+$/:/^user_[A-Za-z0-9]+$/).test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your wallet session expired. Open it again.');
     group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance:{theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}}});
-    element=group.create('withdraw',{onDone:()=>{close();refreshBelnaWallet(true);},onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your bank connection could not load. Close and try again.';}});
+    element=group.create(kind,{...(kind==='withdraw'?{availableBalance:Number(session.availableBalance)||0,payoutCountry:session.payoutCountry||'US'}:{}),onDismissed:()=>close(),onDone:()=>{close();refreshBelnaWallet(true);},onDepositConfirmed:()=>{refreshBelnaWallet(true);},onIdentityVerificationRequested:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Close this window and choose Verify identity in your wallet, then reopen Add money.';},onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your wallet connection could not load. Close and try again.';}});
     element.mount('#wallet-withdraw-element');overlay.querySelector('.wallet-withdraw-status').textContent='You stay in control. Bank details are handled in the secure connection.';
     expiryTimer=setTimeout(()=>{close();toast('Your secure bank session expired. Open Withdraw again.');},Math.min(15*60000,expires-Date.now()));
   }catch(e){if(!closed){overlay.querySelector('.wallet-withdraw-status').textContent=e.message||'Could not open your bank connection. Please try again.';}}
@@ -5510,12 +5553,14 @@ async function openWalletCardSetup(){
     const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/card-session',{method:'POST',body:'{}'}),loadWalletElements()]);
     if(closed || owner!==billingIdentity()){close();return;}
     const expires=Date.parse(session.expiresAt);
-    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your card setup session expired. Open it again.');
+    if(!/^user_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your card setup session expired. Open it again.');
     group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance:{theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}}});
     cards=group.create('cards',{accessToken:session.accessToken});
-    element=cards.create('cards',{hideAddButton:true,disableRedirect:true,
+    const showCard=/^icrd_[A-Za-z0-9]+$/.test(session.cardId||'');
+    if(showCard){overlay.querySelector('h3').textContent='Your personal virtual card';overlay.querySelector('header p').textContent='View your card details privately. Card controls are in Wallet settings.';}
+    element=cards.create(showCard?'whopCard':'cards',{...(showCard?{cardId:session.cardId,hideControls:true,hideAppleWalletButton:true}:{hideAddButton:true,disableRedirect:true}),
       onVerificationRequested:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Continue in Whop’s private verification page.';},
-      onReady:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Use Whop’s verification control below to continue card setup.';},
+      onReady:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent=showCard?'Click View details below to reveal your card privately.':'Use Whop’s verification control below to continue card setup.';},
       onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Whop card setup could not load. Close and try again.';}});
     element.mount('#wallet-card-setup-element');
     expiryTimer=setTimeout(()=>{close();toast('Your secure card setup expired. Open it again.');},Math.min(15*60000,expires-Date.now()));
@@ -5528,6 +5573,7 @@ function scopeBelnaWallet(){
     walletWithdrawalClose?.();
     walletCardSetupClose?.(false);
     walletVerificationClose?.();
+    walletLegacy=null;walletIncomingRequest=null;
     walletHistory=[];walletPreferences=null;walletPreferencesLoading=false;walletConnectOpen=false;walletExistingOpen=false;walletAction=null;walletLimitEdit=false;
     walletAddresses=null; walletAddressesLoading=false; walletAddressEdit=null; walletAddressError='';
     belnaWalletOwner = owner; belnaWalletCache = null; belnaWalletLoading = false; belnaWalletError = ''; belnaWalletBusy = false; belnaReceiveLink = null; belnaTransferQuote=null; belnaReceiveAttempt=null;
@@ -5550,8 +5596,9 @@ function refreshBelnaWallet(force = false){
   if (!owner || belnaWalletLoading || (!force && (belnaWalletCache || belnaWalletError))) return Promise.resolve();
   belnaWalletLoading = true; belnaWalletError = '';
   repaintWallet();
-  return window.LingonAuth.api('/api/belna-wallet').then(j => {
+  return completePersonalWalletReturn().then(()=>window.LingonAuth.api('/api/belna-wallet')).then(j => {
     if (owner === scopeBelnaWallet()) belnaWalletCache = j;
+    if(j.wallet?.legacyWallet)return window.LingonAuth.api('/api/belna-wallet/legacy',{method:'POST',body:'{}'}).then(previous=>{if(owner===scopeBelnaWallet())walletLegacy=previous.wallet;}).catch(()=>{});
   }).catch(e => {
     if (owner === scopeBelnaWallet()) belnaWalletError = e.message || 'Could not load your wallet. Refresh to try again.';
   }).finally(() => {
@@ -5600,7 +5647,7 @@ function walletAmount(x){
 }
 function belnaWalletState(){
   const w = belnaWalletCache?.wallet;
-  return { w, created: !!w && !['unavailable','not_created','setup_pending'].includes(w.status) };
+  return { w, created: !!w && !['unavailable','not_created','setup_pending','personal_connection_required'].includes(w.status) };
 }
 function walletDefaultAddress(){
   return (walletAddresses || []).find(a => a.isDefault) || (walletAddresses || [])[0] || null;
@@ -5623,14 +5670,14 @@ function walletMethodPicker(){
   };
   const belnaSide = created ? `<b>${esc(walletMoney(w.balance?.available))}</b> available`
     : `<button type="button" class="btn ghost small" data-act="wallet-connect-belna" aria-expanded="${walletConnectOpen}"${busy}>Set up</button>`;
-  const belnaSetup = !created && walletConnectOpen ? `<div class="wpay-extra"><label class="wl-field">Country you live in<select class="field" id="belna-wallet-country">${walletCountryOptions('SE')}</select></label><button type="button" class="btn small" data-act="belna-wallet-setup"${!w?.configured || belnaWalletBusy ? ' disabled' : ''}>Create wallet</button>${!w?.configured ? '<p class="wl-hint">Belna Wallet isn’t available yet.</p>' : '<p class="wl-hint">You’ll verify your identity with our payment partner next.</p>'}</div>` : '';
+  const belnaSetup = !created && walletConnectOpen ? `<div class="wpay-extra"><label class="wl-field">Country you live in<select class="field" id="belna-wallet-country">${walletCountryOptions('SE')}</select></label><button type="button" class="btn small" data-act="belna-wallet-setup"${!w?.configured || belnaWalletBusy ? ' disabled' : ''}>Connect personal wallet</button>${!w?.configured ? '<p class="wl-hint">Belna needs to finish its Whop sign-in configuration.</p>' : '<p class="wl-hint">Sign in to Whop to connect your own personal balance and virtual card.</p>'}</div>` : '';
   const existingSide = existing ? esc(shop.connected ? 'Shop Pay connected' : 'Store cards on')
     : `<button type="button" class="btn ghost small" data-act="wallet-existing-options" aria-expanded="${walletExistingOpen}">Connect</button>`;
   const existingSetup = walletExistingOpen ? `<div class="wpay-extra wl-list boxed">${walletRow({ mark:'S', tone:'shop', title:'Shop Pay', sub:esc(shop.connected ? shop.email || 'Connected' : shop.configured ? 'Your saved Shop Pay payment method' : 'Not available yet'),
       right: shop.connected ? `<span class="wl-ok">${icon('check', 13)} Connected</span>` : `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured ? ' disabled' : ''}>Connect Shop Pay</button>` })}${walletRow({ ic:'bag', title:'Cards saved in stores', sub:'Like Amazon. You sign in when ' + esc(state.agent.name) + ' opens the store.',
       right: walletPreferences?.merchantEnabled ? `<span class="wl-ok">${icon('check', 13)} On</span>` : `<button type="button" class="btn ghost small" data-act="wallet-merchant-connect"${busy}>Turn on</button>` })}</div>` : '';
   return `<div class="wpay" role="radiogroup" aria-label="${esc(state.agent.name)} pays with">
-    ${option('belna_wallet', 'belna', 'Belna Wallet', 'Your own balance. One-time card per approved purchase.', created, belnaSide, belnaSetup)}
+    ${option('belna_wallet', 'belna', 'Belna Wallet', 'Your personal Whop balance. One-time card per approved purchase.', created, belnaSide, belnaSetup)}
     ${option('existing_card', 'card', 'A card you already use', 'Shop Pay or a card saved in a store you sign in to.', existing, existingSide, existingSetup)}
     ${option(null, 'off', 'Off', esc(state.agent.name) + ' can find products and prices, but can’t pay.', true, '')}
   </div>`;
@@ -5651,8 +5698,8 @@ function walletBelnaGroup(){
   const { w, created } = belnaWalletState();
   if (!created) return '';
   const card = walletCardStatus(w), ready = w.cardReady ?? w.status === 'ready', busy = belnaWalletBusy ? ' disabled' : '';
-  const cardActions = w.cardProgramAvailable === false || ready ? ''
-    : `<span class="wset-actions">${!w.identityVerified && w.verificationStatus!=='manual_review' ? `<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>Verify identity</button>` : ''}${w.status!=='denied' && (w.status!=='review' || w.cardApplicationStatus==='approved')?`<button type="button" class="btn ${!w.identityVerified ? 'ghost ' : ''}small" data-act="belna-wallet-card-connect"${busy}>${w.cardApplicationStatus==='approved'?'Activate virtual card':w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':'Connect card'}</button>`:''}${['denied','card_unavailable'].includes(w.status)?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a>':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></span>`;
+  const cardActions = ready ? '<button type="button" class="btn ghost small" data-act="wallet-view-card">View virtual card</button>' : w.cardProgramAvailable === false ? ''
+    : `<span class="wset-actions">${!w.identityVerified && w.verificationStatus!=='manual_review' ? `<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>Verify identity</button>` : ''}${w.status!=='denied' && (w.kind==='personal' || w.status!=='review' || w.cardApplicationStatus==='approved')?`<button type="button" class="btn ${!w.identityVerified ? 'ghost ' : ''}small" data-act="belna-wallet-card-connect"${busy}>${w.cardApplicationStatus==='approved'?'Activate virtual card':w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':w.status==='review'?'Check card status':'Connect card'}</button>`:''}${['denied','card_unavailable'].includes(w.status)?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a>':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></span>`;
   const limit = Number(w.dailyCardLimitUsd);
   const limitRow = walletLimitEdit
     ? `<div class="wset-row wset-edit wset-limit"><label class="wl-field">Daily card allowance (USD)<input class="field" id="belna-wallet-limit" type="number" min="1" max="2000" step="0.01" value="${Number.isFinite(limit) ? limit : ''}"></label><span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-limit"${busy}>Save</button><button type="button" class="btn ghost small" data-act="wallet-limit-cancel">Cancel</button></span></div>`
@@ -5707,12 +5754,21 @@ function setWalletPreferences(payload){
  const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy)return;
  belnaWalletBusy=true;repaintWallet();window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify(payload)}).then(j=>{if(owner===scopeBelnaWallet()){walletPreferences=j;walletExistingOpen=false;}}).catch(e=>{if(owner===scopeBelnaWallet())toast(e.message || 'Could not switch wallet.');}).finally(()=>{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}});
 }
+function walletLegacyContent(){
+  if(!belnaWalletCache?.wallet?.legacyWallet)return '';
+  return `<section class="wset-sec"><h4 class="wset-label">Previous business wallet</h4><div class="wset-group"><div class="wset-row"><span class="wset-copy"><b>${esc(walletMoney(walletLegacy?.balance?.available))}</b><small>Your previous balance stays in this wallet. Connecting a personal wallet does not move it.</small></span>${walletLegacy?.withdrawalsAvailable?'<button type="button" class="btn ghost small" data-act="wallet-legacy-withdraw">Withdraw previous balance</button>':''}</div></div></section>`;
+}
+function walletRequestContent(){
+  const p=walletIncomingRequest;if(!p)return '';
+  return `<section class="wl-form"><b>Payment request</b><p>${esc(p.title)} · ${esc(walletMoney(p.amount))} to ${esc(p.recipient)}</p><button type="button" class="btn small" data-act="belna-wallet-pay-request">Review payment</button><p class="wl-hint">Connect your personal wallet, then review and confirm this payment.</p></section>`;
+}
 function walletSettingsContent(){
   scopeBelnaWallet();
   return `<div class="wset">
     ${belnaWalletError ? `<p class="wl-error" role="alert">${esc(belnaWalletError)}</p>` : ''}
     <section class="wset-sec"><h4 class="wset-label">${esc(state.agent.name)} pays with</h4>${walletMethodPicker()}<p class="wset-foot">Applies to future purchases. Switching never deletes a connection, balance or history.</p></section>
     ${walletBelnaGroup()}
+    ${walletLegacyContent()}
     ${walletExistingGroup()}
     <section class="wset-sec" id="wallet-shipping-section">${walletShippingContent()}</section>
   </div>`;
@@ -5724,7 +5780,7 @@ function walletActivityContent(){
   const c = belnaWalletCache || {};
   const verifications = (c.purchases || []).filter(p => p.status === 'submitted' && !p.cardCanceled && Date.parse(p.expiresAt) > Date.now())
     .map(p => walletRow({ ic:'shieldcheck', tone:'warn', cls:'attn', title:'Verify your payment at ' + (p.merchant || 'the store'), sub:'Your bank asks you to confirm this purchase.', right:`<button type="button" class="btn small" data-act="wallet-verify-payment" data-id="${esc(p.purchaseId)}">Verify</button>` })).join('');
-  const data = c.activity || [...(c.transfers || []).map(x => ({ title:'Sent to ' + x.recipient, amount:x.amount, status:x.status, at:x.at })), ...(c.purchases || []).map(x => ({ title:x.merchant, amount:x.amount, status:x.status, at:x.at })), ...(c.transactions || [])];
+  const data = c.activity?.length ? c.activity : [...(c.transfers || []).map(x => ({ title:'Sent to ' + x.recipient, amount:x.amount, status:x.status, at:x.at })), ...(c.purchases || []).map(x => ({ title:x.merchant, amount:x.amount, status:x.status, at:x.at })), ...(c.transactions || [])];
   const home = walletDefaultAddress();
   const rows = data.map(x => {
     const title = String(x.title || 'Wallet activity'), incoming = /received|deposit|refund/i.test(title), outgoing = !incoming && /purchase|sent|withdrawal|fee/i.test(title);
@@ -5733,15 +5789,15 @@ function walletActivityContent(){
       right:`<span class="wl-amt${incoming ? ' in' : ''}">${incoming ? '+' : outgoing ? '−' : ''}${esc(walletAmount(x))}</span>` });
   }).join('');
   return `${verifications ? `<div class="wl-list wl-attn">${verifications}</div>` : ''}<section class="wl-sec" aria-label="Wallet activity"><div class="wl-sec-head"><h4>Activity</h4><button type="button" class="wl-link" data-act="wallet-manage-shipping">${home ? 'Delivery: ' + esc(home.label) : 'Add delivery address'}</button></div>
-    ${rows ? `<div class="wl-list">${rows}</div>` : '<p class="wl-empty">Purchases, deposits, sends and payments will appear here.</p>'}</section>`;
+    ${c.activityError ? `<p class="wl-error" role="status">${esc(c.activityError)}</p>` : ''}${rows ? `<div class="wl-list">${rows}</div>` : '<p class="wl-empty">Purchases, deposits, sends and payments will appear here.</p>'}</section>`;
 }
 function walletActionContent(){
   if (walletAction === 'send') return `<div class="wl-form"><b>Send money</b><div class="wl-fields"><label class="wl-field">Recipient’s Belna email<input class="field" id="belna-wallet-recipient" type="email" placeholder="name@example.com"></label><label class="wl-field">Amount (USD)<input class="field" id="belna-wallet-send-amount" type="number" min="1" max="50" step="0.01"></label></div>
     <span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-quote">Review send</button>${belnaTransferQuote && !belnaTransferQuote.status ? '<button type="button" class="btn small" data-act="belna-wallet-send">Confirm send</button>' : ''}</span>
     ${belnaTransferQuote ? `<p class="wl-hint">${esc(walletMoney(belnaTransferQuote.amount) + ' to ' + belnaTransferQuote.recipient + '. ' + belnaTransferQuote.fees)}${belnaTransferQuote.status ? ' · ' + esc(walletStatusLabel(belnaTransferQuote.status)) : ''}</p>` : '<p class="wl-hint">Up to $50 in 24 hours, to another Belna Wallet.</p>'}</div>`;
-  if (walletAction === 'earn') return `<div class="wl-form"><b>Get paid with a payment link</b><div class="wl-fields"><label class="wl-field">Payment for<input class="field" id="belna-wallet-receive-title" maxlength="120" placeholder="Design work"></label><label class="wl-field">Amount (USD)<input class="field" id="belna-wallet-receive-amount" type="number" min="1" max="2000" step="0.01"></label></div>
+  if (walletAction === 'earn') return `<div class="wl-form"><b>Get paid with a payment link</b><div class="wl-fields"><label class="wl-field">Payment for<input class="field" id="belna-wallet-receive-title" maxlength="120" placeholder="Design work"></label><label class="wl-field">Amount (USD)<input class="field" id="belna-wallet-receive-amount" type="number" min="1" max="50" step="0.01"></label></div>
     <span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-receive">Create payment link</button>${belnaReceiveLink ? `<a class="btn ghost small" href="${esc(belnaReceiveLink.url)}" target="_blank" rel="noopener noreferrer">Open payment link</a><button type="button" class="btn ghost small" data-act="belna-wallet-copy-link">Copy link</button>` : ''}</span>
-    <p class="wl-hint">Money arrives after someone pays and it settles. Partner fees may apply.</p></div>`;
+    <p class="wl-hint">Another Belna user reviews a transfer from their personal wallet to yours. Up to $50. Partner fees may apply.</p></div>`;
   return '';
 }
 function walletSetupContent(w){
@@ -5755,11 +5811,11 @@ function walletSetupContent(w){
     : w.status==='card_action_required' ? w.cardApplicationStatus==='needs_information'?'The card issuer needs more information. Continue in its private setup page.':'Finish the card issuer’s verification in its private setup page.'
     : w.status==='card_unavailable' ? 'Whop could not file your card application. Retry setup or contact card support.'
     : `Then ${esc(state.agent.name)} gets a one-time card for each purchase you approve.`;
-  const cardAction = denied || (review && w.cardApplicationStatus!=='approved') ? '' : `<button type="button" class="btn ${verified?'':'ghost '}small" data-act="belna-wallet-card-connect"${busy}>${w.cardApplicationStatus==='approved'?'Activate virtual card':w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':'Connect card'}</button>`;
+  const cardAction = denied || (w.kind!=='personal' && review && w.cardApplicationStatus!=='approved') ? '' : `<button type="button" class="btn ${verified?'':'ghost '}small" data-act="belna-wallet-card-connect"${busy}>${w.cardApplicationStatus==='approved'?'Activate virtual card':w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':review?'Check card status':'Connect card'}</button>`;
   const identityCopy=verified?'Verified with our payment partner':w.verificationStatus==='manual_review'?'In review with our payment partner':w.verificationStatus==='action_required'?'Our payment partner needs more information':w.verificationStatus==='rejected'?'Identity check was declined. Retry with our payment partner.':'Opens with our payment partner';
   const step = (n, done, title, sub, action = '') => `<li class="wl-step${done ? ' done' : ''}"><span class="wl-step-n" aria-hidden="true">${done ? icon('check', 12) : n}</span><span class="wl-copy"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${action}</li>`;
   return `<section class="wl-setup" aria-label="Card setup"><div class="wl-setup-head"><b>Let ${esc(state.agent.name)} buy things</b><small>${verified?2:1} of 3 done</small></div><div class="wl-progress" aria-hidden="true"><span${verified?' style="width:66.67%"':''}></span></div>
-    <ol>${step(1, true, 'Create your wallet', '')}
+    <ol>${step(1, true, w.kind==='personal'?'Connect personal wallet':'Create your wallet', '')}
     ${step(2, verified, verified?'Identity verified':'Verify your identity', identityCopy, verified||w.verificationStatus==='manual_review'?'':`<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>${w.verificationStatus==='pending'||w.verificationStatus==='action_required'?'Continue':'Start'}</button>`)}
     ${step(3, false, 'Connect your card', cardCopy, cardAction)}</ol>${denied||w.status==='card_unavailable'?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a> ':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></section>`;
 }
@@ -5797,7 +5853,7 @@ function paymentsTabContent(){
     const loading = (belnaWalletLoading && !belnaWalletCache) || (walletPreferencesLoading && !walletPreferences);
     body += loading ? '<p class="wl-empty">Loading your wallet…</p>' : `<p class="wl-lede">Choose how ${esc(state.agent.name)} pays. You approve every purchase, and ${esc(state.agent.name)} never sees a card number.</p>${walletMethodPicker()}`;
   }
-  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${name ? `<p>${esc(state.agent.name)} pays with ${name}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${body}</div>`;
+  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${name ? `<p>${esc(state.agent.name)} pays with ${name}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${walletRequestContent()}${body}${walletLegacyContent()}</div>`;
 }
 
 const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
@@ -7728,6 +7784,8 @@ document.addEventListener('click', async e => {
     window.LingonAuth.api('/api/shipping-addresses/'+action,{method:'POST',body:JSON.stringify(payload)}).then(j=>{if(owner===scopeBelnaWallet()){walletAddresses=j.addresses;walletAddressEdit=null;walletAddressError='';toast(action==='delete'?'Address removed.':'Address saved.');}}).catch(e=>{if(owner===scopeBelnaWallet())walletAddressError=e.message || 'Could not save address.';}).finally(()=>{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}});return;
   }
   if (act === 'belna-wallet-refresh'){ refreshBelnaWallet(true); return; }
+  if(act==='wallet-view-card'){openWalletCardSetup();return;}
+  if(act==='wallet-legacy-withdraw'){openWalletWithdrawal('withdraw',true);return;}
   if (act === 'belna-wallet-copy-link'){
     scopeBelnaWallet();
     if (belnaReceiveLink) navigator.clipboard.writeText(belnaReceiveLink.url).then(() => toast('Payment link copied.')).catch(() => toast('Could not copy the link. Open it to copy the address.'));
@@ -7737,6 +7795,7 @@ document.addEventListener('click', async e => {
     const owner = scopeBelnaWallet();
     if (!owner || belnaWalletBusy) return;
     if (act === 'belna-wallet-card-connect' && ['needs_verification','needs_information'].includes(belnaWalletCache?.wallet?.cardApplicationStatus)) { openWalletCardSetup(); return; }
+    if(act==='belna-wallet-deposit'){openWalletWithdrawal('deposit');return;}
     let action, payload = {};
     if (act === 'belna-wallet-setup') { action='setup'; payload={ country:$('#belna-wallet-country')?.value || '' }; }
     else if (act === 'belna-wallet-verify') action='verify';
@@ -7746,6 +7805,7 @@ document.addEventListener('click', async e => {
     else if (act === 'belna-wallet-deposit') action='deposit';
     else if (act === 'belna-wallet-receive') { action='receive'; const title=$('#belna-wallet-receive-title')?.value || '', amount=Number($('#belna-wallet-receive-amount')?.value); if (!belnaReceiveAttempt || belnaReceiveAttempt.title !== title || belnaReceiveAttempt.amount !== amount) belnaReceiveAttempt={ title, amount, requestKey:crypto.randomUUID() }; payload=belnaReceiveAttempt; }
     else if (act === 'belna-wallet-quote') { action='quote'; payload={ recipient:$('#belna-wallet-recipient')?.value || '', amount:Number($('#belna-wallet-send-amount')?.value) }; }
+    else if(act==='belna-wallet-pay-request' && walletIncomingRequest){action='quote';payload={paymentRequestId:walletIncomingRequest.requestId,amount:walletIncomingRequest.amount};walletAction='send';}
     else if (act === 'belna-wallet-transfer-check') { action='send'; payload={ quoteId:b.dataset.id, confirm:true }; }
     else if (act === 'belna-wallet-send' && belnaTransferQuote) { action='send'; payload={ quoteId:belnaTransferQuote.quoteId, confirm:true }; }
     else return;
@@ -7753,6 +7813,10 @@ document.addEventListener('click', async e => {
     b.disabled = true;
     window.LingonAuth.api('/api/belna-wallet/' + action, { method:'POST', body:JSON.stringify(payload) }).then(j => {
       if (owner !== scopeBelnaWallet()) return;
+      if(action==='setup' && j.state){
+        const url=new URL(j.url);if(!['api.whop.com','sandbox-api.whop.com'].includes(url.hostname) || url.protocol!=='https:' || url.pathname!=='/oauth/authorize' || url.searchParams.get('state')!==j.state)throw Error('Your Whop sign-in link could not be confirmed.');
+        sessionStorage.setItem('belna.whopConnect',JSON.stringify({state:j.state,owner}));location.assign(url.href);return;
+      }
       if (j.wallet) { belnaWalletCache=j; belnaWalletError=''; }
       // A new wallet becomes the active one only when nothing else pays: switching away from a
       // connected existing card is the owner's choice, made in Wallet settings.
@@ -7760,7 +7824,7 @@ document.addEventListener('click', async e => {
       if(action==='setup'){walletConnectOpen=false;if(!existingCard)window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})}).then(p=>{if(owner===scopeBelnaWallet()){walletPreferences=p;repaintWallet();}}).catch(e=>toast(e.message));}
       if (action === 'receive') { belnaReceiveLink=j; toast('Payment link ready to share.'); }
       else if (action === 'quote') belnaTransferQuote=j;
-      else if (action === 'send') { belnaTransferQuote=j; toast(j.status === 'succeeded' ? 'Money sent.' : j.status === 'failed' ? 'Transfer failed.' : 'Transfer processing.'); refreshBelnaWallet(true); }
+      else if (action === 'send') { belnaTransferQuote=j;if(j.status==='succeeded'){walletIncomingRequest=null;sessionStorage.removeItem('belna.walletRequest');} toast(j.status === 'succeeded' ? 'Money sent.' : j.status === 'failed' ? 'Transfer failed.' : 'Transfer processing.'); refreshBelnaWallet(true); }
       else if (j.url) window.location.assign(j.url);
       else if (action === 'controls') { if (payload.dailyLimitUsd != null) walletLimitEdit=false; toast(payload.frozen === true ? 'Card spending paused.' : payload.frozen === false ? 'Card spending resumed.' : 'Daily card allowance saved.'); }
       else toast(action === 'setup' ? `Wallet created. Complete your identity check to set up your card.${existingCard ? ' Your existing card stays active until you switch in Wallet settings.' : ''}` : 'Card setup updated.');

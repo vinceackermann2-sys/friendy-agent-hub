@@ -108,9 +108,9 @@ syncStripeProvider();
   writeFileSync(join(root, 'src/lingon-server/agents/wallet-tools.js'), src.replace('module.exports = { createWalletTools };', 'export { createWalletTools };'), 'utf8');
 }
 
-for (const [name, factory] of [['belna-wallet', 'createBelnaWallet'], ['belna-wallet-store', 'createBelnaWalletStore'], ['wallet-purchases','createWalletPurchases'], ['private-checkout-client','createPrivateCheckoutClient']]) {
+for (const [name, factory] of [['whop-user-auth','createWhopUserAuth'],['personal-wallet','createPersonalWallet'],['belna-wallet', 'createBelnaWallet'], ['belna-wallet-store', 'createBelnaWalletStore'], ['wallet-purchases','createWalletPurchases'], ['private-checkout-client','createPrivateCheckoutClient']]) {
   const src = readFileSync(join(root, `server/${name}.js`), 'utf8');
-  const esm = src.replace(`module.exports = { ${factory} };`, `export { ${factory} };`).replace("const { createWalletPurchases } = require('./wallet-purchases');", "import { createWalletPurchases } from './wallet-purchases.js';");
+  const esm = src.replace(/^const \{\s*([^}]+)\s*\}\s*=\s*require\('([^']+)'\);/gm,(_,symbols,path)=>`import {${symbols}} from '${path}.js';`).replace(/module\.exports\s*=\s*\{([^}]+)\};?/g,(_,symbols)=>`export {${symbols}};`);
   if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted Belna wallet module');
   writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');
 }

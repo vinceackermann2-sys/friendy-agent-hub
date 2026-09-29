@@ -1100,11 +1100,15 @@ app.get('/api/belna-wallet', requireAuth(async (req, res) => {
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
   catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
 }));
-for (const action of ['setup', 'verify', 'card-connect', 'card-session', 'controls', 'deposit', 'withdraw-session', 'receive', 'quote', 'send']) {
+for (const action of ['setup', 'oauth-finish', 'verify', 'card-connect', 'card-session', 'controls', 'deposit', 'withdraw-session', 'legacy', 'legacy-withdraw-session', 'payment-request', 'receive', 'quote', 'send']) {
   app.post('/api/belna-wallet/' + action, rateLimit(10, 60000), requireAuth(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
       const result = action === 'setup' ? await belnaWallet.setup(req.user, req.body || {})
+        : action === 'oauth-finish' ? await belnaWallet.finishConnect(req.user, req.body || {})
+        : action === 'legacy' ? await belnaWallet.legacySnapshot(req.user.id)
+        : action === 'legacy-withdraw-session' ? await belnaWallet.legacyWithdrawalSession(req.user.id)
+        : action === 'payment-request' ? await belnaWallet.paymentRequest(req.user.id,req.body?.requestId)
         : action === 'verify' ? await belnaWallet.verify(req.user.id)
         : action === 'card-connect' ? await belnaWallet.connectCard(req.user.id)
         : action === 'controls' ? await belnaWallet.updateCard(req.user.id, req.body || {})

@@ -1,14 +1,20 @@
 // Trusted server code only. The checkout executor must run outside the agent's
 // VM/tool environment. Never pass credentials through a model-visible tool.
-function createWalletPurchases({ store, request, owned, balanceView, environment, secureCheckout, now = () => Date.now() }) {
+function createWalletPurchases({ store, request, owned, balanceView, environment, secureCheckout, getAccount, cardReady, now = () => Date.now() }) {
   const fail = message => Object.assign(new Error(message), { code:'BAD_INPUT' });
+  const personal = id => /^user_[A-Za-z0-9]+$/.test(id || '');
+  const scope = id => personal(id) ? {user_id:id} : {account_id:id};
+  const query = id => new URLSearchParams(scope(id)).toString();
+  const transactionQuery = id => personal(id) ? 'cardholder_id='+encodeURIComponent(id) : query(id);
+  const options = (p,fields={}) => ({...fields,userId:p.user_id,ownerId:p.account_id});
+  const matchesTransaction=(x,p)=>x.card_id===p.card_id && (!personal(p.account_id) || x.cardholder_id===p.account_id);
   const view = p => ({ purchaseId:p.id, merchant:p.merchant, amount:Number(p.amount), currency:'USD', status:p.status,
     cardLast4:p.last4 || null, expiresAt:p.expires_at, cardCanceled:!!p.canceled_at });
   // lateCard: a card issued after its purchase was closed without one is canceled as well.
   async function cancel(p, { lateCard = false } = {}) {
     if (!p.card_id || (p.canceled_at && !lateCard)) return p;
-    const card = await request('/cards/' + encodeURIComponent(p.card_id), { method:'PATCH', body:{ account_id:p.account_id, canceled:true } });
-    if (card.id !== p.card_id || card.status !== 'canceled') throw fail('Your purchase card is being closed. Please check again shortly.');
+    const card = await request('/cards/' + encodeURIComponent(p.card_id), options(p,{ method:'PATCH', body:{ ...scope(p.account_id), canceled:true } }));
+    if (card.id !== p.card_id || card.status !== 'canceled' || personal(p.account_id) && card.user_id !== p.account_id) throw fail('Your purchase card is being closed. Please check again shortly.');
     return store.saveWalletPurchase(p.user_id,p.id,{ canceled_at:p.canceled_at || new Date(now()).toISOString(), status:p.status === 'paid' ? 'paid' : 'closed' });
   }
   // A purchase whose card was never issued can be charged by no one. Closing it ends its
@@ -23,8 +29,8 @@ function createWalletPurchases({ store, request, owned, balanceView, environment
       throw fail('Approve a dollar purchase between $1 and $2,000 with an exact final total first.');
     const wallet = await owned(userId);
     if (wallet.card_status === 'frozen') throw fail('Your wallet card is paused. Unfreeze it before purchasing.');
-    const account = await request('/accounts/' + encodeURIComponent(wallet.account_id));
-    if (account.capabilities?.card_issuing !== 'active' || balanceView(account).available < approved.amount || balanceView(account).available == null)
+    const account = getAccount ? await getAccount(userId) : await request('/accounts/' + encodeURIComponent(wallet.account_id));
+    if (!(cardReady ? await cardReady(userId) : account.capabilities?.card_issuing === 'active') || balanceView(account).available < approved.amount || balanceView(account).available == null)
       throw fail('Your wallet needs an approved card account and enough available dollars.');
     const purchaseId = crypto.randomUUID();
     let p, executor;
@@ -45,9 +51,9 @@ function createWalletPurchases({ store, request, owned, balanceView, environment
       if (!claim.claimed) return { ...view(p), message:'This approval was already used. Check wallet activity; do not place the order again.' };
       let card;
       try {
-        card = await request('/cards', { method:'POST', key:p.id, body:{ account_id:wallet.account_id,
-          assigned_user_id:wallet.owner_provider_id, name:'Belna purchase ' + p.id,
-          spend_limit:approved.amount, spend_limit_frequency:'one_time' } });
+        card = await request('/cards', options(p,{ method:'POST', key:p.id, body:{ ...scope(wallet.account_id),
+          ...(!personal(wallet.account_id)?{assigned_user_id:wallet.owner_provider_id}:{}), name:'Belna purchase ' + p.id,
+          spend_limit:approved.amount, spend_limit_frequency:'one_time' } }));
       } catch (error) {
         // A refusal (4xx) issued no card. A timeout or server error may have, so that
         // purchase stays open for recovery to find its card.
@@ -70,7 +76,7 @@ function createWalletPurchases({ store, request, owned, balanceView, environment
       const stillOwned = await owned(userId);
       if (stillOwned.account_id !== wallet.account_id || stillOwned.owner_provider_id !== wallet.owner_provider_id || stillOwned.card_status === 'frozen' || now() >= Date.parse(p.expires_at))
         throw fail('This purchase is no longer available.');
-      const secretCard = card.secrets?.card_number ? card : await request('/cards/' + encodeURIComponent(card.id) + '?account_id=' + encodeURIComponent(wallet.account_id));
+      const secretCard = card.secrets?.card_number ? card : await request('/cards/' + encodeURIComponent(card.id) + '?' + query(wallet.account_id),options(p));
       const month = Number(secretCard.expiration_month), year = Number(secretCard.expiration_year);
       if (secretCard.id !== card.id || secretCard.status !== 'active' || secretCard.type !== 'virtual' || secretCard.user_id !== wallet.owner_provider_id ||
         Number(secretCard.limit?.amount) !== approved.amount || secretCard.limit?.frequency !== 'one_time' ||
@@ -102,8 +108,8 @@ function createWalletPurchases({ store, request, owned, balanceView, environment
     for (let p of pending) {
       try {
         if (!p.card_id) {
-          const cards = await request('/cards?account_id=' + encodeURIComponent(p.account_id));
-          const card = (cards.data || []).find(x => x.name === 'Belna purchase ' + p.id);
+          const cards = await request('/cards?' + query(p.account_id),options(p));
+          const card = (cards.data || []).find(x => x.name === 'Belna purchase ' + p.id && (!personal(p.account_id) || x.user_id===p.account_id && x.type==='virtual'));
           if (!card) {
             // Issuance may still finish. Once the purchase has expired no checkout can use a
             // card, so it is closed; a card that appears later is still canceled below.
@@ -117,11 +123,11 @@ function createWalletPurchases({ store, request, owned, balanceView, environment
           else await cancel(p, { lateCard:closedEarlier });
           continue;
         }
-        const transactions = await request('/card_transactions?account_id=' + encodeURIComponent(p.account_id) + '&card_id=' + encodeURIComponent(p.card_id) + '&first=10');
+        const transactions = await request('/card_transactions?' + transactionQuery(p.account_id) + '&card_id=' + encodeURIComponent(p.card_id) + '&first=10',options(p));
         // Close on ANY transaction, including a declined first attempt. A new
         // attempt needs a new owner review. Authorizations are not settlements.
-        if ((transactions.data || []).some(x => x.card_id === p.card_id)) {
-          if (transactions.data.some(x => x.card_id === p.card_id && x.transaction_type === 'spend' && x.status === 'completed')) p = await store.saveWalletPurchase(p.user_id,p.id,{ status:'paid' });
+        if ((transactions.data || []).some(x => matchesTransaction(x,p))) {
+          if (transactions.data.some(x => matchesTransaction(x,p) && x.transaction_type === 'spend' && x.status === 'completed')) p = await store.saveWalletPurchase(p.user_id,p.id,{ status:'paid' });
           await cancel(p);
         } else if (now() >= Date.parse(p.expires_at)) await cancel(p);
       } catch { unresolved++; }
@@ -129,13 +135,13 @@ function createWalletPurchases({ store, request, owned, balanceView, environment
     return { checked:pending.length, unresolved };
   }
   async function reconcileCard(accountId,cardId) {
-    if (!/^biz_[a-zA-Z0-9]+$/.test(accountId || '') || !/^icrd_[a-zA-Z0-9]+$/.test(cardId || '')) throw fail('Invalid card transaction event.');
+    if (!/^(biz|user)_[a-zA-Z0-9]+$/.test(accountId || '') || !/^icrd_[a-zA-Z0-9]+$/.test(cardId || '')) throw fail('Invalid card transaction event.');
     const p = await store.getWalletPurchaseByCard(accountId,cardId);
     if (!p || p.environment !== environment()) return { matched:false };
-    const transactions = await request('/card_transactions?account_id=' + encodeURIComponent(accountId) + '&card_id=' + encodeURIComponent(cardId) + '&first=10');
-    if (!(transactions.data || []).some(x => x.card_id === p.card_id)) return { matched:true, settled:false };
+    const transactions = await request('/card_transactions?' + transactionQuery(accountId) + '&card_id=' + encodeURIComponent(cardId) + '&first=10',options(p));
+    if (!(transactions.data || []).some(x => matchesTransaction(x,p))) return { matched:true, settled:false };
     let current = p;
-    if (transactions.data.some(x => x.card_id === p.card_id && x.transaction_type === 'spend' && x.status === 'completed') && p.status !== 'paid') current = await store.saveWalletPurchase(p.user_id,p.id,{ status:'paid' });
+    if (transactions.data.some(x => matchesTransaction(x,p) && x.transaction_type === 'spend' && x.status === 'completed') && p.status !== 'paid') current = await store.saveWalletPurchase(p.user_id,p.id,{ status:'paid' });
     if (!current.canceled_at) current = await cancel(current);
     return { matched:true, settled:current.status === 'paid', cardCanceled:!!current.canceled_at };
   }

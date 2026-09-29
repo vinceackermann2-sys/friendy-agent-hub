@@ -2,7 +2,8 @@
 // Owner/model APIs never return card credentials. The isolated purchase service
 // can use them transiently; they are never persisted or given to the model.
 const { createWalletPurchases } = require('./wallet-purchases');
-function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env = process.env, secureCheckout, randomId = () => crypto.randomUUID() }) {
+const { createPersonalWallet } = require('./personal-wallet');
+function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), env = process.env, secureCheckout, randomId = () => crypto.randomUUID() }) {
   const setting = (name) => String(env[name] || '').trim();
   const environment = () => setting('WHOP_SANDBOX') === 'false' ? 'live' : 'sandbox';
   const platformAccountId = () => setting('WHOP_PLATFORM_ACCOUNT_ID');
@@ -172,6 +173,13 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     const account = await request('/accounts/' + encodeURIComponent(platformAccountId()));
     if (account.id !== platformAccountId()) throw fail('Your wallet provider connection could not be confirmed.', 'PROVIDER');
     return {ok:true};
+  }
+  async function legacySnapshot(userId){
+    const row=await record(userId);
+    if(!row?.account_id)return {wallet:null};
+    const account=await request('/accounts/'+encodeURIComponent(row.account_id));
+    if(account.parent_account?.id!==platformAccountId())throw fail('Your previous wallet could not be confirmed.','PROVIDER');
+    return {wallet:{kind:'business',balance:balanceView(account),withdrawalsAvailable:withdrawalsAvailable(),identityVerified:identityVerification(account).status==='approved'}};
   }
   function hostedUrl(value, verification = false) {
     try {
@@ -390,7 +398,8 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if (!quote) throw fail('That transfer was not found.');
     return send(userId, { quoteId, approvedDetail:JSON.stringify(publicQuote(quote)) });
   }
-  const purchases = createWalletPurchases({ store, request, owned, balanceView, environment, secureCheckout });
+  const purchaseStore={...store,listPendingWalletPurchases:async environment=>(await store.listPendingWalletPurchases(environment)).filter(p=>/^biz_/.test(p.account_id))};
+  const purchases = createWalletPurchases({ store:purchaseStore, request, owned, balanceView, environment, secureCheckout });
   const addressView = a => ({ id:a.id,label:a.label,recipient:a.recipient,line1:a.line1,line2:a.line2,city:a.city,region:a.region,postalCode:a.postal_code,country:a.country,isDefault:a.is_default,
     formatted:[a.recipient,a.line1,a.line2,[a.postal_code,a.city].filter(Boolean).join(' '),a.region,a.country].filter(Boolean).join(', ') });
   // Addresses, payment selection and purchase history live only in Supabase. Without it a
@@ -431,10 +440,18 @@ function createBelnaWallet({ store, fetchImpl = (...args) => fetch(...args), env
     if(durable())await store.recordExistingPurchase(userId,approved);
   }
   async function existingHistory(userId){return {history:durable() ? (await store.listExistingPurchases(userId)).map(x=>({title:x.merchant,amount:Number(x.amount),currency:x.currency,status:x.status,at:x.created_at})) : []};}
-  return { configured, snapshot, setup, verify, connectCard, cardSession, updateCard, deposit, withdrawalSession, receive, transferQuote, send, confirmTransfer,
+  return { configured, snapshot, legacySnapshot, setup, verify, connectCard, cardSession, updateCard, deposit, withdrawalSession, receive, transferQuote, send, confirmTransfer,
     preferences,savePreferences,
     recordExistingPurchase,existingHistory,
     addresses,saveAddress,deleteAddress,
     executePurchase:async (...args)=>{if(!await checkoutAvailable())throw fail('Secure card checkout is not available yet. Use an existing saved card.','NOT_SET_UP');return purchases.execute(...args);}, checkProviderConnection, reconcilePurchases:purchases.reconcile, reconcilePurchaseCard:purchases.reconcileCard, reconcileConnectionCards };
 }
-module.exports = { createBelnaWallet };
+function createBelnaWallet(options){
+  const legacy=createBusinessWallet(options);
+  const archive=createBusinessWallet({...options,store:{...options.store,getBelnaWallet:async userId=>await options.store.getLegacyBelnaWallet?.(userId) || await options.store.getBelnaWallet(userId),saveBelnaWallet:async()=>{throw Object.assign(new Error('Use your personal wallet for new cards.'),{code:'BAD_INPUT'});}}});
+  const personal=createPersonalWallet({...options,legacy});
+  return {...personal,legacySnapshot:archive.legacySnapshot,legacyWithdrawalSession:archive.withdrawalSession,
+    reconcilePurchaseCard:(ownerId,cardId)=>ownerId?.startsWith('user_')?personal.reconcilePersonalPurchaseCard(ownerId,cardId):legacy.reconcilePurchaseCard(ownerId,cardId),
+    reconcilePurchases:async()=>{const [a,b]=await Promise.all([legacy.reconcilePurchases(),personal.reconcilePersonalPurchases()]);return {checked:a.checked+b.checked,unresolved:a.unresolved+b.unresolved};}};
+}
+module.exports = { createBelnaWallet, createBusinessWallet };

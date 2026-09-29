@@ -19,12 +19,13 @@ const {chromium}=require('playwright');
    else if(path==='/api/shop-pay')result={shopPay:{configured:true,connected:false},orders:[]};
    else if(path==='/api/belna-wallet/setup'){Object.assign(wallet,{status:'verification_required',identityVerified:false,verificationStatus:'pending',cardReady:false,balance:{available:12.5,pending:3},agentCardPayments:false,dailyCardLimitUsd:50,paused:false});result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/card-connect'){Object.assign(wallet,{status:'ready',cardReady:true});result={wallet,activity:[]};}
-   else if(path==='/api/belna-wallet/card-session')result={accountId:'biz_test',accessToken:'owner-card-verification-token',expiresAt:new Date(Date.now()+15*60000).toISOString()};
+   else if(path==='/api/belna-wallet/deposit')result={accountId:'user_test',accessToken:'owner-deposit-session-only',expiresAt:new Date(Date.now()+15*60000).toISOString()};
+   else if(path==='/api/belna-wallet/card-session')result={...(wallet.cardReady?{cardId:'icrd_test'}:{}),accountId:'user_test',accessToken:'owner-card-verification-token',expiresAt:new Date(Date.now()+15*60000).toISOString()};
    else if(path==='/api/belna-wallet/controls'){if(body.dailyLimitUsd!=null)wallet.dailyCardLimitUsd=body.dailyLimitUsd;if(typeof body.frozen==='boolean')wallet.paused=body.frozen;result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/quote')result={quoteId:'test-transfer',recipient:body.recipient,amount:body.amount,fees:'Partner fees may apply.'};
    else if(path==='/api/belna-wallet/send')result={status:'succeeded'};
    else if(path==='/api/belna-wallet/receive')result={url:'https://whop.com/checkout/test',amount:body.amount};
-   else if(path==='/api/belna-wallet/withdraw-session')result={accountId:'biz_test',accessToken:'owner-only-ui-token',expiresAt:new Date(Date.now()+15*60000).toISOString()};
+   else if(path==='/api/belna-wallet/withdraw-session')result={accountId:'user_test',accessToken:'owner-only-ui-token',expiresAt:new Date(Date.now()+15*60000).toISOString()};
    else if(path.startsWith('/api/shipping-addresses')){
     if(path.endsWith('/save')){const a={...body,id:body.id||crypto.randomUUID(),isDefault:body.isDefault||!addresses.length};a.formatted=[a.recipient,a.line1,a.line2,[a.postalCode,a.city].join(' '),a.region,a.country].filter(Boolean).join(', ');if(a.isDefault)addresses=addresses.map(x=>({...x,isDefault:false}));addresses=[...addresses.filter(x=>x.id!==a.id),a];}
     if(path.endsWith('/delete')){addresses=addresses.filter(x=>x.id!==body.id);if(addresses.length&&!addresses.some(x=>x.isDefault))addresses[0].isDefault=true;}
@@ -53,7 +54,7 @@ const {chromium}=require('playwright');
   await page.getByText('Ada Lovelace, New Street 2, 11122 Stockholm, SE',{exact:true}).waitFor();
   // Belna Wallet set up in Settings does not replace the card already paying; the owner switches to it.
   await option('belna_wallet').locator('.wpay-side [data-act="wallet-connect-belna"]').click();await page.locator('#belna-wallet-country').selectOption('SE');
-  await page.getByRole('button',{name:'Create wallet',exact:true}).click();await option('belna_wallet').locator('.wpay-main[data-act="wallet-switch"]').waitFor();
+  await page.getByRole('button',{name:'Connect personal wallet',exact:true}).click();await option('belna_wallet').locator('.wpay-main[data-act="wallet-switch"]').waitFor();
   assert.equal(await option('existing_card').getAttribute('class').then(c=>/\bon\b/.test(c)),true,'the card already paying stays active');
   await option('belna_wallet').locator('.wpay-main').click();await page.locator('.wpay-opt.on').filter({hasText:'Belna Wallet'}).waitFor();
   assert.deepEqual(requests.find(x=>x.path.endsWith('/setup')).body,{country:'SE'});
@@ -93,6 +94,7 @@ const {chromium}=require('playwright');
   else {await page.getByRole('button',{name:'Back to Settings',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();}
   cardApplicationState=null;await page.getByRole('button',{name:'Check status',exact:true}).click();
   await page.getByRole('button',{name:'Connect card',exact:true}).click();await page.getByText('Card payments are on',{exact:true}).waitFor();
+  await page.locator('.wallet-panel').getByRole('button',{name:'Add money',exact:true}).click();await page.getByRole('dialog',{name:'Add money to your personal wallet'}).waitFor();await page.getByText('Secure bank connection · review fees and confirm').waitFor();assert.equal(requests.filter(x=>x.path.endsWith('/deposit')).length,1);await page.getByRole('button',{name:'Close bank withdrawal'}).click();
   await page.locator('.wallet-panel').getByRole('button',{name:'Send',exact:true}).click();await page.locator('#belna-wallet-recipient').fill('friend@example.com');await page.locator('#belna-wallet-send-amount').fill('5');
   await page.getByRole('button',{name:'Review send',exact:true}).click();await page.getByRole('button',{name:'Confirm send',exact:true}).waitFor();assert.equal(requests.filter(x=>x.path.endsWith('/send')).length,0);
   await page.getByRole('button',{name:'Get paid',exact:true}).click();await page.locator('#belna-wallet-receive-title').fill('Design');await page.locator('#belna-wallet-receive-amount').fill('25');
@@ -102,6 +104,7 @@ const {chromium}=require('playwright');
   await page.getByRole('button',{name:'Close bank withdrawal'}).click();await page.getByRole('dialog',{name:'Withdraw to your bank'}).waitFor({state:'detached'});
   // Settings: daily card allowance and pausing card spending.
   await page.getByRole('button',{name:'Wallet settings',exact:true}).click();
+  await page.getByRole('button',{name:'View virtual card',exact:true}).click();await page.getByRole('dialog',{name:'Your personal virtual card'}).waitFor();await page.getByRole('button',{name:'Close card setup'}).click();
   await page.getByRole('button',{name:'Change',exact:true}).click();await page.locator('#belna-wallet-limit').fill('75');await page.getByRole('button',{name:'Save',exact:true}).click();
   await page.locator('.wset-row').filter({hasText:'Daily card allowance'}).getByText('$75.00',{exact:true}).waitFor();
   assert.deepEqual(requests.filter(x=>x.path.endsWith('/controls')).at(-1).body,{dailyLimitUsd:75});
