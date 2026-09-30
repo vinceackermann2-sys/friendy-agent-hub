@@ -1,3 +1,4 @@
+const completed=require('./completion-fixture.cjs');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {PGlite}=require('@electric-sql/pglite');
@@ -27,7 +28,7 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
   const d={records,schemas:[],tools:{lookup:{run:async()=>({finding:'Verified price is 50',url:'https://example.com'})},write:{approval:true,run:async a=>{executed.push(a);return {ok:true};}}},
     ensureCredit:async()=>{},checkPrompt:p=>{if(!p)throw Error('Prompt required');},protect:(_,s)=>s,logUsage:async()=>{},
     memory:{list:async()=>[],rank:x=>x,finish:async()=>[]},azure:{getSandbox:async()=>({mode:'azure'})},buildSystem:async()=>'',emitResultCard:()=>{},
-    model:async opts=>{prompts.push(opts);const r=replies.shift();return typeof r==='function'?r(opts):r || {text:'Component result'};}};
+    model:async opts=>{prompts.push(opts);const r=replies.shift();return completed(typeof r==='function'?await r(opts):r || {text:'Component result'});}};
   const rt=createTaskRuntime(d);let n=0;
   const create=(instructions,teamId='objective',userId='owner',chatId='chat')=>rt.create({userId,chatId,requestKey:`request-${++n}`,instructions,context:{teamId,originalPrompt:'Find a solution below 100. Deliver in English.'}});
   const a=await create('Compare prices');const b=await create('Check quality');

@@ -1,3 +1,4 @@
+const { configureGoalWork } = require('./agents/goal-work');
 /* Lingon real backend — Express.
    Auth: Supabase JWT required on all stateful routes (user_id comes from the
    verified token, never from the client). Health + plans are public.
@@ -91,8 +92,9 @@ app.post('/api/composio/webhook', express.raw({ type: 'application/json', limit:
   }
 });
 app.use((req, res, next) => {
-  if ((req.method === 'POST' && (req.path === '/api/voice/transcribe' || req.path === '/api/chat' || req.path === '/api/chat/stream' || req.path === '/api/agent/conversation' || req.path === '/api/library' || req.path === '/api/support/submissions')) || (req.method === 'PUT' && req.path.startsWith('/api/client-state/'))) {
-    return express.json({ limit: '12mb' })(req, res, next);
+  if ((req.method === 'POST' && (req.path === '/api/voice/transcribe' || req.path === '/api/chat' || req.path === '/api/chat/stream' || req.path === '/api/agent/conversation' || req.path === '/api/library' || req.path === '/api/support/submissions')) || (req.method === 'PUT' && req.path.startsWith('/api/client-state/')) || (req.method==='PATCH' && req.path.startsWith('/api/library/'))) {
+    const limit=['/api/chat','/api/chat/stream','/api/agent/conversation'].includes(req.path)?'72mb':req.path.startsWith('/api/library')?'15mb':'12mb';
+    return express.json({ limit })(req, res, next);
   }
   next();
 });
@@ -1267,6 +1269,7 @@ app.patch('/api/goals/:id', rateLimit(120, 60000), requireAuth(async (req, res) 
   try { res.json({ goal: await store.updateGoal(req.user.id, req.params.id, { title, category, status, steps, addSteps, completeSteps, reopenSteps, removeSteps }) }); }
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
+app.put('/api/goals/:id/work', rateLimit(30,60000), requireAuth(async(req,res)=>{try{res.json({goal:await configureGoalWork(store,req.user.id,req.params.id,req.body || {})});}catch(e){res.status(400).json({error:e.message});}}));
 app.delete('/api/goals/:id', requireAuth(async (req, res) => {
   try {
     if (!await store.deleteGoal(req.user.id, req.params.id)) return res.status(404).json({ error: 'Goal not found.' });
@@ -1277,9 +1280,10 @@ app.get('/api/library', requireAuth(async (req, res) => {
   try { res.json({ items: await store.listLibrary(req.user.id, { kind: req.query.kind, query: req.query.q, limit: req.query.limit }) }); }
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
+app.get('/api/library/:id/versions', requireAuth(async(req,res)=>{try{res.json({versions:await store.listLibraryVersions(req.user.id,req.params.id)});}catch(e){res.status(personalStatus(e)).json({error:e.message});}}));
 app.get('/api/library/:id', requireAuth(async (req, res) => {
   try {
-    const item = await store.getLibraryItem(req.user.id, req.params.id);
+    const item = await store.getLibraryItem(req.user.id, req.params.id,req.query.revision);
     if (!item) return res.status(404).json({ error: 'Library item not found.' });
     res.json({ item });
   } catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
@@ -1290,7 +1294,7 @@ app.post('/api/library', rateLimit(30, 60000), requireAuth(async (req, res) => {
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
 app.patch('/api/library/:id', rateLimit(60, 60000), requireAuth(async (req, res) => {
-  try { res.json({ item: await store.renameLibraryItem(req.user.id, req.params.id, req.body?.title) }); }
+  try { res.json({ item: await (req.body?.content!==undefined?store.saveLibraryItem(req.user.id,{...req.body,id:req.params.id,source:'upload'}):store.renameLibraryItem(req.user.id, req.params.id, req.body?.title)) }); }
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
 app.delete('/api/library/:id', requireAuth(async (req, res) => {
@@ -1301,6 +1305,9 @@ app.delete('/api/library/:id', requireAuth(async (req, res) => {
 }));
 
 // ---------- memories (auth-derived user) ----------
+app.get('/api/permission-grants', requireAuth(async(req,res)=>{try{res.json({grants:await store.listPermissionGrants(req.user.id)});}catch{res.status(503).json({error:'Could not load permission grants.'});}}));
+app.post('/api/permission-grants', rateLimit(30,60000), requireAuth(async(req,res)=>{try{res.json({grant:await store.createPermissionGrant(req.user.id,req.body || {})});}catch(e){res.status(400).json({error:e.message});}}));
+app.delete('/api/permission-grants/:id', requireAuth(async(req,res)=>{try{res.json(await store.revokePermissionGrant(req.user.id,req.params.id));}catch{res.status(503).json({error:'Could not revoke grant.'});}}));
 app.get('/api/agent-permissions', requireAuth(async (req,res) => {
   try {res.json({permissions:await store.getAgentPermissions(req.user.id)});}
   catch(e){res.status(503).json({error:'Could not load permission settings.'});}

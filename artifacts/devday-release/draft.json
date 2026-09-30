@@ -1,0 +1,46 @@
+[
+  {
+    "delivered": "**Subject:** Dripping kitchen tap\n\nHi,\n\nI’ve noticed the kitchen tap is dripping. Could you please arrange to have it fixed this week?\n\nThanks,  \n[Your name] []",
+    "coverage": {
+      "verified": false,
+      "gaps": [
+        "Draft a short, friendly email to the landlord asking them to fix the dripping kitchen tap this week; do not send it."
+      ]
+    },
+    "checkpoint": {
+      "version": 1,
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Draft a short, friendly email to the landlord asking them to fix the dripping kitchen tap this week; do not send it.",
+          "status": "pending",
+          "evidenceIds": [],
+          "deliverable": "",
+          "gap": ""
+        }
+      ],
+      "findings": [],
+      "failedApproaches": [],
+      "nextActions": [],
+      "updatedAt": 1790770908257
+    },
+    "id": "draft",
+    "status": "completed",
+    "result": "**Subject:** Dripping kitchen tap\n\nHi,\n\nI’ve noticed the kitchen tap is dripping. Could you please arrange to have it fixed this week?\n\nThanks,  \n[Your name]",
+    "calls": [],
+    "callArgs": [],
+    "denied": 0,
+    "notes": [],
+    "updates": [],
+    "ms": 2405,
+    "input": 5618,
+    "output": 270,
+    "rounds": 1,
+    "billedInput": 5618,
+    "billedOutput": 270,
+    "cachedInput": 5247,
+    "costUsd": 0.00022457,
+    "pass": true,
+    "problems": []
+  }
+]

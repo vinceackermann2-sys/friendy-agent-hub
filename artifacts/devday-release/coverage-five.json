@@ -1,0 +1,151 @@
+[
+  {
+    "delivered": "| Tool | Monthly price (USD/user) | Primary source |\n|---|---:|---|\n| Aster | $9 per user/month | [Official pricing](https://aster.example/pricing) |\n| Birch | $12 per user/month | [Official pricing](https://birch.example/pricing) |\n| Cedar | $15 per user/month | [Official pricing](https://cedar.example/pricing) |\n| Dune | $20 per user/month | [Official pricing](https://dune.example/pricing) |\n| Elm | **Unverified** — the pricing page says “contact sales” and gives no public monthly amount | [Official pricing](https://elm.example/pricing) |\n\nThese are monthly-billing prices; annual pricing is excluded. I didn’t send messages, subscribe, or purchase anything. [{\"type\":\"present\",\"kind\":\"table\",\"title\":\"Monthly per-user pricing comparison\",\"subtitle\":\"Monthly billing only; prices in US dollars. Primary pricing pages linked in each row.\",\"items\":[],\"metrics\":[],\"columns\":[\"Tool\",\"Monthly price (USD/user)\",\"Primary source\"],\"rows\":[[\"Aster\",\"$9 per user/month\",\"https://aster.example/pricing\"],[\"Birch\",\"$12 per user/month\",\"https://birch.example/pricing\"],[\"Cedar\",\"$15 per user/month\",\"https://cedar.example/pricing\"],[\"Dune\",\"$20 per user/month\",\"https://dune.example/pricing\"],[\"Elm\",\"Unverified — contact sales; no public monthly amount\",\"https://elm.example/pricing\"]],\"status\":\"done\"}]",
+    "coverage": {
+      "verified": true,
+      "gaps": []
+    },
+    "checkpoint": {
+      "version": 1,
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Compare exactly Aster, Birch, Cedar, Dune, and Elm; give monthly USD per-user prices and a primary-source link for each; retain all five rows and mark unverified prices; do not message, subscribe, or purchase.",
+          "status": "done",
+          "evidenceIds": [
+            "cc192921-d592-4cdc-8679-bd571736c480",
+            "57f21bb4-a70a-4698-b29e-d6f6623edbe9",
+            "6d49f86f-8433-4543-9e90-45aac4df889e",
+            "800d967b-73ce-4e8b-a855-d58719ed9249",
+            "7d8e411e-c842-4975-814a-4fdedb25791e"
+          ],
+          "deliverable": "",
+          "gap": ""
+        }
+      ],
+      "findings": [],
+      "failedApproaches": [],
+      "nextActions": [],
+      "updatedAt": 1790771914691
+    },
+    "id": "coverage-five",
+    "status": "completed",
+    "result": "| Tool | Monthly price (USD/user) | Primary source |\n|---|---:|---|\n| Aster | $9 per user/month | [Official pricing](https://aster.example/pricing) |\n| Birch | $12 per user/month | [Official pricing](https://birch.example/pricing) |\n| Cedar | $15 per user/month | [Official pricing](https://cedar.example/pricing) |\n| Dune | $20 per user/month | [Official pricing](https://dune.example/pricing) |\n| Elm | **Unverified** — the pricing page says “contact sales” and gives no public monthly amount | [Official pricing](https://elm.example/pricing) |\n\nThese are monthly-billing prices; annual pricing is excluded. I didn’t send messages, subscribe, or purchase anything.",
+    "calls": [
+      "web_search",
+      "web_search",
+      "web_search",
+      "web_search",
+      "web_search",
+      "web_search",
+      "web_search",
+      "present"
+    ],
+    "callArgs": [
+      {
+        "name": "web_search",
+        "args": {
+          "query": "Aster software tool pricing per user monthly pricing official"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "query": "Birch software tool pricing per user monthly pricing official"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "query": "Cedar software tool pricing per user monthly pricing official"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "query": "Dune software tool pricing per user monthly pricing official"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "query": "Elm software tool pricing per user monthly pricing official"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "urls": [
+            "https://aster.example/pricing",
+            "https://birch.example/pricing",
+            "https://cedar.example/pricing",
+            "https://dune.example/pricing"
+          ],
+          "activity": "Checking official pricing pages"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "urls": [
+            "https://elm.example/pricing"
+          ],
+          "activity": "Checking Elm pricing page"
+        }
+      },
+      {
+        "name": "present",
+        "args": {
+          "kind": "table",
+          "title": "Monthly per-user pricing comparison",
+          "subtitle": "Monthly billing only; prices in US dollars. Primary pricing pages linked in each row.",
+          "columns": [
+            "Tool",
+            "Monthly price (USD/user)",
+            "Primary source"
+          ],
+          "rows": [
+            [
+              "Aster",
+              "$9 per user/month",
+              "https://aster.example/pricing"
+            ],
+            [
+              "Birch",
+              "$12 per user/month",
+              "https://birch.example/pricing"
+            ],
+            [
+              "Cedar",
+              "$15 per user/month",
+              "https://cedar.example/pricing"
+            ],
+            [
+              "Dune",
+              "$20 per user/month",
+              "https://dune.example/pricing"
+            ],
+            [
+              "Elm",
+              "Unverified — contact sales; no public monthly amount",
+              "https://elm.example/pricing"
+            ]
+          ]
+        }
+      }
+    ],
+    "denied": 0,
+    "notes": [],
+    "updates": [],
+    "ms": 14747,
+    "input": 30485,
+    "output": 2019,
+    "rounds": 4,
+    "billedInput": 30485,
+    "billedOutput": 2019,
+    "cachedInput": 12918,
+    "costUsd": 0.00328963,
+    "pass": true,
+    "problems": []
+  }
+]

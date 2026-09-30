@@ -170,7 +170,7 @@ for (const [name, factory] of [['whop-user-auth','createWhopUserAuth'],['persona
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs', 'product-search']) {
+for (const name of ['page-validation', 'goal-work', 'permission-policy', 'documents', 'task-checkpoint', 'task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs', 'product-search']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   if (name === 'automations') src = "import { tasks } from './conversation.js';\n" + src.replace(/^[ \t]*const \{ tasks \} = require\('\.\/conversation'\);\r?\n/gm, '');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
@@ -205,3 +205,5 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log('sync-lingon: done');
+
+{const src=readFileSync(join(root,'server/scoped-permissions.js'),'utf8');writeFileSync(join(root,'src/lingon-server/scoped-permissions.js'),src.replace('module.exports={','export {'));}

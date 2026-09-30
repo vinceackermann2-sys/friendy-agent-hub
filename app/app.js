@@ -3349,7 +3349,7 @@ function refreshSystemFiles(force = false){
 /* The Library lives on the account so the agent's library tools see the same
    files. The list carries names, sizes and a text preview; file content loads
    on demand and is cached for this session. */
-const MAX_LIBRARY_UPLOAD_MB = 6;
+const MAX_LIBRARY_UPLOAD_MB = 10;
 const libraryContent = new Map(); // item id -> { loading } | { content } | { error }
 let libraryPending = null, libraryContentOwner = null, libraryViewer = null, libraryCheckedAt = 0, libraryOwner = null;
 function refreshLibrary(force = true){
@@ -3387,7 +3387,7 @@ function libraryItemContent(id, onReady){
   if (libraryContent.has(id)) return libraryContent.get(id);
   libraryContent.set(id, { loading:true });
   window.LingonAuth.api('/api/library/' + encodeURIComponent(id))
-    .then(out => { if (owner === currentUserId()) libraryContent.set(id, { content:String(out.item?.content || '') }); })
+    .then(out => { if (owner === currentUserId()) libraryContent.set(id, { ...out.item,content:String(out.item?.content || '') }); })
     .catch(error => { if (owner === currentUserId()) libraryContent.set(id, { error:error.message || 'Could not load this file.' }); })
     .finally(() => { if (state.view === 'library' && $('#main')) paintLibrary($('#main')); try { onReady && onReady(); } catch {} });
   return libraryContent.get(id);
@@ -3439,6 +3439,7 @@ function libraryViewerHtml(){
   const ext = (String(item.title).match(/\.([a-z0-9]{2,5})$/i) || [])[1] || '';
   const body = /^data:video\//.test(content) ? `<video class="lib-viewer-media" src="${esc(content)}" controls playsinline></video>`
     : /^data:audio\//.test(content) ? `<audio class="lib-viewer-audio" src="${esc(content)}" controls></audio>`
+    : loaded.extractedText ? `<pre class="cv-pre">${esc(loaded.extractedText)}</pre>${(loaded.extractionWarnings || []).map(w=>`<p>${esc(w)}</p>`).join('')}`
     : canvasDocumentHTML({ name:item.title, format:item.kind === 'web' ? 'html' : ext || 'text' }, loaded);
   return `<div class="lib-viewer" role="dialog" aria-modal="true" aria-label="${esc(item.title)}">
     <button class="lib-viewer-scrim" data-act="lib-viewer-close" aria-label="Close" tabindex="-1"></button>
@@ -3446,7 +3447,13 @@ function libraryViewerHtml(){
       <div class="lib-viewer-bar"><span>${item.source === 'upload' ? 'Your upload' : 'Made by agent'} · ${esc(fmtBytes(Number(item.size || 0)))} · ${esc(fmtAgo(item.createdAt))}</span>
         <button class="iconbtn" data-act="lib-download" data-id="lib:${esc(item.id)}" title="Download" aria-label="Download ${esc(item.title)}">${icon('down',16)}</button>
         <button class="iconbtn" data-act="lib-viewer-close" title="Close" aria-label="Close">${icon('x',16)}</button></div>
-      <div class="lib-viewer-body">${body}</div>
+      <div class="lib-viewer-body">${body}
+      <details><summary>File versions · ${loaded.revision || item.revision || 1}</summary>
+        <button class="btn ghost small" data-act="lib-versions" data-id="${esc(item.id)}">Load version history</button>
+        ${(loaded.versions || []).map(v=>`<button class="btn ghost small" data-act="lib-version-open" data-id="${esc(item.id)}" data-revision="${v.revision}">Open version ${v.revision}</button>`).join('')}
+      </details>
+      ${content && !content.startsWith('data:')?`<details><summary>Edit this file</summary><textarea class="field" data-library-edit maxlength="500000">${esc(content)}</textarea><button class="btn small" data-act="lib-version-save" data-id="${esc(item.id)}">Save new version</button></details>`:''}
+      </div>
     </div>
   </div>`;
 }
@@ -3639,7 +3646,7 @@ function goalCounts(){
 // Goals live on the account so this page and the agent's goal tools share them.
 function goalFromServer(g){
   return { id:g.id, title:g.title, category:g.category, chatId:g.chatId || null, createdAt:g.createdAt,
-    active:g.status === 'active', done:g.status === 'done',
+    work:g.work || {},activity:g.activity || [],active:g.status === 'active', done:g.status === 'done',
     subgoals:(g.steps || []).map(s => ({ id:s.id, title:s.title, done:!!s.done })) };
 }
 function repaintGoalViews(){
@@ -3796,6 +3803,17 @@ function paintGoals(M){
           ${state.goalMenu === g.id ? `<div class="goal-menu pop" role="menu">${g.done ? '' : `<button role="menuitem" data-act="goal-active" data-id="${g.id}">${icon(g.active ? 'clock' : 'up',15)} ${g.active ? 'Pause goal' : 'Resume goal'}</button>`}<button role="menuitem" data-act="goal-del" data-id="${g.id}">${icon('trash',15)} Delete goal</button></div>` : ''}
         </div>
       </div>
+      <details class="goal-work"><summary>Ongoing work${g.work?.enabled ? ' · enabled' : ''}</summary>
+        <label>What counts as success<input class="field" data-goal-field="success" value="${esc(g.work?.successCriteria || '')}" maxlength="1000"></label>
+        <label>Next action<input class="field" data-goal-field="next" value="${esc(g.work?.nextAction || '')}" maxlength="1000"></label>
+        <label>Check every (hours)<input class="field" type="number" min="1" max="720" data-goal-field="hours" value="${(g.work?.intervalMinutes || 1440)/60}"></label>
+        <label>Run budget<input class="field" type="number" min="1" max="30" data-goal-field="runs" value="${g.work?.maxRuns || 5}"></label>
+        <p class="mut">Up to 4 planning rounds per run. Can research public sources and read your Library. Account changes still require approval.</p>
+        <button class="btn small" data-act="goal-work-save" data-id="${g.id}">Enable ongoing work</button>
+        ${g.work?.enabled ? `<button class="btn ghost small" data-act="goal-work-pause" data-id="${g.id}">Pause ongoing work</button>` : ''}
+        ${g.work?.nextWakeAt && g.work?.enabled ? `<p>Next check: ${esc(new Date(g.work.nextWakeAt).toLocaleString())}</p>` : ''}
+        ${(g.activity || []).slice(-5).reverse().map(a=>`<p><small>${esc(new Date(a.at).toLocaleString())} · ${esc(a.status)}</small><br>${esc(a.summary)}</p>`).join('')}
+      </details>
       ${subs.length ? `<div class="goal-bar" role="progressbar" aria-label="${esc(g.title)} progress" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>` : ''}
       <div class="sub-list">
         ${subs.map(s => `<div class="sub-row${s.done ? ' is-done' : ''}">
@@ -4322,7 +4340,7 @@ function approvalCardHTML(c, m){
   return `<div class="acard cv-card cv-approval ${pending ? 'is-pending' : ''}">
     ${cvHead(tile, esc(cd.view && cd.title ? cd.title : approvalHeadline({ title:cd.title, detail:cd.detail })), sub, cvDecisionChip(cd.status))}
     <div class="bd">${cvApprovalBody(c, cd)}</div>
-    ${pending ? `<div class="cv-actions"><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Deny</button><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">${verb}</button></div>`
+    ${pending ? `${cd.rememberable && cd.taskId ? `<label class="cv-fine"><input type="checkbox" data-remember-action> Allow this exact account, action and arguments for 7 days. Revoke in Settings.</label>` : ''}<div class="cv-actions"><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Deny</button><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">${verb}</button></div>`
       : `<div class="ft"><span class="note">${icon('shield',12)} ${cd.status === 'denied' ? 'Nothing was done' : cd.status === 'expired' ? 'No longer needed' : 'Approved by you · logged in activity'}</span></div>`}
   </div>`;
 }
@@ -6941,6 +6959,9 @@ function settingsBrowserBody(){
     <article class="browser-settings-card">
       <div class="browser-settings-heading"><span class="browser-card-icon">${icon('box',17)}</span><div><h2>Connected apps</h2><p>Choose when your agent asks before using a connection</p></div></div>
       ${modeOptions('connectors',permissions.connectors,[['ask_some','Ask for some actions','Read connected apps when asked; ask before every write action.'],['always_ask','Always ask','Ask before every connected app action.']])}
+      <h3>Scoped permissions</h3><p>Remember an exact action from its approval card. Grants expire after 7 days and can be revoked here.</p>
+      <button class="btn ghost small" data-act="permission-grants-load">Review scoped permissions</button>
+      ${(state.permissionGrants || []).map(g=>`<div class="row"><span>${esc(g.label)} · ${esc(g.effect)} · expires ${esc(new Date(g.expiresAt).toLocaleDateString())}<details><summary>Scope</summary><pre>${esc(JSON.stringify(g.match,null,2))}</pre></details></span><button class="btn ghost small" data-act="permission-grant-revoke" data-id="${esc(g.id)}">Revoke</button></div>`).join('')}
     </article>
   </section>`;
 }
@@ -7921,6 +7942,23 @@ document.addEventListener('click', async e => {
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
+  if(act==='goal-work-save' || act==='goal-work-pause'){
+    const panel=b.closest('.goal-work'),get=key=>panel.querySelector(`[data-goal-field="${key}"]`)?.value;
+    const input=act==='goal-work-pause'?{enabled:false}:{enabled:true,successCriteria:get('success'),nextAction:get('next'),intervalMinutes:Number(get('hours'))*60,maxRuns:Number(get('runs')),maxRounds:4};
+    b.disabled=true;try{await window.LingonAuth.api('/api/goals/'+encodeURIComponent(b.dataset.id)+'/work',{method:'PUT',body:JSON.stringify(input)});await refreshGoals();}catch(e){toast(e.message);}finally{b.disabled=false;}return;
+  }
+  if(act==='lib-versions' || act==='lib-version-open' || act==='lib-version-save'){
+    const id=b.dataset.id,loaded=libraryContent.get(id) || {};b.disabled=true;
+    try{
+      if(act==='lib-versions'){const out=await window.LingonAuth.api('/api/library/'+encodeURIComponent(id)+'/versions');libraryContent.set(id,{...loaded,versions:out.versions});}
+      else if(act==='lib-version-open'){const out=await window.LingonAuth.api('/api/library/'+encodeURIComponent(id)+'?revision='+encodeURIComponent(b.dataset.revision));libraryContent.set(id,{...out.item,versions:loaded.versions});}
+      else{const item=(state.libraryServer || []).find(i=>i.id===id),content=b.closest('details').querySelector('[data-library-edit]').value;const out=await window.LingonAuth.api('/api/library/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({title:item.title,mime:item.mime,content,revision:item.revision || 1})});libraryContent.delete(id);await refreshLibrary();toast('Version '+out.item.revision+' saved.');}
+      paintLibrary($('#main'));
+    }catch(e){toast(e.message);}finally{b.disabled=false;}return;
+  }
+  if(act==='permission-grants-load' || act==='permission-grant-revoke'){
+    try{if(act==='permission-grant-revoke')await window.LingonAuth.api('/api/permission-grants/'+encodeURIComponent(b.dataset.id),{method:'DELETE'});state.permissionGrants=(await window.LingonAuth.api('/api/permission-grants')).grants;paintSettings($('#main'));}catch(e){toast(e.message);}return;
+  }
   if(act==='browser-permission'){
     const group=b.dataset.group,mode=b.dataset.mode;
     if(!['web','connectors'].includes(group) || !['ask_some','always_ask'].includes(mode))return;
@@ -8545,7 +8583,7 @@ document.addEventListener('click', async e => {
         await window.LingonAuth.api('/api/live/takeover',{method:'POST',body:JSON.stringify({liveId:m.card.liveId,on:false})});
         liveControl = false;
       }
-      if(m.card.taskId) await Engine.controlTask(makeRT(c),m.card.taskId,'decide',{callId:m.card.managedCallId,allow,version:m.card.taskVersion});
+      if(m.card.taskId) await Engine.controlTask(makeRT(c),m.card.taskId,'decide',{callId:m.card.managedCallId,allow,version:m.card.taskVersion,remember:allow && !!b.closest('.acard')?.querySelector('[data-remember-action]')?.checked});
       else await Engine.resume(makeRT(c), { callId:m.card.managedCallId, allow, answer:act === 'qopt' ? b.dataset.o : undefined });
     }catch(error){toast(error.message);}
     b.disabled = false;

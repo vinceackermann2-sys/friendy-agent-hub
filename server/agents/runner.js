@@ -9,7 +9,7 @@
    approvals (frontend-gated for github_*), billing, Supabase persistence.
 */
 const { callFoundry, MODEL_DEFAULT } = require('../foundry');
-const { costOf, PLANS } = require('../plans');
+const { costOf, pricingFor, PLANS } = require('../plans');
 const store = require('../store');
 const { checkPrompt } = require('./guardrails');
 const { entry, persistRun } = require('./tracing');
@@ -106,8 +106,9 @@ async function modelAnswer({ agent, task, history, replyTo, systemExtra, model, 
 }
 
 async function logModelUsage(userId, model, usages) {
-  for (const u of usages.filter(Boolean)) {
-    await store.logUsage(userId, { model: u.model || model, usage: u, cost: costOf(u) });
+  for (const entry of usages.filter(Boolean)) {
+    const u={...entry,model:entry.model || model};
+    await store.logUsage(userId, { model: u.model || model, usage: {...u,pricing:pricingFor(u)},cost:costOf(u) });
   }
 }
 

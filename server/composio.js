@@ -549,9 +549,25 @@ function shrinkResult(value, text, items, depth) {
   }
   return value;
 }
+// Preserve the inventory before shortening bodies. Otherwise promotions at the
+// front of a mailbox page can push important messages out of the result entirely.
+function messageInventory(value) {
+  if(Array.isArray(value))return value.map(item=>{
+    if(item && typeof item==='object' && item.subject && (item.messageId || item.message_id || item.id)){
+      return {id:item.messageId || item.message_id || item.id,subject:String(item.subject).slice(0,180),
+        from:item.sender || item.from,at:item.messageTimestamp || item.date || item.internalDate,
+        labels:item.labelIds || item.labels,attachmentIds:item.attachmentIds};
+    }
+    return messageInventory(item);
+  });
+  if(value && typeof value==='object')return Object.fromEntries(Object.entries(value).filter(([k])=>!RESULT_NOISE.has(k)).map(([k,v])=>[k,messageInventory(v)]));
+  return value;
+}
 function compactResult(value, budget = 6500) {
   if (JSON.stringify(value ?? null).length <= budget) return value;
-  const note = 'Long text and lists are shortened here and this is all of this result. For one item in full, fetch that item by its id.';
+  const note = 'Bodies are shortened; item metadata and pagination are preserved where possible. Fetch relevant items by id for full content. Any omitted items still need pagination or a narrower query before claiming complete coverage.';
+  const inventory=messageInventory(value);
+  if(JSON.stringify(inventory).length<=budget)return {note:'All item metadata and pagination from this response are retained. Message bodies are omitted; fetch relevant messages by id. Follow pagination tokens when present.',result:inventory};
   for (const [text, items] of [[1500, 50], [700, 40], [350, 30], [180, 25], [90, 20]]) {
     const out = shrinkResult(value, text, items, 0);
     if (JSON.stringify(out).length <= budget) return { note, result: out };

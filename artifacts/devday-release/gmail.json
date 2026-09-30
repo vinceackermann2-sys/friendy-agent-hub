@@ -1,0 +1,144 @@
+[
+  {
+    "delivered": "I found two time-sensitive emails:\n\n- **Launch contract — Anna Berg:** asks you to sign by **today, Friday, September 25**, so they can book the venue. The email says the contract is attached.\n- **Skatteverket:** asks you to submit receipts for work-travel deductions through its e-service by **Wednesday, September 30**.\n\nThe other recent messages were mainly store promotions and a Spotify release email. [{\"type\":\"present\",\"kind\":\"list\",\"title\":\"Important Gmail from the last few days\",\"subtitle\":\"Two messages need attention; the inbox also contains Spotify and promotional emails.\",\"items\":[{\"title\":\"Contract for the launch — please sign by Friday\",\"subtitle\":\"Anna Berg · Sep 23\",\"meta\":\"Action: sign the launch contract. The email asks for it by Friday, Sep 25 (today).\",\"badge\":\"Urgent\"},{\"title\":\"Din deklaration: komplettering behövs senast 30 september\",\"subtitle\":\"Skatteverket · Sep 24\",\"meta\":\"Action: submit receipts for work-travel deductions through the e-service by Sep 30.\",\"badge\":\"Deadline Sep 30\"}],\"metrics\":[],\"columns\":[],\"rows\":[],\"status\":\"done\"}]",
+    "coverage": {
+      "verified": true,
+      "gaps": []
+    },
+    "checkpoint": {
+      "version": 1,
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Check Gmail for anything important from the last few days",
+          "status": "done",
+          "evidenceIds": [
+            "d2f9283d-f0c3-4343-b810-0ce0d42c2540",
+            "9049371d-fd35-4c22-b6ec-bc3813496d9b",
+            "39a6f632-f8ee-43d6-b04c-00c711bd899a",
+            "0f926b64-0d2b-4989-8c37-10ad27455dda"
+          ],
+          "deliverable": "",
+          "gap": ""
+        }
+      ],
+      "findings": [],
+      "failedApproaches": [],
+      "nextActions": [],
+      "updatedAt": 1790770953675
+    },
+    "id": "gmail",
+    "status": "completed",
+    "result": "I found two time-sensitive emails:\n\n- **Launch contract — Anna Berg:** asks you to sign by **today, Friday, September 25**, so they can book the venue. The email says the contract is attached.\n- **Skatteverket:** asks you to submit receipts for work-travel deductions through its e-service by **Wednesday, September 30**.\n\nThe other recent messages were mainly store promotions and a Spotify release email.",
+    "calls": [
+      "composio_apps",
+      "composio_tools",
+      "composio_execute",
+      "composio_execute",
+      "composio_execute",
+      "composio_execute",
+      "present"
+    ],
+    "callArgs": [
+      {
+        "name": "composio_apps",
+        "args": {
+          "activity": "Checking Gmail access"
+        }
+      },
+      {
+        "name": "composio_tools",
+        "args": {
+          "toolkit": "gmail",
+          "query": "search recent emails inbox messages, list metadata and get full messages",
+          "activity": "Checking recent Gmail"
+        }
+      },
+      {
+        "name": "composio_execute",
+        "args": {
+          "tool": "GMAIL_FETCH_EMAILS",
+          "args": {
+            "query": "newer_than:4d",
+            "max_results": 25,
+            "include_payload": false,
+            "verbose": false
+          },
+          "activity": "Checking recent Gmail"
+        }
+      },
+      {
+        "name": "composio_execute",
+        "args": {
+          "tool": "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+          "args": {
+            "message_id": "m1",
+            "format": "full",
+            "user_id": "me"
+          },
+          "activity": "Reading tax notice"
+        }
+      },
+      {
+        "name": "composio_execute",
+        "args": {
+          "tool": "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+          "args": {
+            "message_id": "m3",
+            "format": "full",
+            "user_id": "me"
+          },
+          "activity": "Reading contract email"
+        }
+      },
+      {
+        "name": "composio_execute",
+        "args": {
+          "tool": "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+          "args": {
+            "format": "full",
+            "message_id": "m2",
+            "user_id": "me"
+          },
+          "activity": "Checking recent email"
+        }
+      },
+      {
+        "name": "present",
+        "args": {
+          "kind": "list",
+          "title": "Important Gmail from the last few days",
+          "subtitle": "Two messages need attention; the inbox also contains Spotify and promotional emails.",
+          "items": [
+            {
+              "title": "Contract for the launch — please sign by Friday",
+              "subtitle": "Anna Berg · Sep 23",
+              "meta": "Action: sign the launch contract. The email asks for it by Friday, Sep 25 (today).",
+              "badge": "Urgent"
+            },
+            {
+              "title": "Din deklaration: komplettering behövs senast 30 september",
+              "subtitle": "Skatteverket · Sep 24",
+              "meta": "Action: submit receipts for work-travel deductions through the e-service by Sep 30.",
+              "badge": "Deadline Sep 30"
+            }
+          ],
+          "activity": "Highlighting important email"
+        }
+      }
+    ],
+    "denied": 0,
+    "notes": [],
+    "updates": [],
+    "ms": 23948,
+    "input": 71074,
+    "output": 1908,
+    "rounds": 7,
+    "billedInput": 71074,
+    "billedOutput": 1908,
+    "cachedInput": 47859,
+    "costUsd": 0.004266115,
+    "pass": true,
+    "problems": []
+  }
+]

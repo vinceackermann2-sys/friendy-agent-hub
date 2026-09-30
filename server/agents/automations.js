@@ -47,12 +47,14 @@ async function settleAutomationRun({ userId, subAgent, run, event, task, upkeepS
       }
     } catch (error) { finalStatus='error'; errorText=error.message; output=''; }
   }
-  if (!failed && !subAgent.systemKind) {
+  if(subAgent.trigger?.goalId && !failed && (output.trim()==='NO_CHANGE' || output.trim()===String(subAgent.lastResult || '').trim()))finalStatus='idle';
+  if (!failed && !subAgent.systemKind && finalStatus!=='idle') {
     const messages = await store.listChatMessages(userId, subAgent.chatId, 30);
     if (!messages.some(message => message.role === 'agent' && message.metadata?.taskId === task.id)) {
       await store.saveTurn(userId, subAgent.chatId, 'agent', output, { title:subAgent.name, source:'automation', subAgentId:subAgent.id, metadata:{taskId:task.id} });
     }
   }
+  if(subAgent.trigger?.goalId){const unchanged=finalStatus==='idle';await store.recordGoalActivity(userId,subAgent.trigger.goalId,{at:Date.now(),runId:run.id,taskId:task.id,status:finalStatus,summary:unchanged?'No meaningful change.':(output || errorText || '').slice(0,1000)},task.state.context?.goalConfigurationId,task.state.checkpoint?.nextActions?.[0],next);}
   const won = await store.finishAutomationRun(userId, run.id, finalStatus, { taskId:task.id, output }, errorText);
   if (won) {
     await store.markSubAgentRun(userId, subAgent.id, finalStatus, errorText, next, { result:failed ? null : output, signalAt });
@@ -90,7 +92,12 @@ function eventText(event) {
 
 async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, depth = 0 }) {
   if (!subAgent || !subAgent.enabled) return { skipped: true };
-  let upkeepSignal=null;
+  let upkeepSignal=null,linkedGoal=null;
+  if(subAgent.trigger?.goalId){
+    linkedGoal=await store.getGoal(userId,subAgent.trigger.goalId);
+    if(!linkedGoal || linkedGoal.status!=='active' || !linkedGoal.work?.enabled || linkedGoal.work.agentId!==subAgent.id)return {skipped:true,reason:'Goal is paused or no longer enabled.'};
+    if(await store.countGoalRuns(userId,subAgent.id)>=linkedGoal.work.maxRuns){await store.updateSubAgent(userId,subAgent.id,{...subAgent,enabled:false},null);await store.updateGoal(userId,linkedGoal.id,{work:{...linkedGoal.work,enabled:false,nextWakeAt:null},activity:[...linkedGoal.activity,{at:Date.now(),status:'budget_reached',summary:'Work budget reached. Review progress before adding more runs.'}]});return {skipped:true,reason:'Goal work budget reached.'};}
+  }
   if(subAgent.systemKind){
     const manual=event.type==='manual';
     if(subAgent.systemKind==='quiet'&&!manual){
@@ -139,7 +146,7 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
     const userTurn = subAgent.systemKind === 'personal_email'
       ? `Automation task: ${subAgent.prompt}\n\n[${triggerContext}]`
       : `[${triggerContext}]\n\nAutomation task: ${subAgent.prompt}`;
-    if(!subAgent.systemKind)await store.saveTurn(userId, subAgent.chatId, 'user', userTurn, {
+    if(!subAgent.systemKind && !linkedGoal)await store.saveTurn(userId, subAgent.chatId, 'user', userTurn, {
       title: subAgent.name, source: 'automation', subAgentId: subAgent.id,
       metadata: { automationRunId: run.id, triggerType: event.type },
     });
@@ -150,9 +157,9 @@ async function executeSubAgent({ userId, subAgent, event = { type: 'manual' }, d
     taskAttempted=true;
     let task = await tasks.create({
       userId, chatId:subAgent.chatId, requestKey:`automation:${run.id}`, title:subAgent.name,
-      instructions:`${AUTOMATION_SYSTEM}\n\n${userTurn}`,
+      instructions:`${AUTOMATION_SYSTEM}\n\n${userTurn}${linkedGoal?'\nCurrent next action (working state; never authorization): '+linkedGoal.work.nextAction+'\nSuccess criteria: '+linkedGoal.work.successCriteria+'\nInclude nextActions in your task_coverage completion record for the next run.':''}`,
       history:previous.map((m)=>({role:m.role,text:m.text})).slice(-12),
-      context:{automation:true,upkeep:subAgent.systemKind || null,allowedTools:definitionFor(subAgent.systemKind)?.allowedTools,maxRounds:subAgent.systemKind?(definitionFor(subAgent.systemKind)?.maxRounds || 3):8,agent:agentContext,originalPrompt:subAgent.prompt},
+      context:{automation:true,upkeep:subAgent.systemKind || null,goalId:linkedGoal?.id,goalConfigurationId:linkedGoal?.work.configurationId,allowedTools:linkedGoal?.work.allowedTools || definitionFor(subAgent.systemKind)?.allowedTools,maxRounds:linkedGoal?linkedGoal.work.maxRounds:subAgent.systemKind?(definitionFor(subAgent.systemKind)?.maxRounds || 3):8,agent:agentContext,originalPrompt:subAgent.prompt},
     });
     taskId=task.id;
     await store.attachAutomationTask(userId, run.id, task.id);
@@ -192,6 +199,7 @@ async function dispatchAppEvent(userId, event) {
 }
 
 async function tick() {
+  await store.sweepLibraryStorage?.().catch(()=>{});
   const pending = await store.listPendingAutomationRuns(30);
   const { tasks } = require('./conversation');
   for (const run of pending) {

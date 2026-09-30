@@ -197,7 +197,7 @@ function approvalCard(name, args = {}, detail = '', tool = {}, key) {
   if (tool && typeof tool.approvalCard === 'function') return { ...tool.approvalCard(args, detail), status: 'pending' };
   const view = approvalView(name, args, detail);
   const title = HEADLINES[view.kind] ? HEADLINES[view.kind](view) : name;
-  return { type: 'approval', status: 'pending', title: str(title, 200), detail: String(detail || '').slice(0, 2000), key: key || name, tool: name, view };
+  return { type: 'approval', status: 'pending', title: str(title, 200), detail: String(detail || '').slice(0, 2000), key: key || name, tool: name, rememberable:JSON.stringify(args).length<=2000 && ((name==='composio_execute' && !!args.connectedAccountId) || (name==='connector_call' && !!args.connector && !!(args.tool || (args.method && args.path)))),view };
 }
 
 /* ---------- results ---------- */

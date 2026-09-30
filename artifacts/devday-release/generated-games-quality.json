@@ -1,0 +1,19 @@
+[
+  {
+    "variant": "release",
+    "file": "artifacts/devday-release/build-validated-1.json",
+    "pass": true
+  },
+  {
+    "variant": "release",
+    "file": "artifacts/devday-release/build-validated-2.json",
+    "computerModeChecked": true,
+    "pass": true
+  },
+  {
+    "variant": "release",
+    "file": "artifacts/devday-release/build-validated-3.json",
+    "computerModeChecked": true,
+    "pass": true
+  }
+]

@@ -1,3 +1,4 @@
+import { createScopedPermissionStore } from './scoped-permissions.js';
 /* Lingon persistence.
    - If SUPABASE_URL + key are set, uses Supabase tables (see supabase/schema.sql).
    - Otherwise uses local JSON file server/data.json (gitignored) so the app is
@@ -715,6 +716,8 @@ async function beginAutomationRun(userId, subAgentId, chatId, dedupeKey, event) 
   }
   const d = loadLocal(); d.automationRuns = d.automationRuns || [];
   if (d.automationRuns.some((item) => item.dedupe_key === dedupeKey)) return null;
+  const linked=(d.subAgents || []).find(a=>(a.userId || a.user_id)===userId && a.id===subAgentId)?.trigger?.goalId;
+  if(linked){const goal=(d.goals || []).find(g=>g.id===linked && g.user_id===userId),runs=d.automationRuns.filter(r=>r.user_id===userId && r.sub_agent_id===subAgentId);if(!goal || goal.status!=='active' || !goal.work?.enabled || goal.work.agentId!==subAgentId || runs.length>=goal.work.maxRuns || runs.some(r=>['running','waiting_approval'].includes(r.status)))throw new Error('Goal work is paused, already running, or its budget is exhausted.');}
   d.automationRuns.unshift({ ...row, started_at: new Date().toISOString() }); saveLocal(d); return { id: row.id };
 }
 
@@ -1671,12 +1674,14 @@ const { getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipi
 const {getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest}=createBelnaWalletStore({supa,ensureProfile});
 const { addTokenGrant, ensureMonthlyTokens, tokenWallet: getTokenWallet,
   claimTokenDaily, releaseTokenDaily, chargeRawTokens, freePeriod } = tokenWallet;
-const { GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal, LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem } = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
+const { GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal, LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,listLibraryVersions,countGoalRuns,recordGoalActivity,sweepLibraryStorage } = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
+const {listPermissionGrants,createPermissionGrant,revokePermissionGrant}=createScopedPermissionStore({supa,loadLocal,saveLocal,ensureProfile,uid});
 const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureProfile, listChatMessages, durableOnly:true });
 const { list: listClientState, save: saveClientState, removeChat: deleteClientChat } = clientState;
 const { listCustomConnectors, addCustomConnector, updateCustomConnector, deleteCustomConnector, dropConnectorsForSecret } = createCustomConnectorStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
 export {
+  listPermissionGrants,createPermissionGrant,revokePermissionGrant,
   getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest,
   recordExistingPurchase, listExistingPurchases,
   getWalletPreferences, saveWalletPreferences,
@@ -1685,7 +1690,7 @@ export {
   getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers,
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
   GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal,
-  LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,
+  LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,listLibraryVersions,countGoalRuns,recordGoalActivity,sweepLibraryStorage,
   listMemories, memoryStats, searchMemories, getMemory, addMemory, updateMemory, delMemory,
   listSecrets, addSecret, revealSecret, delSecret, secretsEncrypted,
   supaConfigured,

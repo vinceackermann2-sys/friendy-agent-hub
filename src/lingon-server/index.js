@@ -1,3 +1,4 @@
+import { configureGoalWork } from './agents/goal-work.js';
 /* Lingon real backend — Express edge port, including Stripe Checkout.
    Auth: Supabase JWT required on all stateful routes (user_id comes from the
    verified token, never from the client). Health + plans are public.
@@ -1202,6 +1203,7 @@ app.patch('/api/goals/:id', rateLimit(120, 60000), requireAuth(async (req, res) 
   try { res.json({ goal: await store.updateGoal(req.user.id, req.params.id, { title, category, status, steps, addSteps, completeSteps, reopenSteps, removeSteps }) }); }
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
+app.put('/api/goals/:id/work', rateLimit(30,60000), requireAuth(async(req,res)=>{try{res.json({goal:await configureGoalWork(store,req.user.id,req.params.id,req.body || {})});}catch(e){res.status(400).json({error:e.message});}}));
 app.delete('/api/goals/:id', requireAuth(async (req, res) => {
   try {
     if (!await store.deleteGoal(req.user.id, req.params.id)) return res.status(404).json({ error: 'Goal not found.' });
@@ -1212,9 +1214,10 @@ app.get('/api/library', requireAuth(async (req, res) => {
   try { res.json({ items: await store.listLibrary(req.user.id, { kind: req.query.kind, query: req.query.q, limit: req.query.limit }) }); }
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
+app.get('/api/library/:id/versions', requireAuth(async(req,res)=>{try{res.json({versions:await store.listLibraryVersions(req.user.id,req.params.id)});}catch(e){res.status(personalStatus(e)).json({error:e.message});}}));
 app.get('/api/library/:id', requireAuth(async (req, res) => {
   try {
-    const item = await store.getLibraryItem(req.user.id, req.params.id);
+    const item = await store.getLibraryItem(req.user.id, req.params.id,req.query.revision);
     if (!item) return res.status(404).json({ error: 'Library item not found.' });
     res.json({ item });
   } catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
@@ -1225,7 +1228,7 @@ app.post('/api/library', rateLimit(30, 60000), requireAuth(async (req, res) => {
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
 app.patch('/api/library/:id', rateLimit(60, 60000), requireAuth(async (req, res) => {
-  try { res.json({ item: await store.renameLibraryItem(req.user.id, req.params.id, req.body?.title) }); }
+  try { res.json({ item: await (req.body?.content!==undefined?store.saveLibraryItem(req.user.id,{...req.body,id:req.params.id,source:'upload'}):store.renameLibraryItem(req.user.id, req.params.id, req.body?.title)) }); }
   catch (e) { res.status(personalStatus(e)).json({ error: e.message }); }
 }));
 app.delete('/api/library/:id', requireAuth(async (req, res) => {
@@ -1236,6 +1239,9 @@ app.delete('/api/library/:id', requireAuth(async (req, res) => {
 }));
 
 // ---------- memories (auth-derived user) ----------
+app.get('/api/permission-grants', requireAuth(async(req,res)=>{try{res.json({grants:await store.listPermissionGrants(req.user.id)});}catch{res.status(503).json({error:'Could not load permission grants.'});}}));
+app.post('/api/permission-grants', rateLimit(30,60000), requireAuth(async(req,res)=>{try{res.json({grant:await store.createPermissionGrant(req.user.id,req.body || {})});}catch(e){res.status(400).json({error:e.message});}}));
+app.delete('/api/permission-grants/:id', requireAuth(async(req,res)=>{try{res.json(await store.revokePermissionGrant(req.user.id,req.params.id));}catch{res.status(503).json({error:'Could not revoke grant.'});}}));
 app.get('/api/agent-permissions', requireAuth(async (req,res) => {
   try {res.json({permissions:await store.getAgentPermissions(req.user.id)});}
   catch(e){res.status(503).json({error:'Could not load permission settings.'});}

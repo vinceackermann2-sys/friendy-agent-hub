@@ -4,6 +4,8 @@
    creates in chat appears on the Goals page and vice versa. */
 import { entry } from './tracing.js';
 import * as store from '../store.js';
+import { extractDocument } from './documents.js';
+import { configureGoalWork } from './goal-work.js';
 
 // The Goals page says Relationships; the stored id stays 'family' for older goals.
 const GOAL_CATEGORY_ENUM = ['health', 'relationships', 'finance', 'career', 'interests', 'productivity', 'other'];
@@ -15,9 +17,9 @@ const LIBRARY_FORMATS = { md: ['text/markdown', 'document'], txt: ['text/plain',
 
 // Tool results stay small: the model gets metadata, never media bytes.
 const goalBrief = (goal) => ({ id: goal.id, title: goal.title, category: shownCategory(goal.category), status: goal.status,
-  steps: goal.steps.map((st) => ({ id: st.id, title: st.title, done: st.done })) });
+  work:goal.work,activity:goal.activity?.slice(-3),steps: goal.steps.map((st) => ({ id: st.id, title: st.title, done: st.done })) });
 const libraryBrief = (item) => ({ id: item.id, title: item.title, kind: item.kind, mime: item.mime, size: item.size,
-  source: item.source, createdAt: new Date(item.createdAt).toISOString() });
+  revision:item.revision,source: item.source, createdAt: new Date(item.createdAt).toISOString() });
 const notFound = (what) => Object.assign(new Error(`${what} not found.`), { code: 'NOT_FOUND' });
 const SYSTEM_FILES = { identity:'IDENTITY.md', soul:'SOUL.md', user:'USER.md', agents:'AGENTS.md' };
 const systemKey = (key) => {
@@ -86,6 +88,11 @@ const PERSONAL_TOOLS = {
       return { ...goalBrief(goal), action: 'updated' };
     },
   },
+  goal_work: {
+    name:'goal_work',type:'function',approval:true,description:'Configure ongoing work for a goal with explicit owner approval.',
+    approvalDetail:async args=>`Ongoing goal work: ${args.nextAction || 'pause'}. Success: ${args.successCriteria || ''}. Budget: ${args.maxRuns || 5} runs, ${args.maxRounds || 4} rounds each, every ${args.intervalMinutes || 1440} minutes.`,
+    run:async(args,ctx)=>({...goalBrief(await configureGoalWork(store,ctx.userId,args.id,args)),action:'updated'}),
+  },
   goal_delete: {
     name: 'goal_delete', type: 'function', approval: false,
     description: 'Delete a goal by id, only when the owner asks for it to be removed.',
@@ -109,22 +116,24 @@ const PERSONAL_TOOLS = {
   library_read: {
     name: 'library_read', type: 'function', approval: false,
     description: 'Read one Library item by id. Text files return their content; media returns details only.',
-    run: async ({ id }, ctx) => {
-      const item = await store.getLibraryItem(ctx.userId, String(id || ''));
+    run: async ({ id, offset=0, revision }, ctx) => {
+      const item = await store.getLibraryItem(ctx.userId, String(id || ''),revision);
       if (!item) throw notFound('Library item');
       ctx.trace(entry('library', `library_read: ${item.title}`));
       const media = item.content.startsWith('data:');
-      return { ...libraryBrief(item), content: media ? undefined : item.content.slice(0, 60000), truncated: !media && item.content.length > 60000 };
+      let extracted=item.extractedText || (!media?item.content:'');let warnings=item.extractionWarnings || [];
+      if(media && !extracted){const doc=await extractDocument(Buffer.from(item.content.slice(item.content.indexOf(',')+1),'base64'),{name:item.title,mime:item.mime});if(doc){extracted=doc.text;warnings=doc.warnings;}}
+      const start=Math.max(0,Math.floor(Number(offset)||0));return {...libraryBrief(item),content:media && !extracted?undefined:extracted.slice(start,start+12000),nextOffset:start+12000<extracted.length?start+12000:null,truncated:start+12000<extracted.length,warnings};
     },
   },
   library_save: {
     name: 'library_save', type: 'function', approval: false,
     description: 'Save a text artifact (Markdown, text, HTML, CSV, JSON or SVG) to the owner Library as a file they can keep.',
-    run: async ({ title, format, content }, ctx) => {
+    run: async ({ id, revision, title, format, content }, ctx) => {
       const [mime, kind] = LIBRARY_FORMATS[format] || LIBRARY_FORMATS.md;
       const ext = Object.keys(LIBRARY_FORMATS).find((key) => LIBRARY_FORMATS[key][0] === mime);
       const name = /\.[a-z0-9]{2,5}$/i.test(String(title || '')) ? String(title) : `${String(title || 'Untitled').trim()}.${ext}`;
-      const item = await store.saveLibraryItem(ctx.userId, { title: name, mime, kind, content, source: 'agent', chatId: ctx.chatId || ctx.sessionId });
+      const item = await store.saveLibraryItem(ctx.userId, { id,revision,title: name, mime, kind, content, source: 'agent', chatId: ctx.chatId || ctx.sessionId });
       ctx.trace(entry('library', `library_save: ${item.title}`));
       return { ...libraryBrief(item), action: 'saved' };
     },
@@ -161,10 +170,11 @@ const PERSONAL_TOOL_SCHEMAS = [
   { name: 'goal_list', description: 'List the owner goals, steps and progress. Check before creating a similar goal.', parameters: { type: 'object', properties: { status: { type: 'string', enum: ['active', 'paused', 'done'] } } } },
   { name: 'goal_create', description: 'Create a goal on the owner Goals page when they decide what they want to work towards. Short specific title, a category, and 3-6 small concrete steps.', parameters: { type: 'object', properties: { title: { type: 'string', maxLength: 120 }, category: { type: 'string', enum: GOAL_CATEGORY_ENUM }, steps: STEP_LIST }, required: ['title', 'category'] } },
   { name: 'goal_update', description: 'Update a goal by id: rename, recategorize, set status (active, paused, done), or add, complete, reopen or remove steps.', parameters: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string', maxLength: 120 }, category: { type: 'string', enum: GOAL_CATEGORY_ENUM }, status: { type: 'string', enum: ['active', 'paused', 'done'] }, add_steps: STEP_LIST, complete_steps: STEP_REFS, reopen_steps: STEP_REFS, remove_steps: STEP_REFS }, required: ['id'] } },
+  {name:'goal_work',description:'Enable or pause bounded ongoing work toward a goal. Requires owner approval. Results and activity remain linked to the goal.',parameters:{type:'object',properties:{id:{type:'string'},enabled:{type:'boolean'},successCriteria:{type:'string',maxLength:1000},nextAction:{type:'string',maxLength:1000},intervalMinutes:{type:'integer',minimum:60},maxRuns:{type:'integer',minimum:1,maximum:30},maxRounds:{type:'integer',minimum:1,maximum:8}},required:['id','enabled']}},
   { name: 'goal_delete', description: 'Delete a goal by id only when the owner asks to remove it.', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'library_list', description: 'List the owner Library files (documents, web pages, images, video, audio). Filter by kind or name.', parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['document', 'web', 'image', 'video', 'audio', 'file'] }, query: { type: 'string', maxLength: 120 }, limit: { type: 'integer', minimum: 1, maximum: 100 } } } },
-  { name: 'library_read', description: 'Read one Library item by id. Returns text content for documents and pages; details only for media.', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
-  { name: 'library_save', description: 'Save a text artifact to the owner Library so they can keep, open and download it.', parameters: { type: 'object', properties: { title: { type: 'string', maxLength: 160 }, format: { type: 'string', enum: Object.keys(LIBRARY_FORMATS) }, content: { type: 'string', maxLength: 500000 } }, required: ['title', 'format', 'content'] } },
+  { name: 'library_read', description: 'Read one Library item by id. Returns text content for documents and pages; details only for media.', parameters: { type: 'object', properties: { id: { type: 'string' },offset:{type:'integer',minimum:0},revision:{type:'integer',minimum:1} }, required: ['id'] } },
+  { name: 'library_save', description: 'Save a downloadable artifact. To edit an existing file, use its id and latest revision from library_read; this preserves the same file and creates a recoverable version.', parameters: { type: 'object', properties: { id:{type:'string'},revision:{type:'integer',minimum:1},title: { type: 'string', maxLength: 160 }, format: { type: 'string', enum: Object.keys(LIBRARY_FORMATS) }, content: { type: 'string', maxLength: 500000 } }, required: ['title', 'format', 'content'] } },
   { name: 'library_rename', description: 'Rename one Library item by id.', parameters: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string', maxLength: 160 } }, required: ['id', 'title'] } },
   { name: 'library_delete', description: 'Permanently delete one Library item by id. REQUIRES owner approval.', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
 ];
@@ -173,12 +183,12 @@ const PERSONAL_TOOL_SCHEMAS = [
 const PERSONAL_KEYWORDS = {
   system: /(system file|identity|personality|agent instruction|working agreement|soul|user profile|my preference|prefer|always|from now on|remember|about me|profile|systemfil|identitet|personlighet|preferens)/,
   goals: /(goal|milestone|habit|resolution|objective|progress|\bmal(et|en)?\b|delmal|\bmaal\b|\bziel|objectif|\bmeta\b|\bmetas\b|objetivo)/,
-  library: /(library|artifact|artefakt|bibliotek|bibliothe|biblioteca|my (files|documents|images|photos|pictures|videos|uploads)|uploaded|saved (file|document|image|page)|rename|mina filer|mine filer|meine dateien|mes fichiers|mis archivos)/,
+  library: /(pdf|docx|xlsx|spreadsheet|document|library|artifact|artefakt|bibliotek|bibliothe|biblioteca|my (files|documents|images|photos|pictures|videos|uploads)|uploaded|saved (file|document|image|page)|rename|mina filer|mine filer|meine dateien|mes fichiers|mis archivos)/,
 };
 function pickPersonalTools(foldedTask) {
   const names = [];
   if (PERSONAL_KEYWORDS.system.test(foldedTask)) names.push('system_file_read','system_file_update');
-  if (PERSONAL_KEYWORDS.goals.test(foldedTask)) names.push('goal_list', 'goal_create', 'goal_update', 'goal_delete');
+  if (PERSONAL_KEYWORDS.goals.test(foldedTask)) names.push('goal_list', 'goal_create', 'goal_update', 'goal_delete','goal_work');
   if (PERSONAL_KEYWORDS.library.test(foldedTask)) names.push('library_list', 'library_read', 'library_save', 'library_rename', 'library_delete');
   return names;
 }

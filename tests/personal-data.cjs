@@ -82,7 +82,7 @@ const ctx = (userId) => ({ userId, sessionId: 'task1', chatId: 'chat1', trace: (
   assert.equal((await personal.listLibrary('u1', { query: 'TRIP' }))[0].id, saved.id);
   assert.deepEqual(await personal.listLibrary('u2'), [], 'library is account scoped');
   await assert.rejects(personal.saveLibraryItem('u1', { title: 'clip.mp4', mime: 'video/mp4', content: 'not data' }), { code: 'BAD_INPUT' });
-  await assert.rejects(personal.saveLibraryItem('u1', { title: 'big.png', content: 'data:image/png;base64,' + 'A'.repeat(9 * 1024 * 1024) }), { code: 'BAD_INPUT' });
+  await assert.rejects(personal.saveLibraryItem('u1', { title: 'big.png', content: 'data:image/png;base64,' + 'A'.repeat(15 * 1024 * 1024) }), { code: 'BAD_INPUT' });
   assert.equal((await PERSONAL_TOOLS.library_rename.run({ id: saved.id, title: 'Lisbon plan.md' }, ctx('u1'))).title, 'Lisbon plan.md');
   assert.equal(PERSONAL_TOOLS.library_delete.approval, true, 'deleting a file needs owner approval');
   assert.equal(await PERSONAL_TOOLS.library_delete.approvalDetail({ id: saved.id }, { userId: 'u1' }), 'Delete “Lisbon plan.md” from your Library');

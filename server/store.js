@@ -1,3 +1,4 @@
+const { createScopedPermissionStore } = require('./scoped-permissions');
 /* Lingon persistence.
    - If SUPABASE_URL + key are set, uses Supabase tables (see supabase/schema.sql).
    - Otherwise uses local JSON file server/data.json (gitignored) so the app is
@@ -971,6 +972,8 @@ async function beginAutomationRun(userId, subAgentId, chatId, dedupeKey, event) 
   const d = loadLocal();
   d.automationRuns = d.automationRuns || [];
   if (d.automationRuns.some((item) => item.dedupe_key === dedupeKey)) return null;
+  const linked=(d.subAgents || []).find(a=>(a.userId || a.user_id)===userId && a.id===subAgentId)?.trigger?.goalId;
+  if(linked){const goal=(d.goals || []).find(g=>g.id===linked && g.user_id===userId),runs=d.automationRuns.filter(r=>r.user_id===userId && r.sub_agent_id===subAgentId);if(!goal || goal.status!=='active' || !goal.work?.enabled || goal.work.agentId!==subAgentId || runs.length>=goal.work.maxRuns || runs.some(r=>['running','waiting_approval'].includes(r.status)))throw new Error('Goal work is paused, already running, or its budget is exhausted.');}
   d.automationRuns.unshift({ ...row, started_at: new Date().toISOString() });
   saveLocal(d);
   return { id: row.id };
@@ -1993,7 +1996,7 @@ module.exports = {
   getSubscription, setSubscription, findUserByStripeCustomer,
   logUsage, usageTotal, creditsUsed, billingTotals, creditsForUsageUsd, creditsForGift,
   logLegacyUsage, ...tokenWallet, getTokenWallet,
-  ...personalStore,
+  ...personalStore, ...createScopedPermissionStore({supa,loadLocal,saveLocal,ensureProfile,uid}),
   addGrant, grantsTotal, grantsTotalByReason, ensureFreeGrant, hasGrantRef,
   stripeEventSeen, markStripeEvent,
   createGift, findGiftByFrom, listPurchasedGifts, redeemGift, giftsCredit, requestUpgrade,

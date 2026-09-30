@@ -1,0 +1,9 @@
+[
+  {
+    "variant": "release",
+    "file": "artifacts/devday-release/build.json",
+    "pass": false,
+    "error": "advertised computer mode makes its reply\n\n1 !== 2\n",
+    "browserErrors": []
+  }
+]

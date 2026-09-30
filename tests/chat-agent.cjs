@@ -267,7 +267,7 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
 
   // A browser that fails to open changed nothing: the task carries on instead of stopping
   // for review, which is reserved for actions that may have acted before failing.
-  const viewRows=new Map(),viewAnswers=[{functionCalls:[{name:'browser_open',args:{url:'https://example.com/'}}]},{text:'The browser is unavailable, so I could not read the page.'}];
+  const viewRows=new Map(),viewAnswers=[{functionCalls:[{name:'browser_open',args:{url:'https://example.com/'}}]},{text:'The browser is unavailable, so I could not read the page.\n<task_coverage>'+JSON.stringify({requirements:[{id:'read',text:'Read the page',status:'blocked',gap:'Browser unavailable'}]})+'</task_coverage>'}];
   const viewRecords={...records,get:async(u,id)=>clone(viewRows.get(id)),team:async(u,id)=>[clone(viewRows.get(id))],
     create:async row=>{row.revision=1;viewRows.set(row.id,clone(row));return clone(row);},
     claim:async(u,id,token)=>{const r=viewRows.get(id);if(r.lease)return null;r.lease=token;r.revision++;return clone(r);},
@@ -279,7 +279,7 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
     protect:(_,s)=>s,logUsage:async()=>{},emitResultCard:()=>{},model:async()=>viewAnswers.shift() || {text:'Done.'}});
   const viewTask=await viewRuntime.create({userId:'a',chatId:'c',requestKey:'view',instructions:'Read example.com',history:[]});
   for(let i=0;i<4;i++) await viewRuntime.step('a',viewTask.id);
-  assert.equal(viewRows.get(viewTask.id).state.status,'completed');
+  assert.equal(viewRows.get(viewTask.id).state.status,'partial');
   assert.match(viewRows.get(viewTask.id).state.result,/could not read the page/);
 
   // The agent knows the owner's name: the one set in the app, else the account's.

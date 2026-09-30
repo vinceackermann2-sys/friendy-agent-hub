@@ -6,6 +6,7 @@
 */
 import { fetchAllowlisted } from './sandbox.js';
 import { entry } from './tracing.js';
+import { validatePage } from './page-validation.js';
 import { publicUrlProblem, readPage, readHtml, searchDuckDuckGo } from './public-web.js';
 import { searchProducts } from './product-search.js';
 import * as store from '../store.js';
@@ -698,10 +699,11 @@ const TOOLS = {
   },
   build_page: {
     name: 'build_page', type: 'function', approval: false,
-    description: 'Generate a single-file HTML page via the model (sandboxed preview).',
+    description: 'Publish a single-file HTML page (sandboxed preview). Implement the requested functionality without unnecessary extra modes. Before saving, trace every interaction, asynchronous callback, terminal state and reset path. Publication confirms storage, not runtime testing; never claim tests you did not run.',
     run: async ({ html }, ctx) => {
+      html=validatePage(html);
       ctx.trace(entry('code', `build_page: ${String(html || '').length} chars (sandboxed iframe)`));
-      return { html: String(html || '').slice(0, 60000) };
+      return { html };
     },
   },
   memory_write: {

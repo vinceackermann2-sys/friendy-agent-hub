@@ -19,18 +19,17 @@ const [{ createCoordinator }, { createTaskRuntime }, { TOOLS }, harness, docs, r
   edge('agents/product-docs.js'), edge('agents/runner.js'), edge('foundry.js'), edge('agents/permission-policy.js')]);
 
 const TZ = 'Europe/Stockholm';
-// Excuses instead of work: "I couldn't verify…", "only a snippet", "the full article isn't available".
-const HEDGE = /\b(couldn[’']?t|could not|can[’']?t|cannot|unable to|wasn[’']?t able|not able to)\b[^.]{0,80}\b(verify|confirm|access|open|load|retrieve|see the full|read the full)|\bfull (source|article|page|text|list)\b[^.]{0,40}\b(not|isn|wasn|unavailable)|\bonly (had|have|got|saw|found) (a |the )?(snippets?|summar(y|ies)|previews?)|\bsnippets?\b|\bI don[’']?t have (access|the full)/i;
+// Honest gaps are reported as partial; phrasing alone is never a quality failure.
 const count = (re, text) => (String(text).match(re) || []).length;
 const CASES = [
   { id: 'pm', prompt: 'What are the 5 best project management tools for a small agency, and what does each cost per user per month?',
-    check: (t) => (count(/(\$|€|£|kr|USD|EUR)\s?\d|\d+(\.\d+)?\s?(\$|€|kr|USD|EUR)/g, t) >= 4 ? '' : 'fewer than 4 prices') },
+    check: (t,r) => (count(/(\$|€|£|kr|USD|EUR)\s?\d|\d+(\.\d+)?\s?(\$|€|kr|USD|EUR)/g, t+' '+r.cardText) >= 5 ? '' : 'fewer than 5 prices') },
   { id: 'site', prompt: 'What does timewarpdev.com offer? Give me the main features.',
     check: (t) => (/timewarp/i.test(t) && t.length > 250 ? '' : 'thin site summary') },
   { id: 'news', prompt: 'What are the 3 biggest AI news stories from this week?',
     check: (t) => (count(/^\s*(\d+[.)]|[-*•])\s+/gm, t) >= 3 || /present/.test(t) ? '' : 'fewer than 3 stories') },
   { id: 'restaurants', prompt: 'Find 8 highly rated Italian restaurants on Södermalm in Stockholm, with their addresses.',
-    check: (t, r) => (count(/\d{1,3}[A-Z]?\b[^\n]{0,30}(gatan|vägen|gränd|torg|plan|backe|väg|gata)|(gatan|vägen|gränd|torg|backe|väg|gata)\s+\d/gi, t + ' ' + r.cardText) >= 6 ? '' : 'fewer than 6 addresses') },
+    check: (t, r) => (count(/\d{1,3}[A-Z]?\b[^\n]{0,30}(gatan|vägen|gränd|torg|plan|backe|väg|gata)|(gatan|vägen|gränd|torg|backe|väg|gata)\s+\d/gi, t + ' ' + r.cardText) >= 8 ? '' : 'fewer than 8 addresses') },
   { id: 'spotify', prompt: "What were Spotify's revenue and operating income in its most recent quarterly report?",
     check: (t) => (/(revenue|intäkt)/i.test(t) && count(/€\s?\d|\d[\d.,]*\s?(billion|million|bn|m)\b/gi, t) >= 2 ? '' : 'missing the figures') },
   { id: 'compare', prompt: 'Compare the pricing plans of Notion, ClickUp and Asana.',
@@ -113,8 +112,7 @@ async function runCase(c) {
   if (error) problems.push(`error: ${error}`);
   if (task && state.status !== 'completed') problems.push(`task ${state.status}`);
   if (!answer.trim()) problems.push('no answer');
-  const hedge = HEDGE.exec(answer);
-  if (hedge) problems.push(`excuse: “…${answer.slice(Math.max(0, hedge.index - 40), hedge.index + 90).replace(/\s+/g, ' ')}…”`);
+
   const p = c.check(answer, r); if (p) problems.push(p);
   r.pass = !problems.length; r.problems = problems;
   return r;
@@ -132,3 +130,5 @@ for (const r of results) {
   console.log(`     > ${r.answer.replace(/\s+/g, ' ').slice(0, 700)}`);
 }
 console.log(`passed ${results.filter((r) => r.pass).length}/${results.length}; avg input ${Math.round(results.reduce((a, r) => a + r.input, 0) / results.length)} tokens`);
+
+if(results.some(r=>!r.pass))process.exitCode=1;

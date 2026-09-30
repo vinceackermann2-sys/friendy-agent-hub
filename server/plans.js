@@ -71,6 +71,18 @@ const RATE_OUT = rate('MODEL_RATE_OUT_USD_PER_MILLION', 0.50);
 const FALLBACK_RATES = {
   in: 0.20 / 1e6, cached: 0.02 / 1e6, write: 0.25 / 1e6, out: 1.20 / 1e6,
 };
+function pricingFor(usage = {}) {
+  const model=String(usage.model || 'gpt-6-luna');
+  let table={};try{table=JSON.parse(process.env.MODEL_RATE_TABLE_JSON || '{}');}catch{throw new Error('MODEL_RATE_TABLE_JSON is invalid.');}
+  const configured=table[model] || (usage.deployment && table[usage.deployment]);
+  if(configured){
+    if(!['input','cached','cacheWrite','output'].every(k=>Number.isFinite(configured[k]) && configured[k]>=0) || !configured.version)throw new Error('Model pricing requires four non-negative per-million rates and a version.');
+    return {model,version:String(configured.version),rates:{in:configured.input/1e6,cached:configured.cached/1e6,write:configured.cacheWrite/1e6,out:configured.output/1e6}};
+  }
+  if(/^gpt-5\.6-luna(?:-|$)/.test(model))return {model,version:'existing-luna-config',rates:FALLBACK_RATES};
+  if(/^gpt-6-luna(?:-|$)/.test(model))return {model,version:process.env.MODEL_PRICE_VERSION || 'existing-luna-config',rates:{in:RATE_IN,cached:RATE_CACHED_IN,write:RATE_CACHE_WRITE,out:RATE_OUT}};
+  throw Object.assign(new Error('No explicit price configured for model '+model),{code:'MODEL_PRICE_MISSING'});
+}
 function costOf(usage) {
   if (!usage) return 0;
   const pin = Math.max(0, Number(usage.promptTokenCount ?? usage.promptTokens ?? usage.input_tokens ?? 0) || 0);
@@ -79,8 +91,7 @@ function costOf(usage) {
   const cached = Math.max(0, Math.min(pin, Number(details.cached_tokens ?? usage.cachedInputTokens ?? 0) || 0));
   const cacheWrite = Math.max(0, Math.min(pin - cached, Number(details.cache_write_tokens ?? usage.cacheWriteTokens ?? 0) || 0));
   const regular = Math.max(0, pin - cached - cacheWrite);
-  const rates = String(usage.model || '').startsWith('gpt-5.6-luna') ? FALLBACK_RATES
-    : { in: RATE_IN, cached: RATE_CACHED_IN, write: RATE_CACHE_WRITE, out: RATE_OUT };
+  const {rates}=pricingFor(usage);
   const long = pin > 272000;
   return (regular * rates.in + cached * rates.cached + cacheWrite * rates.write) * (long ? 2 : 1)
     + pout * rates.out * (long ? 1.5 : 1);
@@ -99,6 +110,6 @@ function creditsForGiftUsd(amountUsd) {
 module.exports = {
   PLANS, PRELANDER_OFFERS, CREDIT_PACKS, GIFT_AMOUNTS, creditPackFor,
   TOKEN_PACKS, TOKENS_PER_MILLION, tokenPackFor,
-  CREDIT_VALUE_USD, BILLING_MARKUP, CREDITS_PER_USD, costOf, creditsForCost, creditsForGiftUsd,
+  CREDIT_VALUE_USD, BILLING_MARKUP, CREDITS_PER_USD, pricingFor,costOf, creditsForCost, creditsForGiftUsd,
   REFERRAL_TOKENS_EACH,
 };

@@ -8,6 +8,7 @@
 const { fetchAllowlisted, readPage, readHtml, searchDuckDuckGo, publicUrlProblem } = require('./sandbox');
 const { searchProducts } = require('./product-search');
 const { entry } = require('./tracing');
+const { validatePage } = require('./page-validation');
 const composio = require('../composio');
 const connectors = require('../connectors');
 const store = require('../store');
@@ -729,10 +730,11 @@ const TOOLS = {
   },
   build_page: {
     name: 'build_page', type: 'function', approval: false,
-    description: 'Generate a single-file HTML page via the model (sandboxed preview).',
+    description: 'Publish a single-file HTML page (sandboxed preview). Implement the requested functionality without unnecessary extra modes. Before saving, trace every interaction, asynchronous callback, terminal state and reset path. Publication confirms storage, not runtime testing; never claim tests you did not run.',
     run: async ({ html }, ctx) => {
+      html=validatePage(html);
       ctx.trace(entry('code', `build_page: ${String(html || '').length} chars (sandboxed iframe)`));
-      return { html: String(html || '').slice(0, 60000) };
+      return { html };
     },
   },
   memory_write: {

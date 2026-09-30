@@ -1,0 +1,77 @@
+[
+  {
+    "delivered": "The main headline is **“Bring anything into existence.”** I couldn’t open it in the browser because the virtual computer was unavailable, but I verified the headline from the page text.\n\nThe browser action could not be completed. [{\"type\":\"browser\",\"surface\":\"canvas\",\"url\":\"https://timewarpdev.com\",\"note\":\"Opening browser…\",\"status\":\"running\"},{\"type\":\"browser\",\"surface\":\"canvas\",\"url\":\"https://timewarpdev.com\",\"note\":\"The browser could not start: the virtual computer is unavailable.\",\"status\":\"failed\"}]",
+    "coverage": {
+      "verified": false,
+      "gaps": [
+        "Computer actions could not be completed."
+      ]
+    },
+    "checkpoint": {
+      "version": 1,
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Open timewarpdev.com in the browser and tell me the main headline on the page.",
+          "status": "done",
+          "evidenceIds": [
+            "17530763-e474-44b5-8ebf-200510aa5629"
+          ],
+          "deliverable": "",
+          "gap": ""
+        }
+      ],
+      "findings": [],
+      "failedApproaches": [],
+      "nextActions": [],
+      "updatedAt": 1790771396433
+    },
+    "id": "browser-down",
+    "status": "partial",
+    "result": "The main headline is **“Bring anything into existence.”** I couldn’t open it in the browser because the virtual computer was unavailable, but I verified the headline from the page text.\n\nThe browser action could not be completed.",
+    "calls": [
+      "browser_open",
+      "web_search",
+      "web_search"
+    ],
+    "callArgs": [
+      {
+        "name": "browser_open",
+        "args": {
+          "url": "https://timewarpdev.com",
+          "activity": "Opening the requested page"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "query": "site:timewarpdev.com",
+          "activity": "Checking the page headline"
+        }
+      },
+      {
+        "name": "web_search",
+        "args": {
+          "urls": [
+            "https://timewarpdev.com/"
+          ],
+          "render": true,
+          "activity": "Reading the homepage headline"
+        }
+      }
+    ],
+    "denied": 0,
+    "notes": [],
+    "updates": [],
+    "ms": 12068,
+    "input": 38495,
+    "output": 629,
+    "rounds": 4,
+    "billedInput": 38495,
+    "billedOutput": 629,
+    "cachedInput": 0,
+    "costUsd": 0.0050869999999999995,
+    "pass": true,
+    "problems": []
+  }
+]

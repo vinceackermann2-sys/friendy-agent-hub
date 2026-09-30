@@ -1,3 +1,4 @@
+const { grantDecision } = require('../scoped-permissions');
 const store = require('../store');
 const connectors = require('../connectors');
 
@@ -8,6 +9,11 @@ const WRITE_VERB = /(?:^|_)(?:SEND|CREATE|UPDATE|DELETE|POST|WRITE|INSERT|REMOVE
 function hostOf(url){try {const u=new URL(String(url || ''));return /^https?:$/.test(u.protocol)?u.hostname.toLowerCase():'';}catch{return '';}}
 function connectorRead(slug){const value=String(slug || '').toUpperCase();return READ_PREFIX.test(value) && !WRITE_VERB.test(value);}
 async function permissionDecision(userId, name, args = {}, tool = {}) {
+  if(name==='composio_execute' && (!/^[A-Z0-9]+_[A-Z0-9_]+$/.test(String(args.tool || '').toUpperCase()) || String(args.tool).toLowerCase()==='composio_execute'))return {denied:true,required:false,detail:'Invalid connected-app action. Discover an exact action with composio_tools before executing it.'};
+  if(['composio_execute','connector_call','web_search','browser_open'].includes(name) && store.listPermissionGrants){
+    const scoped=grantDecision(await store.listPermissionGrants(userId),name,args);
+    if(scoped){const readOnly=name==='composio_execute'?connectorRead(String(args.tool || '')):name==='connector_call'?(await connectors.callKind(userId,args).catch(()=>'write'))==='read':true;return {...scoped,readOnly};}
+  }
   if(!WEB_TOOLS.has(name) && !CONNECTOR_TOOLS.has(name))return {required:!!tool.approval};
   const p=await store.getAgentPermissions(userId);
   if(CONNECTOR_TOOLS.has(name)){
@@ -16,14 +22,14 @@ async function permissionDecision(userId, name, args = {}, tool = {}) {
     // other method and tool asks, unknown tools included.
     if(name==='connector_call'){
       const kind=await connectors.callKind(userId,args).catch(()=>'write');
-      return {required:kind!=='read'};
+      return {required:kind!=='read',readOnly:kind==='read'};
     }
     if(name!=='composio_execute')return {required:false};
     const slug=String(args.tool || '').toUpperCase();
     const read=connectorRead(slug);
     // "Ask for some" reads the owner's apps when asked (mail, calendar, files) and asks before
     // every write. Reads reveal nothing outside the account; sends and changes stay gated.
-    return {required:!read,detail:`${read?'Read from':'Write to'} a connected app with ${slug}: ${JSON.stringify(args.args || {}).slice(0,1200)}`};
+    return {required:!read,readOnly:read,detail:`${read?'Read from':'Write to'} a connected app with ${slug}: ${JSON.stringify(args.args || {}).slice(0,1200)}`};
   }
   if(tool.approval)return {required:true};
   if(p.web==='always_ask')return {required:true,detail:`Web action: ${name} ${JSON.stringify(args).slice(0,1400)}`};

@@ -1,3 +1,4 @@
+const completed=require('./completion-fixture.cjs');
 const assert=require('node:assert/strict');
 const {createTaskRuntime}=require('../server/agents/task-runtime');
 const {createCoordinator}=require('../server/agents/conversation');
@@ -21,7 +22,7 @@ function setup() {
   const d={records,schemas:[],tools:{},azure:{getSandbox:async()=>({mode:'azure'}),acquireLease:async()=>calls.push('lease'),renewLease:async()=>{},releaseLease:async()=>calls.push('release')},
     memory:{list:async()=>[],rank:x=>x,finish:async()=>[]},buildSystem:async()=>'',checkPrompt:p=>{if(!p)throw Error('prompt required');},ensureCredit:async()=>{},
     protect:(_,s)=>s,logUsage:async()=>calls.push('usage'),emitResultCard:(emit,name,id,out)=>{if(out.html)emit({type:'artifact',artifact:{html:out.html}});},
-    model:async opts=>{calls.push({model:opts});const a=answers.shift();return typeof a==='function'?a(opts):a || {text:'Verified answer'};}};
+    model:async opts=>{calls.push({model:opts});const a=answers.shift();return completed(typeof a==='function'?await a(opts):a || {text:'Verified answer'});}};
   const runtime=createTaskRuntime(d);
   const create=()=>runtime.create({userId:'a',chatId:'chat',requestKey:`req${rows.size}`,instructions:'Research the topic',history:[{role:'user',text:'Original context'}]});
   return {runtime,d,rows,calls,answers,create,records};
@@ -188,7 +189,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   const longChange='Full constraint '.repeat(390);
   await budget.runtime.control('a',br.id,{action:'steer',version:2,instruction:longChange},'chat');
   await budget.runtime.step('a',br.id);
-  assert.ok(budget.calls.filter(c=>c.model).at(-1).model.history.map(h=>h.text).join('').includes(longChange.slice(-900)),'long steering instructions reach the model');
+  assert.ok(budget.calls.filter(c=>c.model).at(-1).model.prompt.includes(longChange.slice(-900)),'long steering instructions reach the model');
 
   const crashed=setup();crashed.d.tools.send=a.d.tools.send;const cid=await planned(crashed,'send');
   crashed.rows.get(cid).state.inflight={kind:'tool',name:'send'};
@@ -324,7 +325,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   const timed=setup();timed.d.clock=({timeZone})=>`Current time: worker clock in ${timeZone}.`;
   const timedRow=await timed.runtime.create({userId:'a',chatId:'chat',requestKey:'timed',instructions:'Plan next weekend',context:{timeZone:'Europe/Stockholm'},history:[]});
   await timed.runtime.step('a',timedRow.id);
-  assert.match(timed.calls.find(c=>c.model).model.prompt,/^Current time: worker clock in Europe\/Stockholm\.\n\nTeam snapshot/);
+  assert.match(timed.calls.find(c=>c.model).model.prompt,/Current time: worker clock in Europe\/Stockholm\.\n\nTeam snapshot/);
   // Tasks have no fixed round limit, and workers start with a small core.
   const schemaFor=name=>({name,description:name,parameters:{type:'object',properties:{}}});
   const runToEnd=async(h,id)=>{for(let i=0;i<60 && !['completed','partial','failed','needs_review','waiting_approval'].includes(h.rows.get(id).state.status);i++) await h.runtime.step('a',id);return h.rows.get(id).state;};
@@ -346,9 +347,9 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   const researchState=await runToEnd(research,(await research.create()).id);
   assert.equal(researchState.status,'completed');
   const finalCall=research.calls.filter(c=>c.model).at(-1).model;
-  assert.deepEqual(finalCall.tools.map(t=>t.name),['present'],'only the card tool is left');
-  assert.equal(finalCall.history.filter(h=>/tool web_search/.test(h.text)).length,14,'every research result is shown');
-  assert.match(finalCall.prompt,/researched enough/);
+  assert.ok(finalCall.tools.some(t=>t.name==='web_search'),'research tools remain until requirements are covered');
+  assert.ok(finalCall.history.some(h=>/Earlier results/.test(h.text)),'older evidence remains discoverable');
+  assert.doesNotMatch(finalCall.prompt,/researched enough/);
   const workerTools=long.calls.find(c=>c.model).model.tools.map(t=>t.name);
   assert.ok(workerTools.includes('web_search'),'read-only search remains available');
   assert.ok(workerTools.includes('composio_apps'),'workers can discover any connected app');

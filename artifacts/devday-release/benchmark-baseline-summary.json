@@ -1,0 +1,114 @@
+{
+  "samplesPerCase": 3,
+  "note": "Real Luna, synthetic inbox and build tool, real public web fallback. Configured provider cost estimates, not invoiced charges. Final after runs are staged, not simultaneous randomized trials.",
+  "rows": [
+    {
+      "case": "draft",
+      "before": {
+        "files": [
+          "final-before-draft-1.json",
+          "final-before-draft-2.json",
+          "final-before-draft-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 3542,
+        "meanCostUsd": 0.0003674283333333333,
+        "meanTokens": 5619.666666666667
+      },
+      "after": {
+        "files": [
+          "verified-after-draft-1.json",
+          "verified-after-draft-2.json",
+          "verified-after-draft-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 2536.3333333333335,
+        "meanCostUsd": 0.00041397166666666665,
+        "meanTokens": 5866.666666666667
+      },
+      "timeChangePercent": -28.39262187088274,
+      "costChangePercent": 12.667322879291664
+    },
+    {
+      "case": "build",
+      "before": {
+        "files": [
+          "final-before-build-1.json",
+          "final-before-build-2.json",
+          "final-before-build-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 19090.666666666668,
+        "meanCostUsd": 0.00238727,
+        "meanTokens": 14506.333333333334
+      },
+      "after": {
+        "files": [
+          "verified-after-build-1.json",
+          "verified-after-build-2.json",
+          "verified-after-build-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 19834,
+        "meanCostUsd": 0.002428725,
+        "meanTokens": 14984
+      },
+      "timeChangePercent": 3.8937002374633156,
+      "costChangePercent": 1.7365023646257027
+    },
+    {
+      "case": "gmail",
+      "before": {
+        "files": [
+          "final-before-gmail-1.json",
+          "final-before-gmail-2.json",
+          "final-before-gmail-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 28564,
+        "meanCostUsd": 0.003924641666666667,
+        "meanTokens": 74436.66666666667
+      },
+      "after": {
+        "files": [
+          "inventory-after-gmail-1.json",
+          "inventory-after-gmail-2.json",
+          "inventory-after-gmail-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 26561,
+        "meanCostUsd": 0.004610603333333334,
+        "meanTokens": 75193
+      },
+      "timeChangePercent": -7.012323204033044,
+      "costChangePercent": 17.47832604675161
+    },
+    {
+      "case": "browser-down",
+      "before": {
+        "files": [
+          "final-before-browser-down-1.json",
+          "final-before-browser-down-2.json",
+          "final-before-browser-down-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 10412.333333333334,
+        "meanCostUsd": 0.0022416483333333333,
+        "meanTokens": 32638
+      },
+      "after": {
+        "files": [
+          "verified-after-browser-down-1.json",
+          "verified-after-browser-down-2.json",
+          "verified-after-browser-down-3.json"
+        ],
+        "pass": 3,
+        "meanMs": 13036,
+        "meanCostUsd": 0.0027215766666666666,
+        "meanTokens": 30777
+      },
+      "timeChangePercent": 25.197682235810092,
+      "costChangePercent": 21.409617476425446
+    }
+  ]
+}

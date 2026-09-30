@@ -1,4 +1,5 @@
 const path = require('path');
+const { extractDocument } = require('./documents');
 
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -70,4 +71,25 @@ function prepareAttachments(input) {
   return { metadata, modelParts, prompt, accepted };
 }
 
-module.exports = { MAX_FILES, MAX_FILE_BYTES, MAX_INLINE_IMAGE_BYTES, MAX_TEXT_CHARS, cleanName, dataUrl, isTextFile, prepareAttachments };
+async function prepareDocumentAttachments(input, save) {
+  const originals=(Array.isArray(input)?input:[]).slice(0,MAX_FILES), prepared=[], details=[];
+  for(const raw of originals){
+    const name=cleanName(raw?.name),parsed=dataUrl(raw?.dataUrl);
+    if(!parsed || parsed.bytes.length>MAX_FILE_BYTES){prepared.push(raw);continue;}
+    let doc;
+    try{doc=await extractDocument(parsed.bytes,{name,mime:parsed.mime});}
+    catch{doc={text:'',warnings:['Document extraction failed. Contents have not been read; ask for a readable copy or use an available OCR tool.']};}
+    let libraryId;
+    if(save){const item=await save({title:name,mime:parsed.mime,content:isTextFile(name,parsed.mime)?parsed.bytes.toString('utf8'):raw.dataUrl,source:'upload',extractedText:doc?.text,extractionWarnings:doc?.warnings});libraryId=item.id;}
+    if(doc){
+      const text=doc.text+'\n'+doc.warnings.join('\n')+(libraryId?`\nFull extraction and original file: library_read id ${libraryId}. Page through all relevant content before claiming complete coverage.`:'');
+      prepared.push({name:name+'.txt',type:'text/plain',dataUrl:'data:text/plain;base64,'+Buffer.from(text).toString('base64')});
+    } else prepared.push(raw);
+    details.push({preparedName:doc?name+'.txt':name,name,type:parsed.mime,size:parsed.bytes.length,libraryId,extractionWarnings:doc?.warnings});
+  }
+  const result=prepareAttachments(prepared);
+  result.metadata=result.metadata.map(m=>{const at=details.findIndex(d=>d.preparedName===m.name);if(at<0)return m;const {preparedName,...detail}=details.splice(at,1)[0];return {...m,...detail};});
+  if(result.metadata.some(m=>m.libraryId))result.prompt+='\nAttached originals in Library: '+JSON.stringify(result.metadata)+'. Use library_read with offsets for content omitted from this preview.';
+  return result;
+}
+module.exports = { MAX_FILES, MAX_FILE_BYTES, MAX_INLINE_IMAGE_BYTES, MAX_TEXT_CHARS, cleanName, dataUrl, isTextFile, prepareAttachments, prepareDocumentAttachments };

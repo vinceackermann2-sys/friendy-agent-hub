@@ -6,7 +6,7 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
   const nowIso = () => new Date().toISOString();
   const fail = (message, code) => Object.assign(new Error(message), { code });
   const clean = (value, max) => String(value ?? '').replace(/\u0000/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
-  const local = () => { const d = loadLocal(); d.goals = d.goals || []; d.libraryItems = d.libraryItems || []; return d; };
+  const local = () => { const d = loadLocal(); d.goals = d.goals || []; d.libraryItems = d.libraryItems || []; d.libraryVersions = d.libraryVersions || []; return d; };
 
   // ---------------- goals ----------------
   const GOAL_CATEGORIES = ['health', 'family', 'finance', 'career', 'interests', 'productivity', 'other'];
@@ -27,7 +27,7 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
     return {
       id: row.id, title: row.title, category: goalCategory(row.category),
       status: GOAL_STATUSES.includes(row.status) ? row.status : 'active',
-      steps: cleanSteps(row.steps), chatId: row.source_chat_id || null,
+      work:row.work || {},activity:(row.activity || []).slice(-30),steps: cleanSteps(row.steps), chatId: row.source_chat_id || null,
       createdAt: Date.parse(row.created_at) || Date.now(), updatedAt: Date.parse(row.updated_at) || Date.now(),
     };
   }
@@ -84,7 +84,7 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
   // Applies a partial change. Step edits address steps by id or exact title so
   // the agent can say "complete 'Run 3x per week'" without looking ids up first.
   function applyGoalPatch(goal, patch) {
-    const next = { ...goal, steps: goal.steps.map((st) => ({ ...st })) };
+    const next = { ...goal, work:patch.work!==undefined?structuredClone(patch.work):goal.work,activity:patch.activity!==undefined?patch.activity.slice(-30):goal.activity, steps: goal.steps.map((st) => ({ ...st })) };
     if (patch.title !== undefined) { const title = clean(patch.title, 120); if (!title) throw fail('Goal title cannot be empty.', 'BAD_INPUT'); next.title = title; }
     if (patch.category !== undefined) next.category = goalCategory(patch.category);
     if (Array.isArray(patch.steps)) next.steps = cleanSteps(patch.steps);
@@ -108,7 +108,7 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
     const goal = await getGoal(userId, id);
     if (!goal) throw fail('Goal not found.', 'NOT_FOUND');
     const next = applyGoalPatch(goal, patch);
-    const row = { title: next.title, category: next.category, status: next.status, steps: next.steps, updated_at: nowIso() };
+    const row = { title: next.title, category: next.category, status: next.status, steps: next.steps, work:next.work,activity:next.activity,updated_at: nowIso() };
     const s = supa();
     if (s) {
       const { error } = await s.from('goals').update(row).eq('user_id', userId).eq('id', goal.id);
@@ -134,9 +134,9 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
   }
 
   // ---------------- library ----------------
-  // Text artifacts keep their body; media is stored as a data URL capped at 6 MB.
+  // Production artifacts use private object storage; local development keeps the body.
   const LIBRARY_KINDS = ['document', 'web', 'image', 'video', 'audio', 'file'];
-  const MAX_LIBRARY_ITEMS = 1000, MAX_TEXT = 500000, MAX_MEDIA_BYTES = 6 * 1024 * 1024;
+  const MAX_LIBRARY_ITEMS = 1000, MAX_TEXT = 500000, MAX_MEDIA_BYTES = 10 * 1024 * 1024;
   const EXT_KIND = { png:'image', jpg:'image', jpeg:'image', gif:'image', webp:'image', svg:'image', avif:'image',
     mp4:'video', mov:'video', webm:'video', m4v:'video', mp3:'audio', wav:'audio', ogg:'audio', m4a:'audio', flac:'audio',
     html:'web', htm:'web', md:'document', txt:'document', csv:'document', json:'document', pdf:'document', doc:'document', docx:'document', xlsx:'document', pptx:'document' };
@@ -154,12 +154,13 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
   const isDataUrl = (value) => /^data:[a-z0-9.+-]+\/[a-z0-9.+-]+(;[a-z0-9=.+-]+)*;base64,[A-Za-z0-9+/=]+$/i.test(value);
   function libraryView(row, withContent = false) {
     const view = { id: row.id, title: row.title, kind: row.kind, mime: row.mime || '', size: Number(row.size || 0),
+      revision:Number(row.revision || 1), extractedText:withContent ? row.extracted_text || '' : undefined, extractionWarnings:row.extraction_warnings || [],
       source: row.source === 'upload' ? 'upload' : 'agent', chatId: row.source_chat_id || null, preview: row.preview || '',
       createdAt: Date.parse(row.created_at) || Date.now(), updatedAt: Date.parse(row.updated_at) || Date.now() };
     if (withContent) view.content = row.content || '';
     return view;
   }
-  const LIST_COLUMNS = 'id,user_id,title,kind,mime,size,source,source_chat_id,preview,created_at,updated_at';
+  const LIST_COLUMNS = 'id,user_id,title,kind,mime,size,source,source_chat_id,preview,created_at,updated_at,revision';
   async function listLibrary(userId, options = {}) {
     const kind = LIBRARY_KINDS.includes(options.kind) ? options.kind : null;
     const q = clean(options.query, 120).toLowerCase();
@@ -179,15 +180,15 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
     }
     return rows.map((row) => libraryView(row));
   }
-  async function getLibraryItem(userId, id) {
+  async function getLibraryItem(userId, id, revision) {
     const s = supa();
     if (s) {
-      const { data, error } = await s.from('library_items').select('*').eq('user_id', userId).eq('id', String(id)).maybeSingle();
+      const { data, error } = await s.from(revision?'library_item_versions':'library_items').select('*').eq('user_id', userId).eq(revision?'item_id':'id', String(id)).match(revision?{revision:Number(revision)}:{}).maybeSingle();
       if (error) throw fail('Library item could not be loaded. Try again.', 'PERSISTENCE');
-      return data ? libraryView(data, true) : null;
+      return data ? hydrateLibrary(data) : null;
     }
-    const row = local().libraryItems.find((item) => item.user_id === userId && item.id === String(id));
-    return row ? libraryView(row, true) : null;
+    const row = (revision?local().libraryVersions:local().libraryItems).find(item=>item.user_id===userId && (item.item_id || item.id)===String(id) && (!revision || item.revision===Number(revision)));
+    return row ? hydrateLibrary(row) : null;
   }
   async function saveLibraryItem(userId, input = {}) {
     const title = clean(input.title, 160) || 'Untitled';
@@ -197,32 +198,61 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
     const kind = libraryKind(title, mime, input.kind);
     let size;
     if (dataUrl) {
-      size = Math.floor((content.length - content.indexOf(',') - 1) * 3 / 4);
-      if (size > MAX_MEDIA_BYTES) throw fail('Files in the Library can be up to 6 MB.', 'BAD_INPUT');
+      size = Buffer.from(content.slice(content.indexOf(',')+1),'base64').length;
+      if (size > MAX_MEDIA_BYTES) throw fail('Files in the Library can be up to 10 MB.', 'BAD_INPUT');
     } else {
       if (['image', 'video', 'audio'].includes(kind) && !/svg/.test(mime) && !/\.svg$/i.test(title)) throw fail('Media must be uploaded as file data.', 'BAD_INPUT');
       if (!content.trim()) throw fail('The Library item needs content.', 'BAD_INPUT');
       if (content.length > MAX_TEXT) throw fail('Text artifacts can be up to 500,000 characters.', 'BAD_INPUT');
       size = content.length;
     }
+    if(dataUrl && input.extractedText===undefined && (/\.(pdf|docx|xlsx)$/i.test(title) || /pdf|wordprocessingml|spreadsheetml/.test(mime))){
+      try{const {extractDocument}=await import('./agents/documents.js');const doc=await extractDocument(Buffer.from(content.slice(content.indexOf(',')+1),'base64'),{name:title,mime});if(doc)input={...input,extractedText:doc.text,extractionWarnings:doc.warnings};}
+      catch{input={...input,extractedText:'',extractionWarnings:['Extraction failed. This file has not been read.']};}
+    }
     const now = nowIso();
-    const row = { id: 'lib_' + uid(), user_id: userId, title, kind, mime: mime || null, size, content,
-      preview: dataUrl ? '' : content.slice(0, 600), source: input.source === 'upload' ? 'upload' : 'agent',
-      source_chat_id: clean(input.chatId, 80) || null, created_at: now, updated_at: now };
+    const old=input.id?await getLibraryItem(userId,input.id):null;
+    if(input.id && !old)throw fail('Library item not found.','NOT_FOUND');
+    if(old && Number(input.revision)!==old.revision)throw fail('File changed. Read the latest revision before editing.','CONFLICT');
+    const row = { id: old?.id || 'lib_' + uid(), user_id: userId, title, kind, mime: mime || null, size, content,
+      preview: dataUrl ? String(input.extractedText || '').slice(0,600) : content.slice(0,600),source:old?.source || (input.source==='upload'?'upload':'agent'),
+      source_chat_id: old?.chatId || clean(input.chatId, 80) || null, created_at: old?new Date(old.createdAt).toISOString():now, updated_at: now,revision:(old?.revision || 0)+1,extracted_text:String(input.extractedText || '').slice(0,240000),extraction_warnings:(input.extractionWarnings || []).slice(0,10) };
     const s = supa();
     if (s) {
       await ensureProfile(userId);
       const { count, error: countError } = await s.from('library_items').select('id', { count: 'exact', head: true }).eq('user_id', userId);
       if (countError) throw fail('Library item could not be saved. Try again.', 'PERSISTENCE');
-      if (Number(count || 0) >= MAX_LIBRARY_ITEMS) throw fail('Your Library is full. Delete a few items first.', 'BAD_INPUT');
-      const { error } = await s.from('library_items').insert(row);
-      if (error) throw fail('Library item could not be saved. Try again.', 'PERSISTENCE');
+      if (!old && Number(count || 0) >= MAX_LIBRARY_ITEMS) throw fail('Your Library is full. Delete a few items first.', 'BAD_INPUT');
+      await storeBlob(row);
+      const { data:saved,error } = old ? await s.from('library_items').update(row).eq('user_id',userId).eq('id',old.id).eq('revision',old.revision).select('id') : await s.from('library_items').insert(row).select('id');
+      if (error || (old && !saved?.length)) {if(row.storage_path)await s.storage.from('library-private').remove([row.storage_path]);throw fail(old && !error?'File changed. Read its latest revision.':'Library item could not be saved. Try again.',old && !error?'CONFLICT':'PERSISTENCE');}
       return libraryView(row);
     }
     const d = local();
-    if (d.libraryItems.filter((item) => item.user_id === userId).length >= MAX_LIBRARY_ITEMS) throw fail('Your Library is full. Delete a few items first.', 'BAD_INPUT');
-    d.libraryItems.unshift(row); saveLocal(d);
+    if (!old && d.libraryItems.filter((item) => item.user_id === userId).length >= MAX_LIBRARY_ITEMS) throw fail('Your Library is full. Delete a few items first.', 'BAD_INPUT');
+    if(old){const current=d.libraryItems.find(x=>x.id===old.id && x.user_id===userId);if(Number(current?.revision || 1)!==old.revision)throw fail('File changed.','CONFLICT');Object.assign(current,row);}else d.libraryItems.unshift(row);
+    d.libraryVersions.push({...row,item_id:row.id});saveLocal(d);
     return libraryView(row);
+  }
+  async function storeBlob(row) {
+    const s=supa();if(!s)return;
+    const binary=isDataUrl(row.content),raw=binary?Buffer.from(row.content.slice(row.content.indexOf(',')+1),'base64'):Buffer.from(row.content,'utf8');
+    row.storage_path=encodeURIComponent(row.user_id)+'/'+row.id+'/'+row.revision+'-'+uid();row.content_encoding=binary?'base64':'utf8';
+    const {error}=await s.storage.from('library-private').upload(row.storage_path,raw,{contentType:row.mime || 'application/octet-stream',upsert:false});
+    if(error)throw fail('File storage is unavailable. The file was not saved.','PERSISTENCE');
+    row.content='';
+  }
+  async function hydrateLibrary(row) {
+    const copy={...row,id:row.item_id || row.id};
+    if(row.storage_path){const {data,error}=await supa().storage.from('library-private').download(row.storage_path);if(error)throw fail('File could not be downloaded.','PERSISTENCE');const bytes=Buffer.from(await data.arrayBuffer());copy.content=row.content_encoding==='base64'?'data:'+(row.mime || 'application/octet-stream')+';base64,'+bytes.toString('base64'):bytes.toString('utf8');}
+    return libraryView(copy,true);
+  }
+  async function listLibraryVersions(userId,id){
+    if(!await getLibraryItem(userId,id))throw fail('Library item not found.','NOT_FOUND');
+    const s=supa();let rows;
+    if(s){const {data,error}=await s.from('library_item_versions').select('revision,title,size,created_at,updated_at').eq('user_id',userId).eq('item_id',id).order('revision',{ascending:false}).limit(100);if(error)throw fail('Versions could not be loaded.','PERSISTENCE');rows=data;}
+    else rows=local().libraryVersions.filter(x=>x.user_id===userId && x.item_id===id).sort((a,b)=>b.revision-a.revision);
+    return (rows || []).map(x=>({revision:x.revision,title:x.title,size:x.size,updatedAt:Date.parse(x.updated_at)}));
   }
   async function renameLibraryItem(userId, id, title) {
     const nextTitle = clean(title, 160);
@@ -244,17 +274,31 @@ function createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid })
     if (s) {
       const { data, error } = await s.from('library_items').delete().eq('user_id', userId).eq('id', String(id)).select('id');
       if (error) throw fail('Library item could not be deleted. Try again.', 'PERSISTENCE');
+      await sweepLibraryStorage(userId).catch(()=>{});
       return (data || []).length;
     }
     const d = local(), before = d.libraryItems.length;
     d.libraryItems = d.libraryItems.filter((item) => !(item.user_id === userId && item.id === String(id)));
+    d.libraryVersions=d.libraryVersions.filter(item=>!(item.user_id===userId && item.item_id===String(id)));
     saveLocal(d);
     return before - d.libraryItems.length;
   }
 
+  async function sweepLibraryStorage(userId){
+    const s=supa();if(!s)return {removed:0};let query=s.from('library_storage_gc').select('storage_path').limit(50);if(userId)query=query.eq('user_id',userId);
+    const {data,error}=await query;if(error)throw fail('Storage cleanup unavailable.','PERSISTENCE');const paths=(data || []).map(r=>r.storage_path);if(!paths.length)return {removed:0};
+    const removed=await s.storage.from('library-private').remove(paths);if(removed.error)return {removed:0,pending:paths.length};
+    const cleaned=await s.from('library_storage_gc').delete().in('storage_path',paths);if(cleaned.error)throw fail('Storage cleanup will retry.','PERSISTENCE');return {removed:paths.length};
+  }
+  async function recordGoalActivity(userId,id,entry,configurationId,nextAction,nextWake){
+    const s=supa();if(s){const {error}=await s.rpc('record_goal_activity',{p_user:userId,p_goal:id,p_entry:entry,p_configuration:configurationId || '',p_next_action:nextAction || '',p_next_wake:nextWake || null});if(error)throw fail('Goal activity could not be saved.','PERSISTENCE');return;}
+    const d=local(),g=d.goals.find(g=>g.user_id===userId && g.id===id);if(!g || (g.activity || []).some(a=>a.runId===entry.runId))return;
+    g.activity=[...(g.activity || []),entry].slice(-30);if(g.work?.configurationId===configurationId && g.status==='active' && g.work?.enabled)g.work={...g.work,nextAction:nextAction || g.work.nextAction,nextWakeAt:nextWake || null};g.updated_at=nowIso();saveLocal(d);
+  }
+  async function countGoalRuns(userId,agentId){const s=supa();if(s){const {count,error}=await s.from('automation_runs').select('id',{count:'exact',head:true}).eq('user_id',userId).eq('sub_agent_id',agentId);if(error)throw fail('Run budget could not be checked.','PERSISTENCE');return count || 0;}return (loadLocal().automationRuns || []).filter(r=>r.user_id===userId && r.sub_agent_id===agentId).length;}
   return {
-    GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal,
-    LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem,
+    recordGoalActivity,sweepLibraryStorage,countGoalRuns, GOAL_CATEGORIES, listGoals, getGoal, createGoal, updateGoal, deleteGoal,
+    LIBRARY_KINDS, listLibrary, getLibraryItem, saveLibraryItem, renameLibraryItem, deleteLibraryItem, listLibraryVersions,
   };
 }
 

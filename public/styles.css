@@ -3250,3 +3250,5 @@ button.wset-row{border:0;background:none;cursor:pointer;}button.wset-row:hover{b
 .wallet-verification-dialog img { width:100%; height:auto; display:block; cursor:pointer; }
 .wallet-verification-dialog form { display:flex; flex-wrap:wrap; gap:8px; align-items:end; padding:12px 0; }
 .wallet-verification-dialog label { flex:1; min-width:160px; }
+
+.goal-work{margin:14px 0;padding:12px;border:1px solid var(--line,#eee);border-radius:12px;font-size:13px}.goal-work summary{cursor:pointer;font-weight:600}.goal-work label{display:block;margin:10px 0}.goal-work .field{display:block;width:100%;margin-top:5px}.goal-work p{line-height:1.5;overflow-wrap:anywhere}.lib-viewer-body details{margin:14px 0}.lib-viewer-body textarea[data-library-edit]{width:100%;min-height:240px;font-family:monospace}.cv-fine:has([data-remember-action]){display:block;padding:12px 20px}

@@ -12,7 +12,7 @@
     "promo:snapshot": "node scripts/snapshot-promo.mjs",
     "start": "node server/index.js",
     "preview": "wrangler --cwd .output dev",
-    "test": "node tests/foundry-provider.cjs && node tests/agent-upkeep.cjs && node tests/agent-upkeep-sql.cjs && node tests/automations.cjs && node tests/automation-subscriptions.cjs && node tests/billing-totals.cjs && node tests/billing-checkout.cjs && node tests/billing-sql.cjs && node tests/token-wallet.cjs && node tests/token-wallet-sql.cjs && node tests/billing-cache.cjs && node tests/billing-presentation.cjs && node tests/request-coalescing.cjs && node tests/attachments.cjs && node tests/agent-context-sql.cjs && node tests/memory-workspace-sql.cjs && node tests/memory-behavior.cjs && node tests/personal-data.cjs && node tests/client-state.cjs && node tests/agent-harness.cjs && node tests/web-search.cjs && node tests/browser-use.cjs && node tests/browser-purchase.cjs && node tests/agent-confidentiality.cjs && node tests/shop-pay.cjs && node tests/product-search.cjs && node tests/shop-pay-sql.cjs && node tests/belna-wallet.cjs && node tests/belna-wallet-sql.cjs && node tests/wallet-purchases.cjs && node tests/shipping-addresses.cjs && node tests/agent-mail.cjs && node tests/personal-check-in.cjs && node tests/composio-security.cjs && node tests/custom-connectors.cjs && node tests/azure-vm.cjs && node tests/vm-start.cjs && node tests/vm-security.cjs && node tests/agent-safe-workflows.cjs && node tests/agent-safe-workflows-esm.mjs && node tests/browser-profile.cjs && node tests/browser-steps.cjs && node tests/azure-vm-esm.mjs && node tests/live-stream.cjs && node tests/vm-harness.cjs && node tests/vm-harness-latency.cjs && node tests/workspace-runtime.cjs && node tests/agent-performance.cjs && node tests/managed-stream.cjs && node tests/managed-progress-cards.cjs && node tests/chat-tasks.cjs && node tests/chat-agent.cjs && node tests/chat-tasks-sql.cjs && node tests/managed-tasks.cjs && node tests/canvas-cards.cjs && node tests/visual-cards.cjs && node tests/canvas-live.cjs && node tests/chat-task-teams.cjs && node tests/voice-transcribe.cjs",
+    "test": "node tests/foundry-provider.cjs && node tests/agent-upkeep.cjs && node tests/agent-upkeep-sql.cjs && node tests/automations.cjs && node tests/automation-subscriptions.cjs && node tests/billing-totals.cjs && node tests/billing-checkout.cjs && node tests/billing-sql.cjs && node tests/token-wallet.cjs && node tests/token-wallet-sql.cjs && node tests/billing-cache.cjs && node tests/billing-presentation.cjs && node tests/request-coalescing.cjs && node tests/attachments.cjs && node tests/agent-context-sql.cjs && node tests/memory-workspace-sql.cjs && node tests/memory-behavior.cjs && node tests/personal-data.cjs && node tests/client-state.cjs && node tests/agent-harness.cjs && node tests/web-search.cjs && node tests/browser-use.cjs && node tests/browser-purchase.cjs && node tests/agent-confidentiality.cjs && node tests/shop-pay.cjs && node tests/product-search.cjs && node tests/shop-pay-sql.cjs && node tests/belna-wallet.cjs && node tests/belna-wallet-sql.cjs && node tests/wallet-purchases.cjs && node tests/shipping-addresses.cjs && node tests/agent-mail.cjs && node tests/personal-check-in.cjs && node tests/composio-security.cjs && node tests/custom-connectors.cjs && node tests/azure-vm.cjs && node tests/vm-start.cjs && node tests/vm-security.cjs && node tests/agent-safe-workflows.cjs && node tests/agent-safe-workflows-esm.mjs && node tests/browser-profile.cjs && node tests/browser-steps.cjs && node tests/azure-vm-esm.mjs && node tests/live-stream.cjs && node tests/vm-harness.cjs && node tests/vm-harness-latency.cjs && node tests/workspace-runtime.cjs && node tests/agent-performance.cjs && node tests/managed-stream.cjs && node tests/managed-progress-cards.cjs && node tests/chat-tasks.cjs && node tests/chat-agent.cjs && node tests/chat-tasks-sql.cjs && node tests/managed-tasks.cjs && node tests/canvas-cards.cjs && node tests/visual-cards.cjs && node tests/canvas-live.cjs && node tests/chat-task-teams.cjs && node tests/voice-transcribe.cjs && node tests/devday-improvements.cjs && node tests/devday-sql.cjs",
     "test:foundry": "node tests/foundry-provider.cjs && node tests/voice-transcribe.cjs && node tests/vm-harness.cjs",
     "test:azure": "node tests/azure-vm.cjs && node tests/vm-security.cjs && node tests/agent-safe-workflows.cjs && node tests/agent-safe-workflows-esm.mjs && node tests/browser-profile.cjs && node tests/vm-harness.cjs",
     "test:onboarding": "node tests/onboarding.cjs",
@@ -26,7 +26,9 @@
     "test:agent-chat": "node tests/agent-chat.real.cjs",
     "test:memory": "node tests/memory-auto.js",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test:devday": "node tests/devday-improvements.cjs && node tests/devday-sql.cjs",
+    "test:devday-ui": "node tests/devday-ui.cjs"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -65,6 +67,7 @@
     "@tanstack/react-router": "1.170.18",
     "@tanstack/react-start": "1.168.32",
     "@tanstack/router-plugin": "1.168.23",
+    "acorn": "8.18.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -73,6 +76,8 @@
     "dotenv": "^16.4.5",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.19.2",
+    "fast-xml-parser": "5.11.2",
+    "fflate": "0.8.3",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.575.0",
     "puppeteer": "^25.11.0",
@@ -87,6 +92,7 @@
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",
     "tw-animate-css": "^1.3.4",
+    "unpdf": "1.8.1",
     "vaul": "^1.1.2",
     "vite-tsconfig-paths": "^6.0.2",
     "ws": "^8.21.3",

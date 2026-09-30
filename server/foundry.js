@@ -223,14 +223,15 @@ function inputItems(prompt, history, attachments, system = '', cache = false) {
   }
   for (const item of stableTail(history, 14, 20)) {
     if (!item?.text) continue;
-    const text = String(item.text).slice(0, 4000);
+    const limit=Math.min(12000,Math.max(1000,Number(item.maxChars) || 4000));
+    const text=String(item.text).slice(0,limit);
     if (item.role === 'agent') input.push({ type: 'message', role: 'assistant', content: text });
     // Breakpoints are only accepted on input_text blocks, i.e. user content.
     else if (cache) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text, prompt_cache_breakpoint: breakpoint() }] });
     else input.push({ type: 'message', role: 'user', content: text });
   }
   // Room for the message plus per-turn memory, task state and supplied context.
-  const content = [{ type: 'input_text', text: String(prompt || '').slice(0, 18000) }];
+  const content = [{ type: 'input_text', text: String(prompt || '').slice(0, 96000) }];
   for (const item of Array.isArray(attachments) ? attachments.slice(0, 4) : []) {
     const mime = String(item?.inlineData?.mimeType || '').toLowerCase();
     const data = String(item?.inlineData?.data || '');
@@ -317,7 +318,7 @@ function extractResponse(data, modelName, { allowEmptyText = false, body = null 
   return {
     text,
     functionCalls,
-    usage: { ...usage, model: data?.model || modelName },
+    usage: { ...usage,model:data?.model || modelName,deployment:modelName,provider:'azure-foundry',region:process.env.AZURE_FOUNDRY_REGION || null,serviceTier:data?.service_tier || null },
     model: data?.model || modelName,
     raw: data,
   };

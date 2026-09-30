@@ -1,3 +1,4 @@
+const completed=require('./completion-fixture.cjs');
 const assert=require('node:assert/strict');
 const {approvalCard,resultCard,presentArgs,questionArgs,cardFromMarkdown}=require('../server/agents/cards');
 const {createTaskRuntime}=require('../server/agents/task-runtime');
@@ -129,7 +130,7 @@ const clone=x=>x==null?x:structuredClone(x);
   let seen;
   const runtime=createTaskRuntime({records,schemas:TOOL_SCHEMAS,tools:{ask_user:{...TOOLS.ask_user,run:async(args,ctx)=>{seen=ctx.answer;return TOOLS.ask_user.run(args,{...ctx,trace:()=>{}});}}},
     azure:{getSandbox:async()=>({mode:'local'})},memory:{list:async()=>[],rank:x=>x,finish:async()=>[]},buildSystem:async()=>'',checkPrompt:()=>{},ensureCredit:async()=>{},
-    protect:(_,s)=>s,logUsage:async()=>{},emitResultCard:()=>{},model:async()=>answers.shift() || {text:'done'}});
+    protect:(_,s)=>s,logUsage:async()=>{},emitResultCard:()=>{},model:async()=>completed(answers.shift() || {text:'done'})});
   const task=await runtime.create({userId:'a',chatId:'chat',requestKey:'k',instructions:'Pick a helmet',history:[]});
   for(let i=0;i<4 && rows.get(task.id).state.status!=='waiting_approval';i++) await runtime.step('a',task.id);
   const waiting=rows.get(task.id).state;
