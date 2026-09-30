@@ -49,7 +49,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   for (const [status,message,expected] of [[400,'No Rain account found',0],[400,'No Rain account found. Please apply for a card first.',0],[400,'Invalid account',1],[401,'No Rain account found',1]]) {
     const pendingWallet=createBelnaWallet({env:{WHOP_COMPANY_API_KEY:'secret',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp'},
       store:{supaConfigured:()=>true,listPendingWalletConnections:async()=>[{account_id:'biz_pending'}],saveBelnaWallet:async()=>{}},
-      fetchImpl:async(url,init)=>{assert.equal(init.redirect,'manual');assert.ok(url.includes('/cards?'));return {ok:false,status,json:async()=>({error:{message}})};}});
+      fetchImpl:async(url,init)=>{assert.equal(init.redirect,'manual');if(url.includes('/accounts/'))return {ok:true,json:async()=>({parent_account:{id:'biz_timewarp'}})};assert.ok(url.includes('/cards?'));return {ok:false,status,json:async()=>({error:{message}})};}});
     assert.equal((await pendingWallet.reconcileConnectionCards()).unresolved,expected,'only the precise pre-issuer no-account response is an empty card list');
   }
   const owner={id:'u1',email:'a@example.com',email_confirmed_at:'2026-09-01T00:00:00Z'};

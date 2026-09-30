@@ -2,8 +2,19 @@
 // Owner/model APIs never return card credentials. The isolated purchase service
 // can use them transiently; they are never persisted or given to the model.
 import {createWalletPurchases } from './wallet-purchases.js';
-import {createPersonalWallet } from './personal-wallet.js';
 function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), env = process.env, secureCheckout, randomId = () => crypto.randomUUID() }) {
+  env = {...env};
+  let configuration;
+  async function loadConfiguration() {
+    if (!configuration) configuration = (async () => {
+      const saved = await store.getConnectedWalletConfiguration?.();
+      if (!saved) return;
+      for (const name of ['WHOP_COMPANY_API_KEY','WHOP_PLATFORM_ACCOUNT_ID','WHOP_SANDBOX','WHOP_CARD_APPLICATIONS_ENABLED','WHOP_CARD_ISSUING_ENABLED','WHOP_WITHDRAWALS_ENABLED']) {
+        if (typeof saved[name] === 'string') env[name] = saved[name].trim();
+      }
+    })();
+    try { await configuration; } catch (error) { configuration = null; throw error; }
+  }
   const setting = (name) => String(env[name] || '').trim();
   const environment = () => setting('WHOP_SANDBOX') === 'false' ? 'live' : 'sandbox';
   const platformAccountId = () => setting('WHOP_PLATFORM_ACCOUNT_ID');
@@ -16,6 +27,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     (typeof secureCheckout.available!=='function' || await secureCheckout.available());
   const fail = (message, code = 'BAD_INPUT') => Object.assign(new Error(message), { code });
   async function request(path, { method='GET', body, key } = {}) {
+    await loadConfiguration();
     if (!configured()) throw fail('Belna Wallet is not available yet.', 'NOT_SET_UP');
     const base = environment() === 'sandbox' ? 'https://sandbox-api.whop.com/api/v1' : 'https://api.whop.com/api/v1';
     let response;
@@ -58,6 +70,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     return data;
   }
   async function record(userId) {
+    await loadConfiguration();
     if (typeof userId !== 'string' || !userId) throw fail('Sign in to use your wallet.');
     const row = await store.getBelnaWallet(userId);
     // The server key manages children of the platform account. It is never
@@ -90,13 +103,14 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     return ['approved','pending','manual_review','denied','locked','canceled','needs_verification','needs_information'].includes(status) ? status : null;
   }
   async function snapshot(userId) {
+    await loadConfiguration();
     if (!configured()) return { wallet:{ configured:false, status:'unavailable', cardProgramAvailable:false, card:null, balance:null }, transactions:[] };
     const row = await record(userId);
     if (!row?.account_id) {
       // Check the live server key before offering setup. Merely having an
       // environment value is not evidence that the provider accepts it.
       await checkProviderConnection();
-      return { wallet:{ configured:true, status:row ? 'setup_pending' : 'not_created', cardProgramAvailable:cardProgramAvailable(), card:null, balance:null }, transactions:[] };
+      return { wallet:{ kind:'connected', configured:true, status:row ? 'setup_pending' : 'not_created', cardProgramAvailable:cardProgramAvailable(), card:null, balance:null }, transactions:[] };
     }
     const account = await request('/accounts/' + encodeURIComponent(row.account_id));
     if (account.parent_account?.id !== platformAccountId()) throw fail('Your wallet account does not belong to this Belna connection.', 'PROVIDER');
@@ -132,7 +146,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
       const status=/pending|processing|review|requested|authorized/.test(rawStatus)?'pending':/failed|denied/.test(rawStatus)?'failed':/cancel|void|revers/.test(rawStatus)?'canceled':x.available_at && Date.parse(x.available_at)>Date.now()?'pending':'recorded';
       return {title,amount:Number(x.usd_amount),currency:'USD',status,at:x.posted_at || null};
     });
-    return { activity, wallet:{ configured:true, status, cardApplicationStatus:application, verificationStatus:verification.status, identityVerified:verification.status === 'approved', withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance:balanceView(account), dailyCardLimitUsd:Number(row.daily_card_limit),
+    return { activity, wallet:{ kind:'connected', configured:true, status, cardApplicationStatus:application, verificationStatus:verification.status, identityVerified:verification.status === 'approved', withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance:balanceView(account), dailyCardLimitUsd:Number(row.daily_card_limit),
       // Pausing works before a purchase card exists, so it is reported from the owner's record.
       paused:row.card_status==='frozen', country:/^[A-Z]{2}$/.test(row.country || '') ? row.country : null,
       // A secure merchant payment bridge must be integrated before agent card spending is enabled.
@@ -142,6 +156,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
       transactions:(transactions.data || []).slice(0,5).map(x => ({ title:String(x.merchant_name || 'Card payment'), amount:Number.isFinite(Number(x.usd_amount)) ? Number(x.usd_amount) : null, currency:'USD', status:String(x.status || 'pending'), at:x.created_at || null })) };
   }
   async function setup(user, { country, dailyLimitUsd=50 } = {}) {
+    await loadConfiguration();
     country = String(country || '').trim().toUpperCase();
     if (!/^[A-Z]{2}$/.test(country)) throw fail('Enter your two-letter country code, for example SE or US.');
     if (!user?.id || !user.email) throw fail('Sign in with an email address to create your wallet.');
@@ -150,7 +165,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     const limit = validateLimit(dailyLimitUsd);
     if (!configured()) throw fail('Belna Wallet is not available yet.', 'NOT_SET_UP');
     let row = await record(user.id);
-    if (!row) row = await store.claimBelnaWallet(user.id, { country, owner_email:user.email.toLowerCase(), environment:environment(), setup_key:randomId(), card_request_key:randomId(), daily_card_limit:limit });
+    if (!row) row = await store.claimBelnaWallet(user.id, { country, owner_email:user.email.toLowerCase(), environment:environment(), setup_key:randomId(), card_request_key:randomId(), daily_card_limit:limit, wallet_kind:'business' });
     if (!row.account_id) {
       const account = await request('/accounts', { method:'POST', key:row.setup_key,
         body:{ email:user.email, country:row.country, title:'Belna Wallet ' + row.setup_key.slice(0,8), send_customer_emails:false, metadata:{ external_id:user.id } } });
@@ -170,6 +185,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     return row;
   }
   async function checkProviderConnection() {
+    await loadConfiguration();
     const account = await request('/accounts/' + encodeURIComponent(platformAccountId()));
     if (account.id !== platformAccountId()) throw fail('Your wallet provider connection could not be confirmed.', 'PROVIDER');
     return {ok:true};
@@ -266,11 +282,14 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     return status;
   }
   async function reconcileConnectionCards() {
+    await loadConfiguration();
     if (!store.listPendingWalletConnections) return { checked:0, unresolved:0 };
     const pending=await store.listPendingWalletConnections(environment());
     let unresolved=0;
     for (const row of pending) {
       try {
+        const account=await request('/accounts/'+encodeURIComponent(row.account_id));
+        if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
         const cards=await request('/cards?account_id='+encodeURIComponent(row.account_id));
         const matching=(cards.data || []).filter(card=>card.name==='Belna card connection' && card.user_id===row.owner_provider_id);
         for (const card of matching) {
@@ -444,14 +463,20 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     preferences,savePreferences,
     recordExistingPurchase,existingHistory,
     addresses,saveAddress,deleteAddress,
-    executePurchase:async (...args)=>{if(!await checkoutAvailable())throw fail('Secure card checkout is not available yet. Use an existing saved card.','NOT_SET_UP');return purchases.execute(...args);}, checkProviderConnection, reconcilePurchases:purchases.reconcile, reconcilePurchaseCard:purchases.reconcileCard, reconcileConnectionCards };
+    connectionInfo:async()=>{await loadConfiguration();return {platformAccountId:platformAccountId(),environment:environment()};},
+    executePurchase:async (...args)=>{await loadConfiguration();if(!await checkoutAvailable())throw fail('Secure card checkout is not available yet. Use an existing saved card.','NOT_SET_UP');return purchases.execute(...args);}, checkProviderConnection,
+    reconcilePurchases:async()=>{await loadConfiguration();return purchases.reconcile();},reconcilePurchaseCard:purchases.reconcileCard,reconcileConnectionCards };
 }
 function createBelnaWallet(options){
-  const legacy=createBusinessWallet(options);
-  const archive=createBusinessWallet({...options,store:{...options.store,getBelnaWallet:async userId=>await options.store.getLegacyBelnaWallet?.(userId) || await options.store.getBelnaWallet(userId),saveBelnaWallet:async()=>{throw Object.assign(new Error('Use your personal wallet for new cards.'),{code:'BAD_INPUT'});}}});
-  const personal=createPersonalWallet({...options,legacy});
-  return {...personal,legacySnapshot:archive.legacySnapshot,legacyWithdrawalSession:archive.withdrawalSession,
-    reconcilePurchaseCard:(ownerId,cardId)=>ownerId?.startsWith('user_')?personal.reconcilePersonalPurchaseCard(ownerId,cardId):legacy.reconcilePurchaseCard(ownerId,cardId),
-    reconcilePurchases:async()=>{const [a,b]=await Promise.all([legacy.reconcilePurchases(),personal.reconcilePersonalPurchases()]);return {checked:a.checked+b.checked,unresolved:a.unresolved+b.unresolved};}};
+  const connectedStore={...options.store,
+    getBelnaWallet:async userId=>{const row=await options.store.getBelnaWallet(userId);return row?.wallet_kind==='personal'?null:row;},
+    ...(options.store.listPendingWalletConnections?{listPendingWalletConnections:async environment=>(await options.store.listPendingWalletConnections(environment)).filter(row=>/^biz_/.test(row.account_id))}:{}),
+    claimBelnaWallet:options.store.claimConnectedBelnaWallet || options.store.claimBelnaWallet};
+  const wallet=createBusinessWallet({...options,store:connectedStore});
+  const retired=async()=>{throw Object.assign(new Error('Create your Belna Wallet connected account in Wallet settings. Personal Whop sign-in cannot issue cards.'),{code:'NOT_SET_UP'});};
+  return {...wallet,finishConnect:retired,paymentRequest:retired,
+    legacyWithdrawalSession:retired,
+    snapshot:async userId=>{const result=await wallet.snapshot(userId);const previous=await options.store.getBelnaWallet(userId);if(previous?.wallet_kind==='personal')result.wallet.previousPersonalWallet=true;return result;},
+    reconcilePurchaseCard:async(ownerId,cardId)=>{if(ownerId?.startsWith('user_'))return;return wallet.reconcilePurchaseCard(ownerId,cardId);}};
 }
 export { createBelnaWallet, createBusinessWallet };

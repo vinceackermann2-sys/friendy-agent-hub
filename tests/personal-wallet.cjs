@@ -1,5 +1,7 @@
 const assert=require('node:assert/strict');
-const {createBelnaWallet}=require('../server/belna-wallet');
+const {createBusinessWallet}=require('../server/belna-wallet');
+const {createPersonalWallet}=require('../server/personal-wallet');
+const createBelnaWallet=options=>{const legacy=createBusinessWallet(options),personal=createPersonalWallet({...options,legacy});return {...personal,reconcilePurchaseCard:(id,card)=>personal.reconcilePersonalPurchaseCard(id,card),reconcilePurchases:personal.reconcilePersonalPurchases};};
 const {createWhopUserAuth}=require('../server/whop-user-auth');
 (async()=>{
   const env={WHOP_OAUTH_CLIENT_ID:'app_test',WHOP_OAUTH_REDIRECT_URI:'https://belna.se/app',WHOP_OAUTH_SCOPES:'openid profile user:balance:read payout:account:read payout:account:update payout:transfer_funds identity:write',WHOP_SANDBOX:'false',ENCRYPTION_KEY:'test-encryption-key-only-not-a-production-key',WHOP_PERSONAL_CARD_APPLICATIONS_ENABLED:'true',WHOP_WITHDRAWALS_ENABLED:'true',WHOP_COMPANY_API_KEY:'company-must-not-be-used',WHOP_PLATFORM_ACCOUNT_ID:'biz_platform'};

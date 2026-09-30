@@ -14,6 +14,13 @@ function createBelnaWalletStore({ supa, ensureProfile }) {
   }
   async function getLegacyBelnaWallet(userId){return checked(await db().from('belna_wallet_legacy_accounts').select('wallet').eq('user_id',userId).maybeSingle())?.wallet || null;}
   async function getPersonalWalletConfiguration(){const value=checked(await db().rpc('get_server_secret',{p_name:'whop_personal_wallet_config'}));if(!value)return null;try{return JSON.parse(value);}catch{throw Object.assign(new Error('Personal wallet configuration needs attention.'),{code:'NOT_SET_UP'});}}
+  async function getConnectedWalletConfiguration(){const value=checked(await db().rpc('get_server_secret',{p_name:'whop_connected_wallet_config'}));if(!value)return null;try{return JSON.parse(value);}catch{throw Object.assign(new Error('Wallet configuration needs attention.'),{code:'NOT_SET_UP'});}}
+  async function claimConnectedBelnaWallet(userId,input){
+    await ensureProfile(userId);
+    const result=await db().rpc('prepare_connected_whop_wallet',{p_user_id:userId,p_wallet:input});
+    if(result.error)throw Object.assign(new Error('A previous wallet payment is still pending. Check its activity before creating your connected wallet.'),{code:'WALLET_STORE'});
+    return result.data;
+  }
   async function claimBelnaWallet(userId, input) {
     await ensureProfile(userId);
     checked(await db().from('belna_wallets').upsert({ user_id:userId, ...input }, { onConflict:'user_id', ignoreDuplicates:true }));
@@ -137,7 +144,7 @@ function createBelnaWalletStore({ supa, ensureProfile }) {
     checked(await db().rpc('delete_shipping_address',{p_user_id:userId,p_id:id}));
     return listShippingAddresses(userId);
   }
-  return { getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest,
+  return { getConnectedWalletConfiguration,claimConnectedBelnaWallet,getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest,
     getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers,
     listShippingAddresses,saveShippingAddress,deleteShippingAddress,
     getWalletPreferences,saveWalletPreferences,

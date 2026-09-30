@@ -1,3 +1,26 @@
+# Connected wallet correction — 30 September 2026
+
+Belna Wallet now uses connected Whop sub-accounts (`biz_`), with each card assigned
+to the verified human owner (`user_`). New setup does not use personal OAuth.
+
+The service-only `whop_connected_wallet_config` Vault secret supplies the company
+API key, platform account ID, environment and feature switches to both the app
+and recovery worker. The worker no longer hardcodes a previous platform account.
+Never expose these settings through `VITE_` variables.
+
+The owner creates the wallet in Wallet settings. `prepare_connected_whop_wallet`
+archives their previous personal mapping, retains OAuth tokens and the older
+business archive, and rejects switching while a money movement remains pending.
+Provider funds are never transferred by the migration. The previous personal
+balance remains accessible on Whop. Identity and issuer approval remain separate.
+
+Local checks cover the connected adapter, configuration, owner isolation,
+repeated setup, pending-payment guards, database permissions, card controls and
+purchase recovery. Live credentials, webhook configuration and issuer approval
+must be verified separately; local checks do not prove card issuance.
+
+The sections below retain the history of the previous integrations.
+
 # Belna Wallet production setup
 
 Belna connects each human owner's personal Whop `user_` wallet through public

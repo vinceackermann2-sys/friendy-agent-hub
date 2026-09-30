@@ -17,7 +17,7 @@
     "test:azure": "node tests/azure-vm.cjs && node tests/vm-security.cjs && node tests/agent-safe-workflows.cjs && node tests/agent-safe-workflows-esm.mjs && node tests/browser-profile.cjs && node tests/vm-harness.cjs",
     "test:onboarding": "node tests/onboarding.cjs",
     "test:ui": "node scripts/ui-audit.mjs && node scripts/ui-interactions.mjs && node tests/browser-settings-ui.cjs && node tests/vault-settings-ui.cjs && node tests/connectors-ui.cjs && node tests/credential-request-ui.cjs",
-    "test:wallet": "node tests/personal-wallet.cjs && node tests/personal-wallet-sql.cjs && node tests/belna-wallet.cjs && node tests/belna-wallet-sql.cjs && node tests/wallet-purchases.cjs && node tests/wallet-recovery-health.cjs && node scripts/bundle-wallet-recovery.mjs && node tests/wallet-recovery-worker.cjs && node tests/whop-webhook.cjs && node tests/wallet-webhook-queue.cjs && node tests/shipping-addresses.cjs && node tests/wallet-preferences.cjs",
+    "test:wallet": "node tests/connected-wallet.cjs && node tests/personal-wallet.cjs && node tests/personal-wallet-sql.cjs && node tests/belna-wallet.cjs && node tests/belna-wallet-sql.cjs && node tests/wallet-purchases.cjs && node tests/wallet-recovery-health.cjs && node scripts/bundle-wallet-recovery.mjs && node tests/wallet-recovery-worker.cjs && node tests/whop-webhook.cjs && node tests/wallet-webhook-queue.cjs && node tests/shipping-addresses.cjs && node tests/wallet-preferences.cjs",
     "test:wallet-ui": "node tests/wallet-ui.cjs && node tests/personal-wallet-ui.cjs",
     "test:permissions": "node tests/agent-permissions.cjs",
     "azure:status": "node scripts/azure-provision.mjs",

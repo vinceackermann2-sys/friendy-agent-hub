@@ -19,19 +19,15 @@ Deno.serve(async req => {
   const {data:secret,error:secretError}=await db.rpc('get_server_secret',{p_name:'wallet_recovery_secret'});
   if(secretError || typeof secret!=='string' || secret.length<32)return new Response('Wallet recovery is not configured',{status:503});
   if(!(await equal(req.headers.get('authorization') || '','Bearer '+secret)))return new Response('Unauthorized',{status:401});
-  const whopKey=Deno.env.get('WHOP_COMPANY_API_KEY');
-  if (!whopKey) return new Response('Wallet recovery is not configured',{status:503});
   const store={ ...createBelnaWalletStore({supa:()=>db,ensureProfile:async()=>{}}),supaConfigured:()=>true };
-  // This deployed worker belongs to the user's TimeWarp production account.
-  // Cards are live-only; the app's separate sandbox configuration is not used.
-  const wallet=createBelnaWallet({store,env:{ WHOP_COMPANY_API_KEY:whopKey,
-    WHOP_OAUTH_CLIENT_ID:Deno.env.get('WHOP_OAUTH_CLIENT_ID'),WHOP_OAUTH_SCOPES:Deno.env.get('WHOP_OAUTH_SCOPES'),
-    WHOP_OAUTH_REDIRECT_URI:Deno.env.get('WHOP_OAUTH_REDIRECT_URI'),ENCRYPTION_KEY:Deno.env.get('ENCRYPTION_KEY'),
-    WHOP_SANDBOX:'false',WHOP_PLATFORM_ACCOUNT_ID:'biz_CpeJbprflNa2ju' }});
+  // App and worker share the service-only connected-wallet configuration.
+  const wallet=createBelnaWallet({store,env:{ WHOP_COMPANY_API_KEY:Deno.env.get('WHOP_COMPANY_API_KEY'),
+    WHOP_SANDBOX:'false',WHOP_PLATFORM_ACCOUNT_ID:Deno.env.get('WHOP_PLATFORM_ACCOUNT_ID') }});
   let stage='provider';
   async function recordHealth(ok:boolean, providerStatus?:number) {
+    const connection=await wallet.connectionInfo();
     const {error}=await db.rpc('put_server_secret',{p_name:'wallet_recovery_health',
-      p_secret:JSON.stringify({ok,personalWallets:wallet.configured(),checkedAt:new Date().toISOString(),environment:'live',platformAccountId:'biz_CpeJbprflNa2ju',
+      p_secret:JSON.stringify({ok,checkedAt:new Date().toISOString(),...connection,
         stage, ...(Number.isInteger(providerStatus) ? {providerStatus} : {})})});
     if(error)throw error;
   }

@@ -19,7 +19,7 @@ const ts=require('typescript');
     }
     throw Error('Unexpected RPC');
   }};
-  const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'server-only',WHOP_COMPANY_API_KEY:'server-only'};
+  const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'server-only',WHOP_COMPANY_API_KEY:'server-only',WHOP_PLATFORM_ACCOUNT_ID:'biz_CpeJbprflNa2ju'};
   vm.runInNewContext(compiled.outputText,{Deno:{env:{get:name=>env[name]},serve:fn=>handler=fn},
     createClient:()=>db,crypto:globalThis.crypto,TextEncoder,Response,Date,AbortSignal,URL,
     fetch:async(url,options)=>{
