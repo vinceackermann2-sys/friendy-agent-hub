@@ -1,0 +1,53 @@
+{
+  "checkedAt": "2026-09-30T13:15:11.934Z",
+  "base": "https://belna.se",
+  "checks": [
+    {
+      "name": "live release frontend and Luna health",
+      "pass": true
+    },
+    {
+      "name": "production file revisions, stale edits and account isolation",
+      "pass": false,
+      "error": "GET /api/library/lib_fubgzf9do80u/versions: 404 Library item not found."
+    },
+    {
+      "name": "production scoped permissions, expiry and foreign revoke",
+      "pass": true
+    },
+    {
+      "name": "production goal link, bounds and pause",
+      "pass": false,
+      "error": "Cannot read properties of undefined (reading 'some')"
+    },
+    {
+      "name": "live desktop/mobile UI with real APIs",
+      "pass": false,
+      "error": "page.waitForFunction: Timeout 15000ms exceeded."
+    },
+    {
+      "name": "real Luna draft respects no sending",
+      "pass": true
+    },
+    {
+      "name": "real Luna reads PDF DOCX XLSX and retains all requested facts",
+      "pass": false,
+      "error": "conversation errors\n+ actual - expected\n\n+ [\n+   {\n+     error: 'The conversation could not complete. Please retry.',\n+     type: 'error'\n+   }\n+ ]\n- []\n"
+    },
+    {
+      "name": "real Luna completes a bounded goal run and preserves activity",
+      "pass": true
+    }
+  ],
+  "agentSamples": [
+    {
+      "prompt": "Draft exactly two short sentences asking my landlord to fix the kitchen tap this week. Only draft it; do not send anything.",
+      "text": "Could you please fix the kitchen tap this week? Let me know what day you can come by.",
+      "cards": [],
+      "traces": [],
+      "ms": 9187
+    }
+  ],
+  "cleanup": true,
+  "passed": false
+}

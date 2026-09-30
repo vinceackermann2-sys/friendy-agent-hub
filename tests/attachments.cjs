@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { prepareAttachments, dataUrl, cleanName } = require('../server/agents/attachments');
+const { prepareAttachments, dataUrl, cleanName, isTextFile } = require('../server/agents/attachments');
 
 const text = Buffer.from('name,answer\nLingon,works\n', 'utf8').toString('base64');
 const image = Buffer.from([0, 1, 2, 3]).toString('base64');
@@ -13,6 +13,10 @@ assert.equal(out.metadata[1].inline, true);
 assert.equal(out.modelParts[0].inlineData.mimeType, 'image/png');
 assert.equal(cleanName('..\\secret\\\u0000bad.txt'), 'bad.txt');
 assert.equal(dataUrl('not-a-data-url'), null);
+assert.equal(isTextFile('Project.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'), false);
+assert.equal(isTextFile('Owner.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'), false);
+assert.equal(isTextFile('data.xml', 'application/xml'), true);
+assert.equal(isTextFile('vector.svg', 'image/svg+xml'), true);
 assert.equal(prepareAttachments([{ name: 'x.bin', type: 'application/octet-stream', size: 1 }]).metadata[0].name, 'x.bin');
 assert.equal(prepareAttachments([{ name: 'too.bin', type: 'application/octet-stream', size: 11 * 1024 * 1024 }]).accepted, 0);
 console.log('attachments: text and image context is bounded and sanitized: ok');

@@ -1,0 +1,131 @@
+{
+  "checkedAt": "2026-09-30T13:33:31.245Z",
+  "base": "http://127.0.0.1:8788",
+  "checks": [
+    {
+      "name": "live release frontend and Luna health",
+      "pass": true
+    },
+    {
+      "name": "production file revisions, stale edits and account isolation",
+      "pass": true
+    },
+    {
+      "name": "production scoped permissions, expiry and foreign revoke",
+      "pass": true
+    },
+    {
+      "name": "production goal link, bounds and pause",
+      "pass": true
+    },
+    {
+      "name": "live desktop/mobile UI with real APIs",
+      "pass": true
+    },
+    {
+      "name": "real Luna draft respects no sending",
+      "pass": true
+    },
+    {
+      "name": "real Luna reads PDF DOCX XLSX and retains all requested facts",
+      "pass": true
+    },
+    {
+      "name": "real Luna completes a bounded goal run and preserves activity",
+      "pass": true
+    }
+  ],
+  "agentSamples": [
+    {
+      "prompt": "Draft exactly two short sentences asking my landlord to fix the kitchen tap this week. Only draft it; do not send anything.",
+      "text": "Hi, could you please arrange to have the kitchen tap fixed this week? Please let me know when it can be repaired.",
+      "cards": [],
+      "traces": [],
+      "ms": 5766
+    },
+    {
+      "prompt": "Read all three attachments. Give exactly six numbered lines: project name, monthly budget, ship date, owner, vendor price status, and contract status. Keep the unverified vendor price explicit. Do not send, subscribe, purchase or change anything.",
+      "text": "Inspecting the Project Cedar attachment for the project name, monthly budget, ship date, owner, vendor price status, and contract status.\n1. Project name: Cedar. The full extracted text matches the supplied preview; no additional text or discrepancy was found. Embedded images and visual layout were not inspected.\n2. Monthly budget: EUR 175.\n3. Ship date: 12 October 2026.\n4. Owner: Mira.\n5. Vendor price status: Unverified; contact sales to verify.\n6. Contract status: DRAFT ONLY.",
+      "cards": [],
+      "traces": [
+        {
+          "id": "6e9e6644-f79a-44b1-8b3c-71730c0b5387",
+          "title": "Inspect Project Cedar attachment",
+          "status": "completed",
+          "version": 1,
+          "round": 2,
+          "recoveries": 0,
+          "metrics": {
+            "usage": [
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.0010349,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 1903,
+                "inputTokens": 7789,
+                "serviceTier": "default",
+                "outputTokens": 180,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 0
+              },
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.00178135,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 8350,
+                "inputTokens": 8965,
+                "serviceTier": "default",
+                "outputTokens": 1381,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 0
+              }
+            ],
+            "models": {
+              "gpt-6-luna": 2
+            },
+            "costUsd": 0.00281625,
+            "modelMs": 10253,
+            "modelCalls": 2,
+            "inputTokens": 16754,
+            "cachedTokens": 0,
+            "outputTokens": 1561
+          },
+          "coverage": {
+            "gaps": [],
+            "verified": true
+          },
+          "steps": [
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_b9ugzm6bch43\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_0dkim2xvche3\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_u6hpw986chqg\"}"
+            }
+          ]
+        }
+      ],
+      "ms": 22646
+    }
+  ],
+  "cleanup": true,
+  "passed": true
+}

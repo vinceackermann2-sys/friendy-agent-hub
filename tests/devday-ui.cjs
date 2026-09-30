@@ -20,9 +20,12 @@ const {createServer}=require('node:http');const {chromium}=require('playwright')
       const r=route.request(),u=new URL(r.url()),method=r.method(),data=r.postData()?JSON.parse(r.postData()):{};requests.push({path:u.pathname,method,data});let out={};
       if(u.pathname==='/api/goals')out={goals:[goal]};
       if(u.pathname==='/api/goals/goal_test/work'){goal={...goal,work:{...goal.work,...data,nextWakeAt:new Date(Date.now()+86400000).toISOString()}};out={goal};}
-      if(u.pathname==='/api/library')out={items:[item]};
-      if(u.pathname==='/api/library/lib_test'){if(method==='PATCH')item={...item,...data,revision:item.revision+1};out={item};}
-      if(u.pathname==='/api/library/lib_test/versions')out={versions:[{revision:1,title:'Plan.md',updatedAt:Date.now()}]};
+      if(u.pathname==='/api/library'){const {content,...metadata}=item;out={items:[metadata]};}
+      if(u.pathname==='/api/library/lib_test'){
+        if(method==='PATCH'){item={...item,...data,revision:item.revision+1};const {content,...metadata}=item;out={item:metadata};}
+        else{await new Promise(r=>setTimeout(r,width===1440?200:500));out={item};}
+      }
+      if(u.pathname==='/api/library/lib_test/versions'){await new Promise(r=>setTimeout(r,width===1440?500:100));out={versions:[{revision:1,title:'Plan.md',updatedAt:Date.now()}]};}
       if(u.pathname==='/api/agent-permissions')out={permissions:{web:'ask_some',connectors:'ask_some'}};
       if(u.pathname==='/api/permission-grants')out={grants};
       if(u.pathname==='/api/permission-grants/grant1' && method==='DELETE'){grants=[];out={ok:true};}
@@ -39,7 +42,7 @@ const {createServer}=require('node:http');const {chromium}=require('playwright')
       assert.equal(goal.work.enabled,false);
     }else if(view==='library'){
       await page.locator('[data-act=library-item-open]').first().click();await page.locator('.lib-viewer details summary').filter({hasText:'File versions'}).click();await page.locator('[data-act=lib-versions]').click();await page.locator('[data-act=lib-version-open]').waitFor({state:'attached'});
-      await page.locator('.lib-viewer summary').filter({hasText:'Edit this file'}).click();await page.locator('[data-library-edit]').fill('Revised plan');await page.locator('[data-act=lib-version-save]').click();
+      await page.locator('.lib-viewer summary').filter({hasText:'Edit this file'}).click();assert.equal(await page.locator('[data-act=lib-version-open]').count(),1,'history survives either file-load ordering');await page.locator('[data-library-edit]').fill('Revised plan');await page.locator('[data-act=lib-version-save]').click();
       await page.waitForFunction(()=>document.querySelector('.lib-viewer-body')?.textContent.includes('Revised plan'));
       assert.equal(item.revision,2);assert.equal(item.content,'Revised plan');
     }else{

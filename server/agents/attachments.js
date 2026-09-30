@@ -29,7 +29,7 @@ function dataUrl(value) {
 }
 
 function isTextFile(name, mime) {
-  return String(mime || '').startsWith('text/') || /json|javascript|xml|yaml|csv|sql|x-sh|svg/i.test(String(mime || '')) || TEXT_EXTENSIONS.has(path.extname(name).toLowerCase());
+  return String(mime || '').startsWith('text/') || /json|javascript|yaml|csv|sql|x-sh|svg/i.test(String(mime || '')) || /(?:\/|\+)xml$/i.test(String(mime || '')) || TEXT_EXTENSIONS.has(path.extname(name).toLowerCase());
 }
 
 function prepareAttachments(input) {
@@ -80,7 +80,7 @@ async function prepareDocumentAttachments(input, save) {
     try{doc=await extractDocument(parsed.bytes,{name,mime:parsed.mime});}
     catch{doc={text:'',warnings:['Document extraction failed. Contents have not been read; ask for a readable copy or use an available OCR tool.']};}
     let libraryId;
-    if(save){const item=await save({title:name,mime:parsed.mime,content:isTextFile(name,parsed.mime)?parsed.bytes.toString('utf8'):raw.dataUrl,source:'upload',extractedText:doc?.text,extractionWarnings:doc?.warnings});libraryId=item.id;}
+    if(save){const item=await save({title:name,mime:parsed.mime,content:!doc && isTextFile(name,parsed.mime)?parsed.bytes.toString('utf8'):raw.dataUrl,source:'upload',extractedText:doc?.text,extractionWarnings:doc?.warnings});libraryId=item.id;}
     if(doc){
       const text=doc.text+'\n'+doc.warnings.join('\n')+(libraryId?`\nFull extraction and original file: library_read id ${libraryId}. Page through all relevant content before claiming complete coverage.`:'');
       prepared.push({name:name+'.txt',type:'text/plain',dataUrl:'data:text/plain;base64,'+Buffer.from(text).toString('base64')});

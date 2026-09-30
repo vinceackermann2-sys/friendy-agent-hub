@@ -134,7 +134,11 @@ async function main(){
   const {zipSync,strToU8}=await import('fflate');
   const docx=zipSync({'word/document.xml':strToU8('<w:document><w:body><w:p><w:r><w:t>Full request</w:t></w:r></w:p><w:p><w:r><w:t>second paragraph &amp; constraints</w:t></w:r></w:p></w:body></w:document>')});
   const word=await extractDocument(docx,{name:'example.docx'});assert.match(word.text,/Full request\nsecond paragraph & constraints/);
-  const prepared=await require('../server/agents/attachments').prepareDocumentAttachments([{name:'too-big',size:11*1024*1024},{name:'example.docx',dataUrl:'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,'+Buffer.from(docx).toString('base64')}],async item=>({id:'original-doc',...item}));
+  const originalDocUrl='data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,'+Buffer.from(docx).toString('base64');
+  let savedDocument;
+  const prepared=await require('../server/agents/attachments').prepareDocumentAttachments([{name:'too-big',size:11*1024*1024},{name:'example.docx',dataUrl:originalDocUrl}],async item=>{savedDocument=item;return {id:'original-doc',...item};});
+  assert.equal(savedDocument.content,originalDocUrl,'Office originals must remain binary-safe before cloud persistence');
+  assert.match(savedDocument.extractedText,/Full request/);
   assert.equal(prepared.metadata.length,1);assert.equal(prepared.metadata[0].name,'example.docx');assert.equal(prepared.metadata[0].libraryId,'original-doc');assert.match(prepared.prompt,/Full request/);
   const xlsx=zipSync({'xl/worksheets/sheet1.xml':strToU8('<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>Cost</t></is></c><c r="B1"><f>2+3</f><v>5</v></c></row></sheetData></worksheet>')});
   const sheet=await extractDocument(xlsx,{name:'example.xlsx'});assert.match(sheet.text,/A1: Cost/);assert.match(sheet.text,/B1: 5.*cached value/);

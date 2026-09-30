@@ -3387,7 +3387,7 @@ function libraryItemContent(id, onReady){
   if (libraryContent.has(id)) return libraryContent.get(id);
   libraryContent.set(id, { loading:true });
   window.LingonAuth.api('/api/library/' + encodeURIComponent(id))
-    .then(out => { if (owner === currentUserId()) libraryContent.set(id, { ...out.item,content:String(out.item?.content || '') }); })
+    .then(out => { if (owner === currentUserId()) libraryContent.set(id, { ...libraryContent.get(id), ...out.item,loading:false,content:String(out.item?.content || '') }); })
     .catch(error => { if (owner === currentUserId()) libraryContent.set(id, { error:error.message || 'Could not load this file.' }); })
     .finally(() => { if (state.view === 'library' && $('#main')) paintLibrary($('#main')); try { onReady && onReady(); } catch {} });
   return libraryContent.get(id);
@@ -7950,7 +7950,7 @@ document.addEventListener('click', async e => {
   if(act==='lib-versions' || act==='lib-version-open' || act==='lib-version-save'){
     const id=b.dataset.id,loaded=libraryContent.get(id) || {};b.disabled=true;
     try{
-      if(act==='lib-versions'){const out=await window.LingonAuth.api('/api/library/'+encodeURIComponent(id)+'/versions');libraryContent.set(id,{...loaded,versions:out.versions});}
+      if(act==='lib-versions'){const out=await window.LingonAuth.api('/api/library/'+encodeURIComponent(id)+'/versions');libraryContent.set(id,{...libraryContent.get(id),versions:out.versions});}
       else if(act==='lib-version-open'){const out=await window.LingonAuth.api('/api/library/'+encodeURIComponent(id)+'?revision='+encodeURIComponent(b.dataset.revision));libraryContent.set(id,{...out.item,versions:loaded.versions});}
       else{const item=(state.libraryServer || []).find(i=>i.id===id),content=b.closest('details').querySelector('[data-library-edit]').value;const out=await window.LingonAuth.api('/api/library/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({title:item.title,mime:item.mime,content,revision:item.revision || 1})});libraryContent.delete(id);await refreshLibrary();toast('Version '+out.item.revision+' saved.');}
       paintLibrary($('#main'));
