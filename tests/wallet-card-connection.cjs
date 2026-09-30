@@ -38,8 +38,9 @@ module.exports = async function cardConnection() {
   assert.equal(connected.wallet.cardReady,false);
   const cardSession=await wallet.cardSession('owner');
   assert.equal(cardSession.accountId,'biz_owner');
+  assert.equal(cardSession.verificationKind,'individual','consumer setup never requests business verification');
   assert.equal(cardSession.accessToken,'owner-card-verification-token-'.repeat(2));
-  assert.deepEqual(calls.find(x=>x.path==='/access_tokens').body.scoped_actions,['payout:account:read','identity:write'],'card verification token has only Whop Cards element scopes');
+  assert.deepEqual(calls.find(x=>x.path==='/access_tokens').body.scoped_actions,['identity:read','identity:write'],'consumer verification token has only dedicated KYC scopes');
   assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').map(x=>x.key),['old-rejected-key',row.card_request_key]);
   assert.deepEqual(calls.filter(x=>x.method==='POST'&&x.path==='/cards').map(x=>x.body),[
     {account_id:'biz_owner',assigned_user_id:'user_owner'},

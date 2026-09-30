@@ -5572,14 +5572,29 @@ async function openWalletCardSetup(){
     if(closed || owner!==billingIdentity()){close();return;}
     const expires=Date.parse(session.expiresAt);
     if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your card setup session expired. Open it again.');
-    group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance:{theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}}});
-    cards=group.create('cards',{accessToken:session.accessToken});
     const showCard=/^icrd_[A-Za-z0-9]+$/.test(session.cardId||'');
-    if(showCard){overlay.querySelector('h3').textContent='Your virtual card';overlay.querySelector('header p').textContent='View your card details privately. Card controls are in Wallet settings.';}
-    element=cards.create(showCard?'whopCard':'cards',{...(showCard?{cardId:session.cardId,hideControls:true,hideAppleWalletButton:true}:{hideAddButton:true,disableRedirect:true}),
-      onVerificationRequested:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Continue in Whop’s private verification page.';},
-      onReady:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent=showCard?'Click View details below to reveal your card privately.':'Use Whop’s verification control below to continue card setup.';},
-      onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Whop card setup could not load. Close and try again.';}});
+    const appearance={theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}};
+    if(showCard){
+      overlay.querySelector('h3').textContent='Your virtual card';overlay.querySelector('header p').textContent='View your card details privately. Card controls are in Wallet settings.';
+      group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance});
+      cards=group.create('cards',{accessToken:session.accessToken});
+      element=cards.create('whopCard',{cardId:session.cardId,hideControls:true,hideAppleWalletButton:true,
+        onReady:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Click View details below to reveal your card privately.';},
+        onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your card details could not load. Close and try again.';}});
+    }else{
+      // The Cards list's Verify button hardcodes business KYB. Consumers must
+      // enter the dedicated verification flow with an explicit individual kind.
+      if(session.verificationKind!=='individual')throw Error('Consumer card setup could not be confirmed. Please try again.');
+      overlay.querySelector('header p').textContent='Verify your personal identity privately with Whop. No business registration is required by Belna.';
+      group=factory().verifications.create({accountId:session.accountId,kind:'individual',getToken:async()=>session.accessToken,appearance});
+      let verificationObserved=false;
+      element=group.create('kyc',{
+        onStatusChanged:e=>{if(closed)return;verificationObserved=true;overlay.querySelector('.wallet-withdraw-status').textContent=e.status==='approved'?'Your personal identity is verified. Close this window and check card status.':e.status==='manual_review'?'Your personal identity check is being reviewed.':e.status==='action_required'?'Complete the personal identity information requested below.':'Continue your personal identity check below.';},
+        onCompleted:()=>{if(!closed)refreshBelnaWallet(true);},
+        onReady:()=>{if(!closed&&!verificationObserved)overlay.querySelector('.wallet-withdraw-status').textContent='Continue your personal identity check below.';},
+        onLoadFailed:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your personal identity check could not load. Close and try again.';},
+        onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your personal identity check could not load. Close and try again.';}});
+    }
     element.mount('#wallet-card-setup-element');
     expiryTimer=setTimeout(()=>{close();toast('Your secure card setup expired. Open it again.');},Math.min(15*60000,expires-Date.now()));
   }catch(e){if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent=e.message||'Could not open secure card setup. Please try again.';}

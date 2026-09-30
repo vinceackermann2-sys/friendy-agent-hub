@@ -5,7 +5,8 @@ const {chromium}=require('playwright');
  try{for(const width of [1280,390]){
   const context=await browser.newContext({viewport:{width,height:1000}});
   await context.addInitScript(()=>{
-   window.WhopElements=()=>({wallet:{create:()=>({create:kind=>kind==='cards'?{create:()=>({mount:selector=>{document.querySelector(selector).innerHTML='<p>Whop card verification</p>';},destroy:()=>{}}),destroy:()=>{}}:{mount:selector=>{document.querySelector(selector).innerHTML='<p>Secure bank connection · review fees and confirm</p>';},destroy:()=>{}},destroy:()=>{}})}});
+   window.walletElementCalls=[];
+   window.WhopElements=()=>({verifications:{create:options=>{window.walletElementCalls.push({kind:'verification',verificationKind:options.kind,accountId:options.accountId});return {create:kind=>({mount:selector=>{document.querySelector(selector).innerHTML='<p>Whop personal identity verification</p>';},destroy:()=>{}}),destroy:()=>{}};}},wallet:{create:()=>({create:kind=>kind==='cards'?{create:()=>({mount:selector=>{document.querySelector(selector).innerHTML='<p>Whop card details</p>';},destroy:()=>{}}),destroy:()=>{}}:{mount:selector=>{document.querySelector(selector).innerHTML='<p>Secure bank connection · review fees and confirm</p>';},destroy:()=>{}},destroy:()=>{}})}});
    localStorage.setItem('lingon.session',JSON.stringify({access_token:'ui-audit',user:{id:'ui-audit',email:'audit@example.invalid'}}));
    if(!localStorage.getItem('lingon.v1'))localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'ui-audit',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet-chat',chats:[{id:'wallet-chat',title:'Wallet setup',messages:[],at:Date.now()}],canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
   });
@@ -21,7 +22,7 @@ const {chromium}=require('playwright');
    else if(path==='/api/belna-wallet/setup'){Object.assign(wallet,{status:'verification_required',identityVerified:false,verificationStatus:'pending',cardReady:false,balance:{available:12.5,pending:3},agentCardPayments:false,dailyCardLimitUsd:50,paused:false});result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/card-connect'){Object.assign(wallet,{status:'ready',cardReady:true});result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/deposit')result={url:'https://whop.com/deposit/biz_owner'};
-   else if(path==='/api/belna-wallet/card-session')result={...(wallet.cardReady?{cardId:'icrd_test'}:{}),accountId:'biz_test',accessToken:'owner-card-verification-token',expiresAt:new Date(Date.now()+15*60000).toISOString()};
+   else if(path==='/api/belna-wallet/card-session')result={...(wallet.cardReady?{cardId:'icrd_test'}:{}),accountId:'biz_test',verificationKind:'individual',accessToken:'owner-card-verification-token',expiresAt:new Date(Date.now()+15*60000).toISOString()};
    else if(path==='/api/belna-wallet/controls'){if(body.dailyLimitUsd!=null)wallet.dailyCardLimitUsd=body.dailyLimitUsd;if(typeof body.frozen==='boolean')wallet.paused=body.frozen;result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/quote')result={quoteId:'test-transfer',recipient:body.recipient,amount:body.amount,fees:'Partner fees may apply.'};
    else if(path==='/api/belna-wallet/send')result={status:'succeeded'};
@@ -85,8 +86,9 @@ const {chromium}=require('playwright');
     assert.equal(await page.locator('.wl-setup').getByText('Identity verified',{exact:true}).count(),1,'issuer verification never resets wallet KYC');
     if(issuer==='needs_verification'){
       await page.getByRole('button',{name:'Continue card setup',exact:true}).click();
-      await page.getByText('Whop card verification',{exact:true}).waitFor();
+      await page.getByText('Whop personal identity verification',{exact:true}).waitFor();
       assert.equal(requests.filter(x=>x.path==='/api/belna-wallet/card-session').length,1,'issuer verification gets an owner-scoped Whop session');
+      assert.deepEqual(await page.evaluate(()=>window.walletElementCalls),[{kind:'verification',verificationKind:'individual',accountId:'biz_test'}],'consumer setup mounts explicit KYC, never the Cards widget KYB button');
       await page.getByRole('button',{name:'Close card setup',exact:true}).click();
     }
   }

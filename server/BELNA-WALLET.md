@@ -19,6 +19,23 @@ repeated setup, pending-payment guards, database permissions, card controls and
 purchase recovery. Live credentials, webhook configuration and issuer approval
 must be verified separately; local checks do not prove card issuance.
 
+Consumer card setup mounts Whop's Verifications KYC component with
+`kind: individual` and a fifteen-minute, account-scoped token restricted to
+`identity:read` and `identity:write`. The Cards list is not a consumer
+verification entry point: its current Verify button starts `kind: business`
+regardless of the approved individual KYC on that account. The company key must
+include both identity permissions. Card details still use the private card
+component after issuance. Identity approval and card issuing approval remain
+separate; do not present the former as proof that a consumer card was issued.
+
+Whop publishes an international consumer program with personal-use terms:
+https://whop.com/intl-card-consumer-terms/ and regional restrictions:
+https://docs.whop.com/whop-finance/supported-regions.
+The `biz_` prefix identifies a connected account, not the holder's legal entity
+type. Never collect business registration from consumers merely to get through
+the Cards widget's KYB flow. The relevant component documentation is
+https://docs.whop.com/elements/latest/verifications/overview.
+
 The sections below retain the history of the previous integrations.
 
 # Belna Wallet production setup
