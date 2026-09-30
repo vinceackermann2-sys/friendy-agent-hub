@@ -75,6 +75,18 @@ async function main(){
   let coverageTask=await repairFixture.runtime.create({userId:'u',chatId:'c',instructions:'Verify the requested fact'});
   for(let i=0;i<8 && ['queued','running'].includes(coverageTask.state.status);i++)coverageTask=await repairFixture.runtime.step('u',coverageTask.id);
   assert.equal(coverageTask.state.status,'completed','pending coverage gets one chance to repair evidence references');assert.equal(coveragePlans,3);assert.equal(coverageTask.state.result,'Verified answer.','hidden coverage comment never leaks into the visible answer');
+  assert.equal(require('../server/agents/task-checkpoint').parseCompletion('NO_CHANGE<!-- <task_coverage>```json\n{"requirements":[]}\n```</task_coverage> -->').text,'NO_CHANGE');
+  assert.deepEqual(require('../server/agents/task-checkpoint').parseCompletion('NO_CHANGE<task_coverage>```json\n{"requirements":[]}\n```</task_coverage>').checkpoint,{requirements:[]});
+  let structuredPlans=0,structured;
+  structured=runtimeFixture(async options=>{
+    if(++structuredPlans===1)return {functionCalls:[{name:'web_search',args:{query:'single read'}}]};
+    if(structuredPlans===2)return {text:'NO_CHANGE'};
+    if(structuredPlans===3){assert.ok(options.tools.some(t=>t.name==='save_task_checkpoint'),'coverage repair has a structured tool');const evidence=[...structured.rows.values()][0].state.observations.find(o=>o.name==='web_search');return {functionCalls:[{name:'save_task_checkpoint',args:{requirements:[{id:'read',text:'Read once',status:'done',evidenceIds:[evidence.id]}]}}]};}
+    assert.equal(options.toolChoice,'none');return {text:'NO_CHANGE'};
+  },{web_search:{run:async()=>({text:'Nothing changed.'})}});
+  let structuredTask=await structured.runtime.create({userId:'u',chatId:'c',instructions:'Read once, then return NO_CHANGE',context:{maxRounds:3}});
+  for(let i=0;i<8 && ['queued','running'].includes(structuredTask.state.status);i++)structuredTask=await structured.runtime.step('u',structuredTask.id);
+  assert.equal(structuredTask.state.status,'completed');assert.equal(structuredTask.state.result,'NO_CHANGE');assert.equal(structuredTask.state.observations.filter(o=>o.name==='web_search').length,1,'repair does not repeat the read');
   for(const ignoredAction of [false,true]){
     let boundedPlans=0,bounded;
     bounded=runtimeFixture(async options=>{

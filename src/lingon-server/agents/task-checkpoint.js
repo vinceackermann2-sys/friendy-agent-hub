@@ -32,7 +32,7 @@ function parseCompletion(text) {
   if(at<0)return {text};
   const visible=text.slice(0,at).replace(/<!--\s*$/,'').trim(),end=text.indexOf('</task_coverage>',at);
   if(end<0)return {text:visible};
-  try{return {text:visible,checkpoint:JSON.parse(text.slice(at+15,end))};}
+  try{const json=text.slice(at+15,end).trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');return {text:visible,checkpoint:JSON.parse(json)};}
   catch{return {text:visible};}
 }
 export {CHECKPOINT,checkpoint,completion,checkpointPrompt,parseCompletion};
