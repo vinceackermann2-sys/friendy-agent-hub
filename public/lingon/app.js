@@ -7774,7 +7774,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if(act==='wallet-manage' || act==='wallet-manage-shipping'){state.view='settings';state.settingsTab='wallet';save();renderApp();if(act==='wallet-manage-shipping')$('#wallet-shipping-section')?.scrollIntoView({block:'start'});return;}
-  if(act==='wallet-connect-belna'){walletConnectOpen=!walletConnectOpen;repaintWallet();return;}
+  if(act==='wallet-connect-belna'){walletConnectOpen=true;repaintWallet();$('#belna-wallet-country')?.focus();return;}
   if(act==='wallet-existing-options'){walletExistingOpen=!walletExistingOpen;repaintWallet();return;}
   if(act==='wallet-merchant-connect'){setWalletPreferences({merchantEnabled:true,activeMethod:'existing_card'});return;}
   if(act==='wallet-switch'){setWalletPreferences({activeMethod:b.dataset.method || null});return;}
@@ -7827,6 +7827,7 @@ document.addEventListener('click', async e => {
     else return;
     belnaWalletBusy = true;
     b.disabled = true;
+    if(action==='setup'){belnaWalletError='';b.textContent='Creating wallet…';}
     window.LingonAuth.api('/api/belna-wallet/' + action, { method:'POST', body:JSON.stringify(payload) }).then(j => {
       if (owner !== scopeBelnaWallet()) return;
       if(action==='setup' && j.state){
@@ -7844,7 +7845,7 @@ document.addEventListener('click', async e => {
       else if (j.url) window.location.assign(j.url);
       else if (action === 'controls') { if (payload.dailyLimitUsd != null) walletLimitEdit=false; toast(payload.frozen === true ? 'Card spending paused.' : payload.frozen === false ? 'Card spending resumed.' : 'Daily card allowance saved.'); }
       else toast(action === 'setup' ? `Wallet created. Complete your identity check to set up your card.${existingCard ? ' Your existing card stays active until you switch in Wallet settings.' : ''}` : 'Card setup updated.');
-    }).catch(e => { if (owner === scopeBelnaWallet()) { toast(e.message || 'Could not update your wallet.');if(action==='card-connect')refreshBelnaWallet(true); } }).finally(() => {
+    }).catch(e => { if (owner === scopeBelnaWallet()) { if(action==='setup')belnaWalletError=e.message || 'Could not create your wallet. Please try again.';toast(e.message || 'Could not update your wallet.');if(action==='card-connect')refreshBelnaWallet(true); } }).finally(() => {
       if (owner !== scopeBelnaWallet()) return;
       belnaWalletBusy=false;
       b.disabled=false;
