@@ -611,7 +611,9 @@ function createTaskRuntime(d) {
           if(notice && !current.noticeSent)current.notice=notice;
           const failureNotice=current.observations.some(o=>o.version===version && o.name.startsWith('browser_') && !o.ok && !o.skipped)?'The browser action could not be completed.':'The computer action could not be completed.';
           const delivered=failedComputer?text+'\n\n'+failureNotice:needsReview && !current.checkpoint?text+'\n\nThis request is not fully verified.':text;
-          current.result=delivered;current.summary=delivered.slice(0,1500);current.status=atLimit || needsReview || failedComputer || !answer.text?.trim()?'partial':'completed';
+          // A verified final answer can finish at the planning limit. The final
+          // synthesis cannot run tools; discarded action calls remain partial.
+          current.result=delivered;current.summary=delivered.slice(0,1500);current.status=needsReview || failedComputer || !answer.text?.trim() || (atLimit && (!coverage.verified || answer.functionCalls?.length))?'partial':'completed';
           // A subtask reports to the task that started it (read_peer_result), not to the chat.
           if(!current.parentTaskId) event(current,{type:'message',id:`${id}:answer:v${version}`,phase:'task_answer',text:delivered});
           return;

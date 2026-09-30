@@ -75,6 +75,18 @@ async function main(){
   let coverageTask=await repairFixture.runtime.create({userId:'u',chatId:'c',instructions:'Verify the requested fact'});
   for(let i=0;i<8 && ['queued','running'].includes(coverageTask.state.status);i++)coverageTask=await repairFixture.runtime.step('u',coverageTask.id);
   assert.equal(coverageTask.state.status,'completed','pending coverage gets one chance to repair evidence references');assert.equal(coveragePlans,3);assert.equal(coverageTask.state.result,'Verified answer.','hidden coverage comment never leaks into the visible answer');
+  for(const ignoredAction of [false,true]){
+    let boundedPlans=0,bounded;
+    bounded=runtimeFixture(async options=>{
+      if(++boundedPlans===1)return {functionCalls:[{name:'web_search',args:{query:'bounded source'}}]};
+      assert.equal(options.toolChoice,'none','budget exhausted: final synthesis cannot execute actions');
+      const observation=[...bounded.rows.values()][0].state.observations.find(o=>o.name==='web_search');
+      return {text:'Verified within budget.<task_coverage>'+JSON.stringify({requirements:[{id:'fact',text:'Verify the fact',status:'done',evidenceIds:[observation.id]}]})+'</task_coverage>',functionCalls:ignoredAction?[{name:'web_search',args:{query:'beyond budget'}}]:[]};
+    },{web_search:{run:async()=>({text:'Evidence.'})}});
+    let boundedTask=await bounded.runtime.create({userId:'u',chatId:'c',instructions:'Verify the fact',context:{maxRounds:1}});
+    for(let i=0;i<5 && ['queued','running'].includes(boundedTask.state.status);i++)boundedTask=await bounded.runtime.step('u',boundedTask.id);
+    assert.equal(boundedTask.state.status,ignoredAction?'partial':'completed');assert.equal(boundedTask.state.observations.filter(o=>o.name==='web_search').length,1,'no beyond-budget call is run');
+  }
 
   let peak=0,active=0;
   const parallel=runtimeFixture(async()=>({functionCalls:[{name:'composio_execute',args:{tool:'GMAIL_FETCH_MESSAGE_BY_ID',args:{message_id:'one'}}},{name:'composio_execute',args:{tool:'GMAIL_FETCH_MESSAGE_BY_ID',args:{message_id:'two'}}}]}),{composio_execute:{approval:true,run:async()=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,10));active--;return {ok:true};}}});

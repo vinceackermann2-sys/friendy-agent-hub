@@ -148,6 +148,7 @@ async function converse(session,prompt,context={}){
         if(taskId){task=(await api(owner,'/api/agent/tasks/advance','POST',{chatId:enabled.work.chatId,taskId})).task;if(!['queued','running','waiting_peers','stopping'].includes(task.status))break;}
         await pause(1000);
       }
+      report.manualGoal={status:task?.status,trace:task?.id?(await api(owner,'/api/agent/tasks/trace?chatId='+enabled.work.chatId+'&taskId='+task.id)).task:null};save();
       assert.equal(task?.status,'completed');await pause(1500);
       await api(owner,'/api/sub-agents/'+enabled.work.agentId+'/run','POST',{},[200,409]);
       const stored=(await api(owner,'/api/goals')).goals.find(g=>g.id===goal.id);assert.ok(stored.activity.length);assert.equal(stored.work.enabled,false,'run cap stops further work');
