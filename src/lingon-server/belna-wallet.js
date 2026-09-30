@@ -173,7 +173,9 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
         throw fail('Your wallet setup could not be confirmed for Belna. Please try again.', 'PROVIDER');
       row = await store.saveBelnaWallet(user.id, { account_id:account.id, owner_provider_id:account.owner.id });
     }
-    return snapshot(user.id);
+    const result=await snapshot(user.id);
+    if(!result.wallet || ['unavailable','not_created','setup_pending','personal_connection_required'].includes(result.wallet.status))throw fail('Your connected wallet setup could not be confirmed. Please try again.','WALLET_STORE');
+    return result;
   }
   function validateLimit(value) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 1 || value > 2000 || Math.abs(Math.round(value * 100) - value * 100) > 1e-8) throw fail('Choose an amount between $1 and $2,000, with at most two decimals.');
@@ -471,7 +473,12 @@ function createBelnaWallet(options){
   const connectedStore={...options.store,
     getBelnaWallet:async userId=>{const row=await options.store.getBelnaWallet(userId);return row?.wallet_kind==='personal'?null:row;},
     ...(options.store.listPendingWalletConnections?{listPendingWalletConnections:async environment=>(await options.store.listPendingWalletConnections(environment)).filter(row=>/^biz_/.test(row.account_id))}:{}),
-    claimBelnaWallet:options.store.claimConnectedBelnaWallet || options.store.claimBelnaWallet};
+    claimBelnaWallet:async (...args)=>{
+      if(typeof options.store.claimConnectedBelnaWallet!=='function')throw Object.assign(new Error('Wallet setup is not configured. Please contact Belna support.'),{code:'NOT_SET_UP'});
+      const row=await options.store.claimConnectedBelnaWallet(...args);
+      if(row?.wallet_kind!=='business' || row.user_id!==args[0] || row.account_id && !/^biz_[A-Za-z0-9]+$/.test(row.account_id))throw Object.assign(new Error('Your connected wallet setup could not be confirmed. Please try again.'),{code:'WALLET_STORE'});
+      return row;
+    }};
   const wallet=createBusinessWallet({...options,store:connectedStore});
   const retired=async()=>{throw Object.assign(new Error('Create your Belna Wallet connected account in Wallet settings. Personal Whop sign-in cannot issue cards.'),{code:'NOT_SET_UP'});};
   return {...wallet,finishConnect:retired,paymentRequest:retired,

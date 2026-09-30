@@ -25,6 +25,14 @@ const {PGlite}=require('@electric-sql/pglite');
   const user={id:'alice',email:'alice@example.test',email_confirmed_at:'2026-09-30'};
   const after=await wallet.setup(user,{country:'SE'});assert.equal(after.wallet.kind,'connected');assert.equal(row.wallet_kind,'business');assert.equal(row.account_id,'biz_alice');
   await wallet.setup(user,{country:'SE'});assert.equal(creates,1,'retries reuse the saved sub-account');assert.equal(configReads,1);assert.ok(!calls.some(p=>/oauth|users\/me|cards/.test(p)));
+  const personalRecord=async()=>({user_id:'alice',wallet_kind:'personal',account_id:'user_alice'});
+  const missingStore={...store,getBelnaWallet:personalRecord,claimConnectedBelnaWallet:undefined,claimBelnaWallet:async()=>{throw Error('Old personal setup must never run');}};
+  await assert.rejects(createBelnaWallet({store:missingStore,env:{}}).setup(user,{country:'SE'}),/Wallet setup is not configured/);
+  const incorrectStore={...store,getBelnaWallet:personalRecord,claimConnectedBelnaWallet:personalRecord};
+  await assert.rejects(createBelnaWallet({store:incorrectStore,env:{}}).setup(user,{country:'SE'}),/connected wallet setup could not be confirmed/);
+  const productionStore=await import('../src/lingon-server/store.js');
+  assert.equal(typeof productionStore.getConnectedWalletConfiguration,'function','production API exports the connected-account configuration loader');
+  assert.equal(typeof productionStore.claimConnectedBelnaWallet,'function','production API exports the connected-account claim instead of reusing personal setup');
 
   const db=new PGlite();try{
     await db.exec("create role anon;create role authenticated;create role service_role;create table profiles(id text primary key);insert into profiles values('a');");

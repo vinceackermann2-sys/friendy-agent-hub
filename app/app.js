@@ -7834,11 +7834,12 @@ document.addEventListener('click', async e => {
         const url=new URL(j.url);if(!['api.whop.com','sandbox-api.whop.com'].includes(url.hostname) || url.protocol!=='https:' || url.pathname!=='/oauth/authorize' || url.searchParams.get('state')!==j.state)throw Error('Your Whop sign-in link could not be confirmed.');
         sessionStorage.setItem('belna.whopConnect',JSON.stringify({state:j.state,owner}));location.assign(url.href);return;
       }
+      if(action==='setup' && (!j.wallet || j.wallet.kind==='personal' || ['unavailable','not_created','setup_pending','personal_connection_required'].includes(j.wallet.status)))throw Error('Your connected wallet was not created. Please try again.');
       if (j.wallet) { belnaWalletCache=j; belnaWalletError=''; }
       // A new wallet becomes the active one only when nothing else pays: switching away from a
       // connected existing card is the owner's choice, made in Wallet settings.
       const existingCard=walletPreferences?.activeMethod==='existing_card' || shopPaySnapshot().connected || walletPreferences?.merchantEnabled;
-      if(action==='setup'){walletConnectOpen=false;if(!walletPreferences?.selectionSaved && !existingCard)window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})}).then(p=>{if(owner===scopeBelnaWallet()){walletPreferences=p;repaintWallet();}}).catch(e=>toast(e.message));}
+      if(action==='setup'){walletConnectOpen=false;if(!walletPreferences?.selectionSaved && !existingCard)window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})}).then(p=>{if(owner===scopeBelnaWallet()){walletPreferences=p;repaintWallet();}}).catch(e=>toast(e.message));state.view='settings';state.settingsTab='wallet';save();renderApp();}
       if (action === 'receive') { belnaReceiveLink=j; toast('Payment link ready to share.'); }
       else if (action === 'quote') belnaTransferQuote=j;
       else if (action === 'send') { belnaTransferQuote=j;if(j.status==='succeeded'){walletIncomingRequest=null;sessionStorage.removeItem('belna.walletRequest');} toast(j.status === 'succeeded' ? 'Money sent.' : j.status === 'failed' ? 'Transfer failed.' : 'Transfer processing.'); refreshBelnaWallet(true); }

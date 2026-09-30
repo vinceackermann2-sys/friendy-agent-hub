@@ -26,6 +26,7 @@ const { chromium } = require('playwright');
             await firstAttempt;
             return route.fulfill({ status:503, contentType:'application/json', body:JSON.stringify({ error:'Wallet provider is temporarily unavailable. Try again.' }) });
           }
+          if (attempts === 2) return route.fulfill({ status:200, contentType:'application/json', body:JSON.stringify({ wallet:{ ...wallet, previousPersonalWallet:true } }) });
           Object.assign(wallet, { status:'verification_required', identityVerified:false, balance:{ available:0, pending:0 } });
           result = { wallet };
         }
@@ -53,8 +54,12 @@ const { chromium } = require('playwright');
       await page.getByRole('alert').filter({ hasText:'Wallet provider is temporarily unavailable. Try again.' }).waitFor();
       assert.equal(await create.isEnabled(), true, 'failed setup remains available to retry');
       await create.click();
-      await page.locator('.wpay-opt[data-option="belna_wallet"] .wpay-main[data-act="wallet-switch"]').waitFor();
-      assert.equal(attempts, 2);
+      await page.getByRole('alert').filter({ hasText:'Your connected wallet was not created. Please try again.' }).waitFor();
+      await create.click();
+      const settings=page.locator('#wallet-settings-content');
+      await settings.locator('.wpay-opt[data-option="belna_wallet"] .wpay-main[data-act="wallet-switch"]').waitFor();
+      await settings.getByRole('button', { name:'Verify identity', exact:true }).waitFor();
+      assert.equal(attempts, 3);
       assert.deepEqual(errors, []);
       await context.close();
     }
