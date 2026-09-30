@@ -181,6 +181,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
 
   // Only explicitly budgeted runs (automations) stop at a round limit.
   const budget=setup();const br=await budget.create();budget.rows.get(br.id).state.context.maxRounds=8;budget.rows.get(br.id).state.round=8;
+  budget.answers.push({text:'Incomplete research.<task_coverage>'+JSON.stringify({requirements:[{id:'research',text:'Finish the research',status:'blocked',gap:'Planning budget reached before all research was done.'}]})+'</task_coverage>'});
   await budget.runtime.step('a',br.id);assert.equal(budget.rows.get(br.id).state.status,'partial');
   // Tools stay listed so the cached prompt prefix survives, but calls are disabled.
   assert.equal(budget.calls.find(c=>c.model).model.toolChoice,'none','budget stops further tool planning');
@@ -403,10 +404,11 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   // Automations keep their explicit round budget.
   const capped=setup();capped.d.schemas=[schemaFor('web_search')];capped.d.selectSchemas=()=>[];
   capped.d.tools.web_search={run:async a=>[{ok:true,text:String(Math.random())}]};
-  for(let i=0;i<10;i++) capped.answers.push(opts=>opts.toolChoice==='none'?{text:'Automation summary.'}:{functionCalls:[{name:'web_search',args:{query:`a${i}`}}]});
+  for(let i=0;i<10;i++) capped.answers.push(opts=>opts.toolChoice==='none'?{text:'Automation summary.<task_coverage>'+JSON.stringify({requirements:[{id:'news',text:'Check all requested news',status:'blocked',gap:'Further research remains after the planning budget.'}]})+'</task_coverage>'}:{functionCalls:[{name:'web_search',args:{query:`a${i}`}}]});
   const autoRow=await capped.runtime.create({userId:'a',chatId:'chat',requestKey:'auto',instructions:'Check news',context:{automation:true,maxRounds:3}});
   const cappedState=await runToEnd(capped,autoRow.id);
   assert.equal(cappedState.status,'partial');assert.equal(cappedState.result,'Automation summary.');
+  assert.equal(cappedState.observations.filter(o=>o.name==='web_search' && o.ok).length,3,'planning budget still stops extra reads');
 
   // A long task keeps the owner posted. Once they have heard nothing for a while and there
   // are new results, an update is written from those results while the worker plans its

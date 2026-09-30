@@ -613,7 +613,7 @@ function createTaskRuntime(d) {
           const delivered=failedComputer?text+'\n\n'+failureNotice:needsReview && !current.checkpoint?text+'\n\nThis request is not fully verified.':text;
           // A verified final answer can finish at the planning limit. The final
           // synthesis cannot run tools; discarded action calls remain partial.
-          current.result=delivered;current.summary=delivered.slice(0,1500);current.status=needsReview || failedComputer || !answer.text?.trim() || (atLimit && (!coverage.verified || answer.functionCalls?.length))?'partial':'completed';
+          current.result=delivered;current.summary=delivered.slice(0,1500);current.status=needsReview || failedComputer || !answer.text?.trim() || (atLimit && (!coverage.verified || answer.functionCalls?.length || stalled || s.round>=RUNAWAY_ROUNDS))?'partial':'completed';
           // A subtask reports to the task that started it (read_peer_result), not to the chat.
           if(!current.parentTaskId) event(current,{type:'message',id:`${id}:answer:v${version}`,phase:'task_answer',text:delivered});
           return;
