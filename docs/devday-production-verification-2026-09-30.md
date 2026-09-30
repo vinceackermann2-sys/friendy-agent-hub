@@ -1,5 +1,9 @@
 # Production verification follow-up
 
+**Final result:** all nine live verification groups passed against the published `e0b9ad1` application code. The full 61-script backend suite, production build, route/interaction audits and desktop/mobile checks passed. Three document requests each returned all six required facts; three independent scheduled goals each completed with verified `NO_CHANGE`, retained goal activity and created zero chat messages. Temporary-account cleanup completed, and a database check found zero remaining verification accounts. Luna remained the only model recorded; Sol was not added.
+
+The [final production report](../artifacts/devday-release/production-final.json) includes real task traces, worker model metrics, manual-goal completion and all three scheduler results. Document contents were synthetic fixtures; authentication, APIs, storage, scheduler and Luna calls were real. Earlier failures remain below so the final pass does not hide the defects found during verification. This establishes the listed functional checks, not universal answer quality or an overall speed/cost improvement.
+
 The deployed app at https://belna.se matched the first release's frontend and reported `gpt-6-luna`. Real authenticated checks used two newly created verification accounts, their own files/goals/grants and real Luna calls. Both accounts were removed afterward. No customer connectors were used.
 
 The first live run found two application defects: the text MIME matcher treated Office ZIP files as XML, corrupting originals before cloud persistence; Library history requests could overwrite loaded content with an earlier loading state. Office originals now remain data URLs, and Library updates merge the current cache. The new UI regression uses metadata-only cloud responses and exercises both response orderings. It fails against the old implementation and passes with the fix.

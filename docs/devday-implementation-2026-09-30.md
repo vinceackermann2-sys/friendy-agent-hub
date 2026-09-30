@@ -2,6 +2,8 @@
 
 The six agreed changes are implemented for both Node and the edge runtime. Luna remains the model; Sol was not added. The release was tested in an isolated checkout based on `86c7264`, preserving unrelated mascot, layout and VM work. Database migrations were applied to the configured Supabase project and verified with real storage/database operations. Git publication does not itself confirm application deployment.
 
+The subsequent [production verification follow-up](devday-production-verification-2026-09-30.md) confirms publication and nine real authenticated application checks. It records and fixes production attachment corruption, Library load races, narrowed file requests, quiet-goal message delivery and completion/recovery issues. All final checks passed, including three document requests and three autonomous quiet-goal runs. The speed/cost limitation below remains unchanged.
+
 ## Behavior changes
 
 1. The original request, later owner instructions, quantities and constraints remain in planning context. Evidence-linked requirement checkpoints prevent captured requirements from disappearing. Unsupported completion becomes partial. The arbitrary 14-search cutoff was removed; stalled/runaway safeguards and explicit automation budgets remain.
@@ -56,7 +58,7 @@ Applied and verified, in order:
 
 The scheduler must continue running for queued storage cleanup. `MODEL_RATE_TABLE_JSON` accepts explicit model/deployment aliases with per-million input/cached/cacheWrite/output rates and a pricing version. Unknown model prices fail rather than receiving Luna prices silently.
 
-Document extraction is text-only. Scanned PDFs need OCR; embedded images/charts/layout are not interpreted, formulas are not recalculated and dates can remain serial values. Extraction limits travel with the content. Native Office document generation is outside these changes. Real customer connectors, the deployed authenticated application and live VM cold-start latency were not fully exercised; those are not covered by the cloud fixture test.
+Document extraction is text-only. Scanned PDFs need OCR; embedded images/charts/layout are not interpreted, formulas are not recalculated and dates can remain serial values. Extraction limits travel with the content. Native Office document generation is outside these changes. Real customer connectors and live VM cold-start latency remain outside the live coverage. Deployed authenticated application coverage is recorded in the production follow-up.
 
 ## Reproduction
 

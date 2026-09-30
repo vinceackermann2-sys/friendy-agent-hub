@@ -155,21 +155,31 @@ async function converse(session,prompt,context={}){
       await api(owner,'/api/goals/'+goal.id+'/work','PUT',{enabled:false});
     });
     if(base==='https://belna.se')await check('production scheduler wakes goal work without a manual run',async()=>{
-      const scheduled=(await api(owner,'/api/goals','POST',{title:'Scheduled verification',category:'other'})).goal;
-      const configured=(await api(owner,'/api/goals/'+scheduled.id+'/work','PUT',{successCriteria:'Read the goal list',nextAction:'List goals once. Nothing needs changing; return exactly NO_CHANGE.',allowedTools:['goal_list'],maxRuns:1,maxRounds:4,intervalMinutes:1440,startAt:new Date(Date.now()+10000).toISOString()})).goal;
-      let run;
+      const cases=[];
+      for(let i=0;i<3;i++){
+        const scheduled=(await api(owner,'/api/goals','POST',{title:'Scheduled verification '+(i+1),category:'other'})).goal;
+        const configured=(await api(owner,'/api/goals/'+scheduled.id+'/work','PUT',{successCriteria:'Read the goal list',nextAction:'List goals once. Nothing needs changing; return exactly NO_CHANGE.',allowedTools:['goal_list'],maxRuns:1,maxRounds:4,intervalMinutes:1440,startAt:new Date(Date.now()+10000).toISOString()})).goal;
+        cases.push({scheduled,configured});
+      }
+      let selected=[];
       for(let i=0;i<80;i++){
-        run=(await api(owner,'/api/automation-runs')).runs.find(r=>(r.subAgentId || r.sub_agent_id)===configured.work.agentId);
-        if(run && !['running','waiting_approval'].includes(run.status))break;
+        const runs=(await api(owner,'/api/automation-runs')).runs;
+        selected=cases.map(({configured})=>runs.find(r=>(r.subAgentId || r.sub_agent_id)===configured.work.agentId));
+        if(selected.every(run=>run && !['running','waiting_approval'].includes(run.status)))break;
         await pause(1500);
       }
+      report.schedulerSamples=[];
+      for(let i=0;i<cases.length;i++){
+      const {scheduled,configured}=cases[i],run=selected[i];
       report.scheduler={status:run?.status,trigger:run?.event?.type,output:run?.result?.output};save();
       if(run?.result?.taskId){report.scheduler.trace=(await api(owner,'/api/agent/tasks/trace?chatId='+configured.work.chatId+'&taskId='+run.result.taskId)).task;save();}
+      report.schedulerSamples.push(report.scheduler);save();
       assert.ok(run,'scheduler created a run');assert.equal(run.event.type,'schedule');assert.equal(run.status,'idle','NO_CHANGE remains quiet');
       const activity=(await api(owner,'/api/goals')).goals.find(g=>g.id===scheduled.id).activity;assert.ok(activity.some(a=>a.status==='idle'),'unchanged check remains in goal activity');
       const messages=await admin.from('messages').select('id').eq('user_id',owner.user.id).eq('chat_id',configured.work.chatId);if(messages.error)throw messages.error;assert.equal(messages.data.length,0,'unchanged goal work creates no chat notification');
-      report.scheduler={status:run.status,trigger:run.event.type,activityCount:activity.length};
+      report.scheduler.activityCount=activity.length;report.scheduler.chatMessageCount=messages.data.length;
       await api(owner,'/api/goals/'+scheduled.id+'/work','PUT',{enabled:false});
+      }
     });
   }finally{
     if(browser)await browser.close();
