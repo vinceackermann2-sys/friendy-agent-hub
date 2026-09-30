@@ -66,6 +66,15 @@ async function main(){
   broken.rows.get(incomplete.id).state.observations.push({id:'failed',name:'search',version:1,ok:false,text:'unavailable'});
   incomplete=await broken.runtime.step('u',incomplete.id);assert.equal(incomplete.state.status,'running','one chance to repair missing coverage');
   incomplete=await broken.runtime.step('u',incomplete.id);assert.equal(incomplete.state.status,'partial','unsupported success never becomes completed');
+  let coveragePlans=0,repairFixture;
+  repairFixture=runtimeFixture(async()=>{
+    if(++coveragePlans===1)return {functionCalls:[{name:'web_search',args:{query:'primary source'}}]};
+    const observation=[...repairFixture.rows.values()][0].state.observations.find(o=>o.name==='web_search');
+    return {text:'Verified answer.<!-- <task_coverage>'+JSON.stringify({requirements:[{id:'fact',text:'Verify the requested fact',status:'done',evidenceIds:[coveragePlans===2?'mistyped-evidence':observation.id]}]})+'</task_coverage> -->'};
+  },{web_search:{run:async()=>({text:'Primary evidence.'})}});
+  let coverageTask=await repairFixture.runtime.create({userId:'u',chatId:'c',instructions:'Verify the requested fact'});
+  for(let i=0;i<8 && ['queued','running'].includes(coverageTask.state.status);i++)coverageTask=await repairFixture.runtime.step('u',coverageTask.id);
+  assert.equal(coverageTask.state.status,'completed','pending coverage gets one chance to repair evidence references');assert.equal(coveragePlans,3);assert.equal(coverageTask.state.result,'Verified answer.','hidden coverage comment never leaks into the visible answer');
 
   let peak=0,active=0;
   const parallel=runtimeFixture(async()=>({functionCalls:[{name:'composio_execute',args:{tool:'GMAIL_FETCH_MESSAGE_BY_ID',args:{message_id:'one'}}},{name:'composio_execute',args:{tool:'GMAIL_FETCH_MESSAGE_BY_ID',args:{message_id:'two'}}}]}),{composio_execute:{approval:true,run:async()=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,10));active--;return {ok:true};}}});

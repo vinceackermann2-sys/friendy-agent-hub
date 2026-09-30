@@ -19,6 +19,7 @@ async function account(){
   row.session=await api(null,'/api/auth/signin','POST',{email,password});assert.ok(row.session.access_token);return row.session;
 }
 async function check(name,fn){
+  if(process.env.VERIFY_FILTER && !name.includes(process.env.VERIFY_FILTER))return;
   try{await fn();report.checks.push({name,pass:true});console.log('PASS '+name);}
   catch(error){report.checks.push({name,pass:false,error:error.message});console.log('FAIL '+name+': '+error.message);}
   save();
@@ -30,7 +31,7 @@ async function converse(session,prompt,context={}){
   const events=raw.split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
   const errors=events.filter(e=>e.type==='error');assert.deepEqual(errors,[],'conversation errors');
   const all=[...events],taskIds=new Set(events.filter(e=>e.type==='task').map(e=>e.task?.id || e.id).filter(Boolean));
-  const traces=[];
+  const traces=[],statuses=[];
   for(const taskId of taskIds){
     let task;
     for(let i=0;i<40 && Date.now()-start<180000;i++){
@@ -38,12 +39,12 @@ async function converse(session,prompt,context={}){
       if(!['queued','running','waiting_peers','stopping'].includes(task.status))break;
       await pause(150);
     }
-    assert.equal(task.status,'completed','task '+taskId+' stopped at '+task.status);
+    statuses.push({id:taskId,status:task.status});
     const trace=(await api(session,'/api/agent/tasks/trace?chatId='+chatId+'&taskId='+taskId)).task;traces.push(trace);
   }
   const text=all.filter(e=>e.type==='message' && ['final_answer','task_answer'].includes(e.phase)).map(e=>e.text).join('\n');
   const cards=all.filter(e=>e.type==='card').map(e=>e.card);
-  const result={prompt,text,cards,traces,ms:Date.now()-start};report.agentSamples.push(result);save();return result;
+  const result={prompt,text,cards,traces,ms:Date.now()-start};report.agentSamples.push(result);save();for(const task of statuses)assert.equal(task.status,'completed','task '+task.id+' stopped at '+task.status);return result;
 }
 (async()=>{
   let browser,owner,foreign,goal,file,grant;
@@ -124,6 +125,7 @@ async function converse(session,prompt,context={}){
       const xlsx=zipSync({'xl/worksheets/sheet1.xml':strToU8('<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>Owner: Mira</t></is></c><c r="B1" t="inlineStr"><is><t>Vendor price: unverified; contact sales.</t></is></c></row></sheetData></worksheet>')});
       const text='BT /F1 12 Tf 72 720 Td (Contract status: DRAFT ONLY) Tj ET';const pdf=Buffer.from('%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n5 0 obj << /Length '+text.length+' >> stream\n'+text+'\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF');
       const attachments=[['Project.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document',docx],['Owner.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',xlsx],['Contract.pdf','application/pdf',pdf]].map(([name,type,bytes])=>({name,type,size:bytes.length,dataUrl:'data:'+type+';base64,'+Buffer.from(bytes).toString('base64')}));
+      for(let attempt=0;attempt<3;attempt++){
       const result=await converse(owner,'Read all three attachments. Give exactly six numbered lines: project name, monthly budget, ship date, owner, vendor price status, and contract status. Keep the unverified vendor price explicit. Do not send, subscribe, purchase or change anything.',{attachments});
       const delivered=result.text+' '+JSON.stringify(result.cards);for(const pattern of [/Cedar/i,/175/,/12.*October.*2026|October.*12.*2026|2026-10-12/i,/Mira/i,/unverified|contact sales/i,/DRAFT ONLY/i])assert.match(delivered,pattern);
       const lines=result.text.split('\n').filter(line=>/^\d+[.)]\s/.test(line));assert.equal(lines.length,6,'all six requested numbered answers');
@@ -132,6 +134,7 @@ async function converse(session,prompt,context={}){
       for(const attachment of attachments){
         const original=originals.find(i=>i.title===attachment.name);assert.ok(original,'original '+attachment.name+' persisted');
         const stored=(await api(owner,'/api/library/'+original.id)).item;assert.equal(stored.content,attachment.dataUrl,'original bytes preserved for '+attachment.name);assert.ok(stored.extractedText?.trim(),'extracted '+attachment.name);assert.ok(!stored.extractionWarnings.some(w=>/failed/i.test(w)));
+      }
       }
     });
     await check('real Luna completes a bounded goal run and preserves activity',async()=>{
@@ -151,13 +154,15 @@ async function converse(session,prompt,context={}){
     });
     if(base==='https://belna.se')await check('production scheduler wakes goal work without a manual run',async()=>{
       const scheduled=(await api(owner,'/api/goals','POST',{title:'Scheduled verification',category:'other'})).goal;
-      const configured=(await api(owner,'/api/goals/'+scheduled.id+'/work','PUT',{successCriteria:'Read the goal list',nextAction:'List goals once. Nothing needs changing; return exactly NO_CHANGE.',allowedTools:['goal_list'],maxRuns:1,maxRounds:3,intervalMinutes:1440,startAt:new Date(Date.now()+10000).toISOString()})).goal;
+      const configured=(await api(owner,'/api/goals/'+scheduled.id+'/work','PUT',{successCriteria:'Read the goal list',nextAction:'List goals once. Nothing needs changing; return exactly NO_CHANGE.',allowedTools:['goal_list'],maxRuns:1,maxRounds:4,intervalMinutes:1440,startAt:new Date(Date.now()+10000).toISOString()})).goal;
       let run;
       for(let i=0;i<80;i++){
         run=(await api(owner,'/api/automation-runs')).runs.find(r=>(r.subAgentId || r.sub_agent_id)===configured.work.agentId);
         if(run && !['running','waiting_approval'].includes(run.status))break;
         await pause(1500);
       }
+      report.scheduler={status:run?.status,trigger:run?.event?.type,output:run?.result?.output};save();
+      if(run?.result?.taskId){report.scheduler.trace=(await api(owner,'/api/agent/tasks/trace?chatId='+configured.work.chatId+'&taskId='+run.result.taskId)).task;save();}
       assert.ok(run,'scheduler created a run');assert.equal(run.event.type,'schedule');assert.equal(run.status,'idle','NO_CHANGE remains quiet');
       const activity=(await api(owner,'/api/goals')).goals.find(g=>g.id===scheduled.id).activity;assert.ok(activity.some(a=>a.status==='idle'),'unchanged check remains in goal activity');
       const messages=await admin.from('messages').select('id').eq('user_id',owner.user.id).eq('chat_id',configured.work.chatId);if(messages.error)throw messages.error;assert.equal(messages.data.length,0,'unchanged goal work creates no chat notification');

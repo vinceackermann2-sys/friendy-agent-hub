@@ -30,7 +30,7 @@ function checkpointPrompt(state) {
 function parseCompletion(text) {
   text=String(text || '');const at=text.indexOf('<task_coverage>');
   if(at<0)return {text};
-  const visible=text.slice(0,at).trim(),end=text.indexOf('</task_coverage>',at);
+  const visible=text.slice(0,at).replace(/<!--\s*$/,'').trim(),end=text.indexOf('</task_coverage>',at);
   if(end<0)return {text:visible};
   try{return {text:visible,checkpoint:JSON.parse(text.slice(at+15,end))};}
   catch{return {text:visible};}

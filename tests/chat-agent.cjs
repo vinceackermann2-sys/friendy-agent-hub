@@ -17,6 +17,21 @@ function chat(model,extra={}) {
 const reply=(...steps)=>{const models=[];return {models,model:async opts=>{models.push(clone({...opts,onDelta:undefined,signal:undefined}));const step=steps.shift();return typeof step==='function'?step(opts):step || {text:'Done.'};}};};
 
 (async()=>{
+  // New file work retains the complete owner request rather than a coordinator
+  // brief selecting one file. Existing/replied-to work still uses the coordinator.
+  const filePrompt='Read both files. Give six numbered facts. Do not send or buy anything.';
+  for(const [context,existing,direct] of [[{},[],true],[{replyTo:'message1'},[],false],[{},[{id:'ongoing',status:'running'}],false]]){
+    const created=[],savedFiles=[];let plans=0;
+    const attachments=['one','two'].map(name=>({name:name+'.txt',dataUrl:'data:text/plain;base64,'+Buffer.from(name+' evidence').toString('base64')}));
+    const files=chat(async()=>{plans++;return {text:'The existing request continues.'};},{
+      acknowledge:async()=>'Reading both files.',
+      store:{listMemories:async()=>[],saveTurn:async()=>{},saveLibraryItem:async item=>{savedFiles.push(item);return {id:'file'+savedFiles.length};}},
+      tasks:{summaries:async()=>existing,create:async input=>{created.push(input);return {id:'file-task',state:{status:'queued'}};},view:r=>({id:r.id})},
+    });
+    await files.coordinator.run({userId:'a',chatId:'files',requestId:'files-'+direct+'-'+plans,prompt:filePrompt,context:{...context,attachments},onEvent:()=>{}});
+    assert.equal(plans,direct?0:1);assert.equal(created.length,direct?1:0);
+    if(direct){assert.equal(created[0].instructions,filePrompt);assert.equal(created[0].context.originalPrompt,filePrompt);assert.equal(created[0].context.attachments.length,2);assert.match(created[0].context.attachmentText,/one evidence[\s\S]*two evidence/);}
+  }
   // Read-only account lookups run in chat. A lookup that needs approval is not run;
   // the model is told to start a task instead.
   let shopRuns=0,appRuns=0;

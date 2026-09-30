@@ -245,8 +245,10 @@ function createCoordinator(d) {
       } catch {}
       return STARTED_REPLIES[parseInt(teamId.slice(0,8),16)%STARTED_REPLIES.length];
     };
+    // A new file request is one complete job. A coordinator-written brief can
+    // accidentally select only the first file and narrow the owner's request.
     const direct=taskStorageAvailable && !context.replyTo && !interrupted && !tasks.some(t=>['queued','running','waiting_peers','waiting_approval','stopping'].includes(t.status))
-      ? directWorkerRequest(prompt) : null;
+      ? directWorkerRequest(prompt) || (preparedAttachments.accepted?{title:prompt.replace(/\s+/g,' ').slice(0,84),instructions:prompt}:null) : null;
     if(direct) {
       const row=await d.tasks.create({userId,chatId,requestKey:`${requestId}:direct`,...direct,history:historyCopy,
         context:{...context,attachments:preparedAttachments.metadata,attachmentText:preparedAttachments.prompt,agent:agentContext,originalPrompt:prompt,teamId,language:messageLanguage(prompt)}});
