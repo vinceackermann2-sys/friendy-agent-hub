@@ -604,14 +604,16 @@ async function updateChatSummary(userId,chatId,{store:s,model,logUsage:bill}) {
 // syncs to the app like automation chats, so it appears in the chat list when it changes.
 const updatesChatId=userId=>`updates_${crypto.createHash('md5').update(String(userId)).digest('hex').slice(0,12)}`;
 const notifyOwner=(userId,{message,kind})=>store.saveTurn(userId,updatesChatId(userId),'agent',message,{title:'Updates',source:'automation',metadata:{delivery:kind || 'upkeep'}});
+async function finishTaskMemory(userId,row){
+  const memoryHandled=(row.state.observations || []).some(o=>o.ok&&['memory_write','memory_update','memory_delete'].includes(o.name));
+  const upkeep=!!row.state.context?.upkeep;
+  const saved=memoryHandled||upkeep?[]:await finishMemory(userId,row.state.originalPrompt,row.state.result,await store.searchMemories(userId,row.state.originalPrompt,20),()=>{});
+  // Automation settlement owns delivery, including suppression of unchanged goals.
+  if(!upkeep && !row.state.context?.automation && !row.state.parentTaskId)await store.saveTurn(userId,row.chat_id,'agent',row.state.result,{metadata:{taskId:row.id}});
+  return saved;
+}
 const tasks=createTaskRuntime({records,model:callFoundryWithTools,clock:runtimeContext,goalStatus:store.getGoal,saveGrant:store.createPermissionGrant,notify:notifyOwner,progress:request=>writeProgress(request,small),schemas:[...TOOL_SCHEMAS,READ_DOC_SCHEMA],selectSchemas:selectToolSchemas,tools:{...TOOLS,read_doc:READ_DOC_TOOL},azure,buildSystem,emitResultCard,
-  ensureCredit,logUsage,checkPrompt,protect:protectAgentResponse,memory:{list:store.listMemories,search:(userId,query,limit)=>store.searchMemories(userId,query,limit,true),rank:rankMemories,finish:async(userId,row)=>{
-    const memoryHandled=(row.state.observations || []).some(o=>o.ok&&['memory_write','memory_update','memory_delete'].includes(o.name));
-    const upkeep=!!row.state.context?.upkeep;
-    const saved=memoryHandled||upkeep?[]:await finishMemory(userId,row.state.originalPrompt,row.state.result,await store.searchMemories(userId,row.state.originalPrompt,20),()=>{});
-    if(!upkeep && !row.state.parentTaskId)await store.saveTurn(userId,row.chat_id,'agent',row.state.result,{source:row.state.context?.automation?'automation':undefined,metadata:{taskId:row.id}});
-    return saved;
-  }}});
+  ensureCredit,logUsage,checkPrompt,protect:protectAgentResponse,memory:{list:store.listMemories,search:(userId,query,limit)=>store.searchMemories(userId,query,limit,true),rank:rankMemories,finish:finishTaskMemory}});
 const coordinator=createCoordinator({tasks,model:callFoundryWithTools,schemas:TOOL_SCHEMAS,tools:TOOLS,azure,store,buildSystem,memoryContext,permission:permissionDecision,
   ensureCredit,logUsage,checkPrompt,protect:protectAgentResponse,rank:rankMemories,finishMemory,reasoningEffort:CHAT_REASONING_EFFORT,
   summarize:(userId,chatId)=>updateChatSummary(userId,chatId,{store,...small}),
@@ -626,4 +628,4 @@ function startWorker() {
   worker=setInterval(async()=>{if(busy)return;busy=true;try{await tasks.tick({drain:true});}catch{}finally{busy=false;}},1000);
   worker.unref?.();return worker;
 }
-module.exports={createCoordinator,updateChatSummary,acknowledgeTask,handle:coordinator.handle,tasks,startWorker};
+module.exports={createCoordinator,updateChatSummary,acknowledgeTask,finishTaskMemory,handle:coordinator.handle,tasks,startWorker};

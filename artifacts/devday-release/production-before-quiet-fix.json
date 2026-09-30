@@ -1,0 +1,385 @@
+{
+  "checkedAt": "2026-09-30T14:02:36.804Z",
+  "base": "https://belna.se",
+  "checks": [
+    {
+      "name": "live release frontend and Luna health",
+      "pass": true
+    },
+    {
+      "name": "production file revisions, stale edits and account isolation",
+      "pass": true
+    },
+    {
+      "name": "production scoped permissions, expiry and foreign revoke",
+      "pass": true
+    },
+    {
+      "name": "production goal link, bounds and pause",
+      "pass": true
+    },
+    {
+      "name": "live desktop/mobile UI with real APIs",
+      "pass": true
+    },
+    {
+      "name": "real Luna draft respects no sending",
+      "pass": true
+    },
+    {
+      "name": "real Luna reads PDF DOCX XLSX and retains all requested facts",
+      "pass": true
+    },
+    {
+      "name": "real Luna completes a bounded goal run and preserves activity",
+      "pass": true
+    },
+    {
+      "name": "production scheduler wakes goal work without a manual run",
+      "pass": false,
+      "error": "unchanged goal work creates no chat notification\n\n1 !== 0\n"
+    }
+  ],
+  "agentSamples": [
+    {
+      "prompt": "Draft exactly two short sentences asking my landlord to fix the kitchen tap this week. Only draft it; do not send anything.",
+      "text": "Could you please fix the kitchen tap this week? Let me know what day works for you.",
+      "cards": [],
+      "traces": [],
+      "ms": 4963
+    },
+    {
+      "prompt": "Read all three attachments. Give exactly six numbered lines: project name, monthly budget, ship date, owner, vendor price status, and contract status. Keep the unverified vendor price explicit. Do not send, subscribe, purchase or change anything.",
+      "text": "I’m reviewing all three attachments to extract the project name, monthly budget, ship date, owner, vendor price status, and contract status while keeping any unverified vendor price explicit.\n1. Project name: Cedar\n2. Monthly budget: EUR 175\n3. Ship date: 12 October 2026\n4. Owner: Mira\n5. Vendor price: Unverified; contact sales.\n6. Contract status: Draft only.",
+      "cards": [],
+      "traces": [
+        {
+          "id": "b6c4f353-d77f-43cf-a174-2f18ab673f8d",
+          "title": "Read all three attachments. Give exactly six numbered lines: project name, monthly b",
+          "status": "completed",
+          "version": 1,
+          "round": 2,
+          "recoveries": 0,
+          "metrics": {
+            "usage": [
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.0009977249999999999,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 1835,
+                "inputTokens": 7782,
+                "serviceTier": "default",
+                "outputTokens": 105,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 0
+              },
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.0014945499999999999,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 4003,
+                "inputTokens": 10093,
+                "serviceTier": "default",
+                "outputTokens": 523,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 0
+              }
+            ],
+            "models": {
+              "gpt-6-luna": 2
+            },
+            "costUsd": 0.0024922749999999995,
+            "modelMs": 5838,
+            "modelCalls": 2,
+            "inputTokens": 17875,
+            "cachedTokens": 0,
+            "outputTokens": 628
+          },
+          "coverage": {
+            "gaps": [],
+            "verified": true
+          },
+          "steps": [
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_3om45uj6e0zr\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_vxfwuxuce18d\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_9cjvjw78e1go\"}"
+            }
+          ]
+        }
+      ],
+      "ms": 16290
+    },
+    {
+      "prompt": "Read all three attachments. Give exactly six numbered lines: project name, monthly budget, ship date, owner, vendor price status, and contract status. Keep the unverified vendor price explicit. Do not send, subscribe, purchase or change anything.",
+      "text": "Reading all three attachments to extract the project name, monthly budget, ship date, owner, vendor price status, and contract status. I’ll keep any unverified vendor price explicitly marked and make no changes or purchases.\n1. Project name: Cedar\n2. Monthly budget: EUR 175\n3. Ship date: 12 October 2026\n4. Owner: Mira\n5. Vendor price: Unverified; contact sales.\n6. Contract status: Draft only.",
+      "cards": [],
+      "traces": [
+        {
+          "id": "70cd0b56-02be-4fa2-ba61-4db4756d9308",
+          "title": "Read all three attachments. Give exactly six numbered lines: project name, monthly b",
+          "status": "completed",
+          "version": 1,
+          "round": 2,
+          "recoveries": 0,
+          "metrics": {
+            "usage": [
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.00028521000000000004,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 1377,
+                "inputTokens": 7771,
+                "serviceTier": "default",
+                "outputTokens": 104,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 6181
+              },
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.0014944749999999999,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 3678,
+                "inputTokens": 10083,
+                "serviceTier": "default",
+                "outputTokens": 525,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 0
+              }
+            ],
+            "models": {
+              "gpt-6-luna": 2
+            },
+            "costUsd": 0.001779685,
+            "modelMs": 5055,
+            "modelCalls": 2,
+            "inputTokens": 17854,
+            "cachedTokens": 6181,
+            "outputTokens": 629
+          },
+          "coverage": {
+            "gaps": [],
+            "verified": true
+          },
+          "steps": [
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_zfr6hodmef12\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_1hk3urxqefad\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_a82tvopcefk5\"}"
+            }
+          ]
+        }
+      ],
+      "ms": 14714
+    },
+    {
+      "prompt": "Read all three attachments. Give exactly six numbered lines: project name, monthly budget, ship date, owner, vendor price status, and contract status. Keep the unverified vendor price explicit. Do not send, subscribe, purchase or change anything.",
+      "text": "Reading all three attachments to extract the project name, monthly budget, ship date, owner, vendor price status, and contract status, while keeping any unverified vendor price explicit and making no changes or purchases.\n1. Project name: Cedar\n2. Monthly budget: EUR 175\n3. Ship date: 12 October 2026\n4. Owner: Mira\n5. Vendor price: Unverified; contact sales.\n6. Contract status: Draft only.",
+      "cards": [],
+      "traces": [
+        {
+          "id": "673a2fe3-843e-4f5b-9f04-40e0003c4154",
+          "title": "Read all three attachments. Give exactly six numbered lines: project name, monthly b",
+          "status": "completed",
+          "version": 1,
+          "round": 2,
+          "recoveries": 0,
+          "metrics": {
+            "usage": [
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.00029753500000000003,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 2076,
+                "inputTokens": 7788,
+                "serviceTier": "default",
+                "outputTokens": 125,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 6181
+              },
+              {
+                "model": "gpt-6-luna",
+                "region": null,
+                "costUsd": 0.0014422999999999999,
+                "provider": "azure-foundry",
+                "deployment": "gpt-6-luna",
+                "durationMs": 3398,
+                "inputTokens": 10100,
+                "serviceTier": "default",
+                "outputTokens": 417,
+                "priceVersion": "existing-luna-config",
+                "cachedInputTokens": 0
+              }
+            ],
+            "models": {
+              "gpt-6-luna": 2
+            },
+            "costUsd": 0.001739835,
+            "modelMs": 5474,
+            "modelCalls": 2,
+            "inputTokens": 17888,
+            "cachedTokens": 6181,
+            "outputTokens": 542
+          },
+          "coverage": {
+            "gaps": [],
+            "verified": true
+          },
+          "steps": [
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_2o3lny8gergm\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_7pimr1yyerpq\"}"
+            },
+            {
+              "name": "library_read",
+              "ok": true,
+              "version": 1,
+              "skipped": false,
+              "args": "{\"id\":\"lib_7k7cynieeryg\"}"
+            }
+          ]
+        }
+      ],
+      "ms": 15623
+    }
+  ],
+  "cleanup": true,
+  "scheduler": {
+    "status": "idle",
+    "trigger": "schedule",
+    "output": "NO_CHANGE",
+    "trace": {
+      "id": "91d4e131-564d-4442-a12c-7e5c9a8e2d69",
+      "title": "Scheduled verification",
+      "status": "completed",
+      "version": 1,
+      "round": 3,
+      "recoveries": 0,
+      "metrics": {
+        "usage": [
+          {
+            "model": "gpt-6-luna",
+            "region": null,
+            "costUsd": 0.00017466,
+            "provider": "azure-foundry",
+            "deployment": "gpt-6-luna",
+            "durationMs": 1486,
+            "inputTokens": 3798,
+            "serviceTier": "default",
+            "outputTokens": 101,
+            "priceVersion": "existing-luna-config",
+            "cachedInputTokens": 2896
+          },
+          {
+            "model": "gpt-6-luna",
+            "region": null,
+            "costUsd": 0.000250885,
+            "provider": "azure-foundry",
+            "deployment": "gpt-6-luna",
+            "durationMs": 1957,
+            "inputTokens": 4291,
+            "serviceTier": "default",
+            "outputTokens": 178,
+            "priceVersion": "existing-luna-config",
+            "cachedInputTokens": 3096
+          },
+          {
+            "model": "gpt-6-luna",
+            "region": null,
+            "costUsd": 0.000373955,
+            "provider": "azure-foundry",
+            "deployment": "gpt-6-luna",
+            "durationMs": 3650,
+            "inputTokens": 4385,
+            "serviceTier": "default",
+            "outputTokens": 506,
+            "priceVersion": "existing-luna-config",
+            "cachedInputTokens": 3553
+          }
+        ],
+        "models": {
+          "gpt-6-luna": 3
+        },
+        "costUsd": 0.0007995000000000001,
+        "modelMs": 7093,
+        "modelCalls": 3,
+        "inputTokens": 12474,
+        "cachedTokens": 9545,
+        "outputTokens": 785
+      },
+      "coverage": {
+        "gaps": [],
+        "verified": true
+      },
+      "steps": [
+        {
+          "name": "goal_list",
+          "ok": true,
+          "version": 1,
+          "skipped": false,
+          "args": "{}"
+        },
+        {
+          "name": "completion_review",
+          "ok": false,
+          "version": 1,
+          "skipped": false,
+          "error": "Before finishing, resolve missing requirements or mark them blocked in the final task_coverage record. Preserve ALL requirements; state remaining gaps honestly. Review the complete owner request and s"
+        }
+      ]
+    }
+  },
+  "passed": false
+}

@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {createCoordinator,updateChatSummary}=require('../server/agents/conversation');
+const {createCoordinator,updateChatSummary,finishTaskMemory}=require('../server/agents/conversation');
 const {createTaskRuntime}=require('../server/agents/task-runtime');
 const {readDoc,READ_DOC_SCHEMA}=require('../server/agents/product-docs');
 const clone=x=>x==null?x:structuredClone(x);
@@ -17,6 +17,14 @@ function chat(model,extra={}) {
 const reply=(...steps)=>{const models=[];return {models,model:async opts=>{models.push(clone({...opts,onDelta:undefined,signal:undefined}));const step=steps.shift();return typeof step==='function'?step(opts):step || {text:'Done.'};}};};
 
 (async()=>{
+  const productionStore=require('../server/store'),savedResults=[],originalSearch=productionStore.searchMemories,originalSave=productionStore.saveTurn;
+  try{
+    productionStore.searchMemories=async()=>[];productionStore.saveTurn=async(...args)=>savedResults.push(args);
+    const finished=(context,parentTaskId=null)=>({id:'finished',chat_id:'goal-chat',state:{context,parentTaskId,originalPrompt:'Check the goal',result:'NO_CHANGE',observations:[]}});
+    await finishTaskMemory('owner',finished({automation:true}));assert.equal(savedResults.length,0,'automation settlement controls quiet and meaningful delivery');
+    await finishTaskMemory('owner',finished({upkeep:'memory'}));await finishTaskMemory('owner',finished({},'parent'));assert.equal(savedResults.length,0,'upkeep and subtasks do not publish task answers');
+    await finishTaskMemory('owner',finished({}));assert.equal(savedResults.length,1,'ordinary chat tasks still persist their result');assert.equal(savedResults[0][3],'NO_CHANGE');
+  }finally{productionStore.searchMemories=originalSearch;productionStore.saveTurn=originalSave;}
   // New file work retains the complete owner request rather than a coordinator
   // brief selecting one file. Existing/replied-to work still uses the coordinator.
   const filePrompt='Read both files. Give six numbered facts. Do not send or buy anything.';

@@ -177,8 +177,8 @@ for (const name of ['page-validation', 'goal-work', 'permission-policy', 'docume
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);
   src = src.replace(/const (\w+) = require\('([^']+)'\);/g, (_, binding, spec) =>
     spec === 'crypto' ? `import ${binding} from 'node:crypto';` : spec === 'path' ? `import path from 'node:path';` : `import * as ${binding} from '${spec}.js';`);
-  src = src.replace('module.exports={createCoordinator,updateChatSummary,acknowledgeTask,handle:coordinator.handle,tasks,startWorker};',
-    'const handle=coordinator.handle;\nexport {createCoordinator,updateChatSummary,acknowledgeTask,handle,tasks,startWorker};');
+  src = src.replace('module.exports={createCoordinator,updateChatSummary,acknowledgeTask,finishTaskMemory,handle:coordinator.handle,tasks,startWorker};',
+    'const handle=coordinator.handle;\nexport {createCoordinator,updateChatSummary,acknowledgeTask,finishTaskMemory,handle,tasks,startWorker};');
   src = src.replace(/module\.exports\s*=\s*\{/g, 'export {');
   if (/require\(|module\.exports/.test(src)) throw new Error(`Unconverted CommonJS in ${name}`);
   writeFileSync(join(root, `src/lingon-server/agents/${name}.js`), src, 'utf8');

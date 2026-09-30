@@ -127,6 +127,7 @@ async function converse(session,prompt,context={}){
       const attachments=[['Project.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document',docx],['Owner.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',xlsx],['Contract.pdf','application/pdf',pdf]].map(([name,type,bytes])=>({name,type,size:bytes.length,dataUrl:'data:'+type+';base64,'+Buffer.from(bytes).toString('base64')}));
       for(let attempt=0;attempt<3;attempt++){
       const result=await converse(owner,'Read all three attachments. Give exactly six numbered lines: project name, monthly budget, ship date, owner, vendor price status, and contract status. Keep the unverified vendor price explicit. Do not send, subscribe, purchase or change anything.',{attachments});
+      assert.equal(result.traces.length,1,'one worker covers the complete file request');assert.equal(result.traces[0].title,result.prompt.replace(/\s+/g,' ').slice(0,84),'deployed runtime uses the original request');
       const delivered=result.text+' '+JSON.stringify(result.cards);for(const pattern of [/Cedar/i,/175/,/12.*October.*2026|October.*12.*2026|2026-10-12/i,/Mira/i,/unverified|contact sales/i,/DRAFT ONLY/i])assert.match(delivered,pattern);
       const lines=result.text.split('\n').filter(line=>/^\d+[.)]\s/.test(line));assert.equal(lines.length,6,'all six requested numbered answers');
       assert.doesNotMatch(result.text,/<task_coverage>/);assert.ok(!result.traces.some(t=>t.steps.some(s=>/mail_send|shop_purchase/.test(s.name))));
