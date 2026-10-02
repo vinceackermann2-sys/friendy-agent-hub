@@ -5615,7 +5615,8 @@ async function openWalletWithdrawal(kind='withdraw'){
     const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/'+(verifying?'verification-session':kind==='deposit'?'deposit-session':'withdraw-session'),{method:'POST',body:'{}'}),loadWalletElements()]);
     if(closed || owner!==billingIdentity()){close();return;}
     const expires=Date.parse(session.expiresAt);
-    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || (verifying || kind==='withdraw') && (typeof session.accessToken!=='string' || session.accessToken.length<32) || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.now()+15*60000+1000)throw Error('Your wallet session expired. Open it again.');
+    // Allow small device/server clock differences; the local timer still caps the session at 15 minutes.
+    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || (verifying || kind==='withdraw') && (typeof session.accessToken!=='string' || session.accessToken.length<32) || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.now()+15*60000+30000)throw Error('Your wallet session expired. Open it again.');
     clearElement();
     if(verifying){
       if(session.verificationKind!=='individual')throw Error('Your private wallet check could not be confirmed.');

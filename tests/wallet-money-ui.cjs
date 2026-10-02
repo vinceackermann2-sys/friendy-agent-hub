@@ -12,6 +12,7 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
    window.WhopElements=()=>({wallet:{create:group=>({create:(kind,options)=>{window.moneyOptions=options;window.moneyElements.push({kind,accountId:group.accountId,availableBalance:options.availableBalance,pendingBalance:options.pendingBalance,payoutCountry:options.payoutCountry,allowNewCard:options.allowNewCard});return {mount:target=>{document.querySelector(target).innerHTML='<p>Secure '+kind+' form</p>';},destroy:()=>{}};},destroy:()=>{}})},verifications:{create:group=>({create:(kind,options)=>{window.moneyVerification=options;window.moneyElements.push({kind,accountId:group.accountId,verificationKind:group.kind});return {mount:target=>{document.querySelector(target).innerHTML='<p>Secure wallet check</p>';},destroy:()=>{}};},destroy:()=>{}})}});
   });
   const calls=[],wallet={configured:true,kind:'connected',status:'verification_required',cardProgramAvailable:false,withdrawalsAvailable:true,identityVerified:false,verificationStatus:'pending',balance:{available:125,pending:25},country:'SE'};
+  // Live server clocks can run a few seconds ahead of the owner's device.
   let depositAttempts=0,quoteAttempts=0,linkAttempts=0,sendAttempts=0,holdWithdrawal=false,releaseWithdrawal;
   await context.route('**/api/**',async route=>{
    const req=route.request(),pathname=new URL(req.url()).pathname,body=req.postData()?JSON.parse(req.postData()):{};calls.push({pathname,method:req.method(),body});let result={};
@@ -21,9 +22,9 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
    else if(pathname==='/api/belna-wallet/card-waitlist')result={cardWaitlist:{joined:false}};
    else if(pathname==='/api/shipping-addresses')result={addresses:[]};
    else if(pathname==='/api/shop-pay')result={shopPay:{configured:true,connected:false}};
-   else if(pathname==='/api/belna-wallet/deposit-session'){if(++depositAttempts===1)return reject('Funding methods could not load. Try again.');result={accountId:'biz_owner',expiresAt:new Date(Date.now()+15*60000).toISOString(),cardFundingAvailable:true};}
-   else if(pathname==='/api/belna-wallet/verification-session')result={accountId:'biz_owner',accessToken:'identity-fixture-token'.repeat(3),verificationKind:'individual',expiresAt:new Date(Date.now()+15*60000).toISOString()};
-   else if(pathname==='/api/belna-wallet/withdraw-session'){if(holdWithdrawal)await new Promise(resolve=>{releaseWithdrawal=resolve;});result={accountId:'biz_owner',accessToken:'withdrawal-fixture-token'.repeat(3),expiresAt:new Date(Date.now()+15*60000).toISOString(),availableBalance:125,pendingBalance:25,payoutCountry:'SE'};}
+   else if(pathname==='/api/belna-wallet/deposit-session'){if(++depositAttempts===1)return reject('Funding methods could not load. Try again.');result={accountId:'biz_owner',expiresAt:new Date(Date.now()+15*60000+3000).toISOString(),cardFundingAvailable:true};}
+   else if(pathname==='/api/belna-wallet/verification-session')result={accountId:'biz_owner',accessToken:'identity-fixture-token'.repeat(3),verificationKind:'individual',expiresAt:new Date(Date.now()+15*60000+3000).toISOString()};
+   else if(pathname==='/api/belna-wallet/withdraw-session'){if(holdWithdrawal)await new Promise(resolve=>{releaseWithdrawal=resolve;});result={accountId:'biz_owner',accessToken:'withdrawal-fixture-token'.repeat(3),expiresAt:new Date(Date.now()+15*60000+3000).toISOString(),availableBalance:125,pendingBalance:25,payoutCountry:'SE'};}
    else if(pathname==='/api/belna-wallet/quote'){if(++quoteAttempts===1)return reject('Sending money is not enabled for your wallet yet. Complete your identity check first.');result={quoteId:'reviewed-transfer',recipient:body.recipient,amount:body.amount,fees:'Partner fees may apply.'};}
    else if(pathname==='/api/belna-wallet/send'){sendAttempts++;result={quoteId:body.quoteId,recipient:'friend@example.invalid',amount:5,status:'succeeded'};}
    else if(pathname==='/api/belna-wallet/receive'){if(++linkAttempts===1)return reject('Your payment link could not be created. Try again.');result={url:'https://whop.com/checkout/fixture',amount:body.amount,title:body.title};}
