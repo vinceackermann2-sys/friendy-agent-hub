@@ -7,6 +7,8 @@ shots/*.png
 uploads/
 playwright-report/
 test-results/
+# Local verification captures can contain account details or security codes.
+artifacts/
 supabase/.temp/
 .DS_Store
 Thumbs.db

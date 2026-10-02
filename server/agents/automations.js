@@ -57,6 +57,8 @@ async function settleAutomationRun({ userId, subAgent, run, event, task, upkeepS
   if(subAgent.trigger?.goalId){const unchanged=finalStatus==='idle';await store.recordGoalActivity(userId,subAgent.trigger.goalId,{at:Date.now(),runId:run.id,taskId:task.id,status:finalStatus,summary:unchanged?'No meaningful change.':(output || errorText || '').slice(0,1000)},task.state.context?.goalConfigurationId,task.state.checkpoint?.nextActions?.[0],next);}
   const won = await store.finishAutomationRun(userId, run.id, finalStatus, { taskId:task.id, output }, errorText);
   if (won) {
+
+
     await store.markSubAgentRun(userId, subAgent.id, finalStatus, errorText, next, { result:failed ? null : output, signalAt });
     await store.logToolRun({ userId, sessionId:subAgent.chatId, kind:'trigger', name:subAgent.name, status:finalStatus, detail:failed ? errorText : eventText(event), ms:Date.now()-started });
     if (finalStatus === 'done' && !subAgent.systemKind && depth < MAX_CHAIN_DEPTH) {

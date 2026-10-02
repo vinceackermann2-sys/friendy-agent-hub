@@ -239,7 +239,7 @@ function ensureSweep() {
 
 async function start({ userId, trace, kind = 'browser' }) {
   const desktop = kind === 'desktop';
-  if (desktop) throw Object.assign(new Error('Native desktop access is disabled for VM security. Use the protected browser and isolated code tools.'), { code: 'DISABLED' });
+  if (desktop) throw Object.assign(new Error('The computer runs in its own container over the live channel on the hosted app, not through this relay.'), { code: 'DISABLED' });
   if (!desktop && process.env.BROWSER_TOOL === 'off') throw Object.assign(new Error('browser tool disabled'), { code: 'DISABLED' });
   if (desktop && process.env.COMPUTER_TOOL === 'off') throw Object.assign(new Error('computer tool disabled'), { code: 'DISABLED' });
   if (!azure.isAzureConfigured()) throw Object.assign(new Error(desktop ? 'Computer use requires the user Azure VM.' : 'Live browser requires the user Azure VM.'), { code: 'DISABLED' });

@@ -11,7 +11,7 @@ const { browserProfileRuntime, buildBrowserSessionScript, buildBrowserRelayScrip
   // Functions sent to the VM as text must not use the global require or process: the
   // production bundler rewrites them to __require and processModule, which the VM lacks.
   const azureVm = require('../server/agents/azure-vm');
-  for (const name of ['browserKit', 'browserProfileRuntime', 'liveStreamer', 'desktopKit']) {
+  for (const name of ['browserKit', 'browserProfileRuntime', 'liveStreamer', 'desktopKit', 'desktopStreamer']) {
     if (!azureVm[name]) continue;
     assert.doesNotMatch(azureVm[name].toString(), /(^|[^.\w])require\(/, `${name} is serialized to the VM and must use the require it is given`);
     assert.doesNotMatch(azureVm[name].toString(), /(^|[^.\w])process\.[a-z]/, `${name} is serialized to the VM and must use load('process')`);

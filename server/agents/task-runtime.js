@@ -195,6 +195,12 @@ function createTaskRuntime(d) {
       const browser=VISUAL.has(call.name);
       event(s,{type:'card',id:call.id,card:browser?{type:'browser',desktop:DESKTOP.has(call.name) || undefined,surface:'canvas',url:DESKTOP.has(call.name)?'Virtual computer':String(call.args.url || ''),note:String(failure).slice(0,200),status:'failed'}:{type:'computer',surface:'canvas',managed:true,lines:[{t:String(failure).slice(0,500)}],status:'failed'}});
     }
+    // A step whose result makes no card of its own (a fill without a page) still closes the
+    // card it opened as running; otherwise that card reads as working after the step.
+    if(!failure && (VISUAL.has(call.name) || ['shell','code_run'].includes(call.name))) {
+      const open=s.events.findLast(e=>e.type==='card' && e.id===call.id);
+      if(open?.card?.status==='running') event(s,{type:'card',id:call.id,card:{...open.card,note:undefined,status:'done'}});
+    }
     if(!failure && call.name==='memory_write' && out?.text) event(s,{type:'card',card:{type:'memory',status:'done',text:out.text}});
   }
   const view = (r, after=0) => ({ id:r.id, chatId:r.chat_id, teamId:r.state.teamId || r.id, title:r.state.title, status:r.state.status,
@@ -453,12 +459,12 @@ function createTaskRuntime(d) {
           });
         }
         // The live view can open while the step works, not only once it is done.
-        const liveId=BROWSER.has(call.name) && tool.liveId ? await tool.liveId({userId,sessionId:id}).catch(()=>null) : null;
+        const liveId=(BROWSER.has(call.name) || DESKTOP.has(call.name)) && tool.liveId ? await tool.liveId({userId,sessionId:id}).catch(()=>null) : null;
         row=await update(s=>{
           if(s.version!==version || s.pending[0]?.id!==call.id || !['queued','running'].includes(s.status)) return;
           s.inflight={...call,kind:'tool',version};
           if(BROWSER.has(call.name)) event(s,{type:'card',id:call.id,card:{type:'browser',surface:'canvas',url:String(call.args.url || ''),note:call.name==='browser_open'?'Opening browser…':'Working in the browser…',status:'running',...(liveId?{liveId,transport:'realtime'}:{})}});
-          if(DESKTOP.has(call.name)) event(s,{type:'card',id:call.id,card:{type:'browser',desktop:true,surface:'canvas',url:'Virtual computer',note:'Using the computer…',status:'running'}});
+          if(DESKTOP.has(call.name)) event(s,{type:'card',id:call.id,card:{type:'browser',desktop:true,surface:'canvas',url:'Virtual computer',note:'Using the computer…',status:'running',...(liveId?{liveId,transport:'realtime'}:{})}});
           if(['shell','code_run'].includes(call.name)) event(s,{type:'card',id:call.id,card:{type:'computer',surface:'canvas',managed:true,lines:[],status:'running'}});
         });
         if(row.state.inflight?.id!==call.id) return row;
@@ -481,7 +487,12 @@ function createTaskRuntime(d) {
             return;
           }
           if(s.status==='stopping') s.status='stopped';
-          if(s.version!==version || !['running','queued'].includes(s.status)) return;
+          if(s.version!==version || !['running','queued'].includes(s.status)) {
+            // The step's browser or computer card still says running: it shows how the step
+            // ended, or the owner sees it working after the task was stopped or changed.
+            if(VISUAL.has(call.name) || ['shell','code_run'].includes(call.name)) showResult(s,call,out,failure);
+            return;
+          }
           s.pending.shift();
           showResult(s,call,out,failure);
         });

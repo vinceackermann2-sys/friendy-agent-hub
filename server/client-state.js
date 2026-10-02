@@ -13,6 +13,7 @@ function createClientStateStore({ supa, loadLocal, saveLocal, ensureProfile, lis
         agent: agent ? {
           name: String(agent.name || 'Your agent').slice(0, 40),
           color: String(agent.color || 'lingon').slice(0, 30),
+          outfit: (Array.isArray(agent.outfit) ? agent.outfit : []).slice(0, 3).map(item => String(item || '').slice(0, 20)).filter(item => /^[a-z]+$/.test(item)),
           pers: String(agent.pers || 'Playful').slice(0, 30),
           provisional: agent.provisional === true,
           claimedAt: Number(agent.claimedAt) || null,

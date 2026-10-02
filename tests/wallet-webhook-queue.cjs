@@ -6,7 +6,7 @@ const { PGlite } = require('@electric-sql/pglite');
   const db = new PGlite();
   try {
     await db.exec('create role anon; create role authenticated; create role service_role;');
-    await db.exec(fs.readFileSync('supabase/migrations/20260928110000_wallet_webhook_queue.sql','utf8'));
+    await db.exec(fs.readFileSync('supabase/migrations/20260928095256_wallet_webhook_queue.sql','utf8'));
     const permissions = (await db.query(`select
       has_table_privilege('anon','belna_wallet_webhook_events','SELECT') as anon_read,
       has_table_privilege('authenticated','belna_wallet_webhook_events','INSERT') as user_write,

@@ -31,7 +31,8 @@ It also lists, under `custom`, the owner's own connectors: remote MCP servers
 and REST APIs (`server/connectors.js`, table `custom_connectors`). The owner
 asks in chat and a task adds one with `connector_setup`: the worker finds the
 address and sign-in in the service's docs, and a chat card shows the owner
-where the key goes and takes it (Settings > Secrets has a manual form too).
+where the key goes and takes it. There is no manual form: Settings > Secrets
+only lists saved credentials and starts a chat to add one.
 Workers see what one can do with `connector_tools` and use it with
 `connector_call`. Requests go from
 the server, not the VM, because the VM's job containers have no network. The

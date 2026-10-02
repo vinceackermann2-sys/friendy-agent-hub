@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
+// On phones Settings opens sections from its list; go back to the list first when a section is open.
+const openSettingsTab=async(page,t)=>{await page.locator('#main .set-page, #main .settings-tabs').first().waitFor();const back=page.locator('.set-sub-head [data-act="stab"][data-t="home"]');if(await back.count())await back.click();await page.locator(`:is(.set-row,.settings-tabs button)[data-act="stab"][data-t="${t}"]`).click();};
 (async () => {
   const browser = await chromium.launch();
   try {
@@ -26,11 +28,11 @@ const { chromium } = require('playwright');
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto('http://127.0.0.1:8080/app');
-    await page.locator('[data-act="stab"][data-t="billing"]').click();
+    await openSettingsTab(page,'billing');
     await page.locator('[data-act="portal"]').waitFor();
     assert.equal(await page.locator('#plancards .pcard').count(), 3);
     assert.equal(await page.locator('.billing-extra-balance, #giftcode').count(), 0);
-    await page.locator('[data-act="stab"][data-t="usage"]').click();
+    await openSettingsTab(page,'usage');
     await page.locator('#giftcode').waitFor();
     assert.equal(await page.locator('[data-act="portal"], #plancards').count(), 0);
     assert.equal(await page.locator('.billing-extra-balance').count(), 1);
@@ -61,10 +63,10 @@ const { chromium } = require('playwright');
       await page.locator('#main .page').evaluate(element => { element.scrollTop = element.scrollHeight; });
       await page.screenshot({ path: process.env.BILLING_SCREENSHOT, fullPage: true });
     }
-    await page.locator('[data-act="stab"][data-t="issue"]').click();
+    await openSettingsTab(page,'issue');
     assert.equal(await page.locator('#issue-topic').evaluate(el => getComputedStyle(el).appearance), 'none');
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.locator('[data-act="stab"][data-t="usage"]').click();
+    await openSettingsTab(page,'usage');
     await page.locator('.billing-select-trigger').click();
     const menu = await page.locator('.billing-select-menu').boundingBox();
     assert.ok(menu && menu.x >= 0 && menu.x + menu.width <= 1280, 'token menu stays inside the desktop viewport');

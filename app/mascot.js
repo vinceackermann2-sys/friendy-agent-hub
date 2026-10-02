@@ -8,12 +8,10 @@ window.Mascot = (() => {
 
   const PALETTE = {
     lingon:   { name:'Belna blue', body:'#4A7FD4', dark:'#2E5BA8', glow:'#B8D4F7', blush:'#FF8FB0' },
-    blueberry:{ name:'Blueberry',   body:'#5B6EE1', dark:'#4353C6', glow:'#C3CBF7', blush:'#FF8FB0' },
-    moss:     { name:'Moss',        body:'#7BA05B', dark:'#5F8344', glow:'#D3E4C2', blush:'#FF8FA0' },
-    sun:      { name:'Sunbeam',     body:'#E8B33C', dark:'#C6922A', glow:'#F7DFAE', blush:'#FF7F8E' },
-    lavender: { name:'Lavender',    body:'#9B6BD3', dark:'#7E4FB8', glow:'#E2CFF5', blush:'#FF8FC0' },
-    rose:     { name:'Rosehip',     body:'#E58BB1', dark:'#C96B94', glow:'#F8D3E2', blush:'#E4527E' },
-    charcoal: { name:'Charcoal',    body:'#4A4D55', dark:'#33363D', glow:'#8B8E96', blush:'#FF8FB0' },
+    blueberry:{ name:'Sky',         body:'#B7D6FF', dark:'#7EA6DB', glow:'#E2EEFF', blush:'#FF8FB0' },
+    moss:     { name:'Pistachio',   body:'#D8F3B0', dark:'#9BC468', glow:'#EEF9DF', blush:'#FF8FA0' },
+    sun:      { name:'Apricot',     body:'#FFE0A3', dark:'#E3B25A', glow:'#FFF1D6', blush:'#FF7F8E' },
+    rose:     { name:'Orchid',      body:'#E8B5F4', dark:'#BF7FD3', glow:'#F6E2FB', blush:'#FF8FC0' },
   };
 
   const sprite = (color, view = '') => `${ASSET}star-${PALETTE[color] ? color : 'lingon'}${view}.webp`;
@@ -52,6 +50,74 @@ window.Mascot = (() => {
       + cx.map(x => `<ellipse cx="${x}" cy="${cy}" rx="${rx}" ry="${ry}" fill="url(#${id})"/>`).join('');
   }
 
+  /* Accessories the owner can dress the star in (Edit in the agent panel).
+     Drawn as SVG over the body in the 120×120 face frame, so they fit every
+     colour without new renders. One item per slot: eyes, head, neck. */
+  const OUTFITS = {
+    glasses:    { name:'Glasses',    slot:'eyes' },
+    shades:     { name:'Shades',     slot:'eyes' },
+    headphones: { name:'Headphones', slot:'head' },
+    partyhat:   { name:'Party hat',  slot:'head' },
+    flower:     { name:'Flower',     slot:'head' },
+    bowtie:     { name:'Bow tie',    slot:'neck' },
+  };
+  /* keeps known items, at most one per slot (the last one picked wins) */
+  function cleanOutfit(list){
+    const bySlot = {};
+    (Array.isArray(list) ? list : []).forEach(k => { if (OUTFITS[k]) bySlot[OUTFITS[k].slot] = k; });
+    return Object.values(bySlot);
+  }
+  let worn = [];
+  function wear(list){ worn = cleanOutfit(list); return worn; }
+
+  /* front-view drawings; `back` items sit behind the face, the rest on top */
+  function accessory(key){
+    const id = `macc${++uid}`;
+    switch (key) {
+      case 'glasses': return `
+        <g class="macc macc-glasses" stroke="#23252E" stroke-width="1.9" fill="#fff" fill-opacity=".16">
+          <circle cx="${EL}" cy="${EY}" r="7"/><circle cx="${ER}" cy="${EY}" r="7"/>
+          <path d="M${EL + 7} ${EY - 1} q${(ER - EL - 14) / 2} -2.6 ${ER - EL - 14} 0" fill="none"/>
+          <path d="M${EL - 7} ${EY - 1.5} l-6 -2.2 M${ER + 7} ${EY - 1.5} l6 -2.2" fill="none" stroke-linecap="round"/>
+        </g>`;
+      case 'shades': return `
+        <g class="macc macc-shades">
+          <path d="M${EL - 8.2} ${EY - 4.6} h16.4 q.6 9.4 -8.2 9.8 q-8.8 -.4 -8.2 -9.8z M${ER - 8.2} ${EY - 4.6} h16.4 q.6 9.4 -8.2 9.8 q-8.8 -.4 -8.2 -9.8z" fill="#1E2029"/>
+          <path d="M${EL - 9.4} ${EY - 4.8} H${ER + 9.4}" stroke="#1E2029" stroke-width="2.2" stroke-linecap="round"/>
+          <path d="M${EL - 5.2} ${EY - 2.2} l3.4 0 M${ER - 5.2} ${EY - 2.2} l3.4 0" stroke="#fff" stroke-opacity=".55" stroke-width="1.6" stroke-linecap="round"/>
+        </g>`;
+      case 'headphones': return `
+        <g class="macc macc-headphones">
+          <path d="M37.5 47 C35 18 85 18 82.5 47" stroke="#E9ECF3" stroke-width="4.6" fill="none" stroke-linecap="round"/>
+          <path d="M37.5 47 C35 18 85 18 82.5 47" stroke="#C4C9D6" stroke-width="1.4" fill="none" stroke-linecap="round" transform="translate(0 1.6)"/>
+          <ellipse cx="37" cy="48.5" rx="6.6" ry="7.6" fill="#F4F5F9" stroke="#C4C9D6" stroke-width="1"/><ellipse cx="37" cy="48.5" rx="3.4" ry="4" fill="#F07B6A"/>
+          <ellipse cx="83" cy="48.5" rx="6.6" ry="7.6" fill="#F4F5F9" stroke="#C4C9D6" stroke-width="1"/><ellipse cx="83" cy="48.5" rx="3.4" ry="4" fill="#F07B6A"/>
+        </g>`;
+      case 'partyhat': return `
+        <g class="macc macc-partyhat" transform="rotate(8 58.6 24)">
+          <defs><clipPath id="${id}"><path d="M58.6 3.6 L67.4 24 Q58.6 27.4 49.8 24 Z"/></clipPath></defs>
+          <path d="M58.6 3.6 L67.4 24 Q58.6 27.4 49.8 24 Z" fill="#FFC94D"/>
+          <g clip-path="url(#${id})" stroke="#F0717D" stroke-width="2.8"><path d="M46 14 L72 6 M46 21.5 L72 13.5 M46 29 L72 21"/></g>
+          <path d="M49.8 24 Q58.6 27.4 67.4 24" stroke="#E2A82F" stroke-width="1.3" fill="none"/>
+          <circle cx="58.6" cy="3.4" r="2.9" fill="#F0717D"/>
+        </g>`;
+      case 'flower': return `
+        <g class="macc macc-flower" transform="translate(70 30) rotate(14)">
+          ${[0, 72, 144, 216, 288].map(r => `<ellipse cx="0" cy="-5.2" rx="3.6" ry="5" fill="#fff" stroke="#E6E1EA" stroke-width=".8" transform="rotate(${r})"/>`).join('')}
+          <circle r="3.3" fill="#FFC94D" stroke="#E7A93A" stroke-width=".8"/>
+        </g>`;
+      case 'bowtie': return `
+        <g class="macc macc-bowtie">
+          <path d="M60 82.5 L49 76.5 Q46.6 82.5 49 88.5 Z M60 82.5 L71 76.5 Q73.4 82.5 71 88.5 Z" fill="#E5484D" stroke="#B9343A" stroke-width="1" stroke-linejoin="round"/>
+          <rect x="56.8" y="79.2" width="6.4" height="6.6" rx="2.2" fill="#C93C41"/>
+          <path d="M51 79.4 q-1 3 0 6" stroke="#fff" stroke-opacity=".4" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+        </g>`;
+    }
+    return '';
+  }
+  /* head items go under the face, eye and neck items over it */
+  const outfitLayer = (list, slots) => list.filter(k => slots.includes(OUTFITS[k].slot)).map(accessory).join('');
+
   /**
    * svg(colorKey, mood, size, extraClass)
    * moods: idle | happy | think | wave | wow
@@ -61,7 +127,7 @@ window.Mascot = (() => {
    * frame (HELPER_ORTHO) so the big item fits under the face: the viewBox
    * widens to match while the face keeps its coordinates.
    */
-  function svg(color = 'lingon', mood = 'idle', size = 64, extra = '', prop = ''){
+  function svg(color = 'lingon', mood = 'idle', size = 64, extra = '', prop = '', outfit = worn){
     const c = PALETTE[color] || PALETTE.lingon;
     const ink = '#1A1B22';
     const waveSpark = mood === 'wave' ? spark(104, 22, 7, c.dark) + spark(112, 37, 4.5, c.body) : '';
@@ -71,9 +137,11 @@ window.Mascot = (() => {
   <ellipse class="mascot-shadow" cx="60" cy="${prop ? 136 : 104}" rx="${prop ? 36 : 30}" ry="4.6" fill="#1B2A4A" opacity=".09"/>
   ${waveSpark}
   <image class="mascot-body" href="${sprite(color, prop ? `-${prop}` : '')}" x="${x}" y="${y}" width="${w}" height="${w}"/>
+  ${outfitLayer(outfit, ['head'])}
   ${blush([41.5, 78.5], 70.2, 6.4, 4.2, c.blush)}
   <g class="eyes">${eyes(mood, ink)}</g>
   ${mouth(mood, ink)}
+  ${outfitLayer(outfit, ['eyes', 'neck'])}
 </svg>`;
   }
 
@@ -162,8 +230,11 @@ window.Mascot = (() => {
      sprite per colour (star-<colour>-desk.webp, 320px render in the same
      500 box as laptop(), so the face transform is shared). The viewBox crops
      to the figure so it fills the round header badge. */
-  function desk(color = 'lingon'){
+  /* the desk pose's head tip sits lower and further left than the front view's */
+  const DESK_HEAD = { partyhat:'translate(-2 7)', flower:'translate(-7 -1)' };
+  function desk(color = 'lingon', outfit = worn){
     const c = PALETTE[color] || PALETTE.lingon;
+    const extras = outfit.filter(k => k !== 'headphones');   // the pose wears its own
     const ink = '#1A1B22';
     const face = 'translate(272.2 270.9) rotate(-5.5) scale(3.28 3.7) translate(-60 -63.5)';
     const note = (x, y, cls) => `<g transform="translate(${x} ${y}) scale(1.5)"><g class="mdesk-note ${cls}"><path d="M0 0v-26l18 -6v25" stroke="${c.dark}" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><ellipse cx="-5" cy="1" rx="7" ry="5.4" fill="${c.dark}"/><ellipse cx="13" cy="-5" rx="7" ry="5.4" fill="${c.dark}"/></g></g>`;
@@ -176,6 +247,7 @@ window.Mascot = (() => {
       ${blush([41.5, 78.5], 70.2, 6.4, 4.2, c.blush)}
       <g class="mdesk-eyes"><g class="eye-blink">${eyes('idle', ink)}</g></g>
       <path class="mdesk-mouth" d="M57.2 69.6 q2.8 1.6 5.6 0" stroke="${ink}" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <g class="mdesk-outfit">${outfitLayer(extras, ['eyes', 'neck'])}${extras.filter(k => DESK_HEAD[k]).map(k => `<g transform="${DESK_HEAD[k]}">${accessory(k)}</g>`).join('')}</g>
     </g>
   </g>
   ${note(372, 170, 'n1')}${note(394, 150, 'n2')}${note(128, 178, 'n3')}
@@ -185,9 +257,23 @@ window.Mascot = (() => {
   /* Chat-header badge: both states stacked so switching is a class toggle
      (.working on an ancestor) with no re-render — idle looks around and
      blinks, working types on the laptop with headphones on. */
-  function head(color = 'lingon', size = 44){
-    return `<span class="mhead" aria-hidden="true"><span class="mhead-idle">${svg(color, 'idle', size, 'mascot-look')}</span><span class="mhead-work">${desk(color)}</span></span>`;
+  function head(color = 'lingon', size = 44, outfit = worn){
+    return `<span class="mhead" aria-hidden="true"><span class="mhead-idle">${svg(color, 'idle', size, 'mascot-look', '', outfit)}</span><span class="mhead-work">${desk(color, outfit)}</span></span>`;
   }
 
-  return { svg, logo, loop, laptop, desk, head, PALETTE, keys: Object.keys(PALETTE) };
+  /* Fetches and decodes a colour's sprites before the app swaps them in; an
+     <image> whose sprite is not decoded yet paints blank for a few frames. */
+  const ready = new Map(), kept = [];
+  function preload(color = 'lingon'){
+    const key = PALETTE[color] ? color : 'lingon';
+    if (!ready.has(key)) ready.set(key, Promise.all(['', '-desk'].map(view => {
+      const img = new Image();
+      img.src = sprite(key, view);
+      kept.push(img);
+      return img.decode().catch(() => {});
+    })));
+    return ready.get(key);
+  }
+
+  return { svg, logo, loop, laptop, desk, head, preload, wear, cleanOutfit, PALETTE, keys: Object.keys(PALETTE), OUTFITS, outfitKeys: Object.keys(OUTFITS) };
 })();

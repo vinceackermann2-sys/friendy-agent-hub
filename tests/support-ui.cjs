@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
+// On phones Settings opens sections from its list; go back to the list first when a section is open.
+const openSettingsTab=async(page,t)=>{await page.locator('#main .set-page, #main .settings-tabs').first().waitFor();const back=page.locator('.set-sub-head [data-act="stab"][data-t="home"]');if(await back.count())await back.click();await page.locator(`:is(.set-row,.settings-tabs button)[data-act="stab"][data-t="${t}"]`).click();};
 (async () => {
   const browser = await chromium.launch();
   try {
@@ -27,7 +29,7 @@ const { chromium } = require('playwright');
     assert.equal(submitted[0].kind, 'issue');
     assert.equal(submitted[0].topic, 'Chat or agent');
     assert.equal(Buffer.from(submitted[0].images[0].data, 'base64').toString(), 'screenshot');
-    await page.locator('[data-act="stab"][data-t="support"]').click();
+    await openSettingsTab(page,'support');
     assert.equal(await page.locator('a[href="mailto:support@belna.se"]').count(), 1);
     await page.locator('#feedback-name').fill('Taylor');
     await page.locator('#feedback-email').fill('taylor@example.com');

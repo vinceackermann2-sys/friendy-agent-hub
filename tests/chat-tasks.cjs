@@ -204,6 +204,8 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await stop.runtime.control('a',stopId,{action:'cancel',version:1},'chat');assert.equal(stop.rows.get(stopId).state.status,'stopping');
   toolRelease.resolve({stdout:'Done'});await action;
   assert.equal(stop.rows.get(stopId).state.status,'stopped');assert.equal(stop.rows.get(stopId).state.observations.length,1);
+  // The step's computer card does not keep saying running once the task is stopped.
+  assert.equal(stop.rows.get(stopId).state.events.filter(e=>e.card?.type==='computer').at(-1).card.status,'done','a stopped step closes its card');
   // Cancelling stops the model mid-thought, and the work done so far is still billed.
   const aborting=(began,usage)=>opts=>new Promise((_,reject)=>{began.resolve();
     opts.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError',usage})));});
@@ -380,6 +382,10 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   // The browser card carries the task's live channel while the step still runs.
   const liveCard=seerState.events.find(e=>e.card?.type==='browser' && e.card.status==='running');
   assert.match(String(liveCard?.card.liveId),/^rt:live-[0-9a-f-]{36}$/,'the live view can open while a browser step works');
+  // A step whose result makes no card of its own still closes the card it opened.
+  const closed=seerState.events.filter(e=>e.id===liveCard.id).at(-1).card;
+  assert.equal(closed.status,'done');assert.equal(closed.note,undefined,'"Working in the browser…" goes with the running step');
+  assert.equal(closed.liveId,liveCard.card.liveId);
   assert.match(seerState.observations[0].text,/\[1\] button \\"Buy\\"/);
   // Only the newest screen card keeps its screenshot in the stored task history.
   const cards=setup();cards.d.schemas=[schemaFor('browser_action')];cards.d.selectSchemas=()=>[];

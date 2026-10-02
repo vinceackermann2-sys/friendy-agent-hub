@@ -37,7 +37,7 @@ When tokens run out the agent stops working until the allowance resets or a pack
     text: `Apps connect with secure OAuth from the Apps page, or from a connect card the agent shows in chat. The agent never asks for app passwords.
 Once connected, tasks can read and act in the app within the approval rules (see approvals). The chat can tell which apps are connected; reading or acting inside an app happens in a task, which asks the owner before any write.
 Disconnect an app on the Apps page to remove the agent's access to it.
-The agent can also add the owner's own connectors: a remote MCP server or a REST API. The owner asks in chat; a task finds the address and sign-in in the service's docs, and the owner pastes the key into a secure card in chat. The key is encrypted in the vault and never shown to the agent. (A key can also be added by hand under Settings > Secrets > MCP server or API connection.) Each connector shows as connected with its tools or HTTP methods as permissions the owner can turn off; removing it deletes its key. MCP servers must be reachable over https with a token or no sign-in; servers that allow only browser sign-in (OAuth) or run only on the owner's own computer (stdio) cannot be added yet.`,
+The agent can also add the owner's own connectors: a remote MCP server or a REST API. The owner asks in chat; a task finds the address and sign-in in the service's docs, and the owner pastes the key into a secure card in chat. The key is encrypted in the vault and never shown to the agent. There is no form for adding one by hand: the agent sets it up. Each connector shows as connected with its tools or HTTP methods as permissions the owner can turn off; removing it deletes its key. MCP servers must be reachable over https with a token or no sign-in; servers that allow only browser sign-in (OAuth) or run only on the owner's own computer (stdio) cannot be added yet.`,
   },
   mailbox: {
     title: "The agent's own mailbox",
@@ -46,7 +46,7 @@ This is separate from the owner's own email; the owner's Gmail or Outlook is a c
   },
   'privacy-and-credentials': {
     title: 'Privacy, credentials and the vault',
-    text: `Passwords, API keys and one-time codes are never typed into chat. The agent asks for logins and keys with a secure vault request; the owner saves them in Settings, and the agent uses them only by reference (sec_••••) with approval, without seeing the value.
+    text: `Passwords, API keys and one-time codes are never typed into chat. The agent asks for logins and keys with a secure vault request: a card in chat where the owner types the value, which is encrypted straight into the vault. To save a login, an API key or any other credential, or to connect an API or MCP server, the owner just asks in chat; Settings > Secrets has no form for adding them, only the saved list, where the owner can reveal or delete each one. The agent uses them only by reference (sec_••••) with approval, without seeing the value.
 Card details are never saved in Belna, not even masked. For website purchases the agent signs in to the merchant and pays with Shop Pay or a card the owner already saved in that merchant account; the owner approves each order first.
 Each account's chats, memory, files and tasks are private to that account.`,
   },
@@ -60,7 +60,8 @@ Between conversations the agent tidies memory hourly and reflects nightly on wha
   automations: {
     title: 'Automations and reminders',
     text: `The agent can run work on a schedule (every 5 minutes up to every 30 days), when a connected app reports an event, or after another automation finishes. Scheduled runs are checks, not live watchers: timing can drift by a few minutes.
-Results arrive in the automation's own chat. The owner can pause, edit or delete automations at any time; creating one asks for approval.`,
+The owner describes what they want done and when in chat. The agent works out the setup and creates the automation with trigger_create after approval. There is no manual creation form; never ask the owner to configure triggers or schedules in the Automations panel.
+Results arrive in the automation's own chat. The Automations panel lets the owner view, run, pause, enable or delete existing automations.`,
   },
 };
 

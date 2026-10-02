@@ -61,6 +61,9 @@ const IC = {
   chart:'<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V7M18 17v-8"/>',
   code:'<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>',
   mail:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 6l-10 7L2 6"/>',
+  inbox:'<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/>',
+  send:'<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/>',
+  reply:'<path d="M9 14 4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
   phone:'<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.6 2Z"/>',
   wallet:'<path d="M20 7H4a2 2 0 0 1 0-4h14v4"/><path d="M20 7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5"/><circle cx="17" cy="14" r="1.2"/>',
   laptop:'<rect x="2" y="4" width="20" height="12" rx="2"/><path d="M2 20h20"/>',
@@ -130,6 +133,8 @@ const IC = {
   calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h3v3H8Z"/>',
   slides:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8M7 12l3-3 2 2 4-4"/>',
   map:'<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/>',
+  chevl:'<path d="M15 6l-6 6 6 6"/>',
+  kebab:'<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
 };
 const icon = (n, s = 16) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[n] || ''}</svg>`;
 
@@ -163,7 +168,7 @@ function attachmentIcon(file){
   const extension = String(file.name || '').split('.').pop().toUpperCase();
   const label = kind === 'video' ? (extension.length <= 5 ? extension : 'VIDEO') :
     kind === 'image' ? (extension.length <= 5 ? extension : 'IMAGE') :
-    ({ excel:'X', sheets:'', word:'W', docs:'', powerpoint:'P', slides:'', pdf:'PDF', audio:'AUDIO', archive:'ZIP', spreadsheet:'CSV', text:'TXT', file:'FILE' })[kind];
+    ({ excel:'X', sheets:'', word:'W', docs:'', powerpoint:'P', slides:'', pdf:'PDF', audio:'AUDIO', archive:'ZIP', spreadsheet:'CSV', text:['md','rtf','txt'].includes(extension.toLowerCase()) ? extension : 'TXT', file:'FILE' })[kind];
   const colors = { excel:'#107c41', sheets:'#0f9d58', word:'#185abd', docs:'#4285f4', powerpoint:'#c43e1c', slides:'#f4b400', pdf:'#e53736', image:'#2e8fa3', video:'#6650b8', audio:'#8a58ad', archive:'#bd8723', spreadsheet:'#168469', text:'#5c7188', file:'#687487' };
   const color = colors[kind];
   const glyph = kind === 'sheets' || kind === 'spreadsheet' || kind === 'excel'
@@ -538,6 +543,7 @@ if (state.libraryCat === 'memory') { state.libraryCat = 'system'; state.systemFi
 if (!state.agentContext || typeof state.agentContext !== 'object') state.agentContext = null;
 if (!Array.isArray(state.subAgents)) state.subAgents = [];
 delete state.builtInAutomationsOpen;
+for (const key of ['subAgentComposer','subAgentDraft','subAgentDraftName','subAgentTriggerType','subAgentDraftInterval']) delete state[key];
 if (!state.triggerOptions) state.triggerOptions = fresh().triggerOptions;
 if (!Array.isArray(state.composioApps)) state.composioApps = [];
 state.composioLoading = false;
@@ -575,7 +581,7 @@ state.composioLoading = false;
     'canvasSelectedMessageId','canvasSelectedFileIndex','replyingTo','taskReply','taskReplyScope','coordinatorRuns'];
   const clientProfile = () => ({
     onboarded:!!state.onboarded,
-    agent:state.agent ? { name:state.agent.name, color:state.agent.color,
+    agent:state.agent ? { name:state.agent.name, color:state.agent.color, outfit:Mascot.cleanOutfit(state.agent.outfit),
       provisional:!!state.agent.provisional, claimedAt:state.agent.claimedAt || null } : null,
     theme:state.theme || 'grey',
     userProfile:state.userProfile ? {name:state.userProfile.name || ''} : null,
@@ -957,12 +963,6 @@ function refreshSubAgents(repaint = true) {
       state.subAgents = Array.isArray(agents.subAgents) ? agents.subAgents : [];
       state.triggerOptions = options || state.triggerOptions;
       subAgentsCheckedAt = Date.now();
-      if (state.subAgentComposer) {
-        const nameInput = $('#subname');
-        const promptInput = $('#subprompt');
-        if (nameInput) state.subAgentDraftName = nameInput.value;
-        if (promptInput) state.subAgentDraft = promptInput.value;
-      }
       save();
       if (repaint && state.canvasOpen && state.canvasTab === 'subagents') paintCanvas();
     } catch (e) { if (owner === billingIdentity()) toast(e.message || 'Could not load sub-agents.'); }
@@ -1635,7 +1635,7 @@ async function afterSignIn(user){
     }
     if (state.pendingPrompt && state.onboarded && state.agent && !state.agent.provisional){
       await landingRun(state.pendingPrompt, state.pendingPromptFiles || []);
-    } else render();
+    } else { leaveSetupChat(); render(); }
     toast('Signed in as ' + (user.email || 'you'));
   } catch (e){
     console.error(e);
@@ -2455,8 +2455,8 @@ function renderLanding(){
     <div class="hero-wrap">
     <div class="belna-stars" aria-hidden="true">${STAR_SKY_SVG}</div>
     <header class="hero ahero">
-      <h1>Bring anything <span class="mhold" id="mhold" title="Your Belna agent at work — handling mail, calls, laptop work and counting" aria-label="Your Belna agent at work — handling mail, calls, laptop work and counting">${Mascot.loop()}</span> to life.</h1>
-      <div class="safe-note" style="margin-top:18px">Your personal AI agent</div>
+      <h1>Make time <span class="mhold" id="mhold" title="Your Belna agent at work — handling mail, calls, laptop work and counting" aria-label="Your Belna agent at work — handling mail, calls, laptop work and counting">${Mascot.loop()}</span> <span style="white-space:nowrap">for life.</span></h1>
+      <div class="safe-note" style="margin-top:18px;text-transform:none;letter-spacing:.02em">Belna shops, schedules, structures your entire life</div>
       <div class="promptwrap">
         <form class="promptbox" id="lform">
           <textarea id="lprompt" rows="2" placeholder="Ask Belna to do my taxes..."></textarea>
@@ -2706,6 +2706,23 @@ function startPendingPromptFlow(pendingOverride){
   if (c.onboardingAnswers?.name && c.onboardingAnswers?.color) void completeOnboarding(c);
 }
 
+/* Signing in or opening the app never lands on the finished setup chat: its
+   name and color questions would greet the owner on every visit. A fresh chat
+   opens instead (an empty one is reused); the setup chat stays in the list,
+   and stays open while a request saved before setup is still being worked on. */
+function leaveSetupChat(){
+  const c = chat();
+  if (needsOnboarding() || state.pendingPrompt || !c || c.onboarding || liveTaskIds(c).length) return;
+  if (!(c.onboardingAnswers || c.messages?.some(m => m.card?.onboarding))) return;
+  let next = state.chats.find(x => x.source !== 'automation' && !x.onboardingAnswers && !x.messages?.length);
+  if (!next) {
+    next = { id:uid(), title:'New chat', messages:[], trace:[], artifact:null, createdAt:Date.now() };
+    state.chats.unshift(next);
+  }
+  state.activeChat = next.id; state.view = 'chat';
+  save();
+}
+
 function pendingQuestion(c){
   return c && (c.messages || []).slice().reverse().map(m => ({c,m})).find(({m}) => m.card?.type === 'question' && m.card.status === 'pending');
 }
@@ -2891,13 +2908,15 @@ async function sendPromptDirect(c, text, files = []){
 const THEMES = [
   { id:'grey', name:'Standard Grey', c:'#5A5D63' },
   { id:'brick', name:'Classic Blue', c:'#3B6DD9' },
-  { id:'blue', name:'Blue', c:'#4353C6' },
-  { id:'yellow', name:'Yellow', c:'#8A6D1A' },
-  { id:'green', name:'Green', c:'#4E7A38' },
-  { id:'pink', name:'Pink', c:'#B14E85' },
+  { id:'blue', name:'Sky', c:'#B7D6FF' },
+  { id:'green', name:'Pistachio', c:'#D8F3B0' },
+  { id:'yellow', name:'Apricot', c:'#FFE0A3' },
+  { id:'pink', name:'Orchid', c:'#E8B5F4' },
 ];
 function applyTheme(){
   if (!THEMES.some(t => t.id === state.theme)) state.theme = 'grey';
+  // Retired agent colours (lavender, charcoal) fall back to Belna blue.
+  if (state.agent && !Mascot.PALETTE[state.agent.color]) state.agent.color = 'lingon';
   try { document.body.setAttribute('data-accent', state.theme); } catch {}
 }
 
@@ -3037,6 +3056,7 @@ function wireDrawerSwipe(){
 }
 function renderApp(){
   if (!signedIn()){ renderAuth(); return; }
+  Mascot.wear(state.agent?.outfit);
   ensureOwnerScope();
   if (needsOnboarding()) {
     if (!chat()?.onboarding) return startPendingPromptFlow();
@@ -3292,6 +3312,67 @@ function libCardHtml(item){
     ${state.librarySelect ? `<button class="lib-check${sel ? ' on' : ''}" data-act="lib-pick" data-id="${esc(item.id)}" aria-pressed="${sel ? 'true' : 'false'}">${icon('check',12)}</button>` : ''}
   </article>`;
 }
+// How an item opens: account files in the viewer, device uploads in a tab,
+// chat artifacts in the Canvas.
+function libOpenAttrs(item){
+  const action = item.libraryId ? 'library-item-open' : item.libraryUpload ? 'library-upload-open' : 'library-open';
+  const attrs = item.libraryId ? ` data-lib-id="${esc(item.libraryId)}"` : item.libraryUpload
+    ? ` data-upload="${esc(item.uploadId || '')}"`
+    : ` data-chat="${esc(item.chatId || '')}"${item.messageId ? ` data-msg="${esc(item.messageId)}"` : ''}${item.fileIndex !== undefined ? ` data-file="${item.fileIndex}"` : ''}`;
+  return ` data-act="${action}"${attrs}`;
+}
+// Files show their format (MD, CSV, DOCX); pages and apps the agent made show
+// the same colored icon as their chat card.
+function libRowIcon(item){
+  if (item._type === 'document') return `<span class="lib-row-file">${attachmentIcon({ name:item.title, type:item.mime || '' })}</span>`;
+  const info = artifactInfo({ ...(item.card || {}), name:item.title, title:item.title, mime:item.mime });
+  const tone = info.tone === 'doc' ? 'web' : info.tone;
+  return `<span class="art-icon tone-${esc(tone)}">${icon(info.ic, 22)}</span>`;
+}
+function libRowLabel(item){
+  if (['image','video','audio'].includes(item._type)) return libTypeLabel(item._type);
+  if (item._type !== 'document') return 'Artifact';
+  const ext = libExt(item.title);
+  return ext ? ext.toUpperCase() : 'Document';
+}
+function libCheckHtml(item){
+  const sel = (state.librarySelected || []).includes(item.id);
+  return `<button class="lib-pick${sel ? ' on' : ''}" data-act="lib-pick" data-id="${esc(item.id)}" aria-pressed="${sel}" aria-label="Select ${esc(item.title)}">${icon('check',13)}</button>`;
+}
+function libRowHtml(item){
+  const sel = state.librarySelect && (state.librarySelected || []).includes(item.id);
+  const open = libOpenAttrs(item);
+  return `<article class="lib-row${sel ? ' sel' : ''}" data-lib="${esc(item.id)}">
+    ${state.librarySelect ? libCheckHtml(item) : ''}
+    <button class="lib-row-main"${state.librarySelect ? ` data-act="lib-pick" data-id="${esc(item.id)}"` : open}>
+      ${libRowIcon(item)}
+      <span class="lib-row-copy"><b>${esc(item.title)}</b><span>${esc(libRowLabel(item))}</span></span>
+    </button>
+    ${state.librarySelect ? '' : `<details class="art-menu lib-row-menu"><summary class="iconbtn" aria-label="More actions for ${esc(item.title)}">${icon('kebab',20)}</summary>
+      <div class="art-menu-list"><button type="button"${open}>${icon('eye',14)} Open</button><button type="button" data-act="lib-download" data-id="${esc(item.id)}">${icon('down',14)} Download</button><button type="button" class="danger" data-act="lib-delete-one" data-id="${esc(item.id)}">${icon('trash',14)} Delete</button></div>
+    </details>`}
+  </article>`;
+}
+// Media tiles show the picture or first video frame once the file has loaded.
+function libMediaSource(item){
+  if (item.libraryId){
+    const loaded = libraryItemContent(item.libraryId);
+    return String(loaded.content || '').startsWith('data:') ? loaded.content : '';
+  }
+  return String(item.card?.dataUrl || '');
+}
+function libTileHtml(item){
+  const sel = state.librarySelect && (state.librarySelected || []).includes(item.id);
+  const src = libMediaSource(item);
+  const t = item._type;
+  const inner = t === 'image' && /^data:image\//.test(src) ? `<img src="${esc(src)}" alt="${esc(item.title)}" loading="lazy">`
+    : t === 'video' && /^data:video\//.test(src) ? `<video src="${esc(src)}" muted playsinline preload="metadata"></video>`
+    : `<span class="lib-tile-empty">${icon(libIconFor(t), 26)}<span>${esc(item.title)}</span></span>`;
+  return `<article class="lib-tile${sel ? ' sel' : ''}" data-lib="${esc(item.id)}">
+    <button class="lib-tile-main"${state.librarySelect ? ` data-act="lib-pick" data-id="${esc(item.id)}"` : libOpenAttrs(item)} aria-label="${esc(item.title)}">${inner}${t === 'video' && src ? `<span class="lib-tile-play">${icon('play',22)}</span>` : ''}</button>
+    ${state.librarySelect ? libCheckHtml(item) : ''}
+  </article>`;
+}
 function memoryDocumentContent(){
   const rows = (state.memory || []).filter(m => !m.category || m.category === 'long_term');
   return `# MEMORY.md\n\n${rows.map(m => `- ${m.text} <!-- ${memorySource(m)} -->`).join('\n') || 'No long-term memories yet.'}`;
@@ -3331,11 +3412,11 @@ function systemEditorHtml(item){
       : `<textarea class="field system-editor-text" id="system-editor-text" data-system-key="${esc(item.key)}" maxlength="${item.key === 'user' ? '4000' : '8000'}">${esc(item.content)}</textarea><div class="system-editor-actions"><button class="btn dark small" data-act="system-save">Save changes</button><button class="btn ghost small" data-act="system-back">Cancel</button></div>`}
   </div>`;
 }
-function systemLibraryBody(){
+function systemLibraryBody(phone = false){
   const selected = state.systemFile ? systemDocumentItems().find(item => item.id === state.systemFile) : null;
   if (selected) return systemEditorHtml(selected);
   const items = systemDocumentItems();
-  return `<div class="lib-head"><div><span class="lib-eyebrow">Library</span><h1>System files</h1></div></div>
+  return `${phone ? `<div class="set-sub-head lib-system-head"><button class="set-round" data-act="libcat" data-cat="all" aria-label="Back to Library" title="Library">${icon('chevl',20)}</button><h1>System files</h1></div>` : '<div class="lib-head"><div><span class="lib-eyebrow">Library</span><h1>System files</h1></div></div>'}
     ${SYSTEM_FILE_GROUPS.map(([folder, label]) => `<div class="lib-sec">${label}</div><div class="system-file-list">${items.filter(item => item.folder === folder).map(systemFileRowHtml).join('')}</div>`).join('')}`;
 }
 let systemFilesPending = null, systemFilesOwner = null, systemFilesCheckedAt = 0;
@@ -3708,6 +3789,7 @@ let workspaceIntroStartedAt = null;
 function paintSide(){
   const a = state.agent;
   if (!a) return;
+  Mascot.wear(a.outfit);
   const sidebarVisible = mobileNavOpen || !window.matchMedia('(max-width: 760px)').matches;
   if (workspaceIntroStartedAt === null && sidebarVisible) workspaceIntroStartedAt = performance.now();
   const introElapsed = workspaceIntroStartedAt === null ? Infinity : performance.now() - workspaceIntroStartedAt;
@@ -3872,6 +3954,7 @@ function paintGoals(M){
 }
 function paintMain(){
   const M = $('#main');
+  applyAgentBrand();
   if (state.view !== 'chat') stopVoice();
   if (state.view === 'chat') { setTimeout(() => syncCardLive(chat()), 0); return paintChat(M); }
   if (state.view === 'settings') return paintSettings(M);
@@ -3978,6 +4061,8 @@ function paintChat(M){
   const oldThread = M.dataset.chatId === c.id ? M.querySelector('#thread') : null;
   const keepTop = oldThread && !threadStickNext && oldThread.scrollHeight - oldThread.scrollTop - oldThread.clientHeight >= 120 ? oldThread.scrollTop : null;
   threadStickNext = false;
+  // Chats saved before paused cards moved under their answer.
+  for (const m of c.messages.filter(x => x.card?.type === 'task')) placeTaskCard(c, m);
   const fv = floatView(c);
   M.innerHTML = `
     <div class="floathead${fv.working ? ' working' : ''}"><div class="fav">${Mascot.head(state.agent.color,44)}</div><div class="pill" role="status" aria-live="polite">${esc(state.agent.name)}<span class="st" id="floatstatus">${esc(fv.text)}</span></div></div>
@@ -3989,7 +4074,7 @@ function paintChat(M){
       </span>
       <span class="sp"></span>
       ${Engine.managed && c.managedStatus === 'paused' ? `<button class="btn ghost tiny" data-act="managed-resume">Reconnect</button>` : ''}
-      <button class="giftbtn" data-act="opengift" title="Invite a friend — 10 million tokens each" aria-label="Open invite code">${Mascot.logo(18)}<span>Invite a friend · 10M each</span></button>
+      <button class="giftbtn" data-act="opengift" title="Invite a friend — 10 million tokens each" aria-label="Open invite code"><img class="giftbtn-icon" src="/lingon/mascot/gift-invite-icon.webp" alt="" width="20" height="20" decoding="async"><span>Invite a friend · 10M each</span></button>
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas" aria-label="Toggle canvas">${icon('menu',16)}</button>
     </div>
     <div class="thread" id="thread"><div class="threadinner" id="tinner">
@@ -4011,13 +4096,17 @@ function paintChat(M){
         </div>
       </form>
     </div></div>`;
+  const prevLast = M.dataset.chatId === c.id ? M.dataset.lastMsg : null;
   M.dataset.chatId = c.id;
+  watchAgentRuns($('#tinner'));
   pinThread($('#thread'), keepTop);
-  // Animate only the newest message — repainting all rows each time was jank.
+  // Animate only a message that just arrived: repaints for other reasons (a new mascot
+  // colour, a renamed agent) must not replay the last message's entrance.
   try {
     const rows = M.querySelectorAll('#tinner .msg');
     const last = rows[rows.length - 1];
-    if (last) last.classList.add('msg-new');
+    M.dataset.lastMsg = last?.dataset.mid || '';
+    if (last && prevLast != null && last.dataset.mid !== prevLast) last.classList.add('msg-new');
   } catch {}
   updateFloat();
   const prompt = $('#cprompt');
@@ -4097,6 +4186,59 @@ function messageChromeHTML(c, m){
   </div>`,
   };
 }
+/* The agent's brand colours as CSS variables: the name above its chat messages, the frame
+   around its computer and the pointer glow follow the colour picked for the agent. --ag-ink
+   is the palette's dark tone deepened until it reads as text on white. */
+function agentBrand(){
+  const p = Mascot.PALETTE[state.agent?.color] || Mascot.PALETTE.lingon;
+  const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const lum = a => a.map(v => (v /= 255) <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((s, v, i) => s + v * [.2126, .7152, .0722][i], 0);
+  let ink = rgb(p.dark);
+  while (1.05 / (lum(ink) + .05) < 4.6) ink = ink.map(v => Math.round(v * .92));
+  const hex = a => '#' + a.map(v => v.toString(16).padStart(2, '0')).join('');
+  return { body:p.body, dark:p.dark, glow:p.glow, ink:hex(ink), on:lum(rgb(p.body)) > .45 ? '#1A1B22' : '#fff', rgb:rgb(p.dark).join(',') };
+}
+function applyAgentBrand(){
+  Mascot.wear(state.agent?.outfit);
+  const b = agentBrand(), r = document.documentElement.style;
+  r.setProperty('--ag', b.body); r.setProperty('--ag-dark', b.dark); r.setProperty('--ag-glow', b.glow);
+  r.setProperty('--ag-ink', b.ink); r.setProperty('--ag-on', b.on); r.setProperty('--ag-rgb', b.rgb);
+}
+/* One browser card and one computer card per task: every browser step sends its own card
+   ("Opening…", "Working…", done), so only the newest of a group (visualGroup) shows and it
+   follows the work. A reply's ungrouped cards end at the next message from the person. */
+function hideOlderVisualCards(root){
+  const seen = new Set();
+  for (let n = root.lastElementChild; n; n = n.previousElementSibling){
+    if (n.classList.contains('user')) { for (const k of [...seen]) if (k.endsWith(':')) seen.delete(k); continue; }
+    const g = n.dataset.vgroup;
+    if (!g) continue;
+    n.classList.toggle('superseded', seen.has(g));
+    seen.add(g);
+  }
+}
+/* Like Messages: the agent's name sits above the first message of each run of its messages.
+   Hidden rows and the typing dots (CSS moves them to the end) neither start nor break a run. */
+function markAgentRuns(root){
+  if (!root) return;
+  hideOlderVisualCards(root);
+  let prev = '';
+  for (const n of root.children){
+    if (n.hidden || n.classList.contains('msg-hidden') || n.classList.contains('superseded') || n.classList.contains('task-working') || n.style.display === 'none') continue;
+    const agent = n.classList.contains('msg') && n.classList.contains('agent');
+    n.classList.toggle('run-start', agent && prev !== 'agent');
+    prev = agent ? 'agent' : 'other';
+  }
+}
+let agentRunObserver = null;
+function watchAgentRuns(root){
+  agentRunObserver?.disconnect();
+  if (!root) return;
+  markAgentRuns(root);
+  agentRunObserver = new MutationObserver(() => markAgentRuns(root));
+  agentRunObserver.observe(root, { childList:true });
+}
+const agentNameHTML = () => `<div class="msg-name">${esc(state.agent.name)}</div>`;
 function msgNode(c, m){
   const chrome = (m.kind === 'text') ? messageChromeHTML(c, m) : { has:false, reactions:'', actions:'' };
   if (m.kind === 'text' && m.role === 'user'){
@@ -4104,12 +4246,14 @@ function msgNode(c, m){
     return el(`<div class="msg user" data-mid="${m.id}"><div class="message-stack${chrome.has ? ' has-reactions' : ''}"><div class="bub-wrap"><div class="bub">${replyPreviewHTML(m)}${filesHtml}${paintAppleEmoji(esc(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
   }
   if (m.kind === 'text')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body message-stack${chrome.has ? ' has-reactions' : ''}"><div class="bub-wrap"><div class="bub md">${replyPreviewHTML(m)}${paintAppleEmoji(md(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body message-stack${chrome.has ? ' has-reactions' : ''}">${agentNameHTML()}<div class="bub-wrap"><div class="bub md">${replyPreviewHTML(m)}${paintAppleEmoji(md(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
   if (m.kind === 'tools')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body"><div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${agentNameHTML()}<div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
   if (m.kind === 'chips')
     return el('<div style="display:none"></div>');
-  if (m.kind === 'card' && m.card?.type === 'memory')
+  // Belna is for everyone: shell commands and their output (npm, ls …) run on the agent's
+  // computer out of sight. The work still happens; the chat shows only what it produced.
+  if (m.kind === 'card' && (m.card?.type === 'memory' || m.card?.type === 'computer'))
     return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
   // A working task shows only as typing dots at the end of the chat (CSS order keeps
   // them below newer messages). Results, approvals and questions arrive as their own
@@ -4122,8 +4266,10 @@ function msgNode(c, m){
   // milestone cards from older tasks) is chatter the chat reply already covers. Failures still show.
   if (m.kind === 'card' && m.card?.type === 'progress' && m.card.taskId && m.card.status === 'done')
     return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
-  if (m.kind === 'card')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${cardNode(c, m)}${!(m.card.type === 'subagents' || (m.card.type === 'present' && ['dashboard','table'].includes(m.card.kind))) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
+  if (m.kind === 'card') {
+    const group = visualGroup(m.card);
+    return el(`<div class="msg agent" data-mid="${m.id}"${group ? ` data-vgroup="${esc(group)}"` : ''}><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body card-body">${agentNameHTML()}${cardNode(c, m)}${!(m.card.type === 'subagents' || (m.card.type === 'present' && ['dashboard','table'].includes(m.card.kind))) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
+  }
   return el('<div></div>');
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
@@ -4222,11 +4368,7 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
       if (e.target.dataset.act === 'toggle-cc') ccToggle(e.target.dataset.id);
       else openConnector(e.target.dataset.toolkit);
     }
-    // Enter in the add-connector form connects; in the key box it saves the new key.
-    if (e.key === 'Enter' && e.target && e.target.matches && e.target.matches('.cc-form input')) {
-      e.preventDefault();
-      ccSave(e.target.closest('.cc-form'));
-    }
+    // Enter in the replace-key box saves the new key.
     if (e.key === 'Enter' && e.target && e.target.matches && e.target.matches('[data-cc-rekey]')) {
       e.preventDefault();
       const form = e.target.closest('.cc-rekey');
@@ -4494,14 +4636,17 @@ function browserCardHTML(c, m){
   const cd = m.card, k = c.id, mid = m.id;
   // While its task works, the card plays the agent's browser live (see syncCardLive).
   const live = cardStreams(c, cd);
-  const running = cd.status === 'running' || live;
-  const word = running ? 'Working' : cd.status === 'failed' ? 'Stopped' : cd.status === 'interrupted' ? 'Interrupted' : 'Completed';
-  const shot = (live && liveCardFrame?.id === cd.liveId && liveCardFrame.url) || safeImg(cd.screenshot);
+  const running = cardWorking(c, cd), status = cardStatus(c, cd);
+  const word = running ? 'Working' : status === 'failed' ? 'Stopped' : status === 'interrupted' ? 'Interrupted' : 'Completed';
+  // The group shows only this newest card (hideOlderVisualCards), so it keeps the group's last picture.
+  const shot = (live && liveCardFrame?.id === cd.liveId && liveCardFrame.url) || visualShot(c, cd);
   const host = cd.desktop ? 'Virtual computer' : hostName(cd.url) || cd.url || 'Browser';
-  const label = cd.liveId || running ? 'Open live view' : 'Open preview';
+  const label = running || (cd.liveId && !liveEnded(c, cd)) ? 'Open live view' : 'Open preview';
+  // A step's note ("Working in the browser…") is stale once the work has ended.
+  const note = cd.note && (running || cd.status !== 'running') ? cd.note : '';
   if (live) setTimeout(() => syncCardLive(c), 0);
   return `<div class="acard cv-card cv-browser ${running ? 'is-running' : ''}">
-    ${cvHead(`<div class="tile cv-tile ${cd.status === 'failed' ? '' : 'green'}">${icon(cd.desktop ? 'laptop' : 'globe',20)}</div>`, cd.desktop ? 'Computer' : 'Browser', `${word}${cd.note ? ` · ${esc(cd.note)}` : ''}`, '')}
+    ${cvHead(`<div class="tile cv-tile ${status === 'failed' ? '' : 'green'}">${icon(cd.desktop ? 'laptop' : 'globe',20)}</div>`, cd.desktop ? 'Computer' : 'Browser', `${word}${note ? ` · ${esc(note)}` : ''}`, '')}
     <button type="button" class="cv-shot" data-act="canvas-card" data-chat="${k}" data-msg="${mid}" aria-label="${label}">
       ${shot ? `<img src="${esc(shot)}" alt="${live ? 'Live view' : 'Screenshot'} of ${esc(host)}"${live ? ` class="cv-live" data-live="${esc(cd.liveId)}"` : ' loading="lazy"'}>` : `<span class="cv-shot-empty">${running ? '<span class="tdots"><i></i><i></i><i></i></span>' : icon(cd.desktop ? 'laptop' : 'globe',26)}</span>${live ? `<img alt="Live view of ${esc(host)}" class="cv-live" data-live="${esc(cd.liveId)}" hidden>` : ''}`}
       ${live ? `<span class="cv-live-badge"><i></i>Live</span>${agentPointerHTML(cd.liveId, true)}` : ''}
@@ -4512,10 +4657,10 @@ function browserCardHTML(c, m){
 }
 function computerCardHTML(c, m){
   const cd = m.card, k = c.id, mid = m.id;
-  const running = cd.status === 'running';
+  const running = cardWorking(c, cd), status = cardStatus(c, cd);
   const lines = (cd.lines || []).slice(-5);
   return `<div class="acard cv-card cv-computer">
-    ${cvHead(`<div class="tile cv-tile dark">${icon('term',20)}</div>`, 'Computer', running ? 'Running in your workspace' : cd.status === 'failed' ? 'Stopped with an error' : `${(cd.lines || []).length} output lines`, '')}
+    ${cvHead(`<div class="tile cv-tile dark">${icon('term',20)}</div>`, 'Computer', running ? 'Running in your workspace' : status === 'failed' ? 'Stopped with an error' : status === 'interrupted' ? 'Stopped before it finished' : `${(cd.lines || []).length} output lines`, '')}
     <div class="bd"><div class="term mini cv-term">${lines.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('') || '<div>$ …</div>'}${running ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div></div>
     <div class="stack"><button class="btn ghost" data-act="canvas-card" data-chat="${k}" data-msg="${mid}">${cd.pcId || running ? 'Open live view' : 'Open output'}</button></div>
   </div>`;
@@ -4884,7 +5029,16 @@ function makeRT(c){
       let m=c.messages.find(x=>x.managedId===`task_${task.id}`);
       const card={type:'task',taskId:task.id,title:snapshot.title,status:snapshot.status,summary:snapshot.summary};
       if(!m) {m={id:uid(),managedId:`task_${task.id}`,kind:'card',card};c.messages.push(m);append(msgNode(c,m));}
-      else {m.card=card;replaceNode(c,m);}
+      else {
+        m.card=card;
+        if(placeTaskCard(c,m)) {
+          if(active()) {
+            document.querySelector(`[data-mid="${m.id}"]`)?.remove();
+            document.querySelector(`[data-mid="${c.messages[c.messages.indexOf(m)-1].id}"]`)?.after(msgNode(c,m));
+            updateFloat();
+          }
+        } else replaceNode(c,m);
+      }
       save();if(active()){updateFloat();syncComposerActions(c);}
     },
     taskConnection(taskId,connected){
@@ -5000,9 +5154,7 @@ function makeRT(c){
     hasApp: n => false,
     hasSecret: n => state.vault.secrets.some(s => s.name === n),
     secretRef: n => { const s = state.vault.secrets.find(s => s.name === n); return s ? s.ref : 'sec_••••'; },
-    openSubAgents(prompt){
-      state.subAgentDraft = String(prompt || '').slice(0, 4000);
-      state.subAgentComposer = true;
+    openSubAgents(){
       state.canvasTab = 'subagents'; state.canvasOpen = true;
       const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
       save(); paintCanvas(); refreshSubAgents();
@@ -5180,6 +5332,20 @@ function makeRT(c){
   return rt;
 }
 
+// The task card is created when the task starts, above its updates and answer. Once the
+// task pauses, its card (with Continue) belongs under the task's last message instead.
+// Returns true when the card moved.
+function placeTaskCard(c, m){
+  if (m.card?.type !== 'task' || m.card.status !== 'partial') return false;
+  const own = x => x !== m && (String(x.managedId || '').startsWith(`${m.card.taskId}:`) || (x.kind === 'card' && x.card?.taskId === m.card.taskId));
+  const at = c.messages.indexOf(m);
+  const last = c.messages.findLastIndex(own);
+  if (at < 0 || last < at) return false;
+  c.messages.splice(at, 1);
+  c.messages.splice(last, 0, m);
+  return true;
+}
+
 const streamPaintPending = new WeakMap();
 function streamPaint(c, m){
   const old = document.querySelector(`[data-mid="${m.id}"]`);
@@ -5309,7 +5475,18 @@ function agentAppearanceForm(a){
     <input class="field" id="agentname" maxlength="18" value="${esc(a.name)}">
     <label class="alabel">Mascot appearance</label>
     <div class="swatches" style="justify-content:flex-start;margin-top:8px">${Mascot.keys.map(k => `<button class="swatch ${k === a.color ? 'on' : ''}" data-act="p-color" data-c="${k}" title="${Mascot.PALETTE[k].name}"><span style="width:26px;height:26px;border-radius:50%;background:${Mascot.PALETTE[k].body};display:block"></span></button>`).join('')}</div>
+    <label class="alabel">Accessories</label>
+    ${outfitPicker(a)}
   </div>`;
+}
+/* One item per slot (eyes, head, neck): picking another in the same slot swaps it,
+   picking a worn one takes it off. Each chip previews the star wearing just that item. */
+function outfitPicker(a){
+  const worn = Mascot.cleanOutfit(a.outfit);
+  return `<div class="outfit-picker" role="group" aria-label="Accessories">${Mascot.outfitKeys.map(k => {
+    const on = worn.includes(k);
+    return `<button type="button" class="outfit-chip${on ? ' on' : ''}" data-act="p-outfit" data-o="${k}" aria-pressed="${on}">${Mascot.svg(a.color, 'idle', 44, '', '', [k])}<span>${Mascot.OUTFITS[k].name}</span></button>`;
+  }).join('')}</div>`;
 }
 function canvasHeroHTML(){
   const a = state.agent;
@@ -5378,10 +5555,74 @@ function libraryTabContent(){
     </div></section>
   </div>`;
 }
+/* Phone Library: the agent at the top, an Artifacts / Media switch with the
+   desktop sidebar's categories under each, then a list or a grid. Upload,
+   create, select, search and System files live in the ⋯ menu. */
+let librarySearchOpen = false;
+const LIB_PHONE_GROUPS = {
+  artifacts:[['all','All artifacts'], ['documents','Documents'], ['web','Web artifacts']],
+  media:[['images','Images'], ['videos','Videos'], ['podcasts','Podcasts']],
+};
+function libraryPhoneHead(all){
+  const a = state.agent || { name:'Your agent', color:'lingon' };
+  const b = billingOwner === billingIdentity() ? billingCache : null;
+  const credit = b ? creditView(b) : null;
+  const status = credit && credit.granted > 0 && credit.tone === 'empty' && !(credit.extraRemaining > 0) ? 'Out of usage'
+    : `${all.length} ${all.length === 1 ? 'item' : 'items'} in your Library`;
+  return `<header class="lib-hero">
+    <details class="art-menu lib-more"><summary class="set-round" aria-label="Library actions" title="More">${icon('more',20)}</summary>
+      <div class="art-menu-list">
+        <button type="button" data-act="lib-search-open">${icon('search',14)} Search</button>
+        <button type="button" data-act="lib-upload">${icon('attach',14)} Upload files</button>
+        <button type="button" data-act="lib-create">${icon('plus',14)} Create an artifact</button>
+        ${all.length ? `<button type="button" data-act="lib-select">${icon('checksq',14)} Select</button>` : ''}
+        <button type="button" data-act="libcat" data-cat="system">${icon('folder',14)} System files</button>
+      </div>
+    </details>
+    <input id="libupload" type="file" multiple hidden>
+    <div class="lib-hero-mascot">${Mascot.svg(a.color,'happy',78)}</div>
+    <h1>${esc(a.name)}</h1>
+    <span class="lib-hero-status">${esc(status)}</span>
+  </header>`;
+}
+function libraryPhoneContent(){
+  const cat = state.libraryCat || 'all';
+  if (cat === 'system') return systemLibraryBody(true);
+  const group = LIB_PHONE_GROUPS.media.some(([id]) => id === cat) ? 'media' : 'artifacts';
+  const all = libraryItems();
+  const items = libraryFiltered();
+  const type = { images:'image', videos:'video', podcasts:'audio', documents:'document', web:'web' };
+  const count = id => id === 'all' ? all.length : all.filter(x => x._type === type[id]).length;
+  const label = (LIB_PHONE_GROUPS[group].find(([id]) => id === cat) || LIB_PHONE_GROUPS.artifacts[0])[1];
+  const searching = librarySearchOpen || !!state.librarySearch;
+  const selected = (state.librarySelected || []).length;
+  const empty = `<div class="lib-empty">
+    <span class="lib-empty-icon">${icon(state.librarySearch ? 'search' : libIconFor(type[cat] || 'artifact'), 22)}</span>
+    <b>${state.librarySearch ? 'No matches' : 'No ' + esc(cat === 'all' ? 'artifacts' : label.toLowerCase()) + ' yet'}</b>
+    <span>${state.librarySearch ? 'Try another search, or clear it to see everything.' : `Files ${esc(state.agent?.name || 'your agent')} makes and files you upload show up here.`}</span>
+  </div>`;
+  return `${libraryPhoneHead(all)}
+    <div class="lib-switch" role="tablist" aria-label="Library">
+      <button role="tab" class="${group === 'artifacts' ? 'on' : ''}" aria-selected="${group === 'artifacts'}" data-act="libcat" data-cat="all">Artifacts</button>
+      <button role="tab" class="${group === 'media' ? 'on' : ''}" aria-selected="${group === 'media'}" data-act="libcat" data-cat="images">Media</button>
+    </div>
+    <div class="lib-chips" aria-label="${group === 'media' ? 'Media' : 'Artifacts'} categories">${LIB_PHONE_GROUPS[group].map(([id, text]) => {
+      const n = count(id);
+      return `<button class="lib-chip${cat === id ? ' on' : ''}" data-act="libcat" data-cat="${id}"${cat === id ? ' aria-current="page"' : ''}>${text}${n ? `<em>${n}</em>` : ''}</button>`;
+    }).join('')}</div>
+    ${searching ? `<label class="lib-find">${icon('search',16)}<input id="libsearch" class="field lib-find-in" placeholder="Search" aria-label="Search the library" value="${esc(state.librarySearch || '')}"><button type="button" class="iconbtn" data-act="lib-search-close" aria-label="Close search">${icon('x',15)}</button></label>` : ''}
+    ${state.librarySelect ? `<div class="lib-selectbar"><span>${selected} selected</span><button class="btn ghost small" data-act="lib-clear">Cancel</button><button class="btn soft small" data-act="lib-delete"${selected ? '' : ' disabled'}>${icon('trash',13)} Delete</button></div>` : ''}
+    ${!items.length ? empty : group === 'media'
+      ? `<div class="lib-media">${items.map(libTileHtml).join('')}</div>`
+      : `<div class="lib-list">${items.map(libRowHtml).join('')}</div>`}`;
+}
 function paintLibrary(M){
-  const scroller = () => M.querySelector('.lib-main');
+  const phone = phoneLayout();
+  const scroller = () => M.querySelector(phone ? '.lib-mpage' : '.lib-main');
   const previousScroll = scroller()?.scrollTop || 0;
-  M.innerHTML = `<div class="page lib-page"><div class="pageinner lib-pageinner">${libraryTabContent()}</div></div>${libraryViewerHtml()}`;
+  M.innerHTML = (phone
+    ? `<div class="page lib-mpage${state.libraryCat === 'system' ? ' is-system' : ''}"><div class="lib-minner">${libraryPhoneContent()}</div></div>`
+    : `<div class="page lib-page"><div class="pageinner lib-pageinner">${libraryTabContent()}</div></div>`) + libraryViewerHtml();
   M.querySelector('.lib-viewer')?.addEventListener('keydown', e => { if (e.key === 'Escape'){ libraryViewer = null; paintLibrary(M); } });
   M.querySelector('.lib-viewer [data-act="lib-viewer-close"]:not(.lib-viewer-scrim)')?.focus();
   if (scroller()) scroller().scrollTop = previousScroll;
@@ -6064,25 +6305,11 @@ function subAgentsTabContent(){
   const upkeep = agents.filter(agent => agent.systemKind).sort((a,b) => upkeepOrder.indexOf(a.systemKind)-upkeepOrder.indexOf(b.systemKind));
   const customAgents = agents.filter(agent => !agent.systemKind);
   const displayAgents = [...customAgents, ...upkeep];
-  const kind = state.subAgentTriggerType || 'schedule';
-  const apps = state.triggerOptions?.apps || [];
-  const scheduleOptions = state.triggerOptions?.schedules || [15,60,360,1440];
-  const triggerFields = kind === 'schedule'
-    ? `<label class="alabel">Run every</label><select class="field" id="subinterval">${scheduleOptions.map((minutes) => `<option value="${minutes}" ${Number(state.subAgentDraftInterval || 60) === Number(minutes) ? 'selected' : ''}>${minutes === 1440 ? 'Day' : minutes === 10080 ? 'Week' : minutes === 60 ? '1 hour' : minutes >= 60 ? (minutes / 60) + ' hours' : minutes + ' minutes'}</option>`).join('')}</select>`
-    : kind === 'app'
-      ? (apps.length ? `<label class="alabel">Connected app event (via Composio)</label><select class="field" id="subappevent">${apps.flatMap((app) => app.events.map((event) => `<option value="${esc(app.id + ':' + event)}" data-account="${esc(app.connectedAccountId || '')}">${esc(app.name)} · ${esc(event)}</option>`)).join('')}</select>` : `<div class="trigger-empty">${icon('box',16)} No ready connected-app events. <button data-act="nav" data-view="apps">Open Apps</button></div>`)
-      : `<label class="alabel">After this sub-agent completes</label><select class="field" id="subsource">${customAgents.map((agent) => `<option value="${agent.id}">${esc(agent.name)}</option>`).join('') || '<option value="">Create another sub-agent first</option>'}</select>`;
+  const agentName = esc(state.agent?.name || 'your agent');
   return `<div class="appr-panel">
-    <div class="appr-toolbar"><h3 class="appr-heading">Automations</h3><button class="btn ${state.subAgentComposer ? 'ghost ' : ''}small" data-act="new-subagent">${icon(state.subAgentComposer ? 'x' : 'plus',14)} ${state.subAgentComposer ? 'Close' : 'New'}</button></div>
-    ${state.subAgentComposer ? `<div class="trigger-form">
-      <label class="alabel">Name</label><input class="field" id="subname" maxlength="60" placeholder="Daily brief" value="${esc(state.subAgentDraftName || '')}">
-      <label class="alabel">Automation task</label><textarea class="field" id="subprompt" rows="4" placeholder="What should this sub-agent check, decide, or prepare?">${esc(state.subAgentDraft || '')}</textarea>
-      <label class="alabel">Trigger</label><select class="field" id="subtrigger"><option value="schedule" ${kind === 'schedule' ? 'selected' : ''}>Schedule</option><option value="app" ${kind === 'app' ? 'selected' : ''}>Connected app</option><option value="subagent" ${kind === 'subagent' ? 'selected' : ''}>Another sub-agent</option></select>
-      <div id="triggerfields">${triggerFields}</div>
-      <div class="trigger-safety">${icon('shieldcheck',14)} Runs in an isolated, account-scoped sandbox. Chains stop after four handoffs.</div>
-      <button class="btn small" data-act="create-subagent" ${kind === 'app' && !apps.length || kind === 'subagent' && !customAgents.length ? 'disabled' : ''}>Create automation</button>
-    </div>` : ''}
-    ${displayAgents.map(automationItemHtml).join('') || '<div class="appr-empty">No automations yet. Create one to run on a schedule, after an app event, or after another automation.</div>'}
+    <div class="appr-toolbar"><h3 class="appr-heading">Automations</h3><button type="button" class="btn small" data-act="ask-automation">${icon('spark',14)} Ask ${agentName}</button></div>
+    <p class="conn-ask">Tell ${agentName} what you want done and when. Your agent sets it up for you and asks you to approve before it starts.</p>
+    ${displayAgents.map(automationItemHtml).join('') || '<div class="appr-empty">No automations yet. Ask in chat for a daily update, a reminder, or help keeping an eye on something.</div>'}
   </div>`;
 }
 
@@ -6101,10 +6328,31 @@ function pcIdFor(c){
 let liveWS = null, liveIdShown = null, liveControl = false;
 let pcWS = null, pcIdShown = null;
 var liveCardFrame = null; // { id, url } of the newest live frame, for chat cards that repaint
-// A browser card streams live while its task works, over the task's Realtime channel.
+// A browser or computer card streams live while its task works, over its Realtime channel
+// (the computer's container has a channel of its own).
 function cardStreams(c, cd){
-  return !!(cd && cd.type === 'browser' && !cd.desktop && String(cd.liveId || '').startsWith('rt:') && cd.taskId && liveTaskIds(c).includes(cd.taskId));
+  return !!(cd && cd.type === 'browser' && String(cd.liveId || '').startsWith('rt:') && cd.taskId && liveTaskIds(c).includes(cd.taskId));
 }
+/* A browser or computer card is working only while its task is. A task stopped or ended
+   in the middle of a step never sends that step's last card, so the saved card can say
+   'running' long after the work ended; it then reads as interrupted. */
+function cardWorking(c, cd){
+  if (!cd || cd.status !== 'running') return cardStreams(c, cd);
+  if (cd.taskId) return liveTaskIds(c).includes(cd.taskId);
+  return !Engine.managed || !!Engine.isRunning?.(c?.id);
+}
+// Browser and computer cards of one task (else one live session, else one reply) show as one card.
+function visualGroup(cd){
+  if (cd?.type !== 'browser') return '';
+  return `${cd.desktop ? 'pc' : 'web'}:${cd.taskId ? 't:' + cd.taskId : cd.liveId ? 'l:' + cd.liveId : ''}`;
+}
+// The newest picture of a card's group, for a card (or Canvas row) that has none of its own.
+function visualShot(c, cd){
+  const group = visualGroup(cd);
+  if (safeImg(cd?.screenshot) || !group || group.endsWith(':')) return safeImg(cd?.screenshot);
+  return safeImg([...(c?.messages || [])].reverse().find(x => x.kind === 'card' && visualGroup(x.card) === group && safeImg(x.card.screenshot))?.card.screenshot);
+}
+const cardStatus = (c, cd) => cd?.status === 'running' && !cardWorking(c, cd) ? 'interrupted' : cd?.status;
 // The chat card and the Canvas live view share one connection; the Canvas view wins when open.
 function syncCardLive(c){
   if (!c || c !== chat()) return;
@@ -6186,6 +6434,7 @@ function drawLiveFrame(data){
         ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
         if (source.close) source.close();
         window.__liveFrames = (window.__liveFrames || 0) + 1;
+        $('#livestart')?.remove();
       } catch {}
       finish();
     };
@@ -6326,10 +6575,15 @@ function pcConnect(selectedId){
 }
 function liveState(s, m){
   const wrap = $('#livewrap'), st = $('#livestate'), sub = $('#livesub'), btn = $('#takebtn');
-  // A desktop session has no URL; its bar shows the active window instead.
+  // A desktop session is the whole screen, so the frame drops its browser chrome.
   const desktop = m && (m.kind === 'desktop' || m.transport === 'x11-stream');
-  if (desktop && $('#livestatus')) $('#livestatus').textContent = 'Agent computer';
+  if (desktop && wrap) { wrap.classList.add('desktop'); wrap.querySelector('.vm-frame')?.classList.add('desktop'); }
   if (m && $('#liveurl') && (desktop ? m.title : m.url)) $('#liveurl').textContent = desktop ? m.title : m.url;
+  if (m && !desktop && $('#livetitle') && (m.title || m.url)) $('#livetitle').textContent = m.title || hostName(m.url) || m.url;
+  const who = $('#livestatus');
+  if (who) who.innerHTML = liveControl ? '<b>You</b> have control' : `<b>${esc(state.agent.name)}</b> has control`;
+  wrap?.classList.toggle('user-control', liveControl);
+  wrap?.querySelectorAll('[data-act="live-nav"]').forEach(n => { n.disabled = !liveControl; });
   if (m && m.title && $('#livesub') && !liveControl) sub.textContent = m.title;
   if (m && m.transport && sub && !liveControl) sub.textContent = m.transport === 'x11-stream' ? 'live virtual computer — the agent is connected to the VM' : m.transport === 'cdp-screencast' || m.transport === 'realtime' ? 'live interactive stream — the agent is connected to the VM' : 'compatibility preview — live relay is not connected';
   if (wrap) wrap.classList.toggle('working', s === 'working' && !liveControl);
@@ -6372,11 +6626,14 @@ let mailboxEnsuredName = null;
 let mailboxPending = null;
 let mailFetchPending = null;
 let mailFetchSeq = 0;
+// The message being written, with its files. Kept apart from mailCache, which each fetch replaces.
+let mailCompose = null;
 function scopeMailCache(){
   const owner = billingIdentity();
   if (owner !== mailOwner) {
     mailOwner = owner;
     mailCache = null;
+    mailCompose = null;
     mailboxEnsuredName = null;
     mailboxPending = null;
     mailFetchPending = null;
@@ -6449,91 +6706,147 @@ async function openMailMessage(id){
   if (mailCache.unread > 0) mailCache.unread -= 1;
   return j.message;
 }
+/* ----- Mail: the chat panel's Mail tab, in the Wallet panel's layout ----- */
+// A heading with the address, round folder buttons, then the open folder, message or new message.
+function mailWhen(at, full){
+  const t = typeof at === 'number' ? at : Date.parse(at || '');
+  if (!Number.isFinite(t)) return '';
+  if (!full && Date.now() - t < 86400e3) return fmtWhen(t);
+  return new Intl.DateTimeFormat('en-US', full ? { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' } : { month:'short', day:'numeric' }).format(t);
+}
+const mailInitial = s => String(s || '').trim().charAt(0).toUpperCase() || '?';
 function mailListRows(m){
-  const sent = m.folder === 'sent';
+  const sent = m.folder === 'sent', unread = !sent && !m.isRead;
   const who = sent ? 'To ' + ((m.to || []).join(', ') || 'no recipient') : (m.fromName || m.from || 'Unknown sender');
-  const initial = String((sent ? (m.to || [])[0] : m.fromName || m.from) || '?').trim().charAt(0).toUpperCase() || '?';
-  return `<button class="appr-row mail-row${m.isRead || sent ? '' : ' unread'}" data-act="m-open" data-id="${esc(m.id)}">
-    <span class="appr-ico mail-avatar" aria-hidden="true">${esc(initial)}</span>
-    <span class="appr-copy">
-      <span class="mail-line"><b>${esc(who)}</b><span class="mail-when">${fmtWhen(m.at)}</span></span>
-      <span class="appr-desc mail-subject">${esc(m.subject || '(no subject)')}</span>
-      ${m.preview ? `<span class="appr-meta mail-preview">${esc(m.preview)}</span>` : ''}
-    </span>
+  return `<button type="button" class="wl-row mail-row${unread ? ' unread' : ''}" data-act="m-open" data-id="${esc(m.id)}"${unread ? ` aria-label="Unread: ${esc(who)}, ${esc(m.subject || '(no subject)')}"` : ''}>
+    <span class="wl-ico" aria-hidden="true">${esc(mailInitial(sent ? (m.to || [])[0] : m.fromName || m.from))}</span>
+    <span class="wl-copy"><span class="mail-line"><b>${esc(who)}</b><span class="mail-when">${unread ? '<span class="mail-dot" aria-hidden="true"></span>' : ''}${esc(mailWhen(m.at))}</span></span>
+      <span class="mail-subject">${esc(m.subject || '(no subject)')}</span>
+      ${m.preview ? `<small class="mail-preview">${esc(m.preview)}</small>` : ''}</span>
   </button>`;
 }
-function mailComposeBody(prefill){
-  const p = prefill || mailCache && mailCache.compose || {};
+function mailDraftRow(d){
+  return `<button type="button" class="wl-row mail-row" data-act="m-edit-draft" data-id="${esc(d.id)}"><span class="wl-ico" aria-hidden="true">${icon('file', 17)}</span><span class="wl-copy"><b>${esc(d.subject || '(no subject)')}</b><small>${esc((d.to || []).length ? 'To ' + d.to.join(', ') : 'No recipient')}</small></span>${icon('chevr', 16)}</button>`;
+}
+// Files ride along as base64, up to the same total as chat attachments.
+const MAIL_MAX_FILES = 10, MAIL_MAX_FILES_MB = 8;
+function mailFileChips(){
+  return ((mailCompose && mailCompose.files) || []).map((f, i) => `<span class="mail-file${f.loading ? ' loading' : ''}" title="${esc(f.name)}">${icon(/^image\//.test(f.type) ? 'image' : 'file', 14)}<span class="mail-file-name">${esc(f.name)}</span><small>${f.loading ? 'Adding…' : fmtBytes(f.size)}</small><button type="button" class="mail-file-x" data-act="m-file-remove" data-i="${i}" aria-label="Remove ${esc(f.name)}">${icon('x', 12)}</button></span>`).join('');
+}
+function paintMailFiles(){
+  const el = $('#m-files');
+  if (el) { el.innerHTML = mailFileChips(); el.hidden = !el.innerHTML; }
+}
+function mailAddFiles(list){
+  mailCompose = mailCompose || {};
+  const files = mailCompose.files = mailCompose.files || [];
+  for (const f of list){
+    if (files.length >= MAIL_MAX_FILES){ toast(`Attach up to ${MAIL_MAX_FILES} files.`); break; }
+    if (!f.size){ toast(`${f.name} is empty.`); continue; }
+    if (files.reduce((total, x) => total + x.size, 0) + f.size > MAIL_MAX_FILES_MB * 1024 * 1024){ toast(`Files can be up to ${MAIL_MAX_FILES_MB} MB together.`); continue; }
+    if (files.some(x => x.name === f.name && x.size === f.size)) continue;
+    const item = { name:f.name, size:f.size, type:f.type || '', content:'', loading:true };
+    files.push(item);
+    const reader = new FileReader();
+    reader.onload = () => { const url = String(reader.result || ''); item.content = url.slice(url.indexOf(',') + 1); item.loading = false; paintMailFiles(); };
+    reader.onerror = () => { const i = files.indexOf(item); if (i !== -1) files.splice(i, 1); paintMailFiles(); toast(`Could not read ${f.name}.`); };
+    reader.readAsDataURL(f);
+  }
+  paintMailFiles();
+}
+function mailComposeBody(){
+  const p = mailCompose || {}, address = mailCache && mailCache.address;
   return `<div class="mail-compose">
-    <h4 class="appr-group">${p.inReplyTo ? 'Reply' : p.draftId ? 'Edit draft' : 'New message'}</h4>
-    <label class="alabel">To</label>
-    <input class="field" id="m-to" type="email" placeholder="name@example.com" value="${esc(p.to || '')}">
-    <label class="alabel">Subject</label>
-    <input class="field" id="m-subject" maxlength="200" value="${esc(p.subject || '')}">
-    <label class="alabel">Message</label>
-    <textarea class="field" id="m-body" rows="8" placeholder="Written as ${esc((state.agent && state.agent.name) || 'your agent')}…">${esc(p.body || '')}</textarea>
+    <div class="mail-compose-head"><b>${p.inReplyTo ? 'Reply' : p.draftId ? 'Edit draft' : 'New message'}</b>${address ? `<small>from ${esc(address)}</small>` : ''}</div>
+    <label class="mail-compose-row"><span>To</span><input id="m-to" type="email" placeholder="name@example.com" autocomplete="off" value="${esc(p.to || '')}"></label>
+    <label class="mail-compose-row"><span>Subject</span><input id="m-subject" maxlength="200" autocomplete="off" value="${esc(p.subject || '')}"></label>
+    <textarea id="m-body" rows="5" aria-label="Message" placeholder="Write your message…">${esc(p.body || '')}</textarea>
+    <div class="mail-files" id="m-files"${(p.files || []).length ? '' : ' hidden'}>${mailFileChips()}</div>
     <input type="hidden" id="m-reply" value="${esc(p.inReplyTo || '')}">
     <input type="hidden" id="m-draft" value="${esc(p.draftId || '')}">
-    <div class="mail-actions">
-      <button class="btn small" data-act="m-send">${icon('up',14)} Send</button>
-      <button class="btn ghost small" data-act="m-draft">${icon('file',14)} Save draft</button>
+    <div class="mail-compose-bar">
+      <button type="button" class="mail-attach" data-act="m-attach" title="Attach files" aria-label="Attach files">${icon('attach', 17)}</button>
+      <input type="file" id="m-file-input" multiple hidden>
+      <button type="button" class="btn ghost small" data-act="m-draft">Save draft</button>
+      <button type="button" class="btn small" data-act="m-send"${p.sending ? ' disabled' : ''}>${icon('send', 14)} ${p.sending ? 'Sending…' : 'Send'}</button>
     </div>
   </div>`;
+}
+// Typing and files live in mailCompose, so a repaint (a fetch landing, a folder badge) keeps them.
+function wireMailCompose(card){
+  const ta = card.querySelector('#m-body'), grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 360) + 'px'; };
+  grow();
+  card.addEventListener('input', e => {
+    if (e.target.type === 'file') return;
+    mailCompose = Object.assign(mailCompose || {}, { to:$('#m-to').value, subject:$('#m-subject').value, body:ta.value });
+    if (e.target === ta) grow();
+  });
+  card.querySelector('#m-file-input').addEventListener('change', e => { if (e.target.files.length) mailAddFiles(e.target.files); e.target.value = ''; });
+  ta.addEventListener('paste', e => { const files = e.clipboardData?.files; if (files && files.length) { e.preventDefault(); mailAddFiles(files); } });
+  const hasFiles = e => Array.from(e.dataTransfer?.types || []).includes('Files');
+  let depth = 0;
+  card.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; card.classList.add('drag'); });
+  card.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  card.addEventListener('dragleave', e => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) card.classList.remove('drag'); });
+  card.addEventListener('drop', e => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; card.classList.remove('drag'); if (e.dataTransfer.files.length) mailAddFiles(e.dataTransfer.files); });
 }
 function mailReader(msg){
   if (!msg) return '';
-  const who = msg.fromName ? esc(msg.fromName) + ' &lt;' + esc(msg.from) + '&gt;' : esc(msg.from || '');
-  return `<div class="mail-read">
-    <div class="mail-read-head">
-      <button class="canvas-back" data-act="m-back">${icon('left',14)} Back</button>
-      <button class="btn ghost small" data-act="m-reply" data-id="${esc(msg.id)}">${icon('mail',14)} Reply</button>
-    </div>
-    <h3>${esc(msg.subject || '(no subject)')}</h3>
-    <div class="sub">${who} · ${fmtWhen(msg.at)}</div>
-    <div class="sub">To ${esc((msg.to || []).join(', '))}</div>
+  const from = msg.fromName || msg.from || 'Unknown sender';
+  const detail = [msg.fromName && msg.from ? msg.from : '', 'to ' + ((msg.to || []).join(', ') || 'no recipient')].filter(Boolean).join(' · ');
+  return `<section class="wl-sec mail-read" aria-label="Message">
+    <div class="mail-read-bar"><button type="button" class="wl-link mail-back" data-act="m-back">${icon('left', 14)} ${state.mailTab === 'sent' ? 'Sent' : 'Inbox'}</button><button type="button" class="btn ghost small" data-act="m-reply" data-id="${esc(msg.id)}">${icon('reply', 14)} Reply</button></div>
+    <h4 class="mail-read-subject">${esc(msg.subject || '(no subject)')}</h4>
+    <div class="wl-row mail-from"><span class="wl-ico" aria-hidden="true">${esc(mailInitial(from))}</span><span class="wl-copy"><b>${esc(from)}</b><small>${esc(detail)}</small></span><span class="mail-when">${esc(mailWhen(msg.at, true))}</span></div>
     <div class="mail-body">${esc(msg.bodyText || '').replace(/\n/g, '<br>')}</div>
-  </div>`;
+  </section>`;
 }
 function paintMail(body){
-  scopeMailCache();
-  const tab = state.mailTab || 'inbox';
-  const m = mailCache;
+  const owner = scopeMailCache();
+  const tab = state.mailTab || 'inbox', m = mailCache, name = esc((state.agent && state.agent.name) || 'Your agent');
   const unread = m && m.unread ? m.unread : 0;
-  const empty = (ic, title, text) => `<div class="appr-empty-state"><span class="appr-ico">${icon(ic,18)}</span><b>${title}</b><span>${text}</span></div>`;
-  let inner = `<div class="appr-empty">Loading mail…</div>`;
-  if (m) {
-    if (m.selected && tab !== 'write') inner = mailReader(m.selected);
-    else if (tab === 'write') inner = mailComposeBody(m.compose);
-    else if (tab === 'drafts') {
-      const drafts = m.drafts || [];
-      inner = drafts.length
-        ? drafts.map((d) => `<button class="appr-row mail-row" data-act="m-edit-draft" data-id="${esc(d.id)}"><span class="appr-ico">${icon('file',17)}</span><span class="appr-copy"><b>${esc(d.subject || '(no subject)')}</b><span class="appr-desc">${esc((d.to || []).join(', ') || 'No recipient')}</span></span></button>`).join('')
-        : empty('file', 'No drafts', 'Drafts your agent saves appear here for you to review before sending.');
-    } else {
-      const rows = m.messages || [];
-      inner = rows.length
-        ? rows.map(mailListRows).join('')
-        : empty('mail', tab === 'sent' ? 'Nothing sent yet' : 'Inbox is empty', m.address ? 'Anyone can write to ' + esc(m.address) + '.' : 'Claim the mailbox to start receiving.');
-    }
+  // A folder switch paints before its messages arrive; it shows loading, not the last folder's mail.
+  const stale = !!m && !m.selected && (tab === 'inbox' || tab === 'sent') && (m.folder === 'write' ? 'inbox' : m.folder || 'inbox') !== tab;
+  let inner = '<p class="wl-empty">Loading mail…</p>';
+  if (tab === 'write') inner = mailComposeBody();
+  else if (m && m.selected) inner = mailReader(m.selected);
+  else if (m && !stale) {
+    const title = { sent:'Sent', drafts:'Drafts' }[tab] || 'Inbox';
+    const rows = tab === 'drafts' ? (m.drafts || []).map(mailDraftRow).join('') : (m.messages || []).map(mailListRows).join('');
+    const none = tab === 'drafts' ? `Drafts ${name} saves appear here for you to review before sending.`
+      : tab === 'sent' ? `Mail ${name} sends will appear here.`
+      : m.address ? `No mail yet. Anyone can write to ${name} at ${esc(m.address)}.` : `Mail to ${name} will appear here.`;
+    inner = `<section class="wl-sec" aria-label="${title}"><div class="wl-sec-head"><h4>${title}</h4>${tab === 'inbox' && unread ? `<span class="mail-count">${unread} unread</span>` : ''}</div>
+      ${rows ? `<div class="wl-list">${rows}</div>` : `<p class="wl-empty">${none}</p>`}</section>`;
   }
-  const banner = m && m.configured === false
-    ? `<div class="warnband">${icon('mail',18)}<div><b>Mailbox is reserved. Sending needs RESEND_API_KEY.</b>${esc(m.receivingHint || 'Add the MX record Resend shows for mail.belna.se.')}</div></div>`
+  const note = m && m.configured === false
+    ? `<div class="wl-note warn">${icon('mail', 17)}<span><b>Mailbox is reserved. Sending needs RESEND_API_KEY.</b><small>${esc(m.receivingHint || 'Add the MX record Resend shows for mail.belna.se.')}</small></span></div>`
     : '';
-  const filter = (t, label, count) => `<button class="appr-filter${tab === t ? ' on' : ''}" data-act="mtab" data-t="${t}" aria-pressed="${tab === t}">${label}${count ? ` <span class="cnt">${count}</span>` : ''}</button>`;
-  body.innerHTML = `<div class="appr-panel mail-panel">
-    <div class="appr-toolbar">
-      <h3 class="appr-heading">Mail</h3>
-      <span class="appr-toolbar-actions">
-        <button class="iconbtn" data-act="m-refresh" title="Refresh mail" aria-label="Refresh mail">${icon('refresh',15)}</button>
-        <button class="btn ${tab === 'write' ? 'ghost ' : ''}small" data-act="mtab" data-t="${tab === 'write' ? 'inbox' : 'write'}">${icon(tab === 'write' ? 'x' : 'plus',14)} ${tab === 'write' ? 'Close' : 'New'}</button>
-      </span>
-    </div>
-    <div class="mail-address"><span class="mono">${esc((m && m.address) || 'Allocating…')}</span>${m && m.address ? `<button class="iconbtn" data-act="m-copy" title="Copy address" aria-label="Copy mail address">${icon('copy',14)}</button>` : ''}</div>
-    ${banner}
-    ${tab === 'write' ? '' : `<div class="appr-filters" role="group" aria-label="Mail folders">${filter('inbox', 'Inbox', unread)}${filter('sent', 'Sent', 0)}${filter('drafts', 'Drafts', 0)}</div>`}
+  const write = tab === 'write';
+  const act = (t, ic, label, count = 0) => {
+    const on = tab === t;
+    return `<button type="button" class="wl-act${on ? ' on' : ''}" data-act="mtab" data-t="${t === 'write' && on ? 'inbox' : t}" aria-pressed="${on}"${count ? ` aria-label="${label}, ${count} unread"` : ''}><span class="wl-act-ic" aria-hidden="true">${icon(ic, 19)}${count ? `<span class="mail-badge">${count > 99 ? '99+' : count}</span>` : ''}</span>${label}</button>`;
+  };
+  const active = document.activeElement, focus = active && active.id && body.contains(active) ? { id:active.id, start:active.selectionStart, end:active.selectionEnd } : null;
+  body.innerHTML = `<div class="appr-panel wl mail-panel">
+    <div class="wl-head"><div><h3>Mail</h3><p class="mail-address">${m && m.address ? `<span>${esc(m.address)}</span><button type="button" class="wl-link" data-act="m-copy" aria-label="Copy mail address">Copy</button>` : m ? 'Setting up the address…' : ''}</p></div>
+      <button type="button" class="iconbtn" data-act="m-refresh" title="Refresh mail" aria-label="Refresh mail">${icon('refresh', 16)}</button></div>
+    ${note}
+    <div class="wl-acts" role="group" aria-label="Mail folders">${act('write', write ? 'x' : 'pencil', write ? 'Close' : 'Write')}${act('inbox', 'inbox', 'Inbox', unread)}${act('sent', 'send', 'Sent')}${act('drafts', 'file', 'Drafts')}</div>
+    ${m && m.error ? `<p class="wl-error" role="alert">${esc(m.error)}</p>` : ''}
     ${inner}
   </div>`;
-  if (!m) getMail(true, tab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
+  const card = body.querySelector('.mail-compose');
+  if (card) wireMailCompose(card);
+  const refocus = focus && document.getElementById(focus.id);
+  if (refocus) { refocus.focus(); try { if (focus.start != null) refocus.setSelectionRange(focus.start, focus.end); } catch {} }
+  const mailTabBtn = $('#canvas .canvas-tab[data-t="mail"]');
+  if (mailTabBtn && m) {
+    mailTabBtn.querySelector('.cnt')?.remove();
+    if (unread) mailTabBtn.insertAdjacentHTML('beforeend', `<span class="cnt" aria-hidden="true">${unread}</span>`);
+    mailTabBtn.setAttribute('aria-label', unread ? `Mail, ${unread} unread` : 'Mail');
+  }
+  if (owner && (!m || stale)) getMail(true, tab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
 }
 
 // Files the agent saved to the Library (generated images) arrive as a reference and load
@@ -6607,7 +6920,6 @@ const canvasTime = v => typeof v === 'number' ? v : Date.parse(v || '') || 0;
 function canvasKind(cd){
   if (!cd) return '';
   if (cd.type === 'browser') return cd.desktop ? 'computer' : 'browser';
-  if (cd.type === 'computer') return 'computer';
   if (['file','canvas','artifact'].includes(cd.type)) return 'file';
   if (cd.type === 'subagents' || (cd.type === 'present' && ['dashboard','table'].includes(cd.kind))) return 'card';
   return '';
@@ -6642,10 +6954,7 @@ function canvasItemView(ref){
   if (!cd) return null;
   const kind = canvasKind(cd) || 'card';
   if (cd.type === 'browser') return { c, m, kind, icon:cd.desktop ? 'laptop' : 'globe', title:cd.desktop ? 'Virtual computer' : hostName(cd.url) || cd.url || 'Browser', label:cd.desktop ? 'Computer' : 'Browser' };
-  if (cd.type === 'computer') {
-    const command = String((cd.lines || []).find(L => /^\$\s/.test(String(L.t || '')))?.t || '').replace(/^\$\s*/, '');
-    return { c, m, kind, icon:'term', title:command || 'Computer', label:'Computer' };
-  }
+  if (cd.type === 'computer') return null; // shell output stays out of sight (see msgNode)
   if (kind === 'file') { const info = artifactInfo({ ...cd, name:cd.name || cd.title }); return { c, m, kind, icon:info.ic, title:info.title, label:info.label }; }
   return { c, m, kind, icon:cd.type === 'present' ? 'chart' : 'users', title:cd.title || cd.name || 'Canvas item', label:cd.type === 'present' ? 'Dashboard' : 'Agents' };
 }
@@ -6655,8 +6964,8 @@ function canvasHistoryHTML(){
     const v = canvasItemView(canvasRefOf(r));
     if (!v) return '';
     const cd = r.m?.card;
-    const working = !!cd && (cardStreams(r.c, cd) || cd.status === 'running');
-    const thumb = cd?.type === 'browser' ? safeImg(cd.screenshot) : '';
+    const working = !!cd && cardWorking(r.c, cd);
+    const thumb = cd?.type === 'browser' ? visualShot(r.c, cd) : '';
     const open = r.artifact ? `data-act="canvas-artifact" data-chat="${esc(r.c.id)}"` : `data-act="canvas-card" data-chat="${esc(r.c.id)}" data-msg="${esc(r.m.id)}"`;
     return `<article class="appr-item canvas-entry">
       <button type="button" class="appr-row" ${open} aria-label="Open ${esc(v.title)} in the Canvas">
@@ -6675,26 +6984,57 @@ function canvasHistoryHTML(){
     ${rows || `<div class="appr-empty">Nothing here yet. When ${esc(state.agent?.name || 'your agent')} browses, works on its computer or makes a file in any chat, it shows up here to open bigger.</div>`}
   </div>`;
 }
+/* The agent's computer, dressed in its brand: a frame in the agent's colour around the real
+   stream, with a browser bar in that colour (tab icon and profile picture are the mascot) and
+   a "<name> has control" pill. Everything shown is real: the picture is the VM's own stream or
+   last screenshot, and the bar holds only the page's actual title and address, which the
+   stream keeps up to date. A desktop stream is the whole screen, so it has no browser bar. */
+const vmSvg = (d, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const vmLock = vmSvg('<rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/>', 13);
+// Back, forward and reload really drive the VM's browser, so they work only while the person
+// has control (liveState turns them on); while the agent works they are dimmed.
+const VM_NAV = [['back', 'Back', '<path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/>'], ['forward', 'Forward', '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>'], ['reload', 'Reload', '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/>']];
+function vmFrameHTML({ desktop, url, title, view, foot, pending = '', nav = false }){
+  // The VM runs Chrome without its own window (only the page is streamed), so this bar is
+  // drawn here in the agent's theme, from the page's real title and address.
+  const chrome = desktop ? '' : `
+        <div class="vm-tabs">
+          <span class="vm-tab"><span class="vm-fav">${Mascot.svg(state.agent.color, 'idle', 16)}</span><span class="vm-tab-title" id="livetitle">${esc(title || hostName(url) || 'New tab')}</span></span>
+        </div>
+        <div class="vm-toolbar">
+          ${nav ? `<span class="vm-nav">${VM_NAV.map(([k, label, d]) => `<button type="button" data-act="live-nav" data-nav="${k}" title="${label}" aria-label="${label}"${liveControl ? '' : ' disabled'}>${vmSvg(d)}</button>`).join('')}</span>` : ''}
+          <span class="vm-omni">${/^https:/.test(url || '') ? vmLock : ''}<span class="url" id="liveurl">${esc(url || pending)}</span></span>
+          <span class="vm-profile" title="${esc(state.agent.name)}'s browser profile">${Mascot.svg(state.agent.color, 'idle', 22)}</span>
+        </div>`;
+  return `<div class="vm-frame${desktop ? ' desktop' : ''}">
+      <div class="vm-window">${chrome}${view}</div>
+    </div>
+    <div class="vm-control">${foot}</div>`;
+}
+// Until the stream's first frame arrives the window says it is connecting; nothing stands in for the screen.
+const vmConnectingHTML = desktop => `<div class="vm-connecting" id="livestart">${Mascot.svg(state.agent.color, 'think', 44)}<span>Connecting to ${esc(state.agent.name)}'s ${desktop ? 'computer' : 'browser'}…</span></div>`;
+function vmControlHTML(){
+  return `<span class="cava">${Mascot.svg(state.agent.color, 'idle', 24)}</span>
+    <span class="vm-who" id="livestatus"><b>${esc(state.agent.name)}</b> has control</span>
+    <span class="vm-state" id="livestate">connecting</span>
+    <span class="vm-sub" id="livesub" hidden></span>
+    <button class="vm-take" data-act="takeover" id="takebtn">Take over</button>`;
+}
 function canvasLiveHTML(c, id){
   const cards = (c.messages || []).filter(m => m.kind === 'card' && m.card.liveId === id);
   const desktop = cards.some(m => m.card.desktop);
   const surface = desktop ? 'computer' : 'browser';
-  const url = [...cards].reverse().find(m => m.card.url)?.card.url || '';
-  const poster = safeImg([...cards].reverse().find(m => m.card.screenshot)?.card.screenshot);
-  return `<div class="livewrap" id="livewrap">
-      <div class="livebar"><span class="url" id="liveurl">${esc(desktop ? 'Agent computer' : url || 'connecting…')}</span><span class="chip purple" id="livestate">connecting</span></div>
-      <div class="liveview" id="liveview" tabindex="0" aria-label="Live ${surface} workspace">
+  const latest = [...cards].reverse();
+  const url = latest.find(m => m.card.url)?.card.url || '';
+  const poster = safeImg(latest.find(m => m.card.screenshot)?.card.screenshot);
+  const view = `<div class="liveview" id="liveview" tabindex="0" aria-label="Live ${surface} workspace">
         <canvas id="livecanvas" width="1280" height="900" aria-label="Live ${surface} stream"></canvas>
         <img id="liveimg" alt="${desktop ? 'Computer' : 'Browser'} preview" hidden${poster ? ` src="${esc(poster)}"` : ''}>
+        ${poster ? '' : vmConnectingHTML(desktop)}
         ${cards.some(m => cardStreams(c, m.card)) ? agentPointerHTML(id) : ''}
         <div class="bigcursor" id="bigcursor"></div>
-      </div>
-      <div class="controlbar">
-        <span class="cava">${Mascot.svg(state.agent.color,'idle',34)}</span>
-        <div class="cinfo"><b id="livestatus">Agent ${surface}</b><div class="sub" id="livesub">${desktop ? 'live virtual computer' : 'live interactive stream'} — the agent is connected to the VM</div></div>
-        <button class="btn small" data-act="takeover" id="takebtn">Take over</button>
-      </div>
-    </div>`;
+      </div>`;
+  return `<div class="livewrap vm-live${desktop ? ' desktop' : ''}" id="livewrap">${vmFrameHTML({ desktop, url, title:latest.find(m => m.card.title)?.card.title, view, foot:vmControlHTML(), pending:'connecting…', nav:true })}</div>`;
 }
 function canvasLiveMount(id){
   window.__liveFrames = 0;
@@ -6709,10 +7049,13 @@ function canvasShotHTML(c, m){
   const related = (c.messages || []).filter(x => x === m || (cd.taskId && x.card?.type === 'browser' && x.card.taskId === cd.taskId));
   const latest = related.at(-1)?.card || cd;
   const shot = safeImg([...related].reverse().find(x => x.card?.screenshot)?.card.screenshot);
-  const ended = liveEnded(c, cd);
-  return `<div class="livebar"><span class="url">${esc(latest.url || cd.url || '')}</span><span class="chip">${esc(ended ? 'last screen' : latest.status || '')}</span></div>
-    ${ended ? '<p class="rnote">The task is finished and its browser is closed. This is the last screen it showed.</p>' : latest.note ? `<p class="rnote">${esc(latest.note)}</p>` : ''}
-    ${shot ? `<img class="canvas-file-image" src="${esc(shot)}" alt="Browser screenshot">` : '<div class="canvas-file-note">Waiting for the browser image…</div>'}`;
+  const ended = liveEnded(c, cd) || cardStatus(c, latest) === 'interrupted';
+  const view = `<div class="liveview vm-shot">${shot ? `<img src="${esc(shot)}" alt="${ended ? 'Last screen of the browser' : 'Browser screenshot'}">` : `<div class="vm-shot-empty">${ended ? 'No picture was saved from this browser.' : 'Waiting for the browser image…'}</div>`}</div>`;
+  const done = ended || !cardWorking(c, latest);
+  const foot = `<span class="cava">${Mascot.svg(state.agent.color, done ? 'happy' : 'idle', 24)}</span>
+    <span class="vm-who"><b>${esc(state.agent.name)}</b> ${done ? 'is done here' : 'is working'}</span>
+    ${done ? `<span class="vm-state" title="${ended ? 'The task has ended and its browser is closed. ' : ''}This is the last screen it showed.">last screen</span>` : ''}`;
+  return `<div class="livewrap vm-live${cd.desktop ? ' desktop' : ''}">${vmFrameHTML({ desktop:!!cd.desktop, url:latest.url || cd.url || '', title:latest.title || cd.title, view, foot })}</div>`;
 }
 // A task's browser streams only while the task works. Afterwards the VM stops, so the
 // entry shows the last screen instead of "connecting" to a stream that will not come and
@@ -6720,30 +7063,22 @@ function canvasShotHTML(c, m){
 function liveEnded(c, cd){
   return String(cd?.liveId || '').startsWith('rt:') && !(c?.messages || []).some(x => x.kind === 'card' && x.card?.liveId === cd.liveId && cardStreams(c, x.card));
 }
-function canvasComputerHTML(c, m){
-  const cd = m.card;
-  const related = (c.messages || []).filter(x => x === m || (cd.taskId && x.card?.type === 'computer' && x.card.taskId === cd.taskId));
-  const latest = related.at(-1)?.card || cd;
-  const lines = related.flatMap(x => x.card.lines || []).slice(-80);
-  return `<div class="term canvas-term"${cd.pcId ? ` data-pc="${esc(cd.pcId)}"` : ''}>${lines.map(L => `<div class="${esc(L.cls || '')}">${esc(L.t)}</div>`).join('') || '<div>$ …</div>'}${latest.status === 'running' ? '<div class="tdots"><i></i><i></i><i></i></div>' : ''}</div>`;
-}
 const canvasBody = (html, cls = '') => ({ key:html, html, cls });
 // What an open entry shows; a live view keeps one key so updates never restart it.
 function canvasItemBody(ref, v){
   if (ref.kind === 'artifact') return canvasBody(chatArtifactHTML(v.c.artifact), 'is-doc');
   if (ref.kind === 'upload') return canvasBody(canvasDocumentHTML(v.file, v.file.dataUrl || v.file.content || '', { head:false }), 'is-doc');
   const { c, m } = v, cd = m.card;
-  if (cd.type === 'browser') return cd.liveId && !liveEnded(c, cd) ? { key:'live:' + cd.liveId, html:canvasLiveHTML(c, cd.liveId), cls:'is-live', live:cd.liveId } : canvasBody(canvasShotHTML(c, m));
-  if (cd.type === 'computer') return canvasBody(canvasComputerHTML(c, m), 'is-term');
+  if (cd.type === 'browser') return cd.liveId && !liveEnded(c, cd) ? { key:'live:' + cd.liveId, html:canvasLiveHTML(c, cd.liveId), cls:'is-live', live:cd.liveId } : canvasBody(canvasShotHTML(c, m), 'is-live');
   if (cd.type === 'artifact' && c.artifact?.title === cd.title) return canvasBody(chatArtifactHTML(c.artifact), 'is-doc');
   if (cd.type === 'file' || cd.type === 'canvas') return canvasBody(canvasDocumentHTML(cd, cd.type === 'file' ? canvasFileContent(c, m) : cd.content, { head:false }), 'is-doc');
   return canvasBody(`<div class="canvas-selected-card">${cardNode(c, m)}</div>`);
 }
 function canvasViewHeadHTML(v){
   return `<div class="canvas-view-bar">
-      <button class="canvas-back" data-act="canvas-back">${icon('left',14)} Canvas history</button>
+      <button class="canvas-back" data-act="canvas-back" title="Back to Canvas history" aria-label="Back to Canvas history">${icon('left',20)}</button>
       <span class="canvas-view-acts">
-        <button class="iconbtn" data-act="canvas-wide" aria-pressed="${canvasWide}" title="${canvasWide ? 'Smaller' : 'Bigger'}" aria-label="${canvasWide ? 'Show it next to the chat' : 'Show it bigger'}">${icon(canvasWide ? 'shrink' : 'expand',15)}</button>
+        <button class="canvas-plain" data-act="canvas-wide" aria-pressed="${canvasWide}" title="${canvasWide ? 'Smaller' : 'Bigger'}" aria-label="${canvasWide ? 'Show it next to the chat' : 'Show it bigger'}">${icon(canvasWide ? 'shrink' : 'expand',18)}</button>
       </span>
     </div>
     <div class="canvas-view-title">
@@ -6766,6 +7101,8 @@ function workspaceLive(){
 function paintCanvasTab(body){
   const put = (node, html) => { if (node.__html !== html) { node.innerHTML = html; node.__html = html; } };
   const ref = state.canvasItem, v = ref ? canvasItemView(ref) : null;
+  // An open entry fills the panel: its top (mascot and tabs) steps aside until Back.
+  $('#canvas')?.classList.toggle('item-open', !!v);
   if (!v) {
     body.classList.remove('is-view');
     put(body, canvasHistoryHTML());
@@ -6787,11 +7124,9 @@ function paintCanvasTab(body){
 }
 function canvasAfterPaint(body, painted){
   if (painted.live && canvasShouldShow() && (painted.fresh || liveIdShown !== painted.live)) canvasLiveMount(painted.live);
-  const term = body.querySelector('.canvas-term[data-pc]');
-  if (term && painted.fresh && !$('#pcout')) { term.id = 'pcout'; pcConnect(term.dataset.pc); }
   const c = chat();
   const cardLive = [...(c?.messages || [])].reverse().find(m => m.kind === 'card' && cardStreams(c, m.card))?.card.liveId;
-  if (!painted.live && !term && (liveWS || pcWS) && !(cardLive && cardLive === liveIdShown)) liveClose();
+  if (!painted.live && (liveWS || pcWS) && !(cardLive && cardLive === liveIdShown)) liveClose();
   syncCanvasWide();
 }
 // Card updates refresh the open Canvas without restarting what it plays.
@@ -6808,13 +7143,35 @@ function repaintCanvasSoon(){
 }
 // Opens something in the Canvas panel of the current chat.
 function canvasShow(ref){
-  state.canvasItem = ref;
-  state.canvasTab = 'canvas';
-  if (canvasShouldShow()) { save(); paintCanvas(); } else setCanvasOpen(true);
+  const inCanvas = canvasShouldShow() && (state.canvasTab || 'canvas') === 'canvas';
+  if (!canvasShouldShow()) { state.canvasItem = ref; state.canvasTab = 'canvas'; setCanvasOpen(true); return; }
+  canvasMorph(() => { state.canvasItem = ref; state.canvasTab = 'canvas'; save(); paintCanvas(); }, inCanvas ? ref : null);
+}
+/* Opening an entry grows its history row into the full view while the panel's top (the
+   mascot and tabs) fades away, so only the entry fills the panel; Back plays it in reverse.
+   Uses view transitions where the browser has them, otherwise it just switches. */
+function canvasEntryRow(ref){
+  if (!ref) return null;
+  const sel = ref.kind === 'artifact' ? `[data-act="canvas-artifact"][data-chat="${CSS.escape(ref.chatId)}"]` : `[data-act="canvas-card"][data-chat="${CSS.escape(ref.chatId)}"][data-msg="${CSS.escape(ref.msgId || '')}"]`;
+  return document.querySelector(`#cbody .canvas-entry ${sel}`)?.closest('.canvas-entry') || null;
+}
+function canvasMorph(update, ref){
+  let reduce = false;
+  try { reduce = matchMedia('(prefers-reduced-motion: reduce)').matches; } catch {}
+  if (!document.startViewTransition || reduce) { update(); return; }
+  const tagged = [];
+  const tag = () => { const row = canvasEntryRow(ref); if (row) { row.style.viewTransitionName = 'canvas-entry'; tagged.push(row); } };
+  tag();
+  try {
+    const vt = document.startViewTransition(() => { update(); tag(); });
+    vt.finished.finally(() => tagged.forEach(row => { row.style.viewTransitionName = ''; }));
+  } catch { tagged.forEach(row => { row.style.viewTransitionName = ''; }); update(); }
 }
 
 function paintCanvas(){
   const cv = $('#canvas'); if (!cv) return;
+  if(state.view==='settings' && state.canvasTab==='payments'){cv.replaceChildren();return;}
+  applyAgentBrand();
   scopeMailCache();
   if (state.canvasTab === 'agent') state.canvasTab = 'approvals';
   if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
@@ -6824,35 +7181,56 @@ function paintCanvas(){
   // A chat card still streaming its task's browser keeps the connection.
   const cardLive = [...(c?.messages || [])].reverse().find(m => m.kind === 'card' && cardStreams(c, m.card))?.card.liveId;
   if (!canvasLiveId() && (liveWS || pcWS) && !(cardLive && cardLive === liveIdShown)) liveClose();
-  cv.innerHTML = `
+  // The panel frame stays mounted and only the parts that changed are replaced: rebuilding
+  // it on every tab switch or edit toggle made the mascot blink and the panel jump.
+  if (!cv.querySelector(':scope > .canvas-head')) {
+    cv.innerHTML = `
     <div class="canvas-resize" id="canvasResize"></div>
     <div class="canvas-head">
-      ${canvasHeroHTML()}
+      <div class="canvas-hero"></div>
       <div class="canvas-head-row">
-        <div class="canvas-tabs" role="tablist" aria-label="Agent panel">
-          ${[
-            ['canvas', 'easel', 'Canvas', workspaceLive() ? '<span class="livedot"></span>' : ''],
-            ['subagents', 'clock', 'Automations', ''],
-            ['approvals', 'shieldcheck', 'Approvals', ''],
-            ['mail', 'mail', 'Mail', mailCache && mailCache.unread ? `<span class="cnt" aria-hidden="true">${mailCache.unread}</span>` : ''],
-            ['payments', 'wallet', 'Wallet', ''],
-          ].map(([t, ic, label, badge]) => `<button class="canvas-tab${top === t ? ' on' : ''}" role="tab" aria-selected="${top === t}" data-act="ctab" data-t="${t}" title="${label}" aria-label="${label}${t === 'mail' && mailCache?.unread ? `, ${mailCache.unread} unread` : ''}">${icon(ic,18)}${badge}</button>`).join('')}
-        </div>
+        <div class="canvas-tabs" role="tablist" aria-label="Agent panel"></div>
         <button class="canvas-close" data-act="togglecanvas" aria-label="Close canvas">${icon('x',16)}</button>
       </div>
     </div>
     <div class="cbody" id="cbody"></div>`;
-  initCanvasResize();
+    initCanvasResize();
+  }
+  const hero = cv.querySelector('.canvas-hero');
+  const a = state.agent;
+  const heroKey = a ? JSON.stringify([a.color, a.name, a.outfit || [], !!state.agentEdit, mailCache?.address || '']) : '';
+  if (hero.__key !== heroKey) {
+    hero.innerHTML = canvasHeroHTML();
+    hero.__key = heroKey;
+    const an = hero.querySelector('#agentname');
+    if (an) an.addEventListener('change', e => {
+      const v = e.target.value.trim(); if (!v) return;
+      state.agent.name = publicAgentName(v); save(); paintSide(); paintMain(); paintCanvas();
+      ensureMailbox(state.agent.name).then(() => { if ($('#cbody')) paintCanvas(); });
+      toast('Renamed — they answer to ' + state.agent.name + ' now.');
+    });
+  } else refreshWorkspaceConnectionView();
+  const tabs = cv.querySelector('.canvas-tabs');
+  const tabsHTML = [
+    ['canvas', 'easel', 'Canvas', workspaceLive() ? '<span class="livedot"></span>' : ''],
+    ['subagents', 'clock', 'Automations', ''],
+    ['approvals', 'shieldcheck', 'Approvals', ''],
+    ['mail', 'mail', 'Mail', mailCache && mailCache.unread ? `<span class="cnt" aria-hidden="true">${mailCache.unread}</span>` : ''],
+    ['payments', 'wallet', 'Wallet', ''],
+  ].map(([t, ic, label, badge]) => `<button class="canvas-tab${top === t ? ' on' : ''}" role="tab" aria-selected="${top === t}" data-act="ctab" data-t="${t}" title="${label}" aria-label="${label}${t === 'mail' && mailCache?.unread ? `, ${mailCache.unread} unread` : ''}">${icon(ic,18)}${badge}</button>`).join('');
+  if (tabs.__html !== tabsHTML) { tabs.innerHTML = tabsHTML; tabs.__html = tabsHTML; }
+  cv.classList.toggle('item-open', top === 'canvas' && !!canvasItemView(state.canvasItem));
   centerActiveSeg(cv);
   syncCanvasWide();
-  const an = $('#agentname');
-  if (an) an.addEventListener('change', e => {
-    const v = e.target.value.trim(); if (!v) return;
-    state.agent.name = publicAgentName(v); save(); paintSide(); paintMain(); paintCanvas();
-    ensureMailbox(state.agent.name).then(() => { if ($('#cbody')) paintCanvas(); });
-    toast('Renamed — they answer to ' + state.agent.name + ' now.');
-  });
   const body = $('#cbody');
+  // Another tab starts from an empty body, as the Canvas tab's diffing expects.
+  if (body.__tab !== top) {
+    body.className = 'cbody';
+    body.innerHTML = '';
+    body.__html = null;
+    body.__tab = top;
+    body.scrollTop = 0;
+  }
   if (top === 'mail'){
     paintMail(body);
     return;
@@ -6873,6 +7251,14 @@ function paintCanvas(){
     return;
   }
   canvasAfterPaint(body, paintCanvasTab(body));
+  refreshCanvasTasks();
+}
+// Other chats keep the task states they had when last open, and the history covers every
+// chat. It asks the server once, so a task that ended meanwhile stops reading as working.
+function refreshCanvasTasks(){
+  if (!Engine.managed || !Engine.recoverTasks || !signedIn()) return;
+  const current = chat();
+  for (const c of state.chats || []) if (c !== current && liveTaskIds(c).length) void Engine.recoverTasks(makeRT(c), false, { once:true });
 }
 
 /* ---------------- canvas drag-to-resize ---------------- */
@@ -6932,11 +7318,6 @@ function paintVault(M){
           <button class="iconbtn" data-act="reveal" data-id="${s.id}" title="Reveal (only you)">${s.revealed ? icon('eyeoff',14) : icon('eye',14)}</button>
           <button class="iconbtn" data-act="delsecret" data-id="${s.id}" title="Delete">${icon('trash',14)}</button>
         </div></div>`).join('') || '<div class="row mut">No secrets yet — the secrets box in chat adds them here.</div>'}
-      <div class="row" style="background:var(--panel)">
-        <input class="field" id="vname" placeholder="name" style="max-width:170px">
-        <input class="field mono" id="vval" type="password" placeholder="value" style="flex:1">
-        <button class="btn small" data-act="addsecret">${icon('plus',14)} Add</button>
-      </div>
     </div>`;
   } else if (tab === 'apps'){
     const connected = (state.composioApps || []).filter((a) => a.connected);
@@ -7010,37 +7391,15 @@ function paintProfile(M){
 }
 
 /* ---------------- Settings (profiles / secrets / browser / usage / billing) ---------------- */
-/* A login becomes "<site> username" + "<site> password" so the agent can
-   fill each field by ref. The settings list groups those refs for the owner. */
-const VAULT_KINDS = {
-  login: { label:'Login', icon:'user', fields:[
-    { k:'site', label:'Website', placeholder:'e.g. github.com' },
-    { k:'username', label:'Username or email', secret:true, optional:true },
-    { k:'password', label:'Password', secret:true, masked:true },
-  ] },
-  apikey: { label:'API key', icon:'key', fields:[
-    { k:'name', label:'Name', placeholder:'e.g. OpenAI API key' },
-    { k:'value', label:'Key', placeholder:'Paste the key', secret:true, masked:true },
-  ] },
-  // Saved as a connector too: the key goes to the vault and the API or MCP server to Connectors.
-  api: { label:'API connection', icon:'code', connector:true },
-  mcp: { label:'MCP server', icon:'grid', connector:true },
-  other: { label:'Other', icon:'lock', fields:[
-    { k:'name', label:'Name', placeholder:'e.g. Wi-Fi password' },
-    { k:'value', label:'Value', secret:true, masked:true },
-  ] },
-};
-function vaultKindEntries(kind, f){
-  const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-  if (kind === 'login'){
-    const site = clean(f.site).replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '').replace(/^www\./i, '');
-    if (!site || !f.password) return { error:'Add the website and the password.' };
-    return { entries:[f.username && [`${site} username`, f.username], [`${site} password`, f.password]].filter(Boolean) };
-  }
-  const name = clean(f.name);
-  if (!name || !f.value) return { error:'Add a name and a value.' };
-  return { entries:[[name, f.value]] };
-}
+/* Settings > Secrets has no form: each row starts a chat with the agent, which asks for
+   the value in a secure card (vault_request) or sets up the whole connection
+   (connector_setup). A login is saved as "<site> username" + "<site> password" so the
+   agent can fill each field by ref; the list below groups those refs for the owner. */
+const VAULT_ASKS = [
+  ['user', 'Save a login', 'Save my login for '],
+  ['key', 'Add an API key', 'Add my API key for '],
+  ['grid', 'Connect a service', 'Connect my account at '],
+];
 function vaultDisplayEntries(secrets){
   const used = new Set();
   const connectorFor = new Map((state.customConnectors || []).filter(c => c.secretId).map(c => [c.secretId, c]));
@@ -7063,19 +7422,18 @@ function settingsSecretsBody(v){
   const secrets = v.secrets || [];
   const entries = vaultDisplayEntries(secrets);
   const agentName = esc((state.agent && state.agent.name) || 'Your agent');
-  const kind = VAULT_KINDS[state.vaultKind] ? state.vaultKind : 'login';
   const locked = v.encrypted === false;
+  // Nothing is added by hand here: the owner asks in chat, and the agent works out what is
+  // needed (a login, a key, or a whole API or MCP connection) and asks for the value in a
+  // secure card.
   return `<section class="vault">
     ${locked ? `<div class="warnband vault-warn">${icon('alert',18)}<div><b>The vault is locked on this server.</b>New secrets can’t be saved until ENCRYPTION_KEY is set on the backend, so nothing is ever stored unencrypted.</div></div>` : ''}
-    <div class="vault-add">
-      <div class="vault-section-head"><h3>Add to vault</h3><span>${locked ? 'Locked' : `${icon('shieldcheck',12)} Encrypted, only a ref is shared with ${agentName}`}</span></div>
-      <div class="vault-kinds" role="radiogroup" aria-label="Credential type">
-        ${Object.entries(VAULT_KINDS).map(([k, d]) => `<button type="button" class="vault-kind ${k === kind ? 'on' : ''}" role="radio" aria-checked="${k === kind}" data-act="vault-kind" data-k="${k}"><span class="vault-kind-icon">${icon(d.icon,16)}</span><span>${d.label}</span><span class="vault-kind-indicator" aria-hidden="true"></span></button>`).join('')}
+    <div class="vault-add vault-ask">
+      <div class="vault-section-head"><h3>Add with ${agentName}</h3><span>${locked ? 'Locked' : `${icon('shieldcheck',12)} Encrypted, only a ref is shared with ${agentName}`}</span></div>
+      <p class="vault-ask-lead">Tell ${agentName} in chat what you want to use. ${agentName} sets it up and asks for the password or key in a secure box, so you never need to know where it goes.</p>
+      <div class="vault-ask-chips">
+        ${VAULT_ASKS.map(([ic, label, prompt]) => `<button type="button" class="vault-ask-chip" data-act="vault-ask" data-p="${esc(prompt)}"${locked ? ' disabled' : ''}>${icon(ic,15)}<span>${label}</span></button>`).join('')}
       </div>
-      ${VAULT_KINDS[kind].connector ? ccFormHtml(kind) : `<form class="vault-add-form" data-kind="${kind}" autocomplete="off" onsubmit="return false">
-        ${VAULT_KINDS[kind].fields.map(fd => `<label class="${fd.short ? 'vault-add-short' : fd.secret ? 'vault-add-value' : ''}"><span>${fd.label}${fd.optional ? ' <i>optional</i>' : ''}</span><input class="field${fd.secret ? ' mono' : ''}" data-vf="${fd.k}" type="${fd.masked ? 'password' : 'text'}" placeholder="${esc(fd.placeholder || '')}" maxlength="${fd.secret ? 4000 : 80}" autocomplete="${fd.masked ? 'new-password' : 'off'}" spellcheck="false"${fd.inputmode ? ` inputmode="${fd.inputmode}"` : ''}${locked ? ' disabled' : ''}></label>`).join('')}
-        <button class="btn" data-act="addsecret"${locked ? ' disabled' : ''}>${icon('plus',14)} Save</button>
-      </form>`}
     </div>
     <div class="vault-list">
       <div class="vault-section-head"><h3>Saved credentials</h3><span>${entries.length} · reveal is only for you</span></div>
@@ -7091,7 +7449,7 @@ function settingsSecretsBody(v){
           <button class="iconbtn" data-act="reveal-credential" data-ids="${ids}" title="${shown ? 'Hide' : 'Reveal (only you)'}" aria-label="${shown ? 'Hide' : 'Reveal'} ${esc(entry.name)}">${shown ? icon('eyeoff',16) : icon('eye',16)}</button>
           <button class="iconbtn" data-act="delete-credential" data-ids="${ids}" data-name="${esc(entry.name)}"${entry.connector ? ' data-connector="1"' : ''} title="Delete" aria-label="Delete ${esc(entry.name)}">${icon('trash',14)}</button>
         </div>
-      </div>`; }).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Add a credential above, or ${agentName} will ask when a task needs one.</p></div></div>`}
+      </div>`; }).join('') || `<div class="vault-empty"><span class="vault-item-icon">${icon('key',16)}</span><div><b>Nothing saved yet</b><p>Ask ${agentName} in chat, or ${agentName} will ask when a task needs one.</p></div></div>`}
     </div>
   </section>`;
 }
@@ -7194,10 +7552,61 @@ async function persistAgentContext(documents){
   }while(completed<agentContextSaveVersion);})();
   try{return await agentContextSavePending;}finally{agentContextSavePending=null;}
 }
+/* On phones Settings opens on one list: the plan card, then the same sections
+   as the desktop tabs in grouped rows. Each row opens its section on its own
+   page with a back button. */
+function phoneLayout(){ return window.matchMedia('(max-width: 760px)').matches; }
+const SETTINGS_TABS = [['profiles','Profiles','user'], ['wallet','Wallet','wallet'], ['secrets','Secrets','key'], ['browser','Browser','globe'], ['usage','Usage','spark'], ['billing','Billing','card'], ['issue','Report an issue','issue'], ['support','Help & support','help']];
+function settingsRowHtml(id){
+  const [, label, ic] = SETTINGS_TABS.find(([t]) => t === id);
+  return `<button type="button" class="set-row" data-act="stab" data-t="${id}">
+    <span class="set-ico">${icon(ic,22)}</span>
+    <span class="set-copy"><span class="set-label">${esc(label)}</span></span>
+    <span class="set-chev">${icon('chevr',18)}</span>
+  </button>`;
+}
+function settingsGroupHtml(ids){ return `<div class="set-group">${ids.map(settingsRowHtml).join('')}</div>`; }
+function settingsPlanHtml(b){
+  if (!b) return `<button type="button" class="set-plan-main" data-act="stab" data-t="usage"><span class="set-plan-head"><b>Your plan</b></span><span class="set-plan-note">Getting your tokens ready…</span><span class="set-plan-bar"><span style="width:0%"></span></span></button>
+    <button type="button" class="set-plan-link" data-act="stab" data-t="billing">See plans</button>`;
+  const v = creditView(b), pct = Math.round(v.percent);
+  const reset = b.resetAt ? new Date(b.resetAt).toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '';
+  const note = v.tone === 'empty' && v.extraRemaining > 0 ? 'Monthly tokens used · extra tokens still available'
+    : reset ? `Monthly tokens reset on ${reset}` : 'Your monthly tokens';
+  return `<button type="button" class="set-plan-main" data-act="stab" data-t="usage" aria-label="${esc(billingPlanName(b))} plan, ${pct}% of monthly tokens used. Open usage">
+      <span class="set-plan-head"><b>${esc(billingPlanName(b))} plan</b><span>${pct}% used</span></span>
+      <span class="set-plan-note">${esc(note)}</span>
+      <span class="set-plan-bar"><span style="width:${v.percent}%"></span></span>
+    </button>
+    <button type="button" class="set-plan-link" data-act="stab" data-t="billing">${b.plan && b.plan !== 'free' ? 'Manage plan' : 'Upgrade'}</button>`;
+}
+function fillSettingsPlan(M){
+  const owner = billingIdentity();
+  getBilling().then(b => {
+    const box = M.querySelector('#set-plan');
+    if (!b || !box || !box.isConnected || owner !== billingIdentity()) return;
+    box.innerHTML = settingsPlanHtml(b);
+  }).catch(() => {});
+}
+function settingsHomeHtml(){
+  const cached = billingOwner === billingIdentity() ? billingCache : null;
+  return `<div class="set-top"><h1>Settings</h1><button class="set-round" data-act="nav" data-view="chat" aria-label="Close settings" title="Close">${icon('x',20)}</button></div>
+    <section class="set-plan" id="set-plan" aria-label="Your plan">${settingsPlanHtml(cached)}</section>
+    ${settingsGroupHtml(['profiles', 'wallet', 'secrets', 'browser'])}
+    ${settingsGroupHtml(['usage', 'billing'])}
+    ${settingsGroupHtml(['issue', 'support'])}`;
+}
 function paintSettings(M){
   const a = state.agent;
   const u = currentUser();
-  const tab = state.settingsTab || 'profiles';
+  const phone = phoneLayout();
+  // The phone list is 'home'; desktop has no list and shows Profiles instead.
+  const tab = state.settingsTab === 'home' || !SETTINGS_TABS.some(([id]) => id === state.settingsTab) ? (phone ? 'home' : 'profiles') : state.settingsTab;
+  if (tab === 'home'){
+    M.innerHTML = `<div class="page set-page"><div class="pageinner set-inner">${settingsHomeHtml()}</div></div>`;
+    fillSettingsPlan(M);
+    return;
+  }
   const curTheme = THEMES.find(t => t.id === (state.theme || 'grey')) || THEMES[0];
   let body = '';
   if (tab === 'profiles'){
@@ -7246,10 +7655,17 @@ function paintSettings(M){
   } else if (tab === 'support'){
     body = settingsSupportBody();
   }
+  const description = ({ wallet:'Choose your wallet and manage its connections.', billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.';
+  if (phone) M.innerHTML = `<div class="page set-page"><div class="pageinner set-sub">
+    <div class="set-sub-head"><button class="set-round" data-act="stab" data-t="home" aria-label="Back to Settings" title="Settings">${icon('chevl',20)}</button><h1>${esc(SETTINGS_TABS.find(([id]) => id === tab)[1])}</h1></div>
+    <p class="psub">${description}</p>
+    ${body}
+  </div></div>`;
+  else {
   const previousTabScroll = M.querySelector('.settings-tabs')?.scrollLeft || 0;
   M.innerHTML = `<div class="page"><div class="pageinner">
     <div class="phead"><h1>Settings</h1><button class="btn ghost small" data-act="nav" data-view="chat">Back to chat</button></div>
-    <p class="psub">${({ wallet:'How '+esc(a.name)+' pays, spending rules and where orders are delivered.', billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.'}</p>
+    <p class="psub">${description}</p>
     <div class="seg settings-tabs" aria-label="Settings sections">
       <button class="${tab === 'profiles' ? 'on' : ''}" data-act="stab" data-t="profiles" aria-pressed="${tab === 'profiles'}">${icon('user',14)} Profiles</button>
       <button class="${tab === 'wallet' ? 'on' : ''}" data-act="stab" data-t="wallet" aria-pressed="${tab === 'wallet'}">${icon('wallet',14)} Wallet</button>
@@ -7264,6 +7680,7 @@ function paintSettings(M){
   </div></div>`;
   M.querySelector('.settings-tabs').scrollLeft = previousTabScroll;
   centerActiveSettingsTab(M);
+  }
   const pn = $('#pname');
   if (pn) pn.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
@@ -7508,18 +7925,16 @@ function paintApps(M){
   if (!state.composioLoading && signedIn()) refreshComposioApps();
 }
 
-/* ---------------- Your own connectors: APIs and MCP servers the owner adds ---------------- */
-// The key goes straight to the encrypted vault on the server. The unsent form lives only
-// in memory here, never in browser storage.
+/* ---------------- Your own connectors: APIs and MCP servers the agent sets up ---------------- */
+// The agent adds them from chat (connector_setup and a key card); there is no form. A new key
+// goes straight to the encrypted vault on the server, never to browser storage.
 // var and function declarations: the Connectors page can paint before this block has run.
-var CC_AUTH = [['bearer','Bearer token'],['header','API key in a header'],['query','API key in the URL'],['basic','Username and password'],['none','No authentication']];
 var CC_SECRET_LABEL = { bearer:'Token', header:'API key', query:'API key', basic:'Password' };
 // The same, inside a sentence.
 var CC_SECRET_NOUN = { bearer:'token', header:'API key', query:'API key', basic:'password' };
-var ccDraft = null, ccRekeyId = null, ccLoadedFor = null, ccRefreshPending = null, ccBusy = new Set();
+var ccRekeyId = null, ccLoadedFor = null, ccRefreshPending = null, ccBusy = new Set();
 function ccKey(id){ return 'cc:' + id; }
 function customConnectorById(id){ return (state.customConnectors || []).find((c) => c.id === id) || null; }
-function ccNewDraft(kind){ return { kind, auth:'bearer', name:'', url:'', header:'', param:'', username:'', secret:'', testPath:'', docsUrl:'', description:'', error:'', busy:false }; }
 function refreshCustomConnectors(){
   if (!signedIn()) return Promise.resolve();
   if (ccRefreshPending) return ccRefreshPending;
@@ -7529,50 +7944,16 @@ function refreshCustomConnectors(){
     state.customConnectors = Array.isArray(j.connectors) ? j.connectors : [];
     state.customConnectorsAvailable = j.available !== false;
     ccLoadedFor = owner;
-    // A repaint while the owner types in the form would take their cursor away.
-    if (document.activeElement?.closest?.('.cc-form')) return;
+    // A repaint while the owner types a new key would take their cursor away.
+    if (document.activeElement?.closest?.('.cc-rekey')) return;
     if (state.view === 'apps' && $('#main')) paintApps($('#main'));
     if (state.view === 'settings' && state.settingsTab === 'secrets' && $('#main')) paintSettings($('#main'));
   }).catch(() => {}).finally(() => { ccRefreshPending = null; });
   return ccRefreshPending;
 }
-function ccRepaint(){
-  if (state.view === 'apps' && $('#main')) paintApps($('#main'));
-  else if (state.view === 'settings' && $('#main')) paintSettings($('#main'));
-}
 function ccPatch(next){
   state.customConnectors = (state.customConnectors || []).map((c) => c.id === next.id ? next : c);
   save();
-}
-// The manual form in Settings > Secrets. In chat, the agent sets connectors up with a card.
-function ccFormHtml(kind){
-  if (!ccDraft) ccDraft = ccNewDraft(kind);
-  if (ccDraft.kind !== kind) ccDraft.kind = kind;
-  const d = ccDraft, mcp = d.kind === 'mcp';
-  const agentName = esc(state.agent?.name || 'Your agent');
-  const locked = state.vault?.encrypted === false && d.auth !== 'none';
-  const unavailable = state.customConnectorsAvailable === false;
-  const field = (k, label, attrs, optional) => `<label class="cc-f cc-f-${k}"><span>${label}${optional ? ' <i>optional</i>' : ''}</span><input class="field${k === 'secret' ? ' mono' : ''}" data-cc="${k}" value="${esc(d[k] || '')}" ${attrs}></label>`;
-  return `<form class="cc-form" data-kind="${d.kind}" data-auth="${esc(d.auth)}" autocomplete="off" onsubmit="return false">
-    <p class="cc-lead">${mcp ? `Add a remote MCP server by its URL. ${agentName} can then use its tools.` : `Add a REST API by its base URL. ${agentName} sends requests there with your key.`} It also appears in Connectors, with its status and permissions.</p>
-    <div class="cc-grid">
-      ${field('name', 'Name', `placeholder="${mcp ? 'e.g. Linear' : 'e.g. Weather API'}" maxlength="60" spellcheck="false"`)}
-      ${field('url', mcp ? 'Server URL' : 'Base URL', `placeholder="${mcp ? 'https://mcp.example.com/mcp' : 'https://api.example.com/v1'}" inputmode="url" maxlength="1000" spellcheck="false"`)}
-      <label class="cc-f cc-f-auth"><span>Sign-in</span><select class="field" data-cc="auth">${CC_AUTH.map(([v, l]) => `<option value="${v}"${v === d.auth ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      ${field('header', 'Header name', 'placeholder="X-API-Key" maxlength="60" spellcheck="false"')}
-      ${field('param', 'Query parameter', 'placeholder="api_key" maxlength="60" spellcheck="false"')}
-      ${field('username', 'Username', 'maxlength="200" spellcheck="false"', true)}
-      ${field('secret', CC_SECRET_LABEL[d.auth] || 'Key', `type="password" placeholder="Paste it here" maxlength="4000" autocomplete="new-password" spellcheck="false"${locked ? ' disabled' : ''}`)}
-      ${field('testPath', 'Test path', 'placeholder="/me" maxlength="300" spellcheck="false"', true)}
-      ${field('docsUrl', 'API docs', 'placeholder="https://docs.example.com" inputmode="url" maxlength="1000" spellcheck="false"', true)}
-      <label class="cc-f cc-f-description"><span>What it’s for <i>optional</i></span><textarea class="field" data-cc="description" rows="2" maxlength="600" placeholder="${mcp ? `Tell ${agentName} when to use it` : `Tell ${agentName} when to use it and which endpoints matter`}">${esc(d.description || '')}</textarea></label>
-    </div>
-    ${d.error ? `<div class="cc-error" role="alert">${icon('alert',14)}<span>${esc(d.error)}</span></div>` : ''}
-    <div class="cc-foot">
-      <span class="cc-note">${icon('lock',12)} ${unavailable ? 'Your own connectors aren’t available on this server yet.' : locked ? 'The vault is locked on this server, so keys can’t be saved.' : `The key is encrypted in your vault. ${agentName} never sees it.`}</span>
-      <button type="button" class="btn" data-act="cc-save"${d.busy || locked || unavailable ? ' disabled' : ''}>${d.busy ? 'Connecting…' : `${icon('plus',14)} Connect`}</button>
-    </div>
-  </form>`;
 }
 function ccPermBlock(c, kind, label){
   const rows = (c.permissions || []).filter((p) => p.kind === kind);
@@ -7641,28 +8022,6 @@ function ccAdopt(j){
   return c;
 }
 function ccToolCount(c){ return c.kind === 'mcp' ? (c.permissions || []).length : 0; }
-async function ccSave(form){
-  const d = ccDraft;
-  if (!form || !d || d.busy) return;
-  if (!signedIn()){ renderAuth(); return; }
-  d.busy = true; d.error = '';
-  ccRepaint();
-  try {
-    const body = { kind:d.kind, name:d.name, url:d.url, description:d.description,
-      auth:{ type:d.auth, ...(d.auth === 'header' ? { header:d.header } : d.auth === 'query' ? { param:d.param } : d.auth === 'basic' ? { username:d.username } : {}) },
-      secret:d.auth === 'none' ? '' : d.secret, testPath:d.kind === 'api' ? d.testPath : '', docsUrl:d.kind === 'api' ? d.docsUrl : '' };
-    const c = ccAdopt(await window.LingonAuth.api('/api/connectors', { method:'POST', body:JSON.stringify(body) }));
-    ccDraft = null;
-    save();
-    const tools = ccToolCount(c);
-    toast(`${c.name} connected${tools ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''}. You’ll find it in Connectors too.`);
-  } catch (e) {
-    if (ccDraft) ccDraft.error = e.message || 'Could not connect.';
-  }
-  if (ccDraft) ccDraft.busy = false;
-  ccRepaint();
-  paintSide();
-}
 async function ccCheck(id){
   const c = customConnectorById(id);
   if (!c || ccBusy.has(id)) return;
@@ -7720,7 +8079,12 @@ async function ccSetPermissions(id, change){
    GLOBAL EVENTS
 ================================================================ */
 window.addEventListener('resize', () => {
-  if (state.view === 'settings' && $('#main')) centerActiveSettingsTab($('#main'));
+  if (state.view === 'settings' && $('#main') && !phoneLayout()) centerActiveSettingsTab($('#main'));
+});
+// Settings and Library have their own phone layout; repaint when the width crosses it.
+window.matchMedia('(max-width: 760px)').addEventListener('change', () => {
+  if (state.view === 'settings' && $('#main')) paintSettings($('#main'));
+  else if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
 });
 window.addEventListener('focus', () => {
   startWorkspacePresence();
@@ -7786,33 +8150,6 @@ document.addEventListener('input', e => {
   const c = state.chats.find(c => c.id === form.dataset.chat);
   const m = c?.messages.find(m => m.id === form.dataset.msg);
   if (m?.card.status === 'pending') { m.card.draft = e.target.value; save(); }
-});
-// The add-connector form: the draft stays in memory, never in browser storage.
-document.addEventListener('input', e => {
-  const el = e.target.closest && e.target.closest('[data-cc]');
-  const form = el && el.closest('.cc-form');
-  if (!form || !ccDraft) return;
-  ccDraft[el.dataset.cc] = el.value;
-  if (ccDraft.error) { ccDraft.error = ''; form.querySelector('.cc-error')?.remove(); }
-  if (el.dataset.cc === 'auth') {
-    form.dataset.auth = el.value;
-    const label = form.querySelector('.cc-f-secret > span');
-    if (label) label.textContent = CC_SECRET_LABEL[el.value] || 'Key';
-    const header = form.querySelector('[data-cc="header"]');
-    if (el.value === 'header' && header && !header.value) { header.value = ccDraft.header = 'X-API-Key'; }
-  }
-});
-document.addEventListener('change', (e) => {
-  if (e.target && e.target.id === 'subtrigger') {
-    state.subAgentDraft = (($('#subprompt') || {}).value || '');
-    state.subAgentDraftName = (($('#subname') || {}).value || '');
-    state.subAgentTriggerType = e.target.value;
-    save(); paintCanvas();
-  }
-  if (e.target && e.target.id === 'subinterval') {
-    state.subAgentDraftInterval = Number(e.target.value || 60);
-    save();
-  }
 });
 document.addEventListener('click', e => {
   document.querySelectorAll('.billing-select[open], .art-menu[open]').forEach(menu => {
@@ -7929,7 +8266,10 @@ document.addEventListener('click', async e => {
   if (act === 'closecanvas'){ setCanvasOpen(false); return; }
   if (act === 'nav'){
     if (!signedIn()){ renderAuth(); return; }
-    mobileNavOpen = false; canvasWide = false; state.view = b.dataset.view; state.userMenuOpen = false; save(); switchView();
+    mobileNavOpen = false; canvasWide = false; state.view = b.dataset.view; state.userMenuOpen = false;
+    // On phones Settings opens on its list; a section opens from there.
+    if (state.view === 'settings' && phoneLayout()) state.settingsTab = 'home';
+    save(); switchView();
     if (state.view === 'apps') refreshComposioApps();
     return;
   }
@@ -8050,7 +8390,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'toggle-connector'){ openConnector(b.dataset.toolkit); return; }
   // The owner's own APIs and MCP servers.
-  if (act === 'cc-save'){ ccSave(b.closest('.cc-form')); return; }
+
   if (act === 'toggle-cc'){ ccToggle(b.dataset.id); return; }
   if (act === 'cc-check'){ ccCheck(b.dataset.id); return; }
   if (act === 'cc-rekey'){
@@ -8089,11 +8429,9 @@ document.addEventListener('click', async e => {
   if (act === 'connect-app'){ connectComposioApp(b.dataset.toolkit, b.dataset.auth); return; }
   if (act === 'disconnect-app'){ disconnectComposioApp(composioAppByToolkit(b.dataset.toolkit), b.dataset.account); return; }
   if (act === 'automate-app'){
-    const _tk = String(b.dataset.toolkit || '').toLowerCase();
-    state.canvasTab = 'subagents'; state.canvasOpen = true;
-    state.subAgentComposer = true; state.subAgentTriggerType = 'app';
-    save(); paintCanvas(); refreshSubAgents();
-    toast(_tk ? ('Pick a ' + _tk + ' event for the trigger.') : 'Pick a connected-app event.');
+    const app = composioAppByToolkit(b.dataset.toolkit);
+    setCanvasOpen(false);
+    askInNewChat(`Help me set up an automation${app?.name ? ' with ' + app.name : ''}. I want to `);
     return;
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
@@ -8227,42 +8565,21 @@ document.addEventListener('click', async e => {
   }
   if (act === 'agent-edit'){
     state.agentEdit = !state.agentEdit;
+    if (state.agentEdit) Mascot.keys.forEach(Mascot.preload);
     state.canvasOpen = true;
     const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
     save(); paintCanvas();
     return;
   }
-  if (act === 'new-subagent'){
-    state.subAgentComposer = !state.subAgentComposer;
-    if (!state.subAgentComposer) { state.subAgentDraft = ''; state.subAgentDraftName = ''; }
-    save(); paintCanvas(); return;
+  if (act === 'ask-automation'){
+    setCanvasOpen(false);
+    askInNewChat('Help me set up an automation. I want to ');
+    return;
   }
   if (act === 'open-subagents'){
     state.canvasTab = 'subagents'; state.canvasOpen = true;
     const app = $('#app'); if (app) app.classList.remove('nocanvas'); syncShellClasses();
     save(); paintCanvas(); refreshSubAgents(); return;
-  }
-  if (act === 'create-subagent'){
-    const name = (($('#subname') || {}).value || '').trim();
-    const prompt = (($('#subprompt') || {}).value || '').trim();
-    const type = (($('#subtrigger') || {}).value || 'schedule');
-    let trigger;
-    if (type === 'schedule') trigger = { type, intervalMinutes:Number((($('#subinterval') || {}).value) || 60) };
-    if (type === 'app') {
-      const _ae = String((($('#subappevent') || {}).value) || ''); const _ci = _ae.indexOf(':'); const app = _ci >= 0 ? _ae.slice(0, _ci) : _ae; const event = _ci >= 0 ? _ae.slice(_ci + 1) : '';
-      const connectedAccountId = ($('#subappevent')?.selectedOptions?.[0]?.dataset.account) || '';
-      trigger = { type, app, event, connectedAccountId };
-    }
-    if (type === 'subagent') trigger = { type, sourceAgentId:(($('#subsource') || {}).value) || '' };
-    if (!name || !prompt){ toast('Name and automation task are required.'); return; }
-    b.disabled = true;
-    try {
-      const result = await window.LingonAuth.api('/api/sub-agents', { method:'POST', body:JSON.stringify({ name, prompt, trigger, enabled:true }) });
-      state.subAgents.unshift(result.subAgent);
-      state.subAgentComposer = false; state.subAgentDraft = ''; state.subAgentDraftName = ''; save(); paintCanvas();
-      toast(`${result.subAgent.name} is watching for its trigger.`);
-    } catch (err) { b.disabled = false; toast(err.message); }
-    return;
   }
   if (act === 'toggle-subagent'){
     const agent = state.subAgents.find((item) => item.id === b.dataset.id); if (!agent) return;
@@ -8360,7 +8677,7 @@ document.addEventListener('click', async e => {
   if (act === 'mtab'){
     state.mailTab = b.dataset.t || 'inbox';
     if (mailCache) mailCache.selected = null;
-    if (state.mailTab === 'write' && mailCache) mailCache.compose = { to:'', subject:'', body:'' };
+    if (state.mailTab === 'write') mailCompose = { to:'', subject:'', body:'' };
     save();
     if ($('#cbody')) paintMail($('#cbody'));
     if (state.mailTab !== 'write') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
@@ -8387,7 +8704,7 @@ document.addEventListener('click', async e => {
     if (!msg) return;
     state.mailTab = 'write';
     mailCache.selected = null;
-    mailCache.compose = {
+    mailCompose = {
       to: msg.direction === 'outbound' ? (msg.to || []).join(', ') : msg.from,
       subject: /^re:/i.test(msg.subject || '') ? msg.subject : 'Re: ' + (msg.subject || ''),
       body: '',
@@ -8401,9 +8718,16 @@ document.addEventListener('click', async e => {
     const draft = ((mailCache && mailCache.drafts) || []).find((d) => d.id === b.dataset.id);
     if (!draft) return;
     state.mailTab = 'write';
-    mailCache.compose = { to: (draft.to || []).join(', '), subject: draft.subject, body: draft.bodyText, draftId: draft.id, inReplyTo: draft.inReplyTo };
+    mailCompose = { to: (draft.to || []).join(', '), subject: draft.subject, body: draft.bodyText, draftId: draft.id, inReplyTo: draft.inReplyTo };
     save();
     if ($('#cbody')) paintMail($('#cbody'));
+    return;
+  }
+  if (act === 'm-attach'){ $('#m-file-input')?.click(); return; }
+  if (act === 'm-file-remove'){
+    const files = (mailCompose && mailCompose.files) || [];
+    files.splice(Number(b.dataset.i), 1);
+    paintMailFiles();
     return;
   }
   if (act === 'm-draft'){
@@ -8411,9 +8735,11 @@ document.addEventListener('click', async e => {
     const subject = (($('#m-subject') || {}).value || '').trim();
     const bodyTxt = (($('#m-body') || {}).value || '').trim();
     const draftId = (($('#m-draft') || {}).value || '').trim();
+    const withFiles = !!((mailCompose && mailCompose.files) || []).length;
     window.LingonAuth.api('/api/mail/drafts', { method:'POST', body: JSON.stringify({ id: draftId || undefined, to, subject, body: bodyTxt }) }).then((j) => {
-      toast('Draft saved.');
-      if (mailCache) mailCache.compose = Object.assign({}, mailCache.compose, { draftId: j.draft && j.draft.id });
+      toast(withFiles ? 'Draft saved. Files stay attached while this message is open, but aren’t saved with drafts.' : 'Draft saved.');
+      const id = j.draft && j.draft.id;
+      if (id) { mailCompose = Object.assign(mailCompose || {}, { draftId:id }); if ($('#m-draft')) $('#m-draft').value = id; }
     }).catch((err) => toast(err.message));
     return;
   }
@@ -8423,16 +8749,24 @@ document.addEventListener('click', async e => {
     const bodyTxt = (($('#m-body') || {}).value || '').trim();
     const inReplyTo = (($('#m-reply') || {}).value || '').trim();
     const draftId = (($('#m-draft') || {}).value || '').trim();
+    const files = (mailCompose && mailCompose.files) || [];
     if (!to || !subject || !bodyTxt){ toast('To, subject and message are required.'); return; }
-    if (!window.confirm('Send this email as ' + ((state.agent && state.agent.name) || 'your agent') + '?')) return;
-    b.disabled = true;
-    window.LingonAuth.api('/api/mail/send', { method:'POST', body: JSON.stringify({ to, subject, body: bodyTxt, inReplyTo: inReplyTo || undefined, draftId: draftId || undefined, agentName: (state.agent && state.agent.name) || '', confirm:true }) }).then((j) => {
+    if (files.some(f => f.loading)){ toast('Wait for the files to finish adding.'); return; }
+    const sending = mailCompose = Object.assign(mailCompose || {}, { to, subject, body:bodyTxt });
+    if (sending.sending) return;
+    const withFiles = files.length ? ` with ${files.length} file${files.length === 1 ? '' : 's'}` : '';
+    if (!window.confirm('Send this email' + withFiles + ' as ' + ((state.agent && state.agent.name) || 'your agent') + '?')) return;
+    const setSending = on => { sending.sending = on; const btn = $('[data-act="m-send"]'); if (btn && mailCompose === sending) { btn.disabled = on; btn.lastChild.textContent = on ? ' Sending…' : ' Send'; } };
+    setSending(true);
+    const attachments = files.map(f => ({ filename:f.name, content:f.content, contentType:f.type || undefined }));
+    window.LingonAuth.api('/api/mail/send', { method:'POST', body: JSON.stringify({ to, subject, body: bodyTxt, inReplyTo: inReplyTo || undefined, draftId: draftId || undefined, attachments: attachments.length ? attachments : undefined, agentName: (state.agent && state.agent.name) || '', confirm:true }) }).then((j) => {
       mailCache = j.mailbox || mailCache;
+      if (mailCompose === sending) mailCompose = null;
       state.mailTab = 'sent';
       save();
       if ($('#cbody')) paintMail($('#cbody'));
-      toast('Sent from ' + ((mailCache && mailCache.address) || 'the agent mailbox') + '.');
-    }).catch((err) => { b.disabled = false; toast(err.message); });
+      toast('Sent' + withFiles + ' from ' + ((mailCache && mailCache.address) || 'the agent mailbox') + '.');
+    }).catch((err) => { setSending(false); toast(err.message); });
     return;
   }
   if (act === 'library-open' && c){
@@ -8456,7 +8790,7 @@ document.addEventListener('click', async e => {
   if (act === 'libcat'){
     state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = [];
     if (state.libraryCat === 'system') state.systemFile = null;
-    save(); paintLibrary($('#main')); $('#main .lib-main, #main .page').forEach(n => { n.scrollTop = 0; });
+    save(); paintLibrary($('#main')); document.querySelectorAll('#main .lib-main, #main .page').forEach(n => { n.scrollTop = 0; });
     return;
   }
   if (act === 'system-open'){
@@ -8485,16 +8819,20 @@ document.addEventListener('click', async e => {
   if (act === 'lib-select'){ state.librarySelect = true; state.librarySelected = []; save(); paintLibrary($('#main')); return; }
   if (act === 'lib-clear'){ state.librarySelect = false; state.librarySelected = []; save(); paintLibrary($('#main')); return; }
   if (act === 'lib-layout'){ state.libraryLayout = state.libraryLayout === 'list' ? 'grid' : 'list'; save(); paintLibrary($('#main')); return; }
+  if (act === 'lib-search-open'){ librarySearchOpen = true; paintLibrary($('#main')); $('#libsearch')?.focus(); return; }
+  if (act === 'lib-search-close'){ librarySearchOpen = false; state.librarySearch = ''; save(); paintLibrary($('#main')); return; }
+  if (act === 'lib-delete-one'){ state.librarySelected = [b.dataset.id]; }
   if (act === 'lib-pick'){
     const id = b.dataset.id;
     const sel = new Set(state.librarySelected || []);
     if (sel.has(id)) sel.delete(id); else sel.add(id);
     state.librarySelected = [...sel]; save(); paintLibrary($('#main')); return;
   }
-  if (act === 'lib-delete'){
+  if (act === 'lib-delete' || act === 'lib-delete-one'){
     const ids = new Set(state.librarySelected || []);
     if (!ids.size){ toast('Select items first.'); state.librarySelect = false; state.librarySelected = []; save(); paintLibrary($('#main')); return; }
-    if (!window.confirm(`Delete ${ids.size} selected item${ids.size > 1 ? 's' : ''}?`)) return;
+    const one = act === 'lib-delete-one' ? libraryItemById([...ids][0]) : null;
+    if (!window.confirm(one ? `Delete ${one.title}?` : `Delete ${ids.size} selected item${ids.size > 1 ? 's' : ''}?`)){ if (one) state.librarySelected = []; return; }
     let removed = 0;
     ids.forEach(id => {
       if (String(id).startsWith('lib:')){
@@ -8559,7 +8897,7 @@ document.addEventListener('click', async e => {
     canvasShow({ kind:'upload', chatId:c.id, msgId:m.id, fileIndex:Number(b.dataset.i) });
     return;
   }
-  if (act === 'canvas-back'){ state.canvasItem = null; canvasWide = false; save(); paintCanvas(); return; }
+  if (act === 'canvas-back'){ const ref = state.canvasItem; canvasMorph(() => { state.canvasItem = null; canvasWide = false; save(); paintCanvas(); }, ref); return; }
   if (act === 'canvas-wide'){
     canvasWide = !canvasWide;
     const body = $('#cbody');
@@ -8575,6 +8913,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'takeover'){ liveTakeover(); return; }
+  if (act === 'live-nav'){ if (liveControl && ['back','forward','reload'].includes(b.dataset.nav)) liveSend({ type:b.dataset.nav }); return; }
   if (act === 'openbrowser'){ toast('For safety, browsing stays contained in the sandbox window above.'); return; }
   if (act === 'artmenu'){ toast('Artifact saved — find it in Vault → Library.'); return; }
   if (act === 'replymsg' && c && m){
@@ -8864,33 +9203,7 @@ document.addEventListener('click', async e => {
     }catch(err){toast(err.message || 'Could not delete that secret.');}
     return;
   }
-  if (act === 'vault-kind'){ state.vaultKind = b.dataset.k; save(); repaintSettings(); return; }
-  if (act === 'addsecret'){
-    // Secrets live only in the encrypted server vault the agent reads from,
-    // never in this browser's storage.
-    if (!signedIn()){ renderAuth(); return; }
-    const form = b.closest('.vault-add-form');
-    if (!form) return;
-    const fields = {};
-    form.querySelectorAll('[data-vf]').forEach(input => { fields[input.dataset.vf] = input.value; });
-    const { entries, error } = vaultKindEntries(form.dataset.kind, fields);
-    if (error){ toast(error); return; }
-    b.disabled = true;
-    const saved = [];
-    try{
-      for (const [name, value] of entries){
-        const added = await window.LingonAuth.api('/api/secrets',{method:'POST',body:JSON.stringify({name,value})});
-        saved.push({ ...added.secret, backend:true });
-      }
-      form.querySelectorAll('[data-vf]').forEach(input => { input.value = ''; });
-      toast(saved.length > 1 ? `Saved ${saved.length} items — your agent only sees their refs` : `Saved — your agent only sees ${saved[0].ref}`);
-    }catch(err){toast(err.message || 'Could not save that secret.');}
-    finally{
-      if (saved.length){ state.vault.secrets = [...saved.reverse(), ...state.vault.secrets]; save(); repaintSettings(); paintSide(); }
-      else b.disabled = false;
-    }
-    return;
-  }
+  if (act === 'vault-ask'){ askInNewChat(b.dataset.p); return; }
   if (act === 'toggleapp'){
     state.view = 'apps'; save(); renderApp(); refreshComposioApps();
     return;
@@ -9025,7 +9338,24 @@ document.addEventListener('click', async e => {
   if (act === 'dlfile'){ const f = window.__fileRows && window.__fileRows[+b.dataset.i]; if (f) dl(f.name, f.content); return; }
 
   /* profile / appearance (shared by Settings + right slider) */
-  if (act === 'p-color'){ state.agent.color = b.dataset.c; save();persistAgentContext().catch(()=>{}); paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main')); return; }
+  if (act === 'p-color'){
+    const color = b.dataset.c;
+    state.agent.color = color; save(); persistAgentContext().catch(()=>{});
+    document.querySelectorAll('[data-act="p-color"]').forEach(s => s.classList.toggle('on', s.dataset.c === color));
+    // Repaint once the new sprites are decoded, so no mascot flashes blank in between.
+    Mascot.preload(color).then(() => {
+      if (state.agent?.color !== color) return;
+      paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); if (state.view === 'settings') paintSettings($('#main')); else if (state.view === 'profile' && $('#main')) paintProfile($('#main'));
+    });
+    return;
+  }
+  if (act === 'p-outfit'){
+    const k = b.dataset.o, worn = Mascot.cleanOutfit(state.agent.outfit);
+    state.agent.outfit = Mascot.cleanOutfit(worn.includes(k) ? worn.filter(x => x !== k) : [...worn, k]);
+    save();
+    paintSide(); paintCanvas(); if (state.view === 'chat') paintMain(); else if (state.view === 'profile' && $('#main')) paintProfile($('#main'));
+    return;
+  }
   if (act === 'reset'){
     if (confirm('Release this agent? This deletes the claim, chats, vault and memory on this device.')){
       localStorage.removeItem(LS); location.reload();
@@ -9115,6 +9445,7 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) =>
     await hydrateStoredFiles();
     await loadClientState();
     await syncFromBackend(true).catch(error => console.warn('Account data restore failed:',error));
+    leaveSetupChat();
   }
   if (signedIn() && state.pendingPrompt && !needsOnboarding()) {
     void landingRun(state.pendingPrompt, state.pendingPromptFiles || []).catch(error => { console.error(error); render(); });

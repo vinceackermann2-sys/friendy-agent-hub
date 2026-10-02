@@ -8,6 +8,8 @@ import * as auth from './auth.js';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_SEND_PER_DAY = 40;
 const MAX_BODY = 20000;
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const RESERVED = new Set([
   'hej', 'hello', 'hi', 'hey', 'info', 'kontakt', 'contact', 'support', 'help',
   'admin', 'root', 'postmaster', 'abuse', 'noreply', 'no-reply', 'mailer-daemon',
@@ -93,7 +95,7 @@ function renderBodyHtml(bodyText) {
 }
 
 function mascotUrl(color) {
-  const safe = ['lingon','blueberry','moss','sun','lavender','rose','charcoal'].includes(color) ? color : 'lingon';
+  const safe = ['lingon','blueberry','moss','sun','rose'].includes(color) ? color : 'lingon';
   return `https://belna.se/lingon/mascot/email-${safe}.png`;
 }
 
@@ -308,6 +310,28 @@ async function rfetch(path, { method = 'GET', body, idempotencyKey } = {}) {
   return data;
 }
 
+// Files the owner attaches in the Mail panel, as base64. The agent's mail tool never passes any.
+function parseAttachments(list) {
+  if (list == null) return [];
+  const fail = (message) => {
+    const e = new Error(message);
+    e.code = 'BAD_INPUT';
+    return e;
+  };
+  if (!Array.isArray(list)) throw fail('Attachments must be a list.');
+  if (list.length > MAX_ATTACHMENTS) throw fail('Attach up to ' + MAX_ATTACHMENTS + ' files.');
+  let total = 0;
+  return list.map((a) => {
+    const filename = String((a && a.filename) || '').replace(/[\\/\x00-\x1f"]/g, '_').trim().slice(0, 120);
+    const content = String((a && a.content) || '');
+    if (!filename || !content || content.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(content)) throw fail('An attached file could not be read.');
+    total += content.length / 4 * 3 - (content.endsWith('==') ? 2 : content.endsWith('=') ? 1 : 0);
+    if (total > MAX_ATTACHMENT_BYTES) throw fail('Attached files can be up to 8 MB together.');
+    const type = String((a && a.contentType) || '');
+    return type.length <= 100 && /^[\w.+-]+\/[\w.+-]+$/.test(type) ? { filename, content, content_type: type } : { filename, content };
+  });
+}
+
 async function send(userId, input) {
   if (input.confirm !== true) {
     const e = new Error('Sending mail needs an explicit confirm.');
@@ -327,6 +351,7 @@ async function send(userId, input) {
     e.code = 'BAD_INPUT';
     throw e;
   }
+  const attachments = parseAttachments(input.attachments);
   const box = await ensureMailbox(userId, input.agentName || 'Agent');
   const today = await store.countOutboundMailToday(userId);
   if (today >= MAX_SEND_PER_DAY) {
@@ -351,6 +376,7 @@ async function send(userId, input) {
       text: bodyText,
       html: brandEmailHtml({ bodyText, agentName: box.displayName, agentAddress: box.address, agentColor:context.agent?.color, personalCheckIn:input.personalCheckIn === true }),
       headers: Object.keys(headers).length ? headers : undefined,
+      attachments: attachments.length ? attachments : undefined,
     },
   });
   const row = await store.insertMailMessage(userId, {

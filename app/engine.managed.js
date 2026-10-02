@@ -45,7 +45,8 @@
       }
     } finally {workers.delete(key);}
   }
-  async function recoverTasks(rt, force=false) {
+  // `once` reads the tasks without polling again, for a chat that is not open.
+  async function recoverTasks(rt, force=false, {once=false}={}) {
     const userId=owner();if(!userId)return;
     const key=`${userId}:${rt.chat.id}`;
     const previous=recovery.get(key);
@@ -60,7 +61,7 @@
     } catch(error) {rt.trace('alert',error.message);}
     finally {
       entry.busy=false;
-      if(owner()===userId && Object.values(rt.chat.managedTasks || {}).some(unfinished)) {
+      if(!once && owner()===userId && Object.values(rt.chat.managedTasks || {}).some(unfinished)) {
         entry.timer=setTimeout(()=>{if(owner()===userId && recovery.get(key)===entry)void recoverTasks(rt,true);},5000);
       }
     }

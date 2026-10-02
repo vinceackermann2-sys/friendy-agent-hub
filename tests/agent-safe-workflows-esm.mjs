@@ -5,12 +5,17 @@ import { TOOL_SCHEMAS, selectToolSchemas, buildSystem } from '../src/lingon-serv
 for (const prompt of ['Calculate this CSV spreadsheet and export a report', 'Edit a file on the computer desktop']) {
   const names = selectToolSchemas(prompt).map((tool) => tool.name);
   for (const name of ['web_search', 'code_run', 'shell', 'library_save']) assert.ok(names.includes(name), `${prompt}: ${name}`);
-  assert.ok(!pickTools(prompt).some((tool) => tool.name === 'computer_action'));
 }
-for (const name of ['computer_action', 'computer_submit', 'computer_fill_secret']) {
-  assert.ok(!TOOL_SCHEMAS.some((tool) => tool.name === name));
-  assert.ok(!selectToolSchemas(name, [], { name }).some((tool) => tool.name === name));
-}
+// The owner's computer (its locked desktop container) is offered for desktop work only.
+assert.ok(!pickTools('Calculate this CSV spreadsheet and export a report').some((tool) => tool.name === 'computer_action'));
+assert.ok(pickTools('Edit a file on the computer desktop').some((tool) => tool.name === 'computer_action'), 'desktop requests get the computer');
+for (const name of ['computer_action', 'computer_submit']) assert.ok(TOOL_SCHEMAS.some((tool) => tool.name === name), name);
+// Saved logins are typed only in the protected browser, never on the computer.
+assert.ok(!TOOL_SCHEMAS.some((tool) => tool.name === 'computer_fill_secret'));
+assert.ok(!selectToolSchemas('computer_fill_secret', [], { name: 'computer_fill_secret' }).some((tool) => tool.name === 'computer_fill_secret'));
+await assert.rejects(TOOLS.computer_submit.run({ action: 'click', x: 10, y: 10, summary: 'Pay the order' }, { userId: 'u', sessionId: 's', trace: () => {} }), /browser checkout/);
+await assert.rejects(TOOLS.computer_action.run({ action: 'type', text: '4242 4242 4242 4242' }, { userId: 'u', sessionId: 's', trace: () => {} }), /payment card/);
+await assert.rejects(TOOLS.computer_action.run({ action: 'open_app', app: 'browser', url: 'http://169.254.169.254/' }, { userId: 'u', sessionId: 's', trace: () => {} }), (error) => error.code === 'HOST_BLOCKED');
 const discovery = await TOOLS.capability_search.run({ query: 'download a CSV report' }, { trace: () => {} });
 assert.ok(discovery.tools.some((tool) => tool.name === 'library_save'));
 const system = await buildSystem({

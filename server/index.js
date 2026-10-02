@@ -92,7 +92,7 @@ app.post('/api/composio/webhook', express.raw({ type: 'application/json', limit:
   }
 });
 app.use((req, res, next) => {
-  if ((req.method === 'POST' && (req.path === '/api/voice/transcribe' || req.path === '/api/chat' || req.path === '/api/chat/stream' || req.path === '/api/agent/conversation' || req.path === '/api/library' || req.path === '/api/support/submissions')) || (req.method === 'PUT' && req.path.startsWith('/api/client-state/')) || (req.method==='PATCH' && req.path.startsWith('/api/library/'))) {
+  if ((req.method === 'POST' && (req.path === '/api/voice/transcribe' || req.path === '/api/chat' || req.path === '/api/chat/stream' || req.path === '/api/agent/conversation' || req.path === '/api/library' || req.path === '/api/support/submissions' || req.path === '/api/mail/send')) || (req.method === 'PUT' && req.path.startsWith('/api/client-state/')) || (req.method==='PATCH' && req.path.startsWith('/api/library/'))) {
     const limit=['/api/chat','/api/chat/stream','/api/agent/conversation'].includes(req.path)?'72mb':req.path.startsWith('/api/library')?'15mb':'12mb';
     return express.json({ limit })(req, res, next);
   }
@@ -110,10 +110,18 @@ app.use((req, res, next) => {
 
 // ---- rate limit (in-memory, per IP) ----
 const hits = new Map();
+// Entries idle longer than every window are dropped, so the map cannot grow without bound
+// (each IP and path, including paths with ids, would otherwise stay forever).
+const RATE_IDLE_MS = 10 * 60000;
+let ratePrunedAt = Date.now();
 function rateLimit(max, windowMs) {
   return (req, res, next) => {
     const k = (req.ip || 'ip') + ':' + (req.path || '');
     const now = Date.now();
+    if (now - ratePrunedAt > 60000) {
+      ratePrunedAt = now;
+      for (const [key, times] of hits) if (now - times[times.length - 1] > RATE_IDLE_MS) hits.delete(key);
+    }
     const arr = (hits.get(k) || []).filter((t) => now - t < windowMs);
     arr.push(now);
     hits.set(k, arr);
@@ -722,20 +730,9 @@ app.get('/api/sub-agents', requireAuth(async (req, res) => {
   res.json({ subAgents: await store.listSubAgents(req.user.id) });
 }));
 
+// New automations are created by the agent's approval-gated trigger_create tool.
 app.post('/api/sub-agents', rateLimit(30, 60000), requireAuth(async (req, res) => {
-  try {
-    const input = normalizeSubAgent(req.body || {});
-    const current = await store.listSubAgents(req.user.id);
-    if (current.filter(agent=>!agent.systemKind).length >= 25) return res.status(400).json({ error: 'A maximum of 25 sub-agents is allowed per account.' });
-    if (input.trigger.type === 'app') {
-      const ok = await composio.isToolkitConnected(req.user.id, input.trigger.app);
-      if (!ok) return res.status(409).json({ error: 'Choose an app that is connected under Apps.' });
-      await composio.ensureAppTrigger(req.user.id, input.trigger.app, input.trigger.event, input.trigger.connectedAccountId);
-    }
-    if (input.trigger.type === 'subagent' && !current.some((agent) => agent.id === input.trigger.sourceAgentId)) return res.status(400).json({ error: 'Source sub-agent was not found.' });
-    const subAgent = await store.createSubAgent(req.user.id, input, nextRunAt(input.trigger));
-    res.status(201).json({ subAgent });
-  } catch (e) { res.status(e.code === 'BAD_INPUT' ? 400 : 500).json({ error: e.message }); }
+  res.status(403).json({ error: 'Ask your agent in chat to set up an automation for you.' });
 }));
 
 app.patch('/api/sub-agents/:id', rateLimit(60, 60000), requireAuth(async (req, res) => {
@@ -1105,7 +1102,9 @@ app.post('/api/belna-wallet/card-waitlist',rateLimit(10,60000),requireAuth(async
   res.setHeader('Cache-Control','no-store');
   try{res.json(await belnaWallet.joinCardWaitlist(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
 }));
-app.get('/api/belna-wallet', requireAuth(async (req, res) => {
+// Each load reads the wallet from Whop several times on the key all owners share, so it is
+// limited like the other wallet routes: one account cannot use up that key's quota.
+app.get('/api/belna-wallet', rateLimit(30, 60000), requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
   catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }

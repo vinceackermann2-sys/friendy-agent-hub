@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 const SANDBOX_ROOT = '/tmp/lingon-sandboxes';
 const ARM = 'https://management.azure.com';
 const COMPUTE_API = '2024-07-01';
+const DISK_API = '2024-03-02';
 const NET_API = '2023-09-01';
 const STORAGE_API = '2023-05-01';
 const BLOB_API = '2023-11-03';
@@ -546,6 +547,10 @@ function browserKit() {
 function networkGuard(user) {
   if (!['lingon-browser', 'lingon-desktop'].includes(user)) throw new Error('Invalid network guard user.');
   return [
+    // An older release blocked the desktop account entirely; its guarded container replaces that.
+    ...(user === 'lingon-desktop' ? ['while iptables -D OUTPUT -m owner --uid-owner lingon-desktop -j REJECT 2>/dev/null; do :; done'] : []),
+    // A print service (from the Chromium snap on older VMs) listens on every address; nothing uses it.
+    "if ss -ltn 2>/dev/null | grep -q ':631 '; then snap stop --disable cups >/dev/null 2>&1 || true; systemctl disable --now cups.service cups.socket cups-browsed.service >/dev/null 2>&1 || true; fi",
     "command -v iptables >/dev/null 2>&1 || { echo 'iptables is required for the network guard' >&2; exit 1; }",
     // Install denies before allows. Every failure stops the browser launch.
     `for NET in 0.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 168.63.129.16/32 192.0.0.0/24 192.0.2.0/24 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4; do iptables -C OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT 2>/dev/null || iptables -I OUTPUT -m owner --uid-owner ${user} -d "$NET" -j REJECT || exit 1; done`,
@@ -556,8 +561,9 @@ function networkGuard(user) {
     `iptables -C OUTPUT ! -o lo -m owner --uid-owner ${user} -p tcp -m multiport ! --dports 80,443 -j REJECT 2>/dev/null || iptables -I OUTPUT ! -o lo -m owner --uid-owner ${user} -p tcp -m multiport ! --dports 80,443 -j REJECT || exit 1`,
     // Only the browser owner may connect to its local debugging service.
     "iptables -C OUTPUT -o lo -p tcp -m owner ! --uid-owner lingon-browser -j REJECT 2>/dev/null || iptables -I OUTPUT -o lo -p tcp -m owner ! --uid-owner lingon-browser -j REJECT || exit 1",
-    // Revoke any desktop sessions left running by an earlier release.
-    "if id -u lingon-desktop >/dev/null 2>&1; then iptables -C OUTPUT -m owner --uid-owner lingon-desktop -j REJECT 2>/dev/null || iptables -I OUTPUT -m owner --uid-owner lingon-desktop -j REJECT || exit 1; pkill -KILL -u lingon-desktop 2>/dev/null || true; fi",
+    // The desktop runs only inside its container: a native desktop left by an older release ends.
+    // (Container processes run as subordinate ids, so these never match them.)
+    "if id -u lingon-desktop >/dev/null 2>&1; then pkill -KILL -u lingon-desktop -f '/home/lingon-desktop/.relay/' 2>/dev/null || true; pkill -KILL -u lingon-desktop -x 'Xvfb|openbox|pcmanfm|mousepad|chromium|ffmpeg|xdotool' 2>/dev/null || true; fi",
   ];
 }
 const BROWSER_NETWORK_GUARD = networkGuard('lingon-browser');
@@ -789,7 +795,7 @@ function liveRealtimeArgs(live) {
 }
 // The streamer build a VM runs. A streamer from another build, or holding another step key,
 // is replaced at the next browser step: it would ignore signed steps, and each would wait for it.
-const LIVE_STREAMER_BUILD = 'steps-1';
+const LIVE_STREAMER_BUILD = 'steps-2';
 const liveStreamerVersion = (live) => `${LIVE_STREAMER_BUILD}-${crypto.createHash('sha256').update(String(live.cmdKey || '')).digest('hex').slice(0, 12)}`;
 function liveStreamer(kit, profileRuntime, cfg, load) {
   const proc = load('process');
@@ -848,7 +854,9 @@ function liveStreamer(kit, profileRuntime, cfg, load) {
   const stateFile = path.join(dir, 'state.json');
   const seenSteps = new Map();
   let stepQueue = Promise.resolve(), agentState = null, browserRef = null;
-  const stepSignature = (p) => crypto.createHmac('sha256', String(cfg.cmdKey)).update(JSON.stringify([p.id, p.action, p.url || '', p.event || null, p.uploadUrl, p.resultUrl, p.exp])).digest('hex');
+  // Keys sorted: the channel does not keep an object's key order (see signStep).
+  const canon = (v) => (Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v === undefined ? null : v));
+  const stepSignature = (p) => crypto.createHmac('sha256', String(cfg.cmdKey)).update(canon([p.id, p.action, p.url || '', p.event || null, p.uploadUrl, p.resultUrl, p.exp])).digest('hex');
   const validStep = (p) => {
     if (!cfg.cmdKey || !p || typeof p.id !== 'string' || p.id.length > 80 || seenSteps.has(p.id)) return false;
     if (!(Number(p.exp) > Date.now()) || Number(p.exp) > Date.now() + 5 * 60000) return false;
@@ -1290,11 +1298,99 @@ function buildBrowserRelayStopScript(sessionId) {
   ].join('\n');
 }
 
+// Chromium never downloads files and never stores passwords or cards: the VM browser gets
+// this as a machine policy, and the desktop's Chromium has it built into its image.
+const CHROMIUM_POLICY = JSON.stringify({
+  DownloadRestrictions: 3, PasswordManagerEnabled: false,
+  AutofillCreditCardEnabled: false, AutofillAddressEnabled: false,
+  DeveloperToolsAvailability: 2, ExtensionInstallBlocklist: ['*'],
+  AllowFileSelectionDialogs: false, PrintingEnabled: false,
+  SafeBrowsingProtectionLevel: 1, SafeBrowsingProceedAnywayDisabled: true,
+  ExternalProtocolDialogShowAlwaysOpenCheckbox: false,
+  URLBlocklist: ['file://*', 'javascript://*', 'chrome://*', 'chrome-extension://*', 'devtools://*'],
+});
+const CHROMIUM_POLICY_SETUP = [
+  `for DIR in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed /etc/opt/chrome/policies/managed; do install -d -m 755 "$DIR"; printf '%s' '${CHROMIUM_POLICY}' > "$DIR/lingon.json"; done`,
+  `if [ -d /var/snap/chromium/current ]; then install -d -m 755 /var/snap/chromium/current/policies/managed && printf '%s' '${CHROMIUM_POLICY}' > /var/snap/chromium/current/policies/managed/lingon.json || true; fi`,
+];
+
 /*
- * Desktop kit for the VM desktop relay, serialized with toString() like
- * browserKit. It turns agent and user input into xdotool steps on the virtual
- * 1280x900 screen, the same size as the Canvas live view. Agent input pauses
- * like a person; the user's own input from the live view stays instant.
+ * The virtual computer (computer use). A file manager, editor or window manager can start
+ * programs, so the whole desktop runs inside one locked container per session and none of
+ * it runs on the VM itself (docs/vm-security.md):
+ * - rootless podman under the unprivileged lingon-desktop account: the container's users map
+ *   to that account's subordinate ids, so even an escape lands in an account without rights;
+ * - the only VM folder it sees is the desktop's own home (/var/lib/lingon-desktop/home: its
+ *   files and its browser profile, kept with the VM backup), mounted noexec/nosuid/nodev,
+ *   plus this session's streamer code, read-only. /tmp is a size-limited tmpfs;
+ * - all capabilities dropped, no new privileges, a read-only image without setuid programs,
+ *   private PID/IPC/UTS namespaces, and memory/CPU/task limits on its systemd scope; its seccomp
+ *   profile is podman's default plus chroot, so Chromium's sandbox can chroot inside its own
+ *   user namespace without the container holding any capability;
+ * - network through slirp4netns, which runs as lingon-desktop, so the same firewall as the
+ *   browser applies: public TCP 80/443 only, no private, metadata, platform or IPv6 addresses,
+ *   and no way to the VM's loopback services;
+ * - Chromium keeps its own sandbox; if the kernel does not give it one, the desktop browser
+ *   stays closed rather than running without it.
+ * The image is built by root (like the worker image) and handed to lingon-desktop, so building
+ * it never needs the desktop's restricted network.
+ */
+const DESKTOP_IMAGE = 'localhost/lingon-desktop:20260930b';
+const DESKTOP_BUILD = 'desktop-9';
+// One desktop runs per VM (its home is shared). Another task's desktop replaces it only once
+// it has had no agent step or owner input for this long; until then that task waits its turn.
+const DESKTOP_BUSY_SECONDS = 300;
+const DESKTOP_APT = 'tini xvfb openbox xdotool ffmpeg x11-xserver-utils x11-utils pcmanfm mousepad chromium fonts-dejavu-core fonts-liberation ca-certificates';
+// lingon-desktop's subordinate ids; the container's user 1000 is the VM's DESKTOP_SUBID + 999.
+const DESKTOP_SUBID = 524288;
+function desktopContainerfile() {
+  return [
+    'FROM docker.io/library/node:22-bookworm-slim',
+    'ENV DEBIAN_FRONTEND=noninteractive',
+    `RUN apt-get update && apt-get install -y --no-install-recommends ${DESKTOP_APT} && rm -rf /var/lib/apt/lists/*`,
+    'RUN npm install --prefix /opt/lingon ws@8.21.3 && npm cache clean --force',
+    `RUN install -d -m 755 /etc/chromium/policies/managed && printf '%s' '${CHROMIUM_POLICY}' > /etc/chromium/policies/managed/lingon.json`,
+    // Nothing inside can change user: setuid/setgid bits go, and there is no terminal to open.
+    'RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + ; rm -f /usr/bin/x-terminal-emulator /etc/alternatives/x-terminal-emulator',
+    'RUN userdel -r node 2>/dev/null || true; useradd --uid 1000 --create-home --shell /usr/sbin/nologin desktop',
+    'USER 1000:1000',
+    'WORKDIR /home/desktop',
+    'ENTRYPOINT ["/usr/bin/tini", "--"]',
+  ].join('\n');
+}
+const desktopContainerName = (sessionId) => `lingon-desktop-${browserSessionId(sessionId)}`;
+const desktopVersion = (live) => `${DESKTOP_BUILD}-${crypto.createHash('sha256').update(String(live.cmdKey || '')).digest('hex').slice(0, 12)}`;
+// Rootless podman as lingon-desktop, with its storage outside the backed-up folders.
+const DESKTOP_PODMAN = 'runuser -u lingon-desktop -- env HOME=/home/lingon-desktop XDG_RUNTIME_DIR=/run/lingon-desktop podman';
+const DESKTOP_HOME = '/var/lib/lingon-desktop/home';
+// podman's default seccomp profile only allows chroot to holders of CAP_SYS_CHROOT; the desktop
+// holds no capabilities, and Chromium's sandbox chroots inside its own user namespace.
+const DESKTOP_SECCOMP = "const fs = require('fs'); const p = JSON.parse(fs.readFileSync('/usr/share/containers/seccomp.json', 'utf8')); "
+  + "p.syscalls.push({ names: ['chroot'], action: 'SCMP_ACT_ALLOW', args: [], comment: 'Chromium sandbox', includes: {}, excludes: {} }); "
+  + "fs.writeFileSync('/etc/lingon/desktop-seccomp.json', JSON.stringify(p));";
+const DESKTOP_ACCOUNT = [
+  // Azure's command runner starts in a folder only root can enter; podman as lingon-desktop cannot.
+  'cd /',
+  'id -u lingon-desktop >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/lingon-desktop --shell /usr/sbin/nologin lingon-desktop',
+  `grep -q '^lingon-desktop:' /etc/subuid || usermod --add-subuids ${DESKTOP_SUBID}-${DESKTOP_SUBID + 65535} lingon-desktop`,
+  `grep -q '^lingon-desktop:' /etc/subgid || usermod --add-subgids ${DESKTOP_SUBID}-${DESKTOP_SUBID + 65535} lingon-desktop`,
+  'command -v podman >/dev/null 2>&1 && command -v newuidmap >/dev/null 2>&1 && command -v slirp4netns >/dev/null 2>&1 && command -v fuse-overlayfs >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get update -q >/dev/null 2>&1; apt-get install -y -q podman uidmap slirp4netns fuse-overlayfs >/dev/null 2>&1; }',
+  "command -v systemd-run >/dev/null 2>&1 || { echo 'systemd-run is required to limit the computer' >&2; exit 1; }",
+  'install -d -m 755 -o root -g root /var/lib/lingon-desktop /opt/lingon/desktop /run/lingon /run/lingon/desktop /etc/lingon',
+  `echo '${Buffer.from(DESKTOP_SECCOMP).toString('base64')}' | base64 -d | node && chmod 644 /etc/lingon/desktop-seccomp.json`,
+  'install -d -m 700 -o lingon-desktop -g lingon-desktop /home/lingon-desktop /home/lingon-desktop/.config /home/lingon-desktop/.config/containers /var/lib/lingon-desktop/storage /run/lingon-desktop',
+  // The desktop's home belongs to the container's user, never to an account on the VM.
+  "DUID=$(( $(awk -F: '$1==\"lingon-desktop\"{print $2; exit}' /etc/subuid) + 999 )); DGID=$(( $(awk -F: '$1==\"lingon-desktop\"{print $2; exit}' /etc/subgid) + 999 ))",
+  `install -d -m 700 -o "$DUID" -g "$DGID" ${DESKTOP_HOME} ${DESKTOP_HOME}/Files`,
+  `printf '%s\\n' '[storage]' 'driver = "overlay"' 'graphroot = "/var/lib/lingon-desktop/storage"' 'runroot = "/run/lingon-desktop/containers"' '[storage.options.overlay]' 'mount_program = "/usr/bin/fuse-overlayfs"' > /home/lingon-desktop/.config/containers/storage.conf`,
+  `printf '%s\\n' '[containers]' 'log_driver = "k8s-file"' '[engine]' 'cgroup_manager = "cgroupfs"' 'events_logger = "file"' > /home/lingon-desktop/.config/containers/containers.conf`,
+  'chown -R lingon-desktop:lingon-desktop /home/lingon-desktop/.config',
+];
+
+/*
+ * Desktop kit, serialized into the container's streamer with toString(). It turns agent and
+ * user input into xdotool steps on the virtual 1280x900 screen, the size of the Canvas live
+ * view. Agent input pauses like a person; the owner's own input stays instant.
  */
 function desktopKit() {
   const WIDTH = 1280, HEIGHT = 900;
@@ -1377,51 +1473,305 @@ function desktopKit() {
       default: throw new Error('Unsupported computer action.');
     }
   }
-  return { WIDTH, HEIGHT, steps, combo };
+  // What the pointer badge in the live view says while the agent acts.
+  function describe(ev) {
+    const type = String(ev.type || '');
+    const app = { browser: 'the browser', files: 'the file manager', editor: 'the text editor' }[ev.app] || 'an app';
+    return ({ screenshot: 'Looking at the screen', move: 'Moving the pointer', click: 'Clicking', double_click: 'Double-clicking', right_click: 'Right-clicking',
+      middle_click: 'Clicking', drag: 'Dragging', type: 'Typing', key: `Pressing ${String(ev.key || 'a key').slice(0, 30)}`, scroll: 'Scrolling',
+      open_app: `Opening ${app}`, wait: 'Waiting' })[type] || 'Working on the computer';
+  }
+  return { WIDTH, HEIGHT, steps, combo, describe };
 }
-
-// Packages for the virtual desktop. New VMs get them at first boot; older VMs
-// install whatever is missing the first time the desktop starts.
-const DESKTOP_PACKAGES = [['xvfb', 'Xvfb'], ['openbox', 'openbox'], ['xdotool', 'xdotool'], ['ffmpeg', 'ffmpeg'], ['x11-xserver-utils', 'xsetroot'], ['pcmanfm', 'pcmanfm'], ['mousepad', 'mousepad']];
-// Chromium on the VM never downloads files and never stores passwords or cards.
-const CHROMIUM_POLICY = JSON.stringify({
-  DownloadRestrictions: 3, PasswordManagerEnabled: false,
-  AutofillCreditCardEnabled: false, AutofillAddressEnabled: false,
-  DeveloperToolsAvailability: 2, ExtensionInstallBlocklist: ['*'],
-  AllowFileSelectionDialogs: false, PrintingEnabled: false,
-  SafeBrowsingProtectionLevel: 1, SafeBrowsingProceedAnywayDisabled: true,
-  ExternalProtocolDialogShowAlwaysOpenCheckbox: false,
-  URLBlocklist: ['file://*', 'javascript://*', 'chrome://*', 'chrome-extension://*', 'devtools://*'],
-});
-const CHROMIUM_POLICY_SETUP = [
-  `for DIR in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed /etc/opt/chrome/policies/managed; do install -d -m 755 "$DIR"; printf '%s' '${CHROMIUM_POLICY}' > "$DIR/lingon.json"; done`,
-  `if [ -d /var/snap/chromium/current ]; then install -d -m 755 /var/snap/chromium/current/policies/managed && printf '%s' '${CHROMIUM_POLICY}' > /var/snap/chromium/current/policies/managed/lingon.json || true; fi`,
-];
 
 /*
- * Starts the desktop relay: a virtual screen (Xvfb, display :7) with a small
- * window manager, run by the unprivileged lingon-desktop user behind the same
- * firewall as the browser. The relay streams the screen as JPEG frames over an
- * authenticated outbound WebSocket, like the browser relay, and applies input
- * with xdotool. Its apps are Chromium, a file manager and a text editor; there
- * is no terminal, because commands run in the sandboxed worker instead.
+ * The desktop's streamer, the container's main program (serialized with toString(); Node's
+ * require arrives as `load`). It starts the virtual screen, window manager and apps, and joins
+ * the session's Realtime channel like the browser's liveStreamer: frames go out only while
+ * someone watches, the owner's input applies only after they take over, and agent steps count
+ * only when signed with the key the server gave at launch. Results go to the step's private
+ * upload links, never to the channel. After 20 idle minutes it exits and the container ends.
  */
-function buildDesktopRelayScript(args = {}) {
-  // A native file manager/editor can launch commands outside the worker container.
-  // Keep this surface closed until it has its own OS-enforced isolation boundary.
-  throw Object.assign(new Error('Native desktop access is disabled for VM security. Use the protected browser and isolated code tools.'), { code: 'DISABLED' });
+function desktopStreamer(kit, cfg, load) {
+  const proc = load('process');
+  const fs = load('fs');
+  const path = load('path');
+  const crypto = load('crypto');
+  const { spawn, execFile } = load('child_process');
+  const WebSocket = load('/opt/lingon/node_modules/ws');
+  const HOME = '/home/desktop', DISPLAY = ':1';
+  // Apps get a clean environment: never the launch payload.
+  const env = { PATH: '/usr/local/bin:/usr/bin:/bin', HOME, DISPLAY, LANG: 'C.UTF-8', XDG_RUNTIME_DIR: '/tmp/xdg', XDG_CONFIG_HOME: `${HOME}/.config`, XDG_CACHE_HOME: '/tmp/cache' };
+  for (const dir of [env.XDG_RUNTIME_DIR, env.XDG_CACHE_HOME, path.join(HOME, 'Files')]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // The browser profile lives in the kept home; a lock left by the last container is stale (one
+  // desktop runs per VM), and Chromium would refuse the profile as in use elsewhere.
+  for (const lock of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) { try { fs.rmSync(path.join(HOME, '.chromium', lock), { force: true }); } catch {} }
+  const topic = `realtime:${cfg.topic}`;
+  const VIEWER_MS = 30000, IDLE_EXIT_MS = 20 * 60000, MAX_FRAME = 240000;
+  let ws = null, joined = false, announced = false, ref = 1, lastViewer = 0, lastActivity = Date.now(), takeover = false;
+  let ffmpeg = null, quality = 8, lastFrame = '', lastFrameAt = 0, agentNow = null;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const run = (cmd, args, timeout = 15000, input) => new Promise((resolve, reject) => {
+    const child = execFile(cmd, args, { env, timeout }, (error, stdout, stderr) => (error ? reject(new Error(String(stderr || error.message).trim().slice(0, 300))) : resolve(String(stdout).trim())));
+    child.stdin.on('error', () => {});
+    child.stdin.end(input == null ? '' : String(input));
+  });
+  const send = (event, payload) => {
+    if (!ws || ws.readyState !== 1 || !joined) return false;
+    ws.send(JSON.stringify({ topic, event: 'broadcast', payload: { type: 'broadcast', event, payload }, ref: String(++ref), join_ref: '1' }));
+    return true;
+  };
+  const windowInfo = async () => {
+    const title = await run('xdotool', ['getactivewindow', 'getwindowname'], 3000).catch(() => '');
+    const ids = (await run('xdotool', ['search', '--onlyvisible', '--name', '.'], 3000).catch(() => '')).split('\n').filter(Boolean).slice(-15);
+    const windows = [];
+    for (const id of ids) { const name = (await run('xdotool', ['getwindowname', id], 3000).catch(() => '')).slice(0, 100); if (name && !windows.includes(name)) windows.push(name); }
+    return { title: title.slice(0, 120) || 'Desktop', windows };
+  };
+  const meta = async () => { const info = await windowInfo(); send('state', { ...info, url: '', state: takeover ? 'user' : 'idle', kind: 'desktop', transport: 'realtime' }); return info; };
+  async function ensureDisplay() {
+    const up = () => run('xdotool', ['getdisplaygeometry'], 3000).then(() => true, () => false);
+    if (await up()) return;
+    const x = spawn('Xvfb', [DISPLAY, '-screen', '0', `${kit.WIDTH}x${kit.HEIGHT}x24`, '-nolisten', 'tcp'], { env, stdio: 'ignore' });
+    x.on('exit', () => proc.exit(1));
+    for (let i = 0; i < 80 && !(await up()); i++) await sleep(100);
+    if (!(await up())) throw new Error('The virtual screen did not start.');
+    spawn('openbox', [], { env, stdio: 'ignore' }).on('error', () => {});
+    // Windows opened before the window manager runs get no focus, so typing would go astray:
+    // wait until it has claimed the screen (on a first start it builds font caches for seconds).
+    const managed = () => run('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK'], 3000).then((out) => /window id/.test(out), () => false);
+    for (let i = 0; i < 150 && !(await managed()); i++) await sleep(200);
+    await run('xsetroot', ['-solid', '#2b3140']).catch(() => {});
+  }
+  // ffmpeg grabs the screen as JPEGs; a frame goes out when it differs from the last one.
+  function startFrames() {
+    if (ffmpeg) return;
+    lastFrame = '';
+    ffmpeg = spawn('ffmpeg', ['-loglevel', 'error', '-f', 'x11grab', '-framerate', '4', '-video_size', `${kit.WIDTH}x${kit.HEIGHT}`, '-draw_mouse', '1', '-i', DISPLAY, '-f', 'image2pipe', '-vcodec', 'mjpeg', '-q:v', String(quality), 'pipe:1'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+    const SOI = Buffer.from([0xff, 0xd8]), EOI = Buffer.from([0xff, 0xd9]);
+    let buffer = Buffer.alloc(0);
+    ffmpeg.stdout.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      for (;;) {
+        const start = buffer.indexOf(SOI);
+        if (start < 0) { buffer = Buffer.alloc(0); return; }
+        const end = buffer.indexOf(EOI, start + 2);
+        if (end < 0) { buffer = buffer.length > 4000000 ? Buffer.alloc(0) : buffer.subarray(start); return; }
+        const d = buffer.subarray(start, end + 2).toString('base64');
+        buffer = buffer.subarray(end + 2);
+        // An oversized frame lowers the quality instead of being dropped again and again.
+        if (d.length > MAX_FRAME) { if (quality < 24) { quality += 4; stopFrames(); setTimeout(startFrames, 100); } return; }
+        if (d !== lastFrame && send('frame', { d })) { lastFrame = d; lastFrameAt = Date.now(); }
+      }
+    });
+    ffmpeg.on('error', () => {});
+    ffmpeg.on('exit', () => { ffmpeg = null; });
+  }
+  function stopFrames() { if (ffmpeg) { try { ffmpeg.kill(); } catch {} ffmpeg = null; } }
+  const grab = () => new Promise((resolve, reject) => {
+    execFile('ffmpeg', ['-loglevel', 'error', '-f', 'x11grab', '-video_size', `${kit.WIDTH}x${kit.HEIGHT}`, '-i', DISPLAY, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-q:v', '6', 'pipe:1'],
+      { env, timeout: 10000, encoding: 'buffer', maxBuffer: 4000000 }, (error, stdout) => (error || !stdout.length ? reject(new Error('The screen could not be captured.')) : resolve(stdout)));
+  });
+  const APPS = {
+    browser: (url) => ['chromium', [`--user-data-dir=${HOME}/.chromium`, `--disk-cache-dir=${env.XDG_CACHE_HOME}/chromium`, '--no-first-run', '--no-default-browser-check', '--password-store=basic', '--disable-dev-shm-usage', '--disable-gpu', '--hide-crash-restore-bubble', '--window-position=0,0', `--window-size=${kit.WIDTH},${kit.HEIGHT}`, ...(url ? [url] : [])]],
+    files: () => ['pcmanfm', [path.join(HOME, 'Files')]],
+    editor: () => ['mousepad', []],
+  };
+  // An app that quits at once reports why; a browser without its sandbox stays closed.
+  async function launch(app, url) {
+    const [bin, args] = APPS[app](url);
+    const child = spawn(bin, args, { env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '', code = null;
+    child.stderr.on('data', (chunk) => { err = (err + chunk).slice(-2000); });
+    child.on('exit', (c) => { code = c; });
+    child.on('error', (e) => { code = -1; err = String(e.message); });
+    child.unref();
+    for (let i = 0; i < 25 && code === null; i++) await sleep(100);
+    if (code === null) return;
+    if (app === 'browser' && /sandbox/i.test(err)) throw new Error('The computer\'s browser could not start its security sandbox, so it stays closed. Use the protected browser tools for websites.');
+    if (code !== 0) throw new Error(`The ${app === 'files' ? 'file manager' : app === 'editor' ? 'text editor' : 'browser'} could not start. ${err.trim().split('\n').pop() || ''}`.trim());
+  }
+  async function execute(ev) {
+    for (const step of kit.steps(ev)) {
+      if (step.sleep) await sleep(step.sleep);
+      else if (step.xdotool) await run('xdotool', step.xdotool, 15000 + (step.stdin ? step.stdin.length * 60 : 0), step.stdin);
+      else if (step.launch) await launch(step.launch, step.url);
+    }
+  }
+  const announce = (ev, pressed) => {
+    const at = Number.isFinite(Number(ev.x)) && Number.isFinite(Number(ev.y)) ? { x: Number(ev.x), y: Number(ev.y) } : {};
+    agentNow = { ...at, text: kit.describe(ev), pressed: !!pressed, at: Date.now() };
+    if (Date.now() - lastViewer < VIEWER_MS) send('agent', agentNow);
+  };
+  const BLOB = /^https:\/\/[a-z0-9]{3,24}\.blob\.core\.windows\.net\//;
+  const seenSteps = new Map();
+  let stepQueue = Promise.resolve();
+  // Keys sorted: the channel does not keep an object's key order (see signStep).
+  const canon = (v) => (Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v === undefined ? null : v));
+  const stepSignature = (p) => crypto.createHmac('sha256', String(cfg.cmdKey)).update(canon([p.id, p.action, p.url || '', p.event || null, p.uploadUrl, p.resultUrl, p.exp])).digest('hex');
+  const validStep = (p) => {
+    if (!cfg.cmdKey || !p || typeof p.id !== 'string' || p.id.length > 80 || seenSteps.has(p.id)) return false;
+    // A step for another build is left unanswered, so the server starts the current one.
+    if (p.build !== cfg.build) return false;
+    if (!(Number(p.exp) > Date.now()) || Number(p.exp) > Date.now() + 5 * 60000) return false;
+    if (!['input', 'inspect'].includes(p.action) || (p.event && p.event.secret)) return false;
+    if (!BLOB.test(String(p.uploadUrl || '')) || !BLOB.test(String(p.resultUrl || ''))) return false;
+    const expected = Buffer.from(stepSignature(p)), given = Buffer.from(String(p.sig || ''));
+    return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+  };
+  // The VM reads this file's time before another task's desktop may replace this one
+  // (see DESKTOP_BUSY_SECONDS): a desktop in use is never taken away mid-task.
+  const markInUse = () => { try { fs.writeFileSync(path.join(HOME, '.lingon-in-use'), String(Date.now())); } catch {} };
+  const runStep = (p) => {
+    seenSteps.set(p.id, Date.now());
+    for (const [id, at] of seenSteps) if (Date.now() - at > 10 * 60000) seenSteps.delete(id);
+    lastActivity = Date.now();
+    markInUse();
+    const report = (body, first) => fetch(p.resultUrl, { method: 'PUT', headers: { 'content-type': 'application/json', 'x-ms-blob-type': 'BlockBlob', ...(first ? { 'If-None-Match': '*' } : {}) }, body: JSON.stringify(body) });
+    // Whoever creates the step's result blob first owns it, so a step never runs twice.
+    const taken = report({ ack: true }, true).then((r) => r.status === 201).catch(() => false);
+    stepQueue = stepQueue.then(async () => {
+      if (!(await taken)) return;
+      let result;
+      try {
+        if (takeover) throw new Error('The owner has taken over this computer in the live view. Wait until they hand it back, then continue.');
+        const ev = { ...(p.event || { type: 'screenshot' }), agent: true };
+        announce(ev, false);
+        if (p.action === 'input') await execute(ev);
+        if (ev.x != null) announce(ev, true);
+        await sleep(400);
+        const screenshot = await grab();
+        const upload = await fetch(p.uploadUrl, { method: 'PUT', headers: { 'content-type': 'image/jpeg', 'x-ms-blob-type': 'BlockBlob' }, body: screenshot });
+        if (!upload.ok) throw new Error('Screenshot upload failed: HTTP ' + upload.status);
+        result = { ok: true, desktop: true, ...(await meta()), screenshotBytes: screenshot.length };
+      } catch (error) { result = { ok: false, error: String(error.message || error) }; }
+      await report({ done: true, ...result }).catch(() => {});
+      lastActivity = Date.now();
+    });
+  };
+  const USER_INPUT = ['move', 'click', 'double_click', 'right_click', 'scroll', 'type', 'key'];
+  const onBroadcast = (event, p) => {
+    lastActivity = Date.now();
+    if (event === 'step') { if (validStep(p)) runStep(p); return; }
+    if (event === 'watch') {
+      lastViewer = Date.now(); startFrames(); meta(); if (agentNow) send('agent', agentNow);
+      if (lastFrame && Date.now() - lastFrameAt > 5000 && send('frame', { d: lastFrame })) lastFrameAt = Date.now();
+    }
+    else if (event === 'control') { takeover = p.takeover === true; meta(); }
+    else if (event === 'input' && takeover && p.ev && typeof p.ev === 'object' && USER_INPUT.includes(String(p.ev.type))) {
+      if (p.ev.type !== 'move') markInUse();
+      execute({ ...p.ev, agent: false }).then(() => (p.ev.type === 'move' ? null : meta())).catch(() => {});
+    }
+  };
+  const connect = () => {
+    ws = new WebSocket(`${cfg.url}?apikey=${encodeURIComponent(cfg.key)}&vsn=1.0.0`);
+    ws.on('open', () => ws.send(JSON.stringify({ topic, event: 'phx_join', payload: { config: { broadcast: { self: false, ack: false }, presence: { key: '' }, private: false } }, ref: '1', join_ref: '1' })));
+    ws.on('message', (raw) => {
+      let m; try { m = JSON.parse(String(raw)); } catch { return; }
+      if (m.event === 'phx_reply' && m.ref === '1') {
+        joined = m.payload && m.payload.status === 'ok';
+        // The start script waits for this line before the server sends the first step.
+        if (joined && !announced) { announced = true; proc.stdout.write('LINGON_DESKTOP_JOINED\n'); }
+        if (joined) meta();
+      } else if (m.event === 'broadcast' && m.payload) onBroadcast(m.payload.event, m.payload.payload || {});
+    });
+    ws.on('close', () => { joined = false; setTimeout(connect, 2000); });
+    ws.on('error', () => {});
+  };
+  setInterval(() => {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(++ref) }));
+    if (ffmpeg && Date.now() - lastViewer > VIEWER_MS) stopFrames();
+    // An owner who left without handing back still hands back: the agent must not wait forever.
+    if (takeover && Date.now() - lastViewer > VIEWER_MS) takeover = false;
+    if (Date.now() - Math.max(lastViewer, lastActivity) > IDLE_EXIT_MS) proc.exit(0);
+  }, 10000);
+  (async () => { await ensureDisplay(); connect(); })().catch((error) => { proc.stderr.write(String(error.message || error)); proc.exit(1); });
 }
 
-function buildDesktopRelayStopScript(sessionId) {
+// The streamer program for one session, as the container runs it.
+function desktopStreamerSource() {
+  return [
+    `const kit = (${desktopKit.toString()})();`,
+    `(${desktopStreamer.toString()})(kit, JSON.parse(Buffer.from(process.env.LINGON_DESKTOP_PAYLOAD, 'base64').toString('utf8')), require);`,
+  ].join('\n');
+}
+
+/*
+ * Starts (or finds) this session's desktop container. Prints DESKTOP_READY once its streamer
+ * has joined the live channel, DESKTOP_BUILDING while the image is still being prepared (the
+ * first use on a VM takes a few minutes), and fails with the reason otherwise.
+ */
+function buildDesktopSessionScript(args = {}) {
+  const sessionId = browserSessionId(args.sessionId);
+  const live = liveRealtimeArgs(args.live);
+  if (!live || !live.cmdKey) throw Object.assign(new Error('The computer needs its live channel.'), { code: 'BAD_INPUT' });
+  const name = desktopContainerName(sessionId), version = desktopVersion(live), image = shellQuote(DESKTOP_IMAGE);
+  const codeB64 = Buffer.from(desktopStreamerSource(), 'utf8').toString('base64');
+  const payloadB64 = Buffer.from(JSON.stringify({ sessionId, ...live, build: DESKTOP_BUILD }), 'utf8').toString('base64');
+  const buildB64 = Buffer.from([
+    '#!/bin/sh',
+    'set -e',
+    `podman build -t ${image} /opt/lingon/desktop`,
+    `podman save ${image} | ${DESKTOP_PODMAN} load`,
+    `podman rmi ${image} >/dev/null 2>&1 || true`,
+    'rm -f /var/lib/lingon-desktop/build.failed',
+  ].join('\n'), 'utf8').toString('base64');
+  const code = `/run/lingon/desktop/${sessionId}`;
+  const P = DESKTOP_PODMAN;
+  return [
+    'set -eu',
+    ...DESKTOP_ACCOUNT,
+    ...networkGuard('lingon-desktop'),
+    // The image: built by root in the background on first use, then handed to lingon-desktop.
+    `if ! ${P} image exists ${image}; then`,
+    "  if [ -f /var/lib/lingon-desktop/build.pid ] && kill -0 \"$(cat /var/lib/lingon-desktop/build.pid)\" 2>/dev/null; then echo DESKTOP_BUILDING; exit 0; fi",
+    "  if [ -f /var/lib/lingon-desktop/build.failed ] && [ \"$(( $(date +%s) - $(stat -c %Y /var/lib/lingon-desktop/build.failed) ))\" -lt 600 ]; then echo \"The computer could not be prepared: $(tail -c 300 /var/lib/lingon-desktop/build.log 2>/dev/null | tr '\\n' ' ')\" >&2; exit 1; fi",
+    `  echo '${Buffer.from(desktopContainerfile(), 'utf8').toString('base64')}' | base64 -d > /opt/lingon/desktop/Containerfile`,
+    `  echo '${buildB64}' | base64 -d > /opt/lingon/desktop/build.sh`,
+    '  chmod 700 /opt/lingon/desktop/build.sh',
+    `  ${OWN_SCOPE}`,
+    "  $SCOPE nohup sh -c '/opt/lingon/desktop/build.sh || touch /var/lib/lingon-desktop/build.failed' > /var/lib/lingon-desktop/build.log 2>&1 < /dev/null &",
+    '  echo $! > /var/lib/lingon-desktop/build.pid',
+    '  echo DESKTOP_BUILDING; exit 0',
+    'fi',
+    `STATE=$(${P} container inspect ${name} --format '{{.State.Running}}/{{index .Config.Labels "lingon.version"}}' 2>/dev/null || true)`,
+    `if [ "$STATE" = 'true/${version}' ]; then echo DESKTOP_READY; exit 0; fi`,
+    `${P} rm -f ${name} >/dev/null 2>&1 || true`,
+    // One desktop per VM: its home is shared, so another session's desktop stops first, but
+    // only once it is idle. One still in use keeps running and this session waits its turn.
+    `if [ -n "$(${P} ps -q --filter label=lingon.desktop=1 2>/dev/null)" ] && [ -f '${DESKTOP_HOME}/.lingon-in-use' ] && [ "$(( $(date +%s) - $(stat -c %Y '${DESKTOP_HOME}/.lingon-in-use') ))" -lt ${DESKTOP_BUSY_SECONDS} ]; then echo DESKTOP_BUSY; exit 0; fi`,
+    `for C in $(${P} ps -a -q --filter label=lingon.desktop=1); do ${P} rm -f "$C" >/dev/null 2>&1 || true; done`,
+    `install -d -m 755 -o root -g root '${code}'`,
+    `echo '${codeB64}' | base64 -d > '${code}/desktop.js'`,
+    `chown root:root '${code}/desktop.js' && chmod 644 '${code}/desktop.js'`,
+    // Memory, CPU and task limits hold for everything in the container: it stays in this scope.
+    `systemd-run --scope --quiet --collect -p MemoryMax=2G -p CPUQuota=150% -p TasksMax=768 -- ${P} run -d --name ${name} --label lingon.desktop=1 --label lingon.version=${version}`
+      + ' --cgroups=disabled --network=slirp4netns:enable_ipv6=false,allow_host_loopback=false --dns=10.0.2.3'
+      // No capabilities; the seccomp profile is podman's default plus chroot, which Chromium's
+      // sandbox calls inside its own user namespace (see DESKTOP_SECCOMP).
+      + ' --cap-drop=ALL --security-opt=no-new-privileges --security-opt=seccomp=/etc/lingon/desktop-seccomp.json --read-only --user 1000:1000 --ipc=private --pid=private --uts=private --hostname=computer'
+      + ` --volume ${DESKTOP_HOME}:/home/desktop:rw,noexec,nosuid,nodev`
+      + ' --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m --tmpfs /var/lib/xkb:rw,nosuid,nodev,noexec,size=8m,mode=1777'
+      + ' --shm-size=256m --ulimit nofile=4096:4096'
+      + ` --volume '${code}/desktop.js:/opt/lingon/desktop.js:ro' --env LINGON_DESKTOP_PAYLOAD='${payloadB64}' ${image} node /opt/lingon/desktop.js >/dev/null`,
+    // Ready once the streamer is on the live channel, so the first step is not missed.
+    'for I in $(seq 1 60); do',
+    `  if ${P} logs ${name} 2>/dev/null | grep -q LINGON_DESKTOP_JOINED; then echo DESKTOP_READY; exit 0; fi`,
+    `  [ "$(${P} container inspect ${name} --format '{{.State.Running}}' 2>/dev/null)" = true ] || break`,
+    '  sleep 0.5',
+    'done',
+    `echo "The computer did not start: $(${P} logs --tail 5 ${name} 2>&1 | tr '\\n' ' ' | tail -c 400)" >&2`,
+    'exit 1',
+  ].join('\n');
+}
+
+function buildDesktopStopScript(sessionId) {
   const id = browserSessionId(sessionId);
-  const root = `/home/lingon-desktop/.relay/${id}`;
   return [
     'set +e',
-    `if [ -f '${root}/relay.pid' ]; then kill "$(cat '${root}/relay.pid')" 2>/dev/null || true; fi`,
-    `D=$(cat '${root}/display' 2>/dev/null)`,
-    'case "$D" in :[0-9]*) pkill -u lingon-desktop -f "Xvfb $D " 2>/dev/null || true ;; esac',
-    'sleep 1',
-    `rm -rf '${root}'`,
+    'cd /',
+    `id -u lingon-desktop >/dev/null 2>&1 && ${DESKTOP_PODMAN} rm -f ${desktopContainerName(id)} >/dev/null 2>&1`,
+    `rm -rf '/run/lingon/desktop/${id}'`,
     'exit 0',
   ].join('\n');
 }
@@ -1564,12 +1914,14 @@ function buildSnapshotStateScript(url) {
     // Everything the browser users run (Chrome, the live streamer) stops, so the profile is
     // saved whole; the next browser step starts them again.
     'pkill -u lingon-browser 2>/dev/null || true',
+    // The desktop container stops first, so its home is saved whole.
+    `if id -u lingon-desktop >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then (cd / && ${DESKTOP_PODMAN} rm -f -a) >/dev/null 2>&1 || true; fi`,
     'pkill -u lingon-desktop 2>/dev/null || true',
     'sleep 1',
     'ARCHIVE=$(mktemp /tmp/lingon-state.XXXXXX.tar.gz)',
     'trap \'rm -f "$ARCHIVE"\' EXIT',
     // Time-bounded, so a backup can never hold the VM's one command slot for long.
-    "timeout 150 tar --exclude='*/Cache/*' --exclude='*/Code Cache/*' --exclude='*/GPUCache/*' --exclude='*/Service Worker/CacheStorage/*' --exclude='*/Service Worker/ScriptCache/*' --exclude='*/GrShaderCache/*' --exclude='*/ShaderCache/*' --exclude='*/Crashpad/*' --exclude='*/component_crx_cache/*' --exclude='home/lingon-desktop/.relay' --exclude='home/lingon-desktop/.run' --exclude='home/lingon-desktop/.cache' -czf \"$ARCHIVE\" -C / home/lingon/workspace var/lib/lingon-browser/sessions home/lingon-desktop",
+    "timeout 150 tar --exclude='*/Cache/*' --exclude='*/Code Cache/*' --exclude='*/GPUCache/*' --exclude='*/Service Worker/CacheStorage/*' --exclude='*/Service Worker/ScriptCache/*' --exclude='*/GrShaderCache/*' --exclude='*/ShaderCache/*' --exclude='*/Crashpad/*' --exclude='*/component_crx_cache/*' --exclude='home/lingon-desktop/.relay' --exclude='home/lingon-desktop/.run' --exclude='home/lingon-desktop/.cache' --exclude='var/lib/lingon-desktop/home/.cache' -czf \"$ARCHIVE\" -C / home/lingon/workspace var/lib/lingon-browser/sessions home/lingon-desktop $([ -d /var/lib/lingon-desktop/home ] && echo var/lib/lingon-desktop/home)",
     'tar -tzf "$ARCHIVE" >/dev/null',
     `URL=$(echo '${encoded}' | base64 -d)`,
     `curl -fsS --retry 2 --max-time 180 -X PUT -H 'x-ms-version: ${BLOB_API}' -H 'x-ms-blob-type: BlockBlob' -H 'content-type: application/gzip' --data-binary @"$ARCHIVE" "$URL"`,
@@ -1680,6 +2032,14 @@ async function ensureInfrastructure(cfg = azureConfig()) {
   return { nsgId, vnetId, subnetId: `${vnetId}/subnets/${cfg.subnet}` };
 }
 
+// Azure sometimes has no capacity for a size in the region (seen for Standard_B2als_v2 and
+// B2as_v2 in swedencentral on 2026-09-30), or a size is not offered to the subscription. A VM
+// is then created on, or resized to, the next of these: all 2 vCPUs on x64 at a similar price.
+// The configured AZURE_VM_SIZE stays first.
+const VM_SIZE_FALLBACKS = ['Standard_B2as_v2', 'Standard_B2s_v2', 'Standard_D2as_v5', 'Standard_D2s_v5'];
+const vmSizes = (cfg) => [...new Set([cfg.vmSize, ...VM_SIZE_FALLBACKS].filter(Boolean))];
+const noCapacity = (error) => /AllocationFailed|sufficient capacity|OverconstrainedAllocationRequest|SkuNotAvailable|not available (?:to|in) the current (?:subscription|region)/i.test(String(error && error.message));
+
 async function ensureVm(userId, { create = false } = {}) {
   const cfg = azureConfig();
   if (missingAzureFields(cfg).length) {
@@ -1720,11 +2080,11 @@ async function ensureVm(userId, { create = false } = {}) {
   }, NET_API);
   const publicKey = sshPublicKey();
   const image = parseImage(cfg.image);
-  const vm = await arm(cfg, 'PUT', vmPath, {
+  const body = (vmSize) => ({
     location: cfg.location,
     tags: { lingon: 'sandbox', user: userHash(userId) },
     properties: {
-      hardwareProfile: { vmSize: cfg.vmSize },
+      hardwareProfile: { vmSize },
       storageProfile: {
         imageReference: image,
         osDisk: { createOption: 'FromImage', managedDisk: { storageAccountType: 'Standard_LRS' } },
@@ -1740,8 +2100,26 @@ async function ensureVm(userId, { create = false } = {}) {
       },
       networkProfile: { networkInterfaces: [{ id: nic.id || nicPath, properties: { primary: true } }] },
     },
-  }, COMPUTE_API);
-  return { vmName: name, id: vm.id, vmId: vm.properties?.vmId || null, provisioningState: vm.properties?.provisioningState || 'Creating', created: true };
+  });
+  // A size without capacity leaves a failed VM behind; it is removed and the next size tried.
+  const sizes = vmSizes(cfg);
+  for (let i = 0; ; i++) {
+    try {
+      const vm = await arm(cfg, 'PUT', vmPath, body(sizes[i]), COMPUTE_API);
+      if (i) console.warn('[vm] created on a fallback size', { vm: name, size: sizes[i] });
+      return { vmName: name, id: vm.id, vmId: vm.properties?.vmId || null, provisioningState: vm.properties?.provisioningState || 'Creating', created: true, vmSize: sizes[i] };
+    } catch (error) {
+      if (!noCapacity(error) || i + 1 >= sizes.length) throw error;
+      console.warn('[vm] no capacity for size', { vm: name, size: sizes[i] });
+      // Removing a VM keeps its OS disk, which would stay behind (and be billed) unused.
+      const failed = await arm(cfg, 'GET', vmPath, undefined, COMPUTE_API).catch(() => null);
+      const diskId = String(failed?.properties?.storageProfile?.osDisk?.managedDisk?.id || '');
+      await arm(cfg, 'DELETE', vmPath, undefined, COMPUTE_API).catch((e) => { if (e.code !== 'AZURE_NOT_FOUND') throw e; });
+      if (diskId.toLowerCase().startsWith(`${rgPath(cfg)}/providers/Microsoft.Compute/disks/`.toLowerCase())) {
+        await arm(cfg, 'DELETE', diskId, undefined, DISK_API).catch((e) => { if (e.code !== 'AZURE_NOT_FOUND') console.warn('[vm] failed VM disk not removed', { vm: name, error: e.code || 'AZURE_ARM' }); });
+      }
+    }
+  }
 }
 
 function parseRunOutput(data, { maxStdout = 12000, maxStderr = 4000 } = {}) {
@@ -1793,10 +2171,7 @@ function cloudInit(cfg) {
     '  - python3',
     '  - ca-certificates',
     '  - curl',
-    '  - xvfb',
     '  - fonts-liberation',
-    ...DESKTOP_PACKAGES.map(([pkg]) => `  - ${pkg}`),
-    '  - fonts-dejavu-core',
     '  - podman',
     '  - uidmap',
     '  - slirp4netns',
@@ -1809,14 +2184,13 @@ function cloudInit(cfg) {
     `  - chown -R ${user}:${user} /home/${user}/workspace`,
     '  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -',
     '  - apt-get install -y nodejs',
-    '  - snap install chromium || apt-get install -y chromium-browser || apt-get install -y chromium || true',
     '  - mkdir -p /opt/lingon && chown -R ' + user + ':' + user + ' /opt/lingon',
     '  - su - ' + user + ' -c "npm install --prefix /opt/lingon puppeteer-core@25.11.0 ws@8.21.3" || true',
     // One runcmd entry: each entry runs on its own, and the install is one if-block.
     `  - ${JSON.stringify(BROWSER_INSTALL.join('\n'))}`,
     '  - install -d -m 700 /opt/lingon/worker /var/lib/lingon-worker',
     `  - echo '${workerContainerfile}' | base64 -d > /opt/lingon/worker/Containerfile`,
-    `  - podman image exists ${shellQuote(image)} || (podman pull ${shellQuote(image)} || podman build --pull=missing -t ${shellQuote(image)} /opt/lingon/worker)`,
+    `  - podman image exists ${shellQuote(image)} || (podman pull ${shellQuote(image)} || podman build -t ${shellQuote(image)} /opt/lingon/worker)`,
     `  - podman image exists ${shellQuote(image)} && touch /var/lib/lingon-worker/ready || true`,
   ].join('\n');
   return Buffer.from(yaml, 'utf8').toString('base64');
@@ -1859,17 +2233,36 @@ async function waitPower(userId, want, timeoutMs = 180000) {
 async function startVm(userId) {
   const cfg = azureConfig();
   const name = vmNameForUser(userId);
-  await arm(cfg, 'POST', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/start`, undefined, COMPUTE_API);
+  const vmPath = `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}`;
+  try {
+    await arm(cfg, 'POST', `${vmPath}/start`, undefined, COMPUTE_API);
+  } catch (error) {
+    if (!noCapacity(error)) throw error;
+    // No capacity for its size right now: the stopped VM moves to the next size and starts
+    // there. Its disk, files and browser profile stay the same.
+    const current = (await arm(cfg, 'GET', vmPath, undefined, COMPUTE_API)).properties?.hardwareProfile?.vmSize;
+    const sizes = vmSizes(cfg).filter((size) => size !== current);
+    for (let i = 0; ; i++) {
+      console.warn('[vm] no capacity to start, resizing', { vm: name, from: current, to: sizes[i] });
+      try {
+        await arm(cfg, 'PATCH', vmPath, { properties: { hardwareProfile: { vmSize: sizes[i] } } }, COMPUTE_API);
+        await arm(cfg, 'POST', `${vmPath}/start`, undefined, COMPUTE_API);
+        break;
+      } catch (next) {
+        if (!noCapacity(next) || i + 1 >= sizes.length) throw next;
+      }
+    }
+  }
   await waitPower(userId, 'running');
   touchActivity(userId);
   return { vmName: name, power: 'running' };
 }
 
-async function deallocateVm(userId) {
+async function deallocateVm(userId, { wait = true } = {}) {
   const cfg = azureConfig();
   const name = vmNameForUser(userId);
-  await arm(cfg, 'POST', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/deallocate`, undefined, COMPUTE_API);
-  return { vmName: name, power: 'deallocated' };
+  await arm(cfg, 'POST', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/deallocate`, undefined, COMPUTE_API, { wait });
+  return { vmName: name, power: wait ? 'deallocated' : 'deallocating' };
 }
 
 async function deallocateByName(name) {
@@ -2026,25 +2419,76 @@ async function releaseLease(userId, { leaseId, skipSnapshot = false } = {}) {
   return { vmName: vmNameForUser(key), power: (leases.get(key)?.size || 0) ? 'running' : 'deallocated', leases: await leaseSnapshot(key) };
 }
 
-async function sweepLeases({ limit = 20 } = {}) {
+/* Idle VMs stop here, once a minute (the vm-lease-sweeper schedule). The scheduler waits
+   25 seconds for a sweep, and the host can end the request then. A sweep that backed up
+   and then waited for Azure to deallocate took longer: it was cut off with the VM marked
+   stopping, which no sweep looked at again, and a cut before the deallocation was sent
+   left the VM running. So a sweep gives the backup SWEEP_BACKUP_MS, sends the
+   deallocation without waiting for it, and first settles every VM left stopping from
+   Azure's own power state. */
+const SWEEP_BACKUP_MS = 12000;
+const STOP_SETTLE_MS = 45000;
+
+async function stoppingVms(limit) {
+  const cfg = supabaseLeaseConfig();
+  const query = new URLSearchParams({
+    select: 'user_id,vm_name,stop_claim_token',
+    power_state: 'eq.stopping',
+    stop_claim_token: 'not.is.null',
+    stop_claimed_at: `lt.${new Date(Date.now() - STOP_SETTLE_MS).toISOString()}`,
+    limit: String(limit),
+  });
+  const response = await fetch(`${cfg.url}/rest/v1/agent_vm_instances?${query}`, {
+    headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}` },
+  });
+  if (!response.ok) throw Object.assign(new Error('Could not read stopping VMs.'), { code: 'VM_LEASE_STORE' });
+  return response.json();
+}
+
+// A deallocated VM is marked so. One still up goes back to running, and the claim below
+// stops it again unless new work has leased it meanwhile.
+async function settleStop(row) {
+  let power;
+  try { power = await powerState(row.user_id); }
+  catch (error) { if (error.code !== 'AZURE_NOT_FOUND') return { vmName: row.vm_name, settled: false, error: error.code || 'AZURE_ARM' }; power = 'deallocated'; }
+  if (power === 'deallocating') return null;
+  const stopped = power === 'deallocated';
+  await supabaseRpc('finish_agent_vm_stop', { p_user_id: row.user_id, p_claim_token: row.stop_claim_token, p_success: stopped });
+  return { vmName: row.vm_name, stopped, power };
+}
+
+async function stopIdleVm(row, claim, backupMs) {
+  const results = [];
+  // Deallocating keeps the OS disk, so a backup that fails or runs long does not keep an
+  // idle VM running; the files stay on the disk and the next backup includes them.
+  let timer;
+  const backupTime = new Promise((resolve, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('Backup still running.'), { code: 'AZURE_STATE_SLOW' })), backupMs); });
+  try { await Promise.race([snapshotDurableState(row.user_id), backupTime]); }
+  catch (error) { results.push({ vmName: row.vm_name, snapshot: false, error: error.code || 'AZURE_STATE' }); }
+  finally { clearTimeout(timer); }
+  try {
+    await deallocateVm(row.user_id, { wait: false });
+    await meterVm(row.user_id, true).catch(() => {});
+    results.push({ vmName: row.vm_name, stopping: true });
+  } catch (error) {
+    const gone = error.code === 'AZURE_NOT_FOUND';
+    await supabaseRpc('finish_agent_vm_stop', { p_user_id: row.user_id, p_claim_token: row.claim_token || claim, p_success: gone }).catch(() => {});
+    results.push(gone ? { vmName: row.vm_name, stopped: true } : { vmName: row.vm_name, stopped: false, error: error.code || 'AZURE_ARM' });
+  }
+  return results;
+}
+
+async function sweepLeases({ limit = 20, backupMs = SWEEP_BACKUP_MS } = {}) {
   if (isLeaseStoreConfigured()) {
+    const results = [];
+    const stale = await stoppingVms(limit).catch((error) => { results.push({ settled: false, error: error.code || 'VM_LEASE_STORE' }); return []; });
+    for (const outcome of await Promise.all(stale.map((row) => settleStop(row).catch((error) => ({ vmName: row.vm_name, settled: false, error: error.code || 'VM_LEASE_STORE' }))))) {
+      if (outcome) results.push(outcome);
+    }
     const claim = crypto.randomUUID();
     const rows = await supabaseRpc('claim_idle_agent_vms', { p_claim_token: claim, p_limit: limit }) || [];
-    const results = [];
-    for (const row of rows) {
-      let success = false;
-      // Deallocating keeps the OS disk, so a failed backup does not keep an idle VM running;
-      // the files stay on the disk and the next backup includes them.
-      try { await snapshotDurableState(row.user_id).catch((error) => results.push({ vmName: row.vm_name, snapshot: false, error: error.code || 'AZURE_STATE' })); await deallocateVm(row.user_id); await meterVm(row.user_id, true); success = true; }
-      catch (error) { results.push({ vmName: row.vm_name, stopped: false, error: error.code || 'AZURE_ARM' }); }
-      finally {
-        await supabaseRpc('finish_agent_vm_stop', {
-          p_user_id: row.user_id, p_claim_token: row.claim_token || claim, p_success: success,
-        }).catch(() => {});
-      }
-      if (success) results.push({ vmName: row.vm_name, stopped: true });
-    }
-    return { checked: rows.length, results };
+    for (const list of await Promise.all(rows.map((row) => stopIdleVm(row, claim, backupMs)))) results.push(...list);
+    return { checked: rows.length, settled: stale.length, results };
   }
   const now = Date.now();
   for (const [userId, map] of leases) {
@@ -2062,7 +2506,13 @@ async function ensureRunning(userId, { create = true } = {}) {
   // A VM already starting (see prewarm) only needs waiting for; a second start request
   // could conflict with the one in progress.
   if (st === 'starting') await waitPower(userId, 'running');
-  else if (st !== 'running') await startVm(userId);
+  else if (st !== 'running') {
+    // An idle stop is sent without waiting for it (see sweepLeases); Azure refuses a start
+    // until that stop is done.
+    if (st === 'deallocating') await waitPower(userId, 'deallocated');
+    else if (st === 'stopping') await waitPower(userId, 'stopped');
+    await startVm(userId);
+  }
   else touchActivity(userId);
   return { vmName: vmNameForUser(userId), vmId: vm.vmId, power: 'running', started: st !== 'running', created: !!vm.created };
 }
@@ -2193,7 +2643,7 @@ async function waitWorkerReady(userId) {
     'command -v podman >/dev/null 2>&1 || { apt-get update -q >/dev/null 2>&1; apt-get install -y -q podman uidmap slirp4netns fuse-overlayfs >/dev/null 2>&1; }',
     'install -d -m 700 /opt/lingon/worker /var/lib/lingon-worker',
     `echo '${workerContainerfileB64()}' | base64 -d > /opt/lingon/worker/Containerfile`,
-    `podman image exists ${image} || podman pull ${image} >/tmp/lingon-worker-build.log 2>&1 || podman build --pull=missing -t ${image} /opt/lingon/worker >>/tmp/lingon-worker-build.log 2>&1`,
+    `podman image exists ${image} || podman pull ${image} >/tmp/lingon-worker-build.log 2>&1 || podman build -t ${image} /opt/lingon/worker >>/tmp/lingon-worker-build.log 2>&1`,
     `if podman image exists ${image}; then touch /var/lib/lingon-worker/ready; echo READY; exit 0; fi`,
     'echo "The worker container could not be prepared: $(tail -n 3 /tmp/lingon-worker-build.log 2>/dev/null | tr \'\\n\' \' \')" >&2',
     'exit 125',
@@ -2304,21 +2754,27 @@ async function createSecretTransfer(userId, sessionId, value) {
 // yet, or an old one), so the caller runs it as a VM command. Once taken, the step is never
 // run a second way: a lost result is an outcome to check, not a retry.
 const STEP_ACK_MS = 2500, STEP_DONE_MS = 75000;
+// Realtime forwards objects with their keys re-sorted, so a step is signed over a canonical
+// form with sorted keys; the streamers check the same form.
+const canon = (v) => (Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v === undefined ? null : v));
+const signStep = (key, step) => crypto.createHmac('sha256', key).update(canon([step.id, step.action, step.url, step.event, step.uploadUrl, step.resultUrl, step.exp])).digest('hex');
 function realtimeBroadcastUrl(live) {
   return String(live.url).replace(/^wss:/, 'https:').replace(/\/realtime\/v1\/websocket$/, '/realtime/v1/api/broadcast');
 }
-async function streamerBrowserStep(userId, sb, args, live) {
+// A signed step for the session's streamer (the browser's, or the desktop's in its container).
+// null when no streamer took it in time: the caller then starts one or uses a VM command.
+async function streamerBrowserStep(userId, sb, args, live, { ackMs = STEP_ACK_MS, label = 'browser', build } = {}) {
   if (!live?.cmdKey || (args.event && args.event.secret)) return null;
   const [shot, report] = await Promise.all([createScreenshotTransfer(userId, args.sessionId), createScreenshotTransfer(userId, args.sessionId, 'json')]);
   const drop = () => Promise.all([shot, report].map((t) => fetch(t.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {})));
   const step = { id: crypto.randomUUID(), action: args.action, url: String(args.url || ''), event: args.event && typeof args.event === 'object' ? args.event : null,
-    uploadUrl: shot.url, resultUrl: report.url, exp: Date.now() + STEP_DONE_MS };
-  step.sig = crypto.createHmac('sha256', live.cmdKey).update(JSON.stringify([step.id, step.action, step.url, step.event, step.uploadUrl, step.resultUrl, step.exp])).digest('hex');
+    uploadUrl: shot.url, resultUrl: report.url, exp: Date.now() + STEP_DONE_MS, ...(build ? { build } : {}) };
+  step.sig = signStep(live.cmdKey, step);
   const sent = await fetch(realtimeBroadcastUrl(live), { method: 'POST', headers: { apikey: live.key, Authorization: `Bearer ${live.key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages: [{ topic: live.topic, event: 'step', payload: step, private: false }] }) }).catch(() => null);
   if (!sent || !sent.ok) { await drop(); return null; }
   const started = Date.now();
-  let taken = false, claimAt = STEP_ACK_MS;
+  let taken = false, claimAt = ackMs;
   for (;;) {
     const waited = Date.now() - started;
     if (!taken && waited > claimAt) {
@@ -2334,8 +2790,8 @@ async function streamerBrowserStep(userId, sb, args, live) {
     if (waited > STEP_DONE_MS) {
       await drop();
       throw Object.assign(new Error(taken
-        ? 'The browser took this step but did not report its result. Check the page before repeating it.'
-        : 'Whether the browser took this step could not be checked. Check the page before repeating it.'), { code: 'AZURE_BROWSER' });
+        ? `The ${label} took this step but did not report its result. Check the screen before repeating it.`
+        : `Whether the ${label} took this step could not be checked. Check the screen before repeating it.`), { code: label === 'computer' ? 'AZURE_DESKTOP' : 'AZURE_BROWSER' });
     }
     await new Promise((resolve) => setTimeout(resolve, waited < 4000 ? 200 : 400));
     const got = await fetch(report.url, { headers: { 'x-ms-version': BLOB_API } }).catch(() => null);
@@ -2347,10 +2803,10 @@ async function streamerBrowserStep(userId, sb, args, live) {
     const { done, ...parsed } = body;
     if (parsed.ok === false) {
       await drop();
-      throw Object.assign(new Error(parsed.error || 'Browser step failed on the user VM.'), { code: 'AZURE_BROWSER' });
+      throw Object.assign(new Error(parsed.error || `The ${label} step failed on the user VM.`), { code: label === 'computer' ? 'AZURE_DESKTOP' : 'AZURE_BROWSER' });
     }
     const screenshot = await readAndDeleteScreenshot(shot);
-    console.info('[vm] browser step', { via: 'streamer', action: step.action, ms: Date.now() - started });
+    console.info(`[vm] ${label} step`, { via: 'streamer', action: step.action, ms: Date.now() - started });
     return { mode: 'azure', vmName: sb.vmName, ...parsed, screenshot };
   }
 }
@@ -2381,6 +2837,34 @@ async function runBrowserSession(userId, sb, args) {
   }
 }
 
+// The computer (computer use): each step goes to the desktop container's streamer over the
+// session's live channel. A step nobody takes starts the container first (the first use on a
+// VM prepares its image, which takes a few minutes), then goes again.
+const toolDesktopSessionId = (userId, sessionId) => `desk_${userHash(`desktop:${userId}:${sessionId || 'default'}`)}`;
+async function runDesktopStep(userId, sb, args) {
+  const live = liveRealtimeArgs(args.live);
+  if (!live || !live.cmdKey) throw Object.assign(new Error('The computer needs the live view channel, which is not configured here.'), { code: 'DISABLED' });
+  const event = args.event && typeof args.event === 'object' ? args.event : { type: 'screenshot' };
+  if (event.secret) throw Object.assign(new Error('Saved logins are typed in the protected browser, not on the computer.'), { code: 'BAD_INPUT' });
+  const step = { sessionId: args.sessionId, action: event.type === 'screenshot' ? 'inspect' : 'input', event };
+  const done = (out) => ({ ...out, desktop: true });
+  const fast = await streamerBrowserStep(userId, sb, step, live, { label: 'computer', build: DESKTOP_BUILD });
+  if (fast) return done(fast);
+  const out = await runCommand(userId, buildDesktopSessionScript({ sessionId: args.sessionId, live }), { maxStdout: 12000, maxStderr: 4000 });
+  if (/\bDESKTOP_BUILDING\b/.test(out.stdout || '')) {
+    throw Object.assign(new Error('The computer is being set up for its first use on this VM, which takes a few minutes. Do other steps (or use the browser) meanwhile and try the computer again shortly.'), { code: 'DESKTOP_PREPARING' });
+  }
+  if (/\bDESKTOP_BUSY\b/.test(out.stdout || '')) {
+    throw Object.assign(new Error('Another of the owner\'s tasks is using the computer right now. Do other steps (or use the browser) meanwhile and try the computer again in a few minutes.'), { code: 'DESKTOP_BUSY' });
+  }
+  if (!/\bDESKTOP_READY\b/.test(out.stdout || '')) {
+    throw Object.assign(new Error(String(out.stderr || '').trim().slice(-500) || `The computer did not start. ${String(out.stdout || '').trim().slice(-300)}`.trim()), { code: 'AZURE_DESKTOP' });
+  }
+  const started = await streamerBrowserStep(userId, sb, step, live, { label: 'computer', ackMs: 8000, build: DESKTOP_BUILD });
+  if (!started) throw Object.assign(new Error('The computer started but did not answer. Try the step again.'), { code: 'AZURE_DESKTOP' });
+  return done(started);
+}
+
 async function startBrowserRelay(userId, args = {}, { alreadyRunning = false } = {}) {
   const sb = await getSandbox(userId);
   if (sb.mode !== 'azure') {
@@ -2404,15 +2888,16 @@ async function stopBrowserRelay(userId, sessionId) {
   }
 }
 
-async function startDesktopRelay(userId, args = {}) {
-  // Reject before provisioning, starting, or sending a command to a VM.
-  buildDesktopRelayScript(args);
+async function startDesktopRelay() {
+  // The old WebSocket relay ran the desktop natively; the desktop now runs only in its
+  // container and streams over the live channel (desktop_action).
+  throw Object.assign(new Error('The computer runs over the live channel on the hosted app.'), { code: 'DISABLED' });
 }
 
 async function stopDesktopRelay(userId, sessionId) {
   if (!isAzureConfigured()) return { stopped: false, disabled: true };
   try {
-    await runCommand(userId, buildDesktopRelayStopScript(sessionId), { maxStdout: 1000, maxStderr: 1000 });
+    await runCommand(userId, buildDesktopStopScript(sessionId), { maxStdout: 1000, maxStderr: 1000 });
     return { stopped: true };
   } catch (error) {
     return { stopped: false, error: error.code || 'AZURE_DESKTOP' };
@@ -2421,7 +2906,7 @@ async function stopDesktopRelay(userId, sessionId) {
 
 async function execInSandbox(userId, tool, args = {}, { alreadyRunning = false, taskId } = {}) {
   const sb = await getSandbox(userId);
-  const vmTools = new Set(['code_run', 'shell', 'browser_open', 'computer_screenshot', 'browser_action', 'browser_session', 'browser_relay']);
+  const vmTools = new Set(['code_run', 'shell', 'browser_open', 'computer_screenshot', 'browser_action', 'browser_session', 'browser_relay', 'desktop_action']);
   if (!vmTools.has(tool)) return { mode: sb.mode, tool, note: 'executed by existing allowlisted tool path' };
   if (sb.mode !== 'azure') {
     throw Object.assign(new Error('This tool runs only inside the user Azure VM. Configure AZURE_* to enable it.'), { code: 'DISABLED' });
@@ -2465,6 +2950,9 @@ async function execInSandbox(userId, tool, args = {}, { alreadyRunning = false, 
   if (tool === 'browser_relay') {
     return startBrowserRelay(userId, args, { alreadyRunning: true });
   }
+  if (tool === 'desktop_action') {
+    return runDesktopStep(userId, sb, { sessionId: toolDesktopSessionId(userId, args.sessionId), event: args.event, live: args.live });
+  }
   return { mode: 'azure', vmName: sb.vmName, tool };
 }
 
@@ -2489,8 +2977,12 @@ export {
   browserProfileRuntime,
   liveStreamer,
   desktopKit,
-  buildDesktopRelayScript,
-  buildDesktopRelayStopScript,
+  desktopContainerfile,
+  desktopStreamer,
+  desktopStreamerSource,
+  buildDesktopSessionScript,
+  buildDesktopStopScript,
+  toolDesktopSessionId,
   startDesktopRelay,
   stopDesktopRelay,
   buildBrowserSessionScript,

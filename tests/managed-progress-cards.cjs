@@ -67,4 +67,20 @@ assert.equal(chat.managedTasks['task-2'].status,'running');
 first.managedTask({...updating,status:'completed',revision:2,sequence:2,events:[...updating.events,{id:'task-2:answer:v1',seq:2,type:'message',phase:'task_answer',text:'Two direct flights fit.'}]});
 assert.equal(chat.messages.filter(m=>m.managedId==='task-2:update:1').length,1,'an update is shown once');
 assert.equal(chat.messages.find(m=>m.managedId==='task-2:answer:v1').text,'Two direct flights fit.');
+// The task card is made when the task starts. Paused, its Continue card sits under the task's
+// answer, not above its updates (2026-09-29), and a later owner message stays below it.
+const paused={id:'task-3',chatId:'chat',title:'Page messages',status:'running',version:1,revision:1,sequence:0,events:[]};
+first.managedTask(paused);
+first.managedTask({...paused,revision:2,events:[{id:'task-3:update:1',seq:1,type:'message',phase:'task_update',text:'Checked two Pages.'}]});
+const order=()=>chat.messages.map(m=>m.managedId || m.id).filter(id=>/task-3|task_task-3|later/.test(id));
+assert.deepEqual(order(),['task_task-3','task-3:update:1'],'a working task card stays where the task started');
+first.managedTask({...paused,status:'partial',revision:3,events:[{id:'task-3:update:1',seq:1,type:'message',phase:'task_update',text:'Checked two Pages.'},{id:'task-3:answer:v1',seq:2,type:'message',phase:'task_answer',text:'One conversation found.'}]});
+assert.deepEqual(order(),['task-3:update:1','task-3:answer:v1','task_task-3'],'a paused card moves under the answer');
+chat.messages.push({id:'later',role:'user',kind:'text',text:'thanks'});
+first.managedTask({...paused,status:'partial',revision:4,summary:'x',events:[]});
+assert.deepEqual(order(),['task-3:update:1','task-3:answer:v1','task_task-3','later'],'a later owner message stays below');
+// Chats saved before the fix are repaired when painted.
+const saved={messages:[{id:'c',managedId:'task_t4',kind:'card',card:{type:'task',taskId:'t4',status:'partial'}},{id:'a',managedId:'t4:answer:v1',role:'agent',kind:'text'}]};
+context.placeTaskCard(saved,saved.messages[0]);
+assert.deepEqual(saved.messages.map(m=>m.id),['a','c']);
 console.log('managed cards: milestone-only updates, persistent history, replay dedupe, independent task/main status: ok');

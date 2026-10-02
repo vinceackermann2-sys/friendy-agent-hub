@@ -7,7 +7,7 @@ const {createWalletTools}=require('../server/agents/wallet-tools');
  const db=new PGlite();
  try{
   await db.exec("create role anon;create role authenticated;create role service_role;create table profiles(id text primary key);insert into profiles values('u1'),('u2');");
-  await db.exec(fs.readFileSync('supabase/migrations/20260927170000_shipping_addresses.sql','utf8'));
+  await db.exec(fs.readFileSync('supabase/migrations/20260927195435_shipping_addresses.sql','utf8'));
   const list=async user=>(await db.query('select * from belna_shipping_addresses where user_id=$1 order by is_default desc,created_at,id',[user])).rows;
   const store={getWalletPreferences:async()=>({active_method:'existing_card',merchant_enabled:true}),listShippingAddresses:list,saveShippingAddress:async(u,a)=>{await db.query('select save_shipping_address($1,$2::jsonb)',[u,JSON.stringify(a)]);return list(u);},deleteShippingAddress:async(u,id)=>{await db.query('select delete_shipping_address($1,$2)',[u,id]);return list(u);}};
   const wallet=createBelnaWallet({store,env:{}});

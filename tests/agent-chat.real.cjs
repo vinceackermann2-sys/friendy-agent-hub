@@ -118,33 +118,17 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('#cbody')?.textContent?.includes('your-page.html'));
     step('build creates sandboxed HTML, file card, and library context');
 
-    await page.locator('[data-act="agenttab"][data-t="subagents"]').click();
-    await sleep(1200);
-    await page.locator('[data-act="new-subagent"]').click();
-    await page.locator('#subname').fill('Harness watcher');
-    await page.locator('#subprompt').fill(`Reply with a concise status for ${marker}`);
-    await page.select('#subinterval', '60');
-    await page.locator('[data-act="create-subagent"]').click();
-    await page.waitForFunction(() => [...document.querySelectorAll('.subagent-card')].some((card) => card.textContent.includes('Harness watcher')), { timeout: 30000 });
-    const { body: listed } = await api(session, '/api/sub-agents');
-    const subAgent = listed.subAgents.find((agent) => agent.name === 'Harness watcher');
-    assert(subAgent, 'created sub-agent was not persisted');
-    await page.locator(`[data-act="run-subagent"][data-id="${subAgent.id}"]`).click();
-    await page.waitForFunction((chatId) => {
-      const state = JSON.parse(localStorage.getItem('lingon.v1') || '{}');
-      return state.activeChat === chatId && document.querySelector('#tinner .msg.agent .bub.md')?.textContent?.trim().length > 0;
-    }, { timeout: 90000 }, subAgent.chatId);
-    const { body: automationChats } = await api(session, '/api/automation-chats');
-    assert(automationChats.chats.some((chat) => (chat.sub_agent_id || chat.subAgentId) === subAgent.id && chat.messages?.length >= 2));
-    step('sub-agent create, manual run, and isolated chat persistence work');
-
-    const { response: invalidSchedule } = await api(session, '/api/sub-agents', {
+    await page.locator('[data-act="ctab"][data-t="subagents"]').click();
+    await page.waitForSelector('[data-act="ask-automation"]');
+    assert.equal(await page.$$eval('#subname, #subprompt, #subtrigger, [data-act="create-subagent"]', nodes => nodes.length), 0);
+    await page.locator('[data-act="ask-automation"]').click();
+    assert.equal(await page.$eval('#cprompt', node => node.value), 'Help me set up an automation. I want to ');
+    const { response: manualCreate } = await api(session, '/api/sub-agents', {
       method: 'POST',
-      body: JSON.stringify({ name: 'Too fast', prompt: 'Check', trigger: { type: 'schedule', intervalMinutes: 1 } }),
+      body: JSON.stringify({ name: 'Manual watcher', prompt: 'Check', trigger: { type: 'schedule', intervalMinutes: 60 } }),
     });
-    assert.equal(invalidSchedule.status, 400);
-    await api(session, `/api/sub-agents/${encodeURIComponent(subAgent.id)}`, { method: 'DELETE' });
-    step('sub-agent validation and deletion work');
+    assert.equal(manualCreate.status, 403);
+    step('automations use agent chat and reject manual creation');
 
     await newChat(page);
     await send(page, 'Review my GitHub pull requests');

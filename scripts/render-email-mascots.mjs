@@ -10,7 +10,7 @@ try {
   await page.setContent('<html><body style="margin:0"></body></html>');
   await page.addScriptTag({content:readFileSync(resolve('app/mascot.js'),'utf8')});
   mkdirSync(resolve('public/lingon/mascot'),{recursive:true});
-  for (const color of ['lingon','blueberry','moss','sun','lavender','rose','charcoal']) {
+  for (const color of ['lingon','blueberry','moss','sun','rose']) {
     const sprite = readFileSync(resolve(`app/mascot/star-${color}.webp`)).toString('base64');
     await page.evaluate(({color,sprite}) => {
       document.body.innerHTML = Mascot.svg(color,'happy',240).replace(`/lingon/mascot/star-${color}.webp`,`data:image/webp;base64,${sprite}`);

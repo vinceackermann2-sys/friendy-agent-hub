@@ -69,6 +69,22 @@ async function main() {
     const sent = await mail.send('user_test', { to: 'new.person@example.com', subject: 'Hello', body: 'Hello there', confirm: true });
     assert.deepEqual(sentTo, ['new.person@example.com']);
     assert.deepEqual(sent.to, ['new.person@example.com']);
+
+    // Files from the Mail panel go to Resend as base64, with safe names and checked sizes.
+    let sentBody;
+    global.fetch = async (_url, init) => {
+      sentBody = JSON.parse(init.body);
+      return Response.json({ id: 'resend_2' });
+    };
+    const withFiles = (attachments) => mail.send('user_test', { to: 'a@example.com', subject: 'Files', body: 'See attached', confirm: true, attachments });
+    const pdf = Buffer.from('%PDF-1.4').toString('base64');
+    await withFiles([{ filename: 'a/b.pdf', content: pdf, contentType: 'application/pdf' }, { filename: 'notes.txt', content: pdf, contentType: 'bad type' }]);
+    assert.deepEqual(sentBody.attachments, [{ filename: 'a_b.pdf', content: pdf, content_type: 'application/pdf' }, { filename: 'notes.txt', content: pdf }]);
+    await mail.send('user_test', { to: 'a@example.com', subject: 'No files', body: 'Plain', confirm: true });
+    assert.equal(sentBody.attachments, undefined);
+    await assert.rejects(withFiles([{ filename: 'x.txt', content: 'not base64!' }]), /could not be read/);
+    await assert.rejects(withFiles(Array.from({ length: 11 }, (_, i) => ({ filename: i + '.txt', content: pdf }))), /up to 10 files/);
+    await assert.rejects(withFiles([{ filename: 'big.bin', content: Buffer.alloc(8 * 1024 * 1024 + 3).toString('base64') }]), /8 MB/);
   } finally {
     global.fetch = old.fetch;
     old.key === undefined ? delete process.env.RESEND_API_KEY : process.env.RESEND_API_KEY = old.key;

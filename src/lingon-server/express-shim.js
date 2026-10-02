@@ -221,7 +221,10 @@ export function createApp() {
           await run();
           while (pending.length) await Promise.all(pending.splice(0));
         } catch (e) {
-          if (!res._sent) res.status(500).json({ error: String(e?.message || e) });
+          // An uncaught error may carry internal details (database or provider errors): it is
+          // logged here, and the caller gets a generic message.
+          console.error('unhandled-route-error', { path: url.pathname, name: String(e?.name || ''), code: String(e?.code || '') });
+          if (!res._sent) res.status(500).json({ error: 'Something went wrong. Please try again.' });
           else res.end();
         }
         if (!res._sent) res.status(404).json({ error: 'Not found' });

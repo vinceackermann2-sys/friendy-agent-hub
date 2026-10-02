@@ -142,14 +142,9 @@ import { chromium } from 'playwright';
   await p.click('.usermenu [data-act="nav"][data-view="settings"]');
   await p.waitForSelector('[data-act="stab"][data-t="secrets"]');
   await p.click('[data-act="stab"][data-t="secrets"]');
-  await p.waitForSelector('.warnband');
-  await p.fill('#vname', 'github_token');
-  await p.fill('#vval', 'ghp_supersecret123');
-  await p.click('[data-act="addsecret"]');
-  await p.waitForSelector('[data-rev]');
-  const masked = await p.textContent('[data-rev]');
-  if (/ghp_/.test(masked)) errs.push('SECRET LEAKED: ' + masked);
-  step('vault masks secret');
+  await p.waitForSelector('[data-act="vault-ask"]');
+  if (await p.locator('.vault-add input, [data-act="addsecret"]').count()) errs.push('Secrets still has a manual add form');
+  step('secrets are added through chat, not a form');
 
   // Apps must be honestly empty (separate Apps view, real connections only)
   await p.click('[data-act="usermenu"]');

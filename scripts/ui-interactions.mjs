@@ -1,5 +1,7 @@
 import { chromium } from "playwright";
 
+// On phones Settings opens sections from its list; go back to the list first when a section is open.
+const openSettingsTab=async(page,t)=>{await page.locator('#main .set-page, #main .settings-tabs').first().waitFor();const back=page.locator('.set-sub-head [data-act="stab"][data-t="home"]');if(await back.count())await back.click();await page.locator(`:is(.set-row,.settings-tabs button)[data-act="stab"][data-t="${t}"]`).click();};
 const base = process.env.UI_BASE || "http://127.0.0.1:8080";
 const browser = await chromium.launch();
 const output = [];
@@ -208,9 +210,10 @@ await run(
     await page.locator('[data-act="nav"][data-view="settings"]').click();
     await check("settings");
     for (const tab of ["secrets", "browser", "billing", "profiles"]) {
-      await page.locator(`[data-act="stab"][data-t="${tab}"]`).click();
+      await openSettingsTab(page,tab);
       await check(`settings ${tab}`);
     }
+    if (await page.locator('.set-sub-head [data-act="stab"][data-t="home"]').count()) await page.locator('.set-sub-head [data-act="stab"][data-t="home"]').click();
     await page.locator('#main [data-act="nav"][data-view="chat"]').click();
     await page.locator('[data-act="newchat"]').last().click();
     await page.locator("#cprompt").waitFor();
@@ -262,10 +265,11 @@ for (const width of [320, 768, 1024]) {
       await page.locator('[data-act="nav"][data-view="settings"]').click();
       await check("settings");
       for (const tab of ["secrets", "browser", "billing", "profiles"]) {
-        await page.locator(`[data-act="stab"][data-t="${tab}"]`).click();
+        await openSettingsTab(page,tab);
         await check(tab);
       }
-      await page.locator('#main [data-act="nav"][data-view="chat"]').click();
+      if (await page.locator('.set-sub-head [data-act="stab"][data-t="home"]').count()) await page.locator('.set-sub-head [data-act="stab"][data-t="home"]').click();
+    await page.locator('#main [data-act="nav"][data-view="chat"]').click();
       await page.locator('#main [data-act="newchat"]').click();
       await check("chat");
       await page.locator('.chathead [data-act="togglecanvas"]').click();

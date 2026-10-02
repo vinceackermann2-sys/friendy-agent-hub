@@ -33,12 +33,10 @@ OUT = argv[argv.index('--out') + 1] if '--out' in argv else os.path.join(ROOT, '
 # Keep in sync with PALETTE in app/mascot.js (body colours).
 PALETTE = {
     'lingon': '#4A7FD4',
-    'blueberry': '#5B6EE1',
-    'moss': '#7BA05B',
-    'sun': '#E8B33C',
-    'lavender': '#9B6BD3',
-    'rose': '#E58BB1',
-    'charcoal': '#4A4D55',
+    'blueberry': '#B7D6FF',
+    'moss': '#D8F3B0',
+    'sun': '#FFE0A3',
+    'rose': '#E8B5F4',
 }
 COLORS = argv[argv.index('--colors') + 1].split(',') if '--colors' in argv else list(PALETTE)
 

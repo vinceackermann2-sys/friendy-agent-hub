@@ -10,6 +10,10 @@ assert.equal(edgeAzure.isAzureConfigured(), nodeAzure.isAzureConfigured());
 assert.equal(typeof edgeAzure.execInSandbox, 'function');
 assert.equal(edgeAzure.buildShellScript('pwd', 'security-task'), nodeAzure.buildShellScript('pwd', 'security-task'));
 assert.equal(edgeAzure.browserProfileRuntime.toString(), nodeAzure.browserProfileRuntime.toString());
-assert.throws(() => edgeAzure.buildDesktopRelayScript({}), (error) => error.code === 'DISABLED');
+// The hosted app sends the same locked desktop container and streamer as the Node server.
+const live = { url: 'wss://abcdefgh.supabase.co/realtime/v1/websocket', key: 'k'.repeat(40), topic: `live-${'a'.repeat(43)}`, cmdKey: 'f'.repeat(64) };
+assert.equal(edgeAzure.buildDesktopSessionScript({ sessionId: 'desk_esm123', live }), nodeAzure.buildDesktopSessionScript({ sessionId: 'desk_esm123', live }));
+assert.equal(edgeAzure.desktopStreamerSource(), nodeAzure.desktopStreamerSource());
+await assert.rejects(edgeAzure.startDesktopRelay('esm-user'), (error) => error.code === 'DISABLED');
 
 console.log('azure-vm esm: ok');

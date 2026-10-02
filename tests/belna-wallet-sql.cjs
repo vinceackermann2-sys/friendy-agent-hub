@@ -5,7 +5,7 @@ const {PGlite}=require('@electric-sql/pglite');
   const db=new PGlite();
   try {
     await db.exec("create role anon; create role authenticated; create role service_role; create table public.profiles(id text primary key); insert into public.profiles values ('u1'),('u2');");
-    await db.exec(fs.readFileSync('supabase/migrations/20260927150000_belna_wallets.sql','utf8'));
+    await db.exec(fs.readFileSync('supabase/migrations/20260927190808_belna_wallets.sql','utf8'));
     await db.exec("insert into belna_wallets(user_id,owner_email,setup_key,card_request_key,country,environment,account_id) values('u1','a@example.com','setup1','card1','SE','live','biz_a');");
     await assert.rejects(db.exec("insert into belna_wallets(user_id,owner_email,setup_key,card_request_key,country,environment,account_id) values('u2','b@example.com','setup2','card2','SE','live','biz_a');"),/unique/,'two owners cannot share the same provider wallet');
     await db.exec("insert into belna_wallets(user_id,owner_email,setup_key,card_request_key,country,environment,account_id) values('u2','b@example.com','setup2','card2','SE','live','biz_b');");

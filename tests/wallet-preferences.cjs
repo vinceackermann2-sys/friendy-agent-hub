@@ -6,7 +6,7 @@ const {createPurchaseFlow}=require('../server/agents/purchase');
  const db=new PGlite();
  try{
   await db.exec("create role anon;create role authenticated;create role service_role;create table profiles(id text primary key);insert into profiles values('u1'),('u2');");
-  await db.exec(fs.readFileSync('supabase/migrations/20260927180000_wallet_preferences.sql','utf8'));
+  await db.exec(fs.readFileSync('supabase/migrations/20260927202004_wallet_preferences.sql','utf8'));
   const owned={account_id:'biz_one',balance:125};
   const store={getBelnaWallet:async u=>u==='u1'?owned:null,getShopPayAccount:async()=>null,
    getWalletPreferences:async u=>(await db.query('select * from belna_wallet_preferences where user_id=$1',[u])).rows[0],

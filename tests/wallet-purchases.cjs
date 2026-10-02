@@ -91,8 +91,8 @@ const fs=require('node:fs');
   const db=new PGlite();
   try{
     await db.exec("create role anon;create role authenticated;create role service_role;create table profiles(id text primary key);insert into profiles values('u1'),('u2');");
-    await db.exec(fs.readFileSync('supabase/migrations/20260927150000_belna_wallets.sql','utf8'));
-    await db.exec(fs.readFileSync('supabase/migrations/20260927160000_wallet_purchase_cards.sql','utf8'));
+    await db.exec(fs.readFileSync('supabase/migrations/20260927190808_belna_wallets.sql','utf8'));
+    await db.exec(fs.readFileSync('supabase/migrations/20260927190810_wallet_purchase_cards.sql','utf8'));
     await db.exec("insert into belna_wallets(user_id,owner_email,setup_key,card_request_key,country,environment,account_id,daily_card_limit)values('u1','a@b.c','setup','card','US','sandbox','biz_a',20);");
     const input={id:'p1',approval_key:'key',account_id:'biz_a',environment:'sandbox',merchant:'shop.example',amount:12.34,approved_detail:'{}',expires_at:new Date(Date.now()+900000).toISOString()};
     const claim=(owner,p)=>db.query('select claim_wallet_purchase($1,$2::jsonb) as result',[owner,JSON.stringify(p)]);

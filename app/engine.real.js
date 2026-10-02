@@ -355,9 +355,8 @@ window.Engine = (() => {
   }
 
   async function automationFlow(rt, raw) {
-    await rt.say(`I'll set this up as an isolated sub-agent chat. Choose whether it should run on a schedule, a connected-app event, or after another sub-agent completes.`, { mood: 'think' });
-    rt.trace('clock', 'trigger setup opened · awaiting owner confirmation');
-    rt.openSubAgents(raw);
+    await rt.say(`Tell me what you want done and when. Automation setup is handled in chat, with your approval before it starts.`, { mood: 'think' });
+    rt.openSubAgents();
   }
 
   async function chatExtra(rt, raw, task) {

@@ -62,14 +62,16 @@ function liveRealtimeUrl() {
   const base = (process.env.SUPABASE_URL || process.env.LINGON_SUPABASE_URL || '').trim().replace(/\/+$/, '');
   return /^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/.test(base) ? `${base.replace(/^https:/, 'wss:')}/realtime/v1/websocket` : '';
 }
-async function liveChannel(ctx) {
+// The computer (kind 'desktop') gets a channel of its own, so its container never learns the
+// browser's channel.
+async function liveChannel(ctx, kind = 'live') {
   const url = liveRealtimeUrl(), key = liveKey(), secret = liveServerSecret();
   if (!url || !key || !secret || !ctx.userId || !ctx.sessionId) return null;
   const enc = new TextEncoder();
   const hmac = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, enc.encode(`live:${ctx.userId}:${ctx.sessionId}`)));
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, enc.encode(`${kind}:${ctx.userId}:${ctx.sessionId}`)));
   const topic = `live-${btoa(String.fromCharCode(...mac)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
-  ctx.liveTopic = topic;
+  if (kind === 'live') ctx.liveTopic = topic;
   // The key that signs browser steps sent to this channel's streamer on the VM (see
   // streamerBrowserStep in azure-vm.js); it never goes over the channel.
   const step = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, enc.encode(`step:${topic}`)));
@@ -78,6 +80,7 @@ async function liveChannel(ctx) {
 }
 // The task's live channel, known before a step runs, so the live view can open while it works.
 const liveIdFor = async (ctx) => { const live = await liveChannel({ ...ctx }); return live ? `rt:${live.topic}` : null; };
+const desktopLiveIdFor = async (ctx) => { const live = await liveChannel({ ...ctx }, 'desktop'); return live ? `rt:${live.topic}` : null; };
 const liveRealtimeConfig = () => (liveRealtimeUrl() && liveKey() ? { url: liveRealtimeUrl(), key: liveKey() } : null);
 
 // Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
@@ -267,6 +270,52 @@ async function readWebPage(url, { signal, timeoutMs = 8000, maxChars = 12000, fa
 }
 
 
+const COMPUTER_ACTIONS = new Set(['screenshot', 'click', 'double_click', 'right_click', 'move', 'drag', 'type', 'key', 'scroll', 'open_app', 'wait']);
+// A model computer action as a desktop input event. The container checks coordinates and keys
+// again against the real screen.
+function desktopEvent(args) {
+  const type = String(args.action || args.type || '');
+  if (!COMPUTER_ACTIONS.has(type)) throw badInput('Unsupported computer action.');
+  const event = { type };
+  for (const field of ['x', 'y', 'to_x', 'to_y', 'dx', 'dy', 'ms']) {
+    if (args[field] == null) continue;
+    if (!Number.isFinite(args[field])) throw badInput(`${field} must be a number.`);
+    event[field] = args[field];
+  }
+  if (['click', 'double_click', 'right_click', 'move', 'drag'].includes(type) && !inViewport(event.x, event.y)) throw badInput(`${type} needs x and y inside the 1280x900 screen.`);
+  if (type === 'drag' && !inViewport(event.to_x, event.to_y)) throw badInput('drag needs to_x and to_y inside the screen.');
+  if (type === 'type') {
+    event.text = String(args.text ?? '').slice(0, 2000);
+    if (cardNumberIn(event.text)) throw badInput('The agent cannot type a payment card number. Ask the owner to enter it themselves.');
+    if (!event.text && args.clear !== true) throw badInput('type needs text.');
+    event.clear = args.clear === true;
+    event.submit = args.submit === true;
+  } else if (type === 'key') {
+    event.key = String(args.key || '').slice(0, 60);
+    if (!event.key) throw badInput('key needs a key such as Enter or ctrl+s.');
+  } else if (type === 'open_app') {
+    event.app = String(args.app || '');
+    if (!['browser', 'files', 'editor'].includes(event.app)) throw badInput('open_app supports browser, files and editor.');
+    if (args.url) {
+      const problem = publicUrlProblem(args.url);
+      if (problem) throw Object.assign(new Error(`Cannot open this address: ${problem}.`), { code: 'HOST_BLOCKED' });
+      event.url = String(args.url);
+    }
+  }
+  return event;
+}
+async function desktopAction(name, args, ctx) {
+  const event = desktopEvent(args || {});
+  if (name === 'computer_submit' && !String(args.summary || '').trim()) throw badInput('computer_submit needs a summary of what the action will do.');
+  if (name === 'computer_submit' && /\b(buy|purchase|checkout|pay|köp|betala|beställ)\b/i.test(String(args.summary || ''))) throw badInput('Use the browser checkout for purchases so the full order can be reviewed.');
+  if (ctx.signal?.aborted) throw Object.assign(new Error('Task interrupted'), { name: 'AbortError' });
+  if (!isAzureConfigured()) throw Object.assign(new Error('The computer is unavailable until the Azure VM is configured.'), { code: 'DISABLED' });
+  const live = await liveChannel(ctx, 'desktop');
+  const out = await execInSandbox(ctx.userId, 'desktop_action', { event, sessionId: ctx.sessionId, live }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+  ctx.trace(entry('term', `${name}: ${event.type} on ${out.vmName}`));
+  const clean = (text) => String(text || '').replace(/(?:\d[ -]?){13,19}/g, (match) => (cardNumberIn(match) ? '[payment card]' : match));
+  return { desktop: true, title: clean(out.title), windows: (out.windows || []).map(clean), screenshot: out.screenshot, ...(live ? { liveId: `rt:${live.topic}`, transport: 'realtime' } : {}) };
+}
 const BROWSER_ACTIONS = new Set(['click', 'double_click', 'right_click', 'click_text', 'hover', 'type', 'key', 'scroll', 'select', 'drag', 'back', 'forward', 'reload', 'wait']);
 const badInput = (message) => Object.assign(new Error(message), { code: 'BAD_INPUT' });
 // What a connection cannot do, so the agent tells the owner instead of trying another way in.
@@ -403,7 +452,7 @@ async function fillBrowserSecret(args, ctx) {
 }
 
 const CAPABILITY_ALIASES = {
-  computer:'browser code workspace file library', desktop:'browser code workspace file library',
+  computer:'computer desktop browser file library', desktop:'computer desktop browser file library',
   spreadsheet:'csv code table library', download:'public web text library file', export:'library file artifact',
   mejl:'email mail inbox', epost:'email mail inbox', kalender:'calendar schedule',
   minne:'memory remember', glom:'forget memory', webb:'web browser search',
@@ -645,6 +694,18 @@ const TOOLS = {
       ctx.trace(entry('globe', `browser_submit: ${event.type} on ${out.vmName}`));
       return safeBrowserResult(out, ctx);
     },
+  },
+  computer_action: {
+    name: 'computer_action', type: 'computer', approval: false,
+    liveId: desktopLiveIdFor,
+    description: "Use the owner's own computer (a Linux desktop on their VM with a file manager, a text editor and a browser; its files are kept between sessions) like a person: screenshot, click, double_click, right_click, move, drag, type, key, scroll, open_app (browser, files, editor) and wait. Coordinates are pixels on the 1280x900 screen. Returns a screenshot and the open windows. For websites prefer the browser tools.",
+    run: async (args, ctx) => desktopAction('computer_action', args, ctx),
+  },
+  computer_submit: {
+    name: 'computer_submit', type: 'computer', approval: true,
+    liveId: desktopLiveIdFor,
+    description: 'The final click or key press on the computer that sends, posts, deletes or changes account settings. Same arguments as computer_action plus a summary. REQUIRES owner approval. Never for purchases.',
+    run: async (args, ctx) => desktopAction('computer_submit', args, ctx),
   },
   vault_list: {
     name: 'vault_list', type: 'function', approval: false,
@@ -965,6 +1026,7 @@ const TOOL_KEYWORDS = {
   shop: /(shop pay|shopify|shop_pay|\bshop\b|catalog|checkout|order|merchant|butik|bestall|kassa|bestell|kasse|boutique|commande|panier|marchand|tienda|pedido|carrito)/,
   wallet: /(wallet|pay|payment|transfer|usdc|\beth\b|invoice|payout|spend|debit card|virtual card|buy |purchase|planbok|betal|overfor|faktura|kop |lommebok|tegnebog|geldborse|bezahl|zahlung|uberweis|rechnung|kaufe|portefeuille|paie|paiement|virement|facture|achet|billetera|cartera|pago|paga|transferencia|factura|compra)/,
 };
+const DESKTOP_WORDS = /(computer|desktop|file manager|text editor|dator|skrivbord|datamaskin|skrivebord|rechner|ordinateur|bureau|ordenador|escritorio)/;
 function pickTools(task) {
   const t = foldText(task);
   // web_search is read-only and cheap, so every task can look things up.
@@ -979,6 +1041,8 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
   if (TOOL_KEYWORDS.computer.test(t)) {
     for (const name of ['browser_open','browser_action','browser_submit','shell','code_run','canvas_show','library_list','library_read','library_save']) names.add(name);
+    // The computer's own apps are a file manager, a text editor and a browser (no spreadsheet).
+    if (DESKTOP_WORDS.test(t)) { names.add('computer_action'); names.add('computer_submit'); }
   }
   if (/download|export|csv|json|spreadsheet|document|report|ladda ner|hamta|rapport|kalkylblad/.test(t)) {
     for (const name of ['browser_open','browser_action','shell','code_run','canvas_show','library_list','library_read','library_save']) names.add(name);

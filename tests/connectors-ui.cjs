@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
+// On phones Settings opens sections from its list; go back to the list first when a section is open.
+const openSettingsTab=async(page,t)=>{await page.locator('#main .set-page, #main .settings-tabs').first().waitFor();const back=page.locator('.set-sub-head [data-act="stab"][data-t="home"]');if(await back.count())await back.click();await page.locator(`:is(.set-row,.settings-tabs button)[data-act="stab"][data-t="${t}"]`).click();};
 // The owner's own APIs and MCP servers. The agent sets them up from chat: a key card shows
 // where the key goes, the owner pastes it, and the card adds the connector and resumes the
 // task. Connectors lists them with their permissions and has no manual form. The key goes to
@@ -123,33 +125,29 @@ const tools = [
     await page.waitForFunction(() => document.querySelector('[data-act="cc-perm"][data-slug="create_ticket"]')?.getAttribute('aria-checked') === 'false');
     assert.deepEqual(requests.filter((r) => r.path.endsWith('/permissions')).at(-1).body, { disabled:['create_ticket'] });
 
-    // Settings › Secrets: the token shows as the connector's key; the manual form remains there.
+    // Settings › Secrets: the token shows as the connector's key. There is no manual form
+    // there either: adding one starts a chat.
     await page.locator('[data-act="usermenu"]').click();
     await page.locator('.sitem[data-view="settings"]').click();
-    await page.locator('[data-act="stab"][data-t="secrets"]').click();
+    await openSettingsTab(page,'secrets');
     await page.locator('.vault-item').first().waitFor();
     assert.equal(await page.locator('.vault-item-type').first().textContent(), 'MCP server');
     assert.match(await page.locator('.vault-item-connector').first().textContent(), /Connected in Connectors/);
-    await page.locator('[data-act="vault-kind"][data-k="api"]').click();
-    await page.locator('.vault-add [data-cc="name"]').fill('Weather');
-    await page.locator('.vault-add [data-cc="url"]').fill('https://api.example.com/v1');
-    await page.locator('.vault-add [data-cc="secret"]').fill('weather-key-1');
-    await page.locator('.vault-add [data-act="cc-save"]').click();
-    await page.locator('.vault-item').nth(1).waitFor();
-    assert.equal(await page.locator('.vault-item-type').first().textContent(), 'API connection');
+    assert.equal(await page.locator('.vault-add input, .vault-add select, .cc-form, [data-act="vault-kind"], [data-act="cc-save"]').count(), 0, 'no manual form in Secrets');
+    assert.equal(await page.locator('[data-act="vault-ask"]').count(), 3);
 
     // Removing a connector removes its key.
     await page.locator('.vault-item [data-act="cc-open"]').first().click();
     await page.locator('.cc-row.is-open [data-act="cc-remove"]').click();
-    await page.waitForFunction(() => document.querySelectorAll('.cc-row').length === 1);
-    assert.ok(requests.some((r) => r.method === 'DELETE' && r.path === '/api/connectors/con_2'));
+    await page.waitForFunction(() => document.querySelectorAll('.cc-row').length === 0);
+    assert.ok(requests.some((r) => r.method === 'DELETE' && r.path === '/api/connectors/con_1'));
 
     // Phone width: nothing overflows.
     await page.setViewportSize({ width:390, height:844 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, 'no horizontal scroll at phone width');
     assert.deepEqual(errors, []);
-    console.log('connectors ui: agent key card connects and resumes the task, Connectors has no manual form, keys stay out of browser storage');
+    console.log('connectors ui: agent key card connects and resumes the task, Connectors and Secrets have no manual form, keys stay out of browser storage');
   } finally {
     await browser.close();
   }

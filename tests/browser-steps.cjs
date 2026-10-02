@@ -17,7 +17,9 @@ const azure = require('../server/agents/azure-vm');
 const puppeteer = require('puppeteer-core');
 
 const live = { url:'wss://abcdefghijklmnop.supabase.co/realtime/v1/websocket', key:'k'.repeat(30), topic:`live-${'a'.repeat(40)}`, cmdKey:crypto.randomBytes(32).toString('hex') };
-// Realtime: sockets the streamer opens, and REST broadcasts delivered to them.
+// Realtime: sockets the streamer opens, and REST broadcasts delivered to them. Like the real
+// service (Elixir), it forwards objects with their keys sorted, not in the order they were sent.
+const sortKeys = (v) => (Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])])) : v);
 const sockets = [];
 class FakeSocket {
   constructor() { this.handlers = {}; this.readyState = 1; this.topic = ''; sockets.push(this); setImmediate(() => this.emit('open')); }
@@ -40,7 +42,7 @@ global.fetch = async (input, options = {}) => {
   if (url.endsWith('/realtime/v1/api/broadcast')) {
     calls.broadcasts++;
     for (const message of JSON.parse(options.body).messages) {
-      for (const socket of sockets) if (socket.topic === `realtime:${message.topic}`) socket.emit('message', JSON.stringify({ event:'broadcast', payload:{ event:message.event, payload:message.payload } }));
+      for (const socket of sockets) if (socket.topic === `realtime:${message.topic}`) socket.emit('message', JSON.stringify({ event:'broadcast', payload:{ event:message.event, payload:sortKeys(message.payload) } }));
     }
     return reply({}, 202);
   }
@@ -90,6 +92,7 @@ global.fetch = async (input, options = {}) => {
     const seen = await step('browser_session', { action:'inspect' });
     assert.match(seen.elements.join('\n'), /\[1\] button "Press"/);
     assert.match(seen.screenshot, /^data:image\/jpeg;base64,/, 'the screenshot comes back through the private blob');
+    // An event with several fields: the channel re-sorts its keys, and the signature still holds.
     const clicked = await step('browser_action', { event:{ type:'click', ref:1, agent:true } });
     const ms = Date.now() - t;
     assert.equal(clicked.title, 'clicked');
@@ -107,7 +110,8 @@ global.fetch = async (input, options = {}) => {
     const blobUrl = (name) => `https://belnatest.blob.core.windows.net/browser-shots/${name}?sv=x`;
     const signed = (extra) => {
       const p = { id:crypto.randomUUID(), action:'input', url:'', event:{ type:'click', ref:1, agent:true }, uploadUrl:blobUrl(`${extra.name}.jpg`), resultUrl:blobUrl(`${extra.name}.json`), exp:Date.now() + 30000 };
-      p.sig = crypto.createHmac('sha256', extra.key || live.cmdKey).update(JSON.stringify([p.id, p.action, p.url, p.event, p.uploadUrl, p.resultUrl, p.exp])).digest('hex');
+      const canon = (v) => (Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v));
+      p.sig = crypto.createHmac('sha256', extra.key || live.cmdKey).update(canon([p.id, p.action, p.url, p.event, p.uploadUrl, p.resultUrl, p.exp])).digest('hex');
       return p;
     };
     const deliver = (p) => socket.emit('message', JSON.stringify({ event:'broadcast', payload:{ event:'step', payload:p } }));

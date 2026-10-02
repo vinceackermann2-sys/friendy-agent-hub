@@ -77,13 +77,13 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
         await page.click('#csend');
       } else await page.click('[data-o="Rosa"]');
       await page.waitForSelector('button.qopt .mascot');
-      assert.equal(await page.locator('button.qopt .mascot').count(), 7);
+      assert.equal(await page.locator('button.qopt .mascot').count(), 5);
       assert.equal((await readState(page)).activeChat, chatId, 'answer must not create a new chat');
       await page.reload();
-      await page.waitForSelector('[data-o="Rosehip"]');
+      await page.waitForSelector('[data-o="Orchid"]');
       assert.equal((await readState(page)).onboarded, false);
       assert.equal(runs.length, 0, 'request waits until the name and color are chosen');
-      await page.click('[data-o="Rosehip"]');
+      await page.click('[data-o="Orchid"]');
       await page.waitForSelector('.canvas-tabs [data-t="canvas"].on');
       await page.waitForFunction(() => /own secure computer/.test(document.querySelector('#thread')?.innerText || ''));
       assert.match(await page.locator('#thread').innerText(), /own secure computer/);
