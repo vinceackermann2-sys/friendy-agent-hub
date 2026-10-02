@@ -134,7 +134,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   await assert.rejects(withdrawalWallet.withdrawalSession('unknown'),/Create your/);
   const withdrawal=await withdrawalWallet.withdrawalSession('u1');assert.equal(withdrawal.accountId,'biz_one');
   assert.equal(withdrawal.availableBalance,100.25);assert.equal(withdrawal.pendingBalance,2.5);assert.equal(withdrawal.payoutCountry,rows.get('u1').country,'withdrawal receives the real owner balance and country');
-  const tokenCall=calls.find(c=>c.path==='/access_tokens');assert.deepEqual(tokenCall.body.scoped_actions,['payout:withdraw_funds','payout:destination:read','payout:create_destination']);assert.equal(tokenCall.body.account_id,'biz_one');assert.ok(Date.parse(withdrawal.expiresAt)-Date.now()<=15*60000);
+  const tokenCall=calls.find(c=>c.path==='/access_tokens');assert.deepEqual(tokenCall.body.scoped_actions,['payout:withdraw_funds','payout:destination:read','payout:create_destination','company:balance:read','payout:withdrawal:read']);assert.equal(tokenCall.body.account_id,'biz_one');assert.ok(Date.parse(withdrawal.expiresAt)-Date.now()<=15*60000);
   assert.ok(!JSON.stringify(await wallet.snapshot('u1')).includes('owner-only-withdrawal-token'));assert.ok(!Object.keys(tools).some(x=>/withdraw.*session|access.*token/.test(x)));
   wrongParent=true;await assert.rejects(withdrawalWallet.withdrawalSession('u1'),/connection could not be confirmed/);wrongParent=false;
   const check=await wallet.verificationSession('u1');assert.equal(check.verificationKind,'individual');assert.deepEqual(calls.at(-1).body.scoped_actions,['identity:read','identity:write']);

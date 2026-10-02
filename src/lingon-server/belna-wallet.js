@@ -359,7 +359,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
     const expiresAt=new Date(Date.now()+15*60000).toISOString();
     const result=await request('/access_tokens',{method:'POST',body:{account_id:row.account_id,expires_at:expiresAt,
-      scoped_actions:['payout:withdraw_funds','payout:destination:read','payout:create_destination']}});
+      scoped_actions:['payout:withdraw_funds','payout:destination:read','payout:create_destination','company:balance:read','payout:withdrawal:read']}});
     const expires=Date.parse(result.expires_at);
     if(typeof result.token!=='string' || result.token.length<32 || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.parse(expiresAt)+1000)
       throw fail('Your bank connection session could not be started. Please try again.','PROVIDER');
