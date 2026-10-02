@@ -48,8 +48,9 @@ module.exports = async function walletOwnerIsolation() {
     } else if (path === '/deposits') {
       data = {account_id:depositOwnerOverride || body.destination,hosted_url:'https://whop.com/deposit/'+body.destination+'/'};
     } else if (path === '/checkout_configurations') {
-      data = {account_id:body.plan.company_id,company_id:checkoutCompanyOverride || body.plan.company_id,
-        plan:body.plan,purchase_url:'https://whop.com/checkout/ch_'+body.plan.company_id};
+      assert.equal(body.plan.account_id,body.account_id,'the inline variant and checkout use the same owner');
+      data = {account_id:body.account_id,company_id:checkoutCompanyOverride || body.account_id,
+        plan:body.plan,purchase_url:'https://whop.com/checkout/ch_'+body.account_id};
     } else if (path === '/access_tokens') {
       data = {token:('token-'+body.account_id+'-').repeat(4),expires_at:body.expires_at};
     } else if (path === '/transfers') {
@@ -106,7 +107,7 @@ module.exports = async function walletOwnerIsolation() {
   const tools = createWalletTools(wallet);
   const linkArgs = {amount:7,title:'Bob’s work',...forged};
   await tools.wallet_receive.run(linkArgs,{userId:'bob',approvedDetail:await tools.wallet_receive.approvalDetail(linkArgs)});
-  assert.equal(calls.at(-1).body.plan.company_id,'biz_bob','agent earnings use the agent owner’s wallet');
+  assert.equal(calls.at(-1).body.plan.account_id,'biz_bob','agent earnings use the agent owner’s wallet');
   // The same approval key is independent for each owner; a retry is not a second charge.
   const approved = {paymentMethod:'belna_wallet',checkoutKey:'a'.repeat(64),website:'https://shop.example/checkout',amount:12.34,currency:'USD',...forged};
   for (const id of ['alice','bob']) await wallet.executePurchase(id,approved,{userId:'alice'});

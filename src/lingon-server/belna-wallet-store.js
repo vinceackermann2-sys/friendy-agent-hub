@@ -124,6 +124,17 @@ function createBelnaWalletStore({ supa, ensureProfile }) {
   async function getWalletPreferences(userId) {
     return checked(await db().from('belna_wallet_preferences').select('*').eq('user_id',userId).maybeSingle());
   }
+  async function getWalletCardInterest(userId) {
+    return checked(await db().from('belna_card_waitlist').select('created_at').eq('user_id',userId).maybeSingle());
+  }
+  async function joinWalletCardWaitlist(userId) {
+    await ensureProfile(userId);
+    checked(await db().from('belna_card_waitlist').upsert({user_id:userId},{onConflict:'user_id',ignoreDuplicates:true}));
+    return getWalletCardInterest(userId);
+  }
+  async function recordWalletBalance(userId,balance) {
+    return checked(await db().rpc('record_belna_wallet_balance',{p_user_id:userId,p_account_id:balance.accountId,p_environment:balance.environment,p_available:balance.available,p_pending:balance.pending})) || [];
+  }
   async function recordExistingPurchase(userId,p) {
     await ensureProfile(userId);
     checked(await db().from('belna_existing_purchases').upsert({user_id:userId,approval_key:p.checkoutKey,merchant:p.merchant,amount:p.amount,currency:p.currency},{onConflict:'user_id,approval_key',ignoreDuplicates:true}));
@@ -148,6 +159,7 @@ function createBelnaWalletStore({ supa, ensureProfile }) {
     getBelnaWallet, claimBelnaWallet, saveBelnaWallet, findBelnaWalletRecipient, addBelnaWalletQuote, getBelnaWalletQuote, beginBelnaWalletTransfer, saveBelnaWalletTransfer, listBelnaWalletTransfers,
     listShippingAddresses,saveShippingAddress,deleteShippingAddress,
     getWalletPreferences,saveWalletPreferences,
+    getWalletCardInterest,joinWalletCardWaitlist,recordWalletBalance,
     recordExistingPurchase,listExistingPurchases,
     claimWalletPurchase,saveWalletPurchase,listWalletPurchases,getWalletPurchase,getWalletPurchaseByCard,listPendingWalletPurchases,listPendingWalletConnections,walletRecoveryReady };
 }

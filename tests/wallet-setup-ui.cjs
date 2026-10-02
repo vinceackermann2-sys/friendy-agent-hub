@@ -11,13 +11,14 @@ const { chromium } = require('playwright');
         localStorage.setItem('lingon.v1', JSON.stringify({ ownerId:'wallet-setup-test', onboarded:true, agent:{ name:'Audit', color:'lingon', pers:'Precise' }, view:'chat', activeChat:'setup', chats:[{ id:'setup', title:'Wallet setup', messages:[], at:Date.now() }], canvasTab:'payments', vault:{ secrets:[], apps:[], approvals:[], mode:'default' } }));
       });
       let attempts = 0, releaseFirst;
+      let preferences = { activeMethod:null, selectionSaved:true, merchantEnabled:false };
       const firstAttempt = new Promise(resolve => { releaseFirst = resolve; });
       const wallet = { configured:true, status:'not_created', cardProgramAvailable:true, balance:null };
       await context.route('**/api/**', async route => {
         const request = route.request(), path = new URL(request.url()).pathname;
         let result = {};
         if (path === '/api/belna-wallet') result = { wallet };
-        if (path === '/api/wallet-preferences') result = { activeMethod:null, selectionSaved:true, merchantEnabled:false };
+        if (path === '/api/wallet-preferences') { if(request.method()==='POST')preferences={...preferences,...JSON.parse(request.postData())};result=preferences; }
         if (path === '/api/shop-pay') result = { shopPay:{ configured:true, connected:false }, orders:[] };
         if (path === '/api/belna-wallet/setup') {
           attempts++;
@@ -37,6 +38,7 @@ const { chromium } = require('playwright');
       await page.goto(process.env.UI_BASE || 'http://127.0.0.1:8022/app');
       await page.locator('[data-act="togglecanvas"]').first().click();
       await page.locator('[data-act="ctab"][data-t="payments"]').click();
+      await page.getByRole('button', { name:'Choose wallet', exact:true }).click();
       const setup = page.getByRole('button', { name:'Set up', exact:true });
       const method = page.getByRole('radio', { name:/^Belna Wallet/ });
       await setup.click();
@@ -58,6 +60,7 @@ const { chromium } = require('playwright');
       await create.click();
       const settings=page.locator('#wallet-settings-content');
       await settings.locator('.wpay-opt[data-option="belna_wallet"] .wpay-main[data-act="wallet-switch"]').waitFor();
+      await settings.locator('.wpay-opt[data-option="belna_wallet"] .wpay-main').click();
       await settings.getByRole('button', { name:'Verify identity', exact:true }).waitFor();
       assert.equal(attempts, 3);
       assert.deepEqual(errors, []);

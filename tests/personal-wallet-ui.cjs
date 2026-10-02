@@ -23,7 +23,7 @@ const {chromium}=require('playwright');
    const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto((process.env.UI_BASE||'http://127.0.0.1:8000')+'/app'+(scenario==='payment-request'?'?wallet_request=personal-payment-request-001':'?state='+'a'.repeat(64)+'&code=fixture-oauth-code'));
    if(scenario==='callback'){
-    await page.getByText('Your personal Whop wallet is connected. Set up your virtual card next.',{exact:true}).waitFor();
+    await page.getByText('Your wallet is connected. Set up your virtual card next.',{exact:true}).waitFor();
     assert.equal(calls.filter(c=>c.path.endsWith('/oauth-finish')).length,1);
     assert.ok(!new URL(page.url()).searchParams.has('code'));
     assert.equal(calls.filter(c=>c.path==='/api/wallet-preferences' && c.method==='POST').length,0,'saved Off choice survives connecting');

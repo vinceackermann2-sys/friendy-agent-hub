@@ -20,7 +20,7 @@ const {PGlite}=require('@electric-sql/pglite');
     return {ok:true,json:async()=>data};
   }});
   const before=await wallet.snapshot('alice');assert.equal(before.wallet.kind,'connected');assert.equal(before.wallet.status,'not_created');assert.equal(before.wallet.previousPersonalWallet,true);assert.equal(creates,0);
-  await assert.rejects(wallet.finishConnect({id:'alice'},{}),/Personal Whop sign-in cannot issue cards/);
+  await assert.rejects(wallet.finishConnect({id:'alice'},{}),/previous personal wallet cannot issue cards/);
   await assert.rejects(wallet.setup({id:'alice',email:'alice@example.test'},{country:'SE'}),/Confirm your email/);
   const user={id:'alice',email:'alice@example.test',email_confirmed_at:'2026-09-30'};
   const after=await wallet.setup(user,{country:'SE'});assert.equal(after.wallet.kind,'connected');assert.equal(row.wallet_kind,'business');assert.equal(row.account_id,'biz_alice');

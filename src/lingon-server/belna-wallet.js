@@ -61,7 +61,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
       console.error('belna-wallet-provider-rejection', { status:response.status,
         reason:/no rain account found/.test(message)?'NO_CARD_ACCOUNT':/rain account is not approved|card.*not approved|application.*not approved/.test(message)?'CARD_NOT_APPROVED':/identity|verification/.test(message)?'IDENTITY_REQUIRED':/not authorized|permission/.test(message)?'PERMISSION':cardError && /idempotency|idempotent/.test(message)?'IDEMPOTENCY':cardError && /spend.limit|transaction.limit/.test(message)?'CARD_LIMIT':cardError && /assigned.user|user.id/.test(message)?'CARD_OWNER':'OTHER',
         ...(cardError ? {providerCode:/^[a-z0-9_.-]{1,64}$/i.test(providerCode)?providerCode:null} : {}) });
-      if(response.status===403 && path==='/checkout_configurations')throw fail('Payment links need additional Whop permissions. Ask the app owner to finish connecting checkout links.','NOT_SET_UP');
+      if(response.status===403 && path==='/checkout_configurations')throw fail('Payment links need additional permissions. Ask the app owner to finish connecting checkout links.','NOT_SET_UP');
       if (/verification|identity/.test(message)) throw rejected('Complete your identity check before creating your card.', 'VERIFY');
       if (/application|approved/.test(message)) throw rejected('The card issuer has not approved card issuing for this wallet.', 'REVIEW');
       throw rejected('Your wallet request could not be completed. Please try again.');
@@ -146,7 +146,11 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
       const status=/pending|processing|review|requested|authorized/.test(rawStatus)?'pending':/failed|denied/.test(rawStatus)?'failed':/cancel|void|revers/.test(rawStatus)?'canceled':x.available_at && Date.parse(x.available_at)>Date.now()?'pending':'recorded';
       return {title,amount:Number(x.usd_amount),currency:'USD',status,at:x.posted_at || null};
     });
-    return { activity, wallet:{ kind:'connected', configured:true, status, cardApplicationStatus:application, verificationStatus:verification.status, identityVerified:verification.status === 'approved', withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance:balanceView(account), dailyCardLimitUsd:Number(row.daily_card_limit),
+    const balance=balanceView(account);let balanceHistory=[],balanceHistoryError;
+    if(typeof store.recordWalletBalance==='function' && Number.isFinite(balance.available) && Number.isFinite(balance.pending)){
+      try{balanceHistory=await store.recordWalletBalance(userId,{...balance,accountId:row.account_id,environment:environment()});}catch{balanceHistoryError='Balance history is temporarily unavailable.';}
+    }
+    return { activity, balanceHistory, ...(balanceHistoryError?{balanceHistoryError}:{}), wallet:{ kind:'connected', configured:true, status, cardApplicationStatus:application, verificationStatus:verification.status, identityVerified:verification.status === 'approved', withdrawalsAvailable:withdrawalsAvailable(), cardReady:account.capabilities?.card_issuing === 'active', cardProgramAvailable:cardProgramAvailable(), sandbox:environment() === 'sandbox', card:cardView(row), balance, dailyCardLimitUsd:Number(row.daily_card_limit),
       // Pausing works before a purchase card exists, so it is reported from the owner's record.
       paused:row.card_status==='frozen', country:/^[A-Z]{2}$/.test(row.country || '') ? row.country : null,
       // A secure merchant payment bridge must be integrated before agent card spending is enabled.
@@ -336,11 +340,19 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if (result.account_id !== row.account_id) throw fail('Your deposit destination could not be confirmed. Please try again.', 'PROVIDER');
     return { url:hostedUrl(result.hosted_url) };
   }
+  async function depositSession(userId) {
+    const row=await owned(userId),account=await request('/accounts/'+encodeURIComponent(row.account_id));
+    if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
+    // Connected-account deposit rails are public. No account-management token
+    // belongs in the funding form. Card funding keeps its existing hosted flow.
+    return {accountId:row.account_id,expiresAt:new Date(Date.now()+15*60000).toISOString(),currency:'usd',cardFundingAvailable:account.capabilities?.card_deposit==='active'};
+  }
   // Owner UI only. Never register this method as an agent tool. The token is
   // child-account scoped, short lived and cannot read or issue payment cards.
   // Whop's embedded flow collects bank details, quotes fees and asks the owner
   // to confirm; Belna does not receive those details or submit the payout.
   async function withdrawalSession(userId) {
+    await loadConfiguration();
     if(!withdrawalsAvailable())throw fail('Bank withdrawals are being connected. Please try again shortly.','NOT_SET_UP');
     const row=await owned(userId);
     const account=await request('/accounts/'+encodeURIComponent(row.account_id));
@@ -351,7 +363,18 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     const expires=Date.parse(result.expires_at);
     if(typeof result.token!=='string' || result.token.length<32 || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.parse(expiresAt)+1000)
       throw fail('Your bank connection session could not be started. Please try again.','PROVIDER');
-    return {accountId:row.account_id,accessToken:result.token,expiresAt:result.expires_at,currency:'usd'};
+    const balance=balanceView(account);
+    if(balance.available==null || balance.pending==null)throw fail('Your dollar balance could not be confirmed. Refresh and try again.','PROVIDER');
+    return {accountId:row.account_id,accessToken:result.token,expiresAt:result.expires_at,currency:'usd',availableBalance:balance.available,pendingBalance:balance.pending,payoutCountry:row.country || 'US'};
+  }
+  async function verificationSession(userId){
+    const row=await owned(userId),account=await request('/accounts/'+encodeURIComponent(row.account_id));
+    if(account.parent_account?.id!==platformAccountId())throw fail('Your wallet connection could not be confirmed.','PROVIDER');
+    const expiresAt=new Date(Date.now()+15*60000).toISOString();
+    const result=await request('/access_tokens',{method:'POST',body:{account_id:row.account_id,expires_at:expiresAt,scoped_actions:['identity:read','identity:write']}});
+    const expires=Date.parse(result.expires_at);
+    if(typeof result.token!=='string' || result.token.length<32 || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.parse(expiresAt)+1000)throw fail('Your secure wallet check could not be started. Please try again.','PROVIDER');
+    return {accountId:row.account_id,accessToken:result.token,expiresAt:result.expires_at,verificationKind:'individual'};
   }
   // Consumer setup uses explicit individual KYC. Whop's Cards list starts KYB
   // and must never be used as the verification entry point for our consumers.
@@ -376,7 +399,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if (!title || title.length > 120) throw fail('Describe what the payment is for, in 120 characters or less.');
     if (!/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey || '')) throw fail('Refresh your wallet and try again.');
     const result = await request('/checkout_configurations', { method:'POST', key:requestKey,
-      body:{ mode:'payment', plan:{ company_id:row.account_id, currency:'usd', initial_price:amount, plan_type:'one_time', title, release_method:'buy_now' } } });
+      body:{ account_id:row.account_id, mode:'payment', plan:{ account_id:row.account_id, currency:'usd', initial_price:amount, plan_type:'one_time', title, release_method:'buy_now' } } });
     const paymentOwners = [result.account_id, result.company_id].filter(id => id != null);
     if(!paymentOwners.length || paymentOwners.some(id => id !== row.account_id) || result.plan?.currency!=='usd' || result.plan?.plan_type!=='one_time' || Number(result.plan?.initial_price)!==amount)
       throw fail('Your payment link could not be confirmed. Please try again.','PROVIDER');
@@ -444,6 +467,17 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
   const prefView=p=>({activeMethod:p?.active_method || null,merchantEnabled:p?.merchant_enabled===true,selectionSaved:!!p,
     spendingMethod:p ? p.active_method || null : 'existing_card'});
   async function preferences(userId) {return prefView(durable() ? await store.getWalletPreferences(userId) : null);}
+  const cardInterestView=row=>({joined:!!row,joinedAt:row?.created_at || null});
+  async function cardWaitlist(userId){
+    if(!durable() || typeof store.getWalletCardInterest!=='function')throw fail('The card waitlist is temporarily unavailable. Please try again.','NOT_SET_UP');
+    return {cardWaitlist:cardInterestView(await store.getWalletCardInterest(userId))};
+  }
+  async function joinCardWaitlist(userId){
+    if(!durable() || typeof store.joinWalletCardWaitlist!=='function')throw fail('The card waitlist is temporarily unavailable. Please try again.','NOT_SET_UP');
+    const row=await store.joinWalletCardWaitlist(userId);
+    if(!row)throw fail('Your interest could not be saved. Please try again.','WALLET_STORE');
+    return {cardWaitlist:cardInterestView(row)};
+  }
   async function savePreferences(userId,input) {
     const current=await store.getWalletPreferences(userId);
     const fields={active_method:current?.active_method || null,merchant_enabled:current?.merchant_enabled===true};
@@ -461,8 +495,8 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if(durable())await store.recordExistingPurchase(userId,approved);
   }
   async function existingHistory(userId){return {history:durable() ? (await store.listExistingPurchases(userId)).map(x=>({title:x.merchant,amount:Number(x.amount),currency:x.currency,status:x.status,at:x.created_at})) : []};}
-  return { configured, snapshot, legacySnapshot, setup, verify, connectCard, cardSession, updateCard, deposit, withdrawalSession, receive, transferQuote, send, confirmTransfer,
-    preferences,savePreferences,
+  return { configured, snapshot, legacySnapshot, setup, verify, verificationSession, connectCard, cardSession, updateCard, deposit, depositSession, withdrawalSession, receive, transferQuote, send, confirmTransfer,
+    preferences,savePreferences,cardWaitlist,joinCardWaitlist,
     recordExistingPurchase,existingHistory,
     addresses,saveAddress,deleteAddress,
     connectionInfo:async()=>{await loadConfiguration();return {platformAccountId:platformAccountId(),environment:environment()};},
@@ -480,7 +514,7 @@ function createBelnaWallet(options){
       return row;
     }};
   const wallet=createBusinessWallet({...options,store:connectedStore});
-  const retired=async()=>{throw Object.assign(new Error('Create your Belna Wallet connected account in Wallet settings. Personal Whop sign-in cannot issue cards.'),{code:'NOT_SET_UP'});};
+  const retired=async()=>{throw Object.assign(new Error('Create your Belna Wallet in Wallet settings. Your previous personal wallet cannot issue cards.'),{code:'NOT_SET_UP'});};
   return {...wallet,finishConnect:retired,paymentRequest:retired,
     legacyWithdrawalSession:retired,
     snapshot:async userId=>{const result=await wallet.snapshot(userId);const previous=await options.store.getBelnaWallet(userId);if(previous?.wallet_kind==='personal')result.wallet.previousPersonalWallet=true;return result;},

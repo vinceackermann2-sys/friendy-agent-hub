@@ -1032,12 +1032,20 @@ for (const action of ['owner-state','owner-input']) app.post('/api/belna-wallet/
     res.json(action==='owner-state'?await privateCheckout.ownerState(purchase.id,req.user.id):await privateCheckout.ownerInput(purchase.id,req.user.id,req.body?.event));
   }catch{res.status(409).json({error:'No private bank verification is available. Check wallet activity before purchasing again.'});}
 }));
+app.get('/api/belna-wallet/card-waitlist',requireAuth(async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  try{res.json(await belnaWallet.cardWaitlist(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
+}));
+app.post('/api/belna-wallet/card-waitlist',rateLimit(10,60000),requireAuth(async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  try{res.json(await belnaWallet.joinCardWaitlist(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
+}));
 app.get('/api/belna-wallet', requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
   catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
 }));
-for (const action of ['setup', 'oauth-finish', 'verify', 'card-connect', 'card-session', 'controls', 'deposit', 'withdraw-session', 'legacy', 'legacy-withdraw-session', 'payment-request', 'receive', 'quote', 'send']) {
+for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session', 'card-connect', 'card-session', 'controls', 'deposit', 'deposit-session', 'withdraw-session', 'legacy', 'legacy-withdraw-session', 'payment-request', 'receive', 'quote', 'send']) {
   app.post('/api/belna-wallet/' + action, rateLimit(10, 60000), requireAuth(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
@@ -1050,6 +1058,8 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'card-connect', 'card-s
         : action === 'card-connect' ? await belnaWallet.connectCard(req.user.id)
         : action === 'controls' ? await belnaWallet.updateCard(req.user.id, req.body || {})
         : action === 'deposit' ? await belnaWallet.deposit(req.user.id)
+        : action === 'deposit-session' ? await belnaWallet.depositSession(req.user.id)
+        : action === 'verification-session' ? await belnaWallet.verificationSession(req.user.id)
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
         : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
