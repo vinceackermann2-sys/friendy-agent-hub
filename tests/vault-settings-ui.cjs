@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
 // Settings › Secrets: no form for adding credentials by hand. The owner asks the agent in
-// chat (the chips start that chat), and the saved list groups vault refs, reveals values
+// chat (the chips start that chat), and separate lists group logins and API secrets, reveal values
 // only on request and deletes them. Values never land in browser storage.
 (async () => {
   const browser=await chromium.launch();
@@ -44,6 +44,27 @@ const { chromium } = require('playwright');
     // The saved list: a login's two fields are one entry; API key and other are typed rows.
     assert.equal(await page.locator('.vault-item').count(),3);
     assert.deepEqual(await page.locator('.vault-item-type').allTextContents(),['Login','API key','Other']);
+    assert.deepEqual(await page.locator('.vault-list h3').allTextContents(),['Saved logins','API keys & secrets']);
+    assert.deepEqual(await page.locator('[data-vault-group="logins"] .vault-item-type').allTextContents(),['Login']);
+    assert.deepEqual(await page.locator('[data-vault-group="api"] .vault-item-type').allTextContents(),['API key','Other']);
+    assert.deepEqual(await page.locator('.vault-list .vault-section-head > span').allTextContents(),['1 saved','2 saved']);
+    const checkLayout=async () => {
+      const layout=await page.evaluate(() => {
+        const add=document.querySelector('.vault-ask').getBoundingClientRect();
+        const list=document.querySelector('[data-vault-group="api"]').getBoundingClientRect();
+        return {addTop:add.top,listBottom:list.bottom,addHeight:add.height,overflow:document.querySelector('.vault').scrollWidth>document.querySelector('.vault').clientWidth};
+      });
+      assert.ok(layout.addTop>=layout.listBottom,'saved credentials come before the secondary add card');
+      assert.ok(layout.addHeight<180,'the add card stays compact');
+      assert.equal(layout.overflow,false,'vault fits the viewport');
+    };
+    await checkLayout();
+    await page.setViewportSize({width:1280,height:900});
+    await page.locator('.settings-tabs').waitFor();
+    await checkLayout();
+    if(process.env.VAULT_SCREENSHOT)await page.screenshot({path:process.env.VAULT_SCREENSHOT.replace(/\.png$/,'-desktop.png'),fullPage:true});
+    await page.setViewportSize({width:390,height:844});
+    await page.locator('.set-sub-head').waitFor();
     await page.locator('.vault-item').first().locator('[data-act="reveal-credential"]').click();
     await page.locator('.vault-item-value').nth(1).waitFor();
     assert.equal(await page.locator('.vault-item-value').count(),2,'the eye reveals both login fields');
@@ -58,6 +79,8 @@ const { chromium } = require('playwright');
     await page.locator('.vault-item').filter({hasText:'github.com'}).locator('[data-act="delete-credential"]').click();
     await page.locator('.vault-item').filter({hasText:'github.com'}).waitFor({state:'detached'});
     assert.deepEqual(deleted,['/api/secrets/sec_t1_x','/api/secrets/sec_t2_x'],'deleting a login removes both saved fields');
+    assert.equal(await page.locator('[data-vault-group="logins"] .vault-empty b').textContent(),'No saved logins yet');
+    assert.equal(await page.locator('[data-vault-group="api"] .vault-item').count(),2,'API secrets remain when a login is deleted');
 
     // A chip opens a new chat with the request started in the composer; nothing is saved here.
     await page.locator('[data-act="vault-ask"]',{hasText:'Save a login'}).click();
@@ -67,6 +90,6 @@ const { chromium } = require('playwright');
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('lingon.v1')).view),'chat');
     assert.deepEqual(posted,[],'Settings never posts a secret');
     assert.deepEqual(errors,[]);
-    console.log('vault settings UI: no manual form, chips start a chat, saved refs reveal and delete in a list');
+    console.log('vault settings UI: separate login and API lists, compact secondary add card, saved refs reveal and delete');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -17,6 +17,8 @@ const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costOf
 const store = require('./store');
 const stripeMod = require('./stripe');
 const { pubClient, adminClient, requireAuth } = require('./auth');
+const { safeNext, bindOAuthBrowser, matchesOAuthBrowser, clearOAuthBrowser } = require('./oauth-security');
+const { requestBodyLimit } = require('./request-limits');
 // Agents-API-shaped harness backed by Microsoft Foundry + extras
 const Runner = require('./agents/runner');
 const { checkPrompt } = require('./agents/guardrails');
@@ -92,13 +94,8 @@ app.post('/api/composio/webhook', express.raw({ type: 'application/json', limit:
   }
 });
 app.use((req, res, next) => {
-  if ((req.method === 'POST' && (req.path === '/api/voice/transcribe' || req.path === '/api/chat' || req.path === '/api/chat/stream' || req.path === '/api/agent/conversation' || req.path === '/api/library' || req.path === '/api/support/submissions' || req.path === '/api/mail/send')) || (req.method === 'PUT' && req.path.startsWith('/api/client-state/')) || (req.method==='PATCH' && req.path.startsWith('/api/library/'))) {
-    const limit=['/api/chat','/api/chat/stream','/api/agent/conversation'].includes(req.path)?'72mb':req.path.startsWith('/api/library')?'15mb':'12mb';
-    return express.json({ limit })(req, res, next);
-  }
-  next();
+  return express.json({ limit: requestBodyLimit(req.method, req.path) })(req, res, next);
 });
-app.use(express.json({ limit: '1mb' }));
 
 // ---- safety headers ----
 app.use((req, res, next) => {
@@ -353,10 +350,6 @@ function siteOrigin(req) {
   if (host) return ((req.protocol || 'https') + '://' + host).replace(/\/$/, '');
   return '';
 }
-function safeNext(n) {
-  const s = String(n || '/');
-  return s.startsWith('/') && !s.startsWith('//') ? s : '/';
-}
 function pruneOAuthState() {
   if (OAUTH_STATE.size <= 500) return;
   const now = Date.now();
@@ -372,7 +365,8 @@ app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
     const crypto = require('crypto');
     const state = crypto.randomBytes(32).toString('hex');
     const redirectUri = siteOrigin(req) + '/api/auth/google/callback';
-    OAUTH_STATE.set(state, { next: safeNext(req.query.next), redirectUri, termsVersion: TERMS_VERSION, exp: Date.now() + 10 * 60e3 });
+    const binding = bindOAuthBrowser(res, state, redirectUri);
+    OAUTH_STATE.set(state, { next: safeNext(req.query.next), redirectUri, binding, termsVersion: TERMS_VERSION, exp: Date.now() + 10 * 60e3 });
     pruneOAuthState();
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
       client_id: clientId,
@@ -392,10 +386,12 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
   const back = (msg) => res.redirect('/?auth_error=' + encodeURIComponent(msg || 'Sign-in failed'));
   try {
     const { code, state, error } = req.query;
-    if (error) return back(req.query.error_description || error || 'Sign-in cancelled.');
     const saved = state ? OAUTH_STATE.get(String(state)) : null;
-    if (state) OAUTH_STATE.delete(String(state)); // one-time use (CSRF protection)
-    if (!code || !saved || saved.exp < Date.now()) return back('Sign-in expired — please try again.');
+    if (!saved || saved.exp < Date.now() || !matchesOAuthBrowser(req, saved.binding)) return back('Sign-in expired — please try again.');
+    OAUTH_STATE.delete(String(state)); // consume only from the initiating browser
+    clearOAuthBrowser(res, saved.binding);
+    if (error) return back(req.query.error_description || error || 'Sign-in cancelled.');
+    if (!code) return back('Sign-in expired — please try again.');
     const clientId = googleEnv('GOOGLE_CLIENT_ID');
     const clientSecret = googleEnv('GOOGLE_CLIENT_SECRET');
     if (!clientId || !clientSecret) return back('Google sign-in is not configured.');
@@ -436,7 +432,7 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
     if (sess.error || !sess.data.session) return back((sess.error && sess.error.message) || 'Could not complete sign-in.');
     const frag = '#access_token=' + encodeURIComponent(sess.data.session.access_token)
       + '&refresh_token=' + encodeURIComponent(sess.data.session.refresh_token || '');
-    res.redirect(saved.next.split('#')[0].split('?')[0] + frag);
+    res.redirect(safeNext(saved.next.split('#')[0].split('?')[0]) + frag);
   } catch (e) {
     return back(e.message);
   }
@@ -1109,7 +1105,7 @@ app.get('/api/belna-wallet', rateLimit(30, 60000), requireAuth(async (req, res) 
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
   catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
 }));
-for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session', 'card-connect', 'card-session', 'controls', 'deposit', 'deposit-session', 'withdraw-session', 'legacy', 'legacy-withdraw-session', 'payment-request', 'receive', 'quote', 'send']) {
+for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session', 'card-connect', 'card-session', 'controls', 'deposit', 'deposit-session', 'withdraw-session', 'legacy', 'legacy-withdraw-session', 'quote', 'send']) {
   app.post('/api/belna-wallet/' + action, rateLimit(10, 60000), requireAuth(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
@@ -1117,7 +1113,6 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'oauth-finish' ? await belnaWallet.finishConnect(req.user, req.body || {})
         : action === 'legacy' ? await belnaWallet.legacySnapshot(req.user.id)
         : action === 'legacy-withdraw-session' ? await belnaWallet.legacyWithdrawalSession(req.user.id)
-        : action === 'payment-request' ? await belnaWallet.paymentRequest(req.user.id,req.body?.requestId)
         : action === 'verify' ? await belnaWallet.verify(req.user.id)
         : action === 'card-connect' ? await belnaWallet.connectCard(req.user.id)
         : action === 'controls' ? await belnaWallet.updateCard(req.user.id, req.body || {})
@@ -1127,10 +1122,9 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
         : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
-        : action === 'send' ? await belnaWallet.confirmTransfer(req.user.id, req.body || {})
-        : await belnaWallet.receive(req.user.id, req.body || {});
+        : await belnaWallet.confirmTransfer(req.user.id, req.body || {});
       res.json(result);
-    } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
+    } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message, ...(action === 'send' && e.transferNotStarted === true ? {transferNotStarted:true} : {}) }); }
   }));
 }
 app.get('/.well-known/ucp', (req, res) => {
@@ -1474,6 +1468,14 @@ app.get('*', (req, res, next) => {
 });
 
 const http = require('http');
+// Includes rejected authenticated handlers and JSON parser errors. Never send
+// provider/database messages or stack traces to the caller.
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  const status = [400, 413, 415].includes(error.status) ? error.status : 500;
+  if (status === 500) console.error('unhandled-route-error', { path: req.path, name: String(error.name || ''), code: String(error.code || '') });
+  res.status(status).json({ error: status === 413 ? 'Request body is too large.' : status === 400 ? 'Invalid request body.' : status === 415 ? 'Unsupported request encoding.' : 'Something went wrong. Please try again.' });
+});
 const { WebSocketServer } = require('ws');
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });

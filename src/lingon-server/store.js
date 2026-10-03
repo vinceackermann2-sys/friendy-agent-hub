@@ -32,12 +32,12 @@ function encKey() {
   const h = (process.env.ENCRYPTION_KEY || '').trim();
   if (/^[0-9a-fA-F]{64}$/.test(h)) return Buffer.from(h, 'hex');
   if (h.length >= 16) return crypto.createHash('sha256').update(h).digest();
-  return null; // no key -> obfuscation fallback
+  return null;
 }
 const secretsEncrypted = () => !!encKey();
 function encryptValue(plain, aad) {
   const k = encKey();
-  if (!k) return { alg: 'b64', data: Buffer.from(String(plain), 'utf8').toString('base64') };
+  if (!k) throw Object.assign(new Error('Secret storage is unavailable: encryption is not configured.'), { code: 'NOT_ENCRYPTED' });
   const iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv('aes-256-gcm', k, iv);
   if (aad) c.setAAD(Buffer.from(aad, 'utf8'));

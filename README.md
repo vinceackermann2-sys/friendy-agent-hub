@@ -110,6 +110,16 @@ Until Azure is configured, the fallback is an isolated per-user workspace and
 
 ## Tests
 
+Run `npm test` for backend regressions; security boundary checks run first.
+Focused suites are `npm run test:security` (auth, encryption, Shop Pay and tool
+boundaries), `npm run test:usage` (billing and the usage meter), and
+`npm run test:questions` (question answers and retained context).
+The usage meter UI test needs the app at `http://127.0.0.1:8080/app`; question UI
+tests start their own fixture server. `node tests/sidebar-history-ui.cjs` also
+serves its own fixtures to verify Updates and retained automation history.
+Wallet regression commands and live-validation limits are in the
+[Wallet deployment notes](server/BELNA-WALLET.md).
+
 ```powershell
 npm run smoke:real
 ```

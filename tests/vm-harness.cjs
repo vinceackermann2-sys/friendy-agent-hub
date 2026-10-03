@@ -7,6 +7,8 @@ async function main(){
   assert.equal(MODEL_DEFAULT, 'gpt-6-luna');
   assert.equal(REASONING_EFFORT, 'xhigh');
   assert.ok(Array.isArray(TOOL_SCHEMAS));
+  assert.equal(TOOLS.wallet_receive,undefined,'payment-link creation is unavailable to agents');
+  assert.ok(!TOOL_SCHEMAS.some(t=>t.name==='wallet_receive'),'VM workers cannot discover the removed payment-link tool');
   for(const name of ['capability_search','web_search','browser_open','browser_action','code_run','shell','computer_screenshot'])assert.ok(TOOL_SCHEMAS.some((t)=>t.name===name));
   // header status: every tool can carry the model's note; labels come from real args
   assert.ok(TOOL_SCHEMAS.every((t)=>t.parameters.properties.activity?.type==='string'));

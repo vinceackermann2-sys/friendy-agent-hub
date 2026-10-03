@@ -6,7 +6,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
 // All provider operations are simulated: this test cannot move real money.
 module.exports = async function walletOwnerIsolation() {
   const rows = new Map(), quotes = new Map(), purchases = new Map(), cards = new Map(), calls = [], submitted = [];
-  let depositOwnerOverride, checkoutCompanyOverride, secretOverride, cardIssuing = true;
+  let depositOwnerOverride, secretOverride, cardIssuing = true;
   const store = {
     supaConfigured: () => true,
     walletRecoveryReady: async () => true,
@@ -47,10 +47,6 @@ module.exports = async function walletOwnerIsolation() {
       data = {data:[{line_type:'payment_gross',currency:{code:'usd'},usd_amount:parsed.searchParams.get('account_id') === 'biz_alice'?11:22}]};
     } else if (path === '/deposits') {
       data = {account_id:depositOwnerOverride || body.destination,hosted_url:'https://whop.com/deposit/'+body.destination+'/'};
-    } else if (path === '/checkout_configurations') {
-      assert.equal(body.plan.account_id,body.account_id,'the inline variant and checkout use the same owner');
-      data = {account_id:body.account_id,company_id:checkoutCompanyOverride || body.account_id,
-        plan:body.plan,purchase_url:'https://whop.com/checkout/ch_'+body.account_id};
     } else if (path === '/access_tokens') {
       data = {token:('token-'+body.account_id+'-').repeat(4),expires_at:body.expires_at};
     } else if (path === '/transfers') {
@@ -91,8 +87,6 @@ module.exports = async function walletOwnerIsolation() {
   const forged = {account_id:'biz_alice',company_id:'biz_platform',destination_id:'biz_platform',user_id:'alice'};
   for (const id of ['alice','bob']) {
     assert.equal((await wallet.deposit(id,forged)).url,'https://whop.com/deposit/biz_'+id+'/');
-    const pay = await wallet.receive(id,{...forged,amount:5,title:'Work',requestKey:'payment-request-'+id});
-    assert.ok(pay.url.endsWith('biz_'+id));
     const withdrawal = await wallet.withdrawalSession(id,forged);
     assert.equal(withdrawal.accountId,'biz_'+id);
     assert.ok(withdrawal.accessToken.includes('biz_'+id));
@@ -105,9 +99,7 @@ module.exports = async function walletOwnerIsolation() {
   const transfer = calls.find(x => x.path === '/transfers').body;
   assert.equal(transfer.origin_id,'biz_bob'); assert.equal(transfer.destination_id,'biz_alice');
   const tools = createWalletTools(wallet);
-  const linkArgs = {amount:7,title:'Bob’s work',...forged};
-  await tools.wallet_receive.run(linkArgs,{userId:'bob',approvedDetail:await tools.wallet_receive.approvalDetail(linkArgs)});
-  assert.equal(calls.at(-1).body.plan.account_id,'biz_bob','agent earnings use the agent owner’s wallet');
+  assert.equal(tools.wallet_receive,undefined,'payment links cannot be created by an agent');
   // The same approval key is independent for each owner; a retry is not a second charge.
   const approved = {paymentMethod:'belna_wallet',checkoutKey:'a'.repeat(64),website:'https://shop.example/checkout',amount:12.34,currency:'USD',...forged};
   for (const id of ['alice','bob']) await wallet.executePurchase(id,approved,{userId:'alice'});
@@ -123,16 +115,12 @@ module.exports = async function walletOwnerIsolation() {
   cardIssuing=true;
   const count = calls.length;
   for (const action of ['deposit','withdrawalSession','connectCard']) await assert.rejects(wallet[action]('missing'),/Create your/);
-  await assert.rejects(wallet.receive('missing',{amount:5,title:'Work',requestKey:'payment-missing-01'}),/Create your/);
   await assert.rejects(wallet.executePurchase('missing',approved),/Create your/);
   assert.equal(calls.length,count,'a missing wallet never falls back to the platform or founder');
 
   depositOwnerOverride='biz_alice';
   await assert.rejects(wallet.deposit('bob'),/deposit.*confirmed/i,'provider deposit must identify the same destination');
   depositOwnerOverride=undefined;
-  checkoutCompanyOverride='biz_platform';
-  await assert.rejects(wallet.receive('bob',{amount:5,title:'Work',requestKey:'payment-conflict-01'}),/link.*confirmed/);
-  checkoutCompanyOverride=undefined;
   const original = rows.get('bob');
   for (const wrong of [{...original,user_id:'alice'},{...original,account_id:'biz_platform'}]) {
     rows.set('bob',wrong);
@@ -147,6 +135,6 @@ module.exports = async function walletOwnerIsolation() {
     assert.equal(submitted.length,2,'changed card owner/type/limit cannot reach checkout');
     assert.equal([...cards.values()].at(-1).status,'canceled','unusable purchase card is canceled');
   }
-  console.log('Wallet owner isolation: two owners, forged IDs, deposits, earnings, sending, withdrawals, virtual card purchases and readback checks passed');
+  console.log('Wallet owner isolation: two owners, forged IDs, deposits, sending, withdrawals, virtual card purchases and readback checks passed');
 };
 if (require.main === module) module.exports().catch(e => {console.error(e);process.exit(1);});

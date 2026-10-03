@@ -169,7 +169,7 @@ import { chromium } from 'playwright';
   await p.click('[data-act="stab"][data-t="usage"]');
   await p.waitForSelector('#giftcode', { timeout: 15000 });
   const usage = await p.evaluate(() => document.querySelector('#main')?.innerText || '');
-  if (!/Monthly plan allowance/i.test(usage)) errs.push('Usage meter missing');
+  if (!await p.$('.billing-usage [role="meter"]')) errs.push('Usage meter missing');
   if (!/Extra tokens/i.test(usage)) errs.push('Extra token balance missing');
   if (!/Redeem gift card/i.test(usage)) errs.push('Gift redeem missing');
   step('billing and usage real');

@@ -112,6 +112,20 @@ async function logModelUsage(userId, model, usages) {
   }
 }
 
+// Keep small supporting calls on the same accounting contract as chat and tasks.
+// Provider errors carry usage when work was accepted before failure/cancellation.
+async function callBilledModel(userId, options, { model, logUsage: bill, ensureCredit: credit }) {
+  if (credit) await credit(userId);
+  let result;
+  try { result = await model(options); }
+  catch (error) {
+    if (error.usage) await bill(userId, [error.usage]);
+    throw error;
+  }
+  if (result.usage) await bill(userId, [result.usage]);
+  return result;
+}
+
 /* Research run: parallel subagent fetch (3 sources) + real browser open + summary. */
 async function runResearch({ userId, sessionId, query, trace, push, signal }) {
   push(entry('search', 'research task accepted'));
@@ -127,4 +141,4 @@ async function runResearch({ userId, sessionId, query, trace, push, signal }) {
   return r;
 }
 
-module.exports = { ensureCredit, modelAnswer, logModelUsage, runResearch, fanOut, runtimeClock, runtimeContext, userTimeZone, timeZoneCountry, currentTimeAnswer };
+module.exports = { ensureCredit, modelAnswer, logModelUsage, callBilledModel, runResearch, fanOut, runtimeClock, runtimeContext, userTimeZone, timeZoneCountry, currentTimeAnswer };

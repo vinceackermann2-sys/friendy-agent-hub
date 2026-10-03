@@ -338,7 +338,9 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     const row = await owned(userId);
     const result = await request('/deposits', { method:'POST', body:{ destination:row.account_id } });
     if (result.account_id !== row.account_id) throw fail('Your deposit destination could not be confirmed. Please try again.', 'PROVIDER');
-    return { url:hostedUrl(result.hosted_url) };
+    // Whop still returns a slug URL, but its hosted form now uses that path as
+    // an API resource ID. A slug fails both permission and deposit resolution.
+    return { url:'https://whop.com/deposit/' + encodeURIComponent(row.account_id) + '/' };
   }
   async function depositSession(userId) {
     const row=await owned(userId),account=await request('/accounts/'+encodeURIComponent(row.account_id));
@@ -391,19 +393,6 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if(typeof result.token!=='string' || result.token.length<32 || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.parse(expiresAt)+1000)
       throw fail('Your secure card setup could not be started. Please try again.','PROVIDER');
     return {accountId:row.account_id,accessToken:result.token,expiresAt:result.expires_at,verificationKind:'individual'};
-  }
-  async function receive(userId, { amount, title, requestKey }) {
-    const row = await owned(userId);
-    amount = validateLimit(amount);
-    title = String(title || '').trim();
-    if (!title || title.length > 120) throw fail('Describe what the payment is for, in 120 characters or less.');
-    if (!/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey || '')) throw fail('Refresh your wallet and try again.');
-    const result = await request('/checkout_configurations', { method:'POST', key:requestKey,
-      body:{ account_id:row.account_id, mode:'payment', plan:{ account_id:row.account_id, currency:'usd', initial_price:amount, plan_type:'one_time', title, release_method:'buy_now' } } });
-    const paymentOwners = [result.account_id, result.company_id].filter(id => id != null);
-    if(!paymentOwners.length || paymentOwners.some(id => id !== row.account_id) || result.plan?.currency!=='usd' || result.plan?.plan_type!=='one_time' || Number(result.plan?.initial_price)!==amount)
-      throw fail('Your payment link could not be confirmed. Please try again.','PROVIDER');
-    return { url:hostedUrl(result.purchase_url), amount, currency:'USD', title };
   }
   const publicQuote = (q) => ({ quoteId:q.id, recipient:q.recipient_email, amount:Number(q.amount), currency:'USD', fees:'Payment partner fees may apply in addition to this amount.' });
   async function transferQuote(userId, { recipient, amount }) {
@@ -495,7 +484,7 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if(durable())await store.recordExistingPurchase(userId,approved);
   }
   async function existingHistory(userId){return {history:durable() ? (await store.listExistingPurchases(userId)).map(x=>({title:x.merchant,amount:Number(x.amount),currency:x.currency,status:x.status,at:x.created_at})) : []};}
-  return { configured, snapshot, legacySnapshot, setup, verify, verificationSession, connectCard, cardSession, updateCard, deposit, depositSession, withdrawalSession, receive, transferQuote, send, confirmTransfer,
+  return { configured, snapshot, legacySnapshot, setup, verify, verificationSession, connectCard, cardSession, updateCard, deposit, depositSession, withdrawalSession, transferQuote, send, confirmTransfer,
     preferences,savePreferences,cardWaitlist,joinCardWaitlist,
     recordExistingPurchase,existingHistory,
     addresses,saveAddress,deleteAddress,
@@ -515,7 +504,7 @@ function createBelnaWallet(options){
     }};
   const wallet=createBusinessWallet({...options,store:connectedStore});
   const retired=async()=>{throw Object.assign(new Error('Create your Belna Wallet in Wallet settings. Your previous personal wallet cannot issue cards.'),{code:'NOT_SET_UP'});};
-  return {...wallet,finishConnect:retired,paymentRequest:retired,
+  return {...wallet,finishConnect:retired,
     legacyWithdrawalSession:retired,
     snapshot:async userId=>{const result=await wallet.snapshot(userId);const previous=await options.store.getBelnaWallet(userId);if(previous?.wallet_kind==='personal')result.wallet.previousPersonalWallet=true;return result;},
     reconcilePurchaseCard:async(ownerId,cardId)=>{if(ownerId?.startsWith('user_'))return;return wallet.reconcilePurchaseCard(ownerId,cardId);}};

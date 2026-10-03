@@ -1,6 +1,13 @@
 const assert = require('node:assert/strict');
-const { pickTools } = require('../server/agents/tools');
+const sandbox = require('../server/agents/sandbox');
+const realPinnedFetch = sandbox.pinnedFetch;
+// Merchant HTTP uses the same response fixtures as provider HTTP in this test.
+sandbox.pinnedFetch = (url, init) => global.fetch(url, init);
 const shoppay = require('../server/shoppay');
+sandbox.pinnedFetch = realPinnedFetch;
+const { pickTools } = require('../server/agents/tools');
+// Connections must use encrypted token storage, including in test fixtures.
+process.env.ENCRYPTION_KEY = 'shop-pay-test-key';
 
 async function main() {
   assert.equal(shoppay.configured(), false);
@@ -185,13 +192,14 @@ async function main() {
     store.updateShopPayOrder = async (_user, _id, patch) => patch;
     global.fetch = async (url, init = {}) => {
       const href = String(url);
-      if (href.endsWith('/.well-known/oauth-protected-resource')) return Response.json({ authorization_servers: ['https://api.shopify.com'] });
+      if (href.endsWith('/.well-known/oauth-protected-resource')) return Response.json({ authorization_servers: ['https://shopify.com/authentication/123'] });
+      if (href === 'https://shopify.com/.well-known/oauth-authorization-server/authentication/123') return Response.json({ token_endpoint: 'https://shopify.com/authentication/123/oauth/token' });
       if (href.endsWith('/.well-known/oauth-authorization-server')) return Response.json({ token_endpoint: href.includes('accounts.shop.app') ? 'https://accounts.shop.app/oauth/token' : 'https://api.shopify.com/auth/access_token' });
       if (href === 'https://accounts.shop.app/oauth/token') {
         if (new URLSearchParams(init.body).get('grant_type') === 'refresh_token') { refreshes++; return Response.json({ access_token: 'new-shop-token', expires_in: 3600 }); }
         return Response.json({ access_token: 'buyer-grant' });
       }
-      if (href === 'https://api.shopify.com/auth/access_token') return Response.json({ access_token: 'buyer-token' });
+      if (href === 'https://shopify.com/authentication/123/oauth/token') return Response.json({ access_token: 'buyer-token' });
       if (href.endsWith('/api/ucp/mcp')) {
         const call = JSON.parse(init.body);
         calls.push(call);

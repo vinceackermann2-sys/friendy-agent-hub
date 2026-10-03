@@ -5,6 +5,8 @@
 import crypto from 'node:crypto';
 import * as store from './store.js';
 import { currencyFor, USD_RATE } from './agents/product-search.js';
+import { publicUrlProblem } from './agents/public-web.js';
+const pinnedFetch = (url, init) => fetch(url, init);
 
 const UCP_VERSION = '2026-08-25';
 const SHOP_SCOPES = 'openid email dev.ucp.shopping.catalog.search:read';
@@ -138,16 +140,49 @@ function merchantHost(raw) {
   }
   if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(host)) fail('BAD_INPUT', 'Invalid merchant domain.');
   if (host === 'localhost' || host.endsWith('.local') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) fail('BAD_INPUT', 'Invalid merchant domain.');
+  if (publicUrlProblem('https://' + host)) fail('BAD_INPUT', 'Invalid merchant domain.');
   return host;
+}
+
+// Shopify implements the reserved UCP endpoint on its own store domains. A
+// custom domain is not proof of Shopify ownership and must never get an app token.
+function sharedTokenHost(host) {
+  return host === CATALOG_HOST || /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(host);
+}
+
+function oauthEndpoint(value, issuer = '') {
+  let url;
+  try { url = new URL(value); } catch { fail('SHOP_CONFIG', 'Invalid Shop Pay authorization endpoint.'); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash) fail('SHOP_CONFIG', 'Invalid Shop Pay authorization endpoint.');
+  const shop = url.origin === 'https://accounts.shop.app';
+  const global = url.origin === 'https://api.shopify.com' && url.pathname === '/auth/access_token';
+  const merchant = url.origin === 'https://shopify.com' && /^\/authentication\/\d+\/oauth\/token$/.test(url.pathname);
+  if (!(shop || global || merchant)) fail('SHOP_CONFIG', 'Untrusted Shop Pay authorization endpoint.');
+  if (issuer && (url.origin !== new URL(issuer).origin || !url.pathname.startsWith(new URL(issuer).pathname.replace(/\/$/, '') + '/'))) fail('SHOP_CONFIG', 'Shop Pay authorization endpoint does not match its issuer.');
+  return url.href;
+}
+
+function shopFetch(url, init = {}) {
+  const target = new URL(url);
+  if (target.protocol !== 'https:' || publicUrlProblem(target.href)) fail('BAD_INPUT', 'Shop Pay requires a public HTTPS address.');
+  const trusted = sharedTokenHost(target.hostname) || ['accounts.shop.app', 'api.shopify.com', 'shopify.com'].includes(target.hostname);
+  // Custom merchant DNS is checked at connection time in Node. Workers enforce
+  // their own network boundary; neither runtime follows credentialed redirects.
+  const transport = trusted ? fetch : pinnedFetch;
+  return transport(target.href, { ...init, redirect: 'manual', signal: init.signal || AbortSignal.timeout(15000) });
+}
+
+function requireTokenEncryption() {
+  if (!store.secretsEncrypted()) fail('SHOP_CONFIG', 'Shop Pay connection is temporarily unavailable. Please try again later.');
 }
 
 async function getJson(url, timeoutMs = 9000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json', 'User-Agent': 'Lingon/1.0 (+ucp)' } });
+    const r = await shopFetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json', 'User-Agent': 'Lingon/1.0 (+ucp)' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
+    return await r.json();
   } finally { clearTimeout(t); }
 }
 
@@ -163,7 +198,12 @@ async function shopAuthServer() {
   return cached('shop-as', async () => {
     try {
       const meta = await getJson('https://accounts.shop.app/.well-known/oauth-authorization-server');
-      if (meta.authorization_endpoint && meta.token_endpoint) return meta;
+      if (meta.authorization_endpoint && meta.token_endpoint) {
+        for (const field of ['authorization_endpoint', 'token_endpoint', 'revocation_endpoint']) {
+          if (meta[field] && new URL(oauthEndpoint(meta[field])).origin !== 'https://accounts.shop.app') fail('SHOP_CONFIG', 'Invalid Shop authorization endpoint.');
+        }
+        return meta;
+      }
     } catch {}
     return {
       issuer: 'https://accounts.shop.app',
@@ -180,7 +220,7 @@ const shopClientChecks = new Map();
 async function checkShopClient(shop, credentials, redirectUri) {
   const cacheKey = crypto.createHash('sha256').update(credentials.id + '\0' + credentials.secret + '\0' + redirectUri).digest('hex');
   if (shopClientChecks.get(cacheKey) > Date.now()) return;
-  const response = await fetch(shop.token_endpoint, {
+  const response = await shopFetch(oauthEndpoint(shop.token_endpoint), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: new URLSearchParams({
@@ -198,23 +238,28 @@ async function checkShopClient(shop, credentials, redirectUri) {
 }
 
 async function shopifyTokenEndpoint(resourceHost) {
-  const host = resourceHost || CATALOG_HOST;
+  const host = merchantHost(resourceHost || CATALOG_HOST);
   return cached('shopify-as:' + host, async () => {
     try {
       const pr = await getJson('https://' + host + '/.well-known/oauth-protected-resource');
-      const issuer = new URL((pr.authorization_servers || [])[0] || 'https://api.shopify.com');
+      const issuer = new URL((pr.authorization_servers || [])[0]);
+      if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.port || issuer.search || issuer.hash
+        || (host === CATALOG_HOST ? issuer.origin !== 'https://api.shopify.com' || issuer.pathname !== '/'
+          : issuer.origin !== 'https://shopify.com' || !/^\/authentication\/\d+\/?$/.test(issuer.pathname))) fail('SHOP_CONFIG', 'Untrusted Shopify authorization server.');
       const path = issuer.pathname === '/' ? '' : issuer.pathname;
       const meta = await getJson(issuer.origin + '/.well-known/oauth-authorization-server' + path);
-      const audience = path ? host : issuer.host;
-      return { audience, tokenEndpoint: meta.token_endpoint, issuer: issuer.href };
-    } catch {
+      const audience = host === CATALOG_HOST ? issuer.host : host;
+      return { audience, tokenEndpoint: oauthEndpoint(meta.token_endpoint, issuer.href), issuer: issuer.href };
+    } catch (error) {
+      // A merchant discovery failure must not become a global token exchange.
+      if (host !== CATALOG_HOST || error.code === 'SHOP_CONFIG') throw error;
       return { audience: 'api.shopify.com', tokenEndpoint: 'https://api.shopify.com/auth/access_token', issuer: 'https://api.shopify.com' };
     }
   });
 }
 
 async function formPost(url, fields, extraHeaders) {
-  const r = await fetch(url, {
+  const r = await shopFetch(oauthEndpoint(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Lingon/1.0 (+ucp)', ...(extraHeaders || {}) },
     body: new URLSearchParams(fields),
@@ -233,7 +278,7 @@ async function appAccessToken() {
   const credentials = catalogCredentials();
   if (!credentials) fail('NO_SHOP', 'Shopify Catalog is not configured (SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET).');
   if (appTokenCache.token && appTokenCache.exp > Date.now() + 30e3) return appTokenCache.token;
-  const r = await fetch('https://api.shopify.com/auth/access_token', {
+  const r = await shopFetch('https://api.shopify.com/auth/access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Lingon/1.0 (+ucp)' },
     body: JSON.stringify({ client_id: credentials.id, client_secret: credentials.secret, grant_type: 'client_credentials' }),
@@ -250,6 +295,7 @@ function shopTokenFromRow(row) {
 }
 
 async function buyerLinkedToken(userId, { resourceHost, scope } = {}) {
+  requireTokenEncryption();
   await loadCredentials();
   const credentials = shopCredentials();
   if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured.');
@@ -294,13 +340,17 @@ async function buyerLinkedToken(userId, { resourceHost, scope } = {}) {
 }
 
 async function bearerFor(userId, { resourceHost, scope, allowApp = true } = {}) {
+  const host = merchantHost(resourceHost || CATALOG_HOST);
   const row = userId ? await store.getShopPayAccount(userId) : null;
   if (shopTokenFromRow(row)) {
-    try { return await buyerLinkedToken(userId, { resourceHost, scope }); }
-    catch (e) { if (!allowApp || e.code === 'NO_SHOP') throw e; }
+    try {
+      const value = await buyerLinkedToken(userId, { resourceHost: host, scope });
+      if (!value) fail('SHOP_HTTP', 'Shop Pay did not return a buyer token.');
+      return { value, host };
+    } catch (e) { if (!allowApp || !sharedTokenHost(host) || e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG') throw e; }
   }
-  if (!allowApp) fail('NO_SHOP_LINK', 'Connect Shop Pay in Payments first.');
-  return appAccessToken();
+  if (!allowApp || !sharedTokenHost(host)) fail('NO_SHOP_LINK', 'Connect Shop Pay in Payments, or use the store’s myshopify.com domain for this checkout.');
+  return { value: await appAccessToken(), host };
 }
 
 function mcpMeta(origin) {
@@ -308,16 +358,18 @@ function mcpMeta(origin) {
 }
 
 async function mcpCall(url, name, args, token) {
-  const r = await fetch(url, {
+  if (!token?.value || token.host !== new URL(url).hostname) fail('SHOP_CONFIG', 'Shop Pay token does not match the merchant.');
+  const r = await shopFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
       'User-Agent': 'Lingon/1.0 (+ucp)',
-      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      Authorization: 'Bearer ' + token.value,
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
   });
+  if (!r.ok) fail('SHOP_HTTP', 'Shop Pay request failed (HTTP ' + r.status + ').');
   const json = await r.json().catch(() => ({}));
   if (json.error) fail('SHOP_HTTP', String(json.error.message || json.error.code || 'UCP call failed').slice(0, 240));
   const content = json.result && (json.result.structuredContent || json.result);
@@ -445,6 +497,7 @@ async function agentStatus(userId) {
 
 async function startConnect(userId, { origin } = {}) {
   requireUser(userId);
+  requireTokenEncryption();
   await loadCredentials();
   const credentials = shopCredentials();
   if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured on this server yet.');
@@ -476,6 +529,7 @@ async function startConnect(userId, { origin } = {}) {
 }
 
 async function finishConnect({ code, state, error, error_description }) {
+  requireTokenEncryption();
   await loadCredentials();
   const credentials = shopCredentials();
   if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured on this server yet.');

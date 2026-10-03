@@ -39,11 +39,17 @@ async function getUserFromRequest(req) {
 }
 
 function requireAuth(handler) {
-  return async (req, res) => {
-    const user = await getUserFromRequest(req);
-    if (!user) return res.status(401).json({ error: 'Sign in required.' });
-    req.user = user;
-    return handler(req, res);
+  return async (req, res, next) => {
+    try {
+      const user = await getUserFromRequest(req);
+      if (!user) return res.status(401).json({ error: 'Sign in required.' });
+      req.user = user;
+      // The edge shim defers large uploads until authentication succeeds.
+      await req.readBody?.();
+      return await handler(req, res);
+    } catch (error) {
+      return next(error);
+    }
   };
 }
 

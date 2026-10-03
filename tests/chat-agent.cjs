@@ -6,17 +6,54 @@ const clone=x=>x==null?x:structuredClone(x);
 const schemaFor=name=>({name,description:name,parameters:{type:'object',properties:{}}});
 
 // A coordinator with in-memory storage; the model is scripted per test.
-function chat(model,extra={}) {
+function chat(model,extra={},factory=createCoordinator) {
   const saved=[];
   const d={tasks:{summaries:async()=>[]},model,schemas:['shop_status','composio_apps','web_search'].map(schemaFor),tools:{},
     azure:{getSandbox:async()=>({mode:'azure'})},store:{listMemories:async()=>[],saveTurn:async(...args)=>{saved.push(args);}},
     buildSystem:async()=>'SYSTEM',ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:p=>{if(!p)throw Error('prompt required');},
     protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],...extra};
-  return {coordinator:createCoordinator(d),saved,d};
+  return {coordinator:factory(d),saved,d};
 }
 const reply=(...steps)=>{const models=[];return {models,model:async opts=>{models.push(clone({...opts,onDelta:undefined,signal:undefined}));const step=steps.shift();return typeof step==='function'?step(opts):step || {text:'Done.'};}};};
 
 (async()=>{
+  // A selected option remains tied to its full question across turns and task handoff
+  // in both API runtimes.
+  const edgeCoordinator=(await import('../src/lingon-server/agents/conversation.js')).createCoordinator;
+  for(const factory of [createCoordinator,edgeCoordinator]) {
+  const questionTurns=[],questionModels=[],questionTasks=[],questionEvents=[];
+  const questionStore={listMemories:async()=>[],listChatMessages:async()=>clone(questionTurns),
+    saveTurn:async(u,c,role,text,options={})=>questionTurns.push({role,text,metadata:options.metadata || {}})};
+  const questionChat=chat(async opts=>{
+    questionModels.push(clone({...opts,onDelta:undefined,signal:undefined}));
+    return questionModels.length===1?{functionCalls:[{name:'ask_user',args:{question:'How should I check Messenger?',context:'The connector only supports Facebook Pages.',options:[{label:'Use browser',description:'Open Messenger so you can sign in yourself.'},{label:'Pages',description:'Check connected business Pages.'}]}}]}
+      :{functionCalls:[{name:'delegate_task',args:{title:'Check Messenger',instructions:'Open Messenger in the browser and check all new messages after the owner signs in.'}}]};
+  },{store:questionStore,schemas:[schemaFor('ask_user')],acknowledge:async()=>'Checking your messages.',
+    tasks:{summaries:async()=>[],create:async input=>{questionTasks.push(input);return {id:'messenger',state:{status:'queued'}};},view:r=>({id:r.id})}},factory);
+  await questionChat.coordinator.run({userId:'a',chatId:'questions',requestId:'ask',prompt:'Check all my new Messenger messages',onEvent:e=>questionEvents.push(e)});
+  const questionEvent=questionEvents.find(e=>e.card?.ask);
+  assert.equal(questionTurns.at(-1).metadata.question?.id,questionEvent.id,'the saved question includes its stable card ID');
+  assert.match(JSON.stringify(questionTurns.at(-1).metadata.question),/sign in yourself/,'option meanings survive persistence');
+  await questionChat.coordinator.run({userId:'a',chatId:'questions',requestId:'selected',prompt:'Use browser',
+    context:{questionReply:{id:questionEvent.id,q:'An incorrect client copy',options:[{label:'Use browser',description:'An incorrect description'}]},cards:Array.from({length:12},()=>({type:'present',content:'unrelated'.repeat(1000)}))},onEvent:()=>{}});
+  assert.match(questionModels[1].prompt,/Answer to an agent question[\s\S]*only supports Facebook Pages[\s\S]*sign in yourself/,'the answer has dedicated context outside the truncated card list');
+  assert.match(questionModels[1].history.at(-1).text,/sign in yourself/,'saved question details reach the model');
+  assert.match(questionTasks[0].context.originalPrompt,/Check all my new Messenger messages[\s\S]*Use browser/,'task retains the original objective and answer');
+  assert.equal(questionTurns.find(m=>m.role==='user' && m.text==='Use browser').metadata.questionReply.id,questionEvent.id);
+  const recalled=reply({text:'You chose the browser.'});
+  await chat(recalled.model,{store:questionStore},factory).coordinator.run({userId:'a',chatId:'questions',requestId:'later',prompt:'What did I choose?',onEvent:()=>{}});
+  assert.ok(recalled.models[0].history.some(m=>/Owner answer:[\s\S]*Use browser/.test(m.text) && /Messenger/.test(m.text)),'later turns recall which question the answer resolved');
+  assert.ok(!questionModels[1].prompt.includes('incorrect client copy'),'server question details take precedence');
+  // Compaction receives structured answers, so summaries can retain decisions
+  // after the original messages have left the recent conversation window.
+  const dated=questionTurns.map((m,i)=>({...m,created_at:new Date(Date.UTC(2026,9,2,8,0,i)).toISOString()}));
+  dated.push(...Array.from({length:30},(_,i)=>({role:i%2?'agent':'user',text:'Later chat '+i,created_at:new Date(Date.UTC(2026,9,2,8,1,i)).toISOString()})));
+  let summaryPrompt='';
+  await updateChatSummary('a','questions',{store:{listChatMessages:async()=>dated,latestChatSummary:async()=>null,saveTurn:async()=>{}},logUsage:async()=>{},
+    model:async opts=>{summaryPrompt=opts.prompt;return {text:'The owner chose the browser to check Messenger.'};}});
+  assert.match(summaryPrompt,/Owner answer: Use browser[\s\S]*How should I check Messenger[\s\S]*sign in yourself/,'summary folding retains the resolved question and option meaning');
+  }
+
   const productionStore=require('../server/store'),savedResults=[],originalSearch=productionStore.searchMemories,originalSave=productionStore.saveTurn;
   try{
     productionStore.searchMemories=async()=>[];productionStore.saveTurn=async(...args)=>savedResults.push(args);

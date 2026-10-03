@@ -151,15 +151,17 @@
     if (active.has(rt.chat.id)) await cancelCurrent(rt, true);
     if (requests.get(rt.chat.id) !== request) return;
     const last = rt.chat.messages.filter(m => m.role === 'user').slice(-1)[0];
-    const history = rt.chat.messages.filter(m => m.kind === 'text' && m !== last).slice(-24).map(m => ({ role: m.role, text: m.text }));
-    const cards = rt.chat.messages.filter(m => m.kind === 'card' && m.card?.type !== 'progress').slice(-12).map(({card}) => ({
+    const history = rt.chat.messages.filter(m => m.kind === 'text' && m !== last).slice(-24).map(m => ({ role: m.role, text: m.text,
+      metadata:m.questionReply ? {questionReply:{...m.questionReply,answer:m.text}} : undefined }));
+    const cards = rt.chat.messages.filter(m => m.kind === 'card' && m.card?.type !== 'progress').slice(-12).map(({id,managedId,card}) => ({
+      id:managedId || id,options:card.type === 'question' ? card.options : undefined,context:card.context,
       type:card.type,title:card.title,name:card.name,status:card.status,text:card.text,q:card.q,choice:card.choice,kind:card.kind || card.view?.kind,
       url:card.url,note:card.note,content:String(card.content || '').slice(0,8000),
       lines:(card.lines || []).slice(-8),agents:card.agents,
     }));
     return stream(rt, '/api/agent/conversation', { prompt, requestId: crypto.randomUUID(), history,
       context: { agent: { name: rt.agent.name, pers: rt.agent.pers, ownerName: rt.ownerName || undefined }, replyTo: last?.replyTo, timeZone: localTimeZone(),
-        userMessageId: last?.id, artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, type:f.type, size:f.size, dataUrl:f.dataUrl })) } });
+        userMessageId: last?.id, questionReply:last?.questionReply, artifact: rt.chat.artifact, cards, attachments: (last?.files || []).map(f => ({ name: f.name, type:f.type, size:f.size, dataUrl:f.dataUrl })) } });
   }
   async function cancelCurrent(rt, replacing = false) {
     const current = active.get(rt.chat.id);

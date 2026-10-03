@@ -14,7 +14,7 @@ const context = vm.createContext({
   fmtTokens: n => Number(n).toLocaleString('en-US'),
   fmtPlanTokens: n => Number(n).toLocaleString('en-US'),
   currentUser: () => ({ name: 'Guest' }),
-  esc: value => String(value),
+  esc: value => String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'),
   icon: () => '',
   fmtC: n => String(n),
   Mascot: { svg: () => '' },
@@ -31,6 +31,7 @@ vm.runInContext([
 const billing = {
   plan: 'pro', status: 'active', planTokens: 100, planTokensUsed: 25,
   packTokens: 50, packTokensUsed: 10, tokens: 115,
+  tokenPacks: [{ tokens: 10000000, millions: 10, usd: 10 }],
 };
 const view = context.view.creditView(billing);
 context.billingOwner = 'owner';
@@ -39,6 +40,12 @@ context.billingCache = { ...billing, plans: [], tokenPacks: [] };
 assert.equal(view.percent, 25, 'extra grants do not change the monthly percentage');
 assert.equal(view.remaining, 75);
 assert.equal(view.extraRemaining, 40);
+
+const tinyUsage={...billing,planTokens:50000000,planTokensUsed:1000,packTokens:0,packTokensUsed:0,tokens:49999000};
+assert.match(context.view.usageCardHtml(tinyUsage),/&lt;1%<\/strong>/,'small real charges are visible instead of rounded to 0%');
+assert.match(context.view.billSummary(tinyUsage),/&lt;1% used/);
+assert.match(context.view.usageCardHtml({...billing,planTokensUsed:99.9,tokens:40.1}),/99%<\/strong>/,
+  'a positive remaining balance is not shown as 100% exhausted');
 
 const sidebar = context.view.usageCardHtml(billing);
 assert.match(sidebar, /25%<\/strong>/);
@@ -49,14 +56,15 @@ assert.doesNotMatch(sidebar, /of 150|extra tokens added/);
 
 const summary = context.view.billSummary(billing);
 const [monthly, extras] = summary.split('<section class="billing-extra-balance"');
-assert.match(monthly, /Monthly tokens used<\/dt><dd>25/);
-assert.match(monthly, /Monthly tokens left<\/dt><dd>75/);
-assert.match(monthly, /Monthly plan allowance<\/dt><dd>100/);
-assert.doesNotMatch(monthly, /Extra tokens added/);
-assert.match(extras, /Extra tokens added<\/dt><dd title="50 tokens">50/);
-assert.match(extras, /Extra tokens used<\/dt><dd title="10 tokens">10/);
+assert.match(monthly, /aria-valuenow="25"/);
+assert.match(monthly, /<strong>75<\/strong><span>of 100 left this month/);
+assert.doesNotMatch(summary, /billing-token-breakdown|Monthly tokens used<\/dt>|Monthly tokens left|Monthly plan allowance|Extra tokens added|Extra tokens used/);
 assert.match(extras, /billing-extra-total[^>]*><strong>40<\/strong>/);
-assert.match(extras, /billing-add-tokens/);
+assert.match(extras, /Add token pack/);
+assert.match(extras, /id="buypack"/);
+assert.match(extras, /data-act="buycredits"/);
+assert.equal((extras.match(/<\/section>/g) || []).length, 1, 'extra balance and pack picker share one card');
+assert.doesNotMatch(summary, /billing-add-tokens/);
 
 const billingPage = context.view.billingBodyHtml('billing');
 const usagePage = context.view.billingBodyHtml('usage');

@@ -19,6 +19,14 @@ const {PGlite}=require('@electric-sql/pglite');
     else if(u.pathname==='/api/v1/financial_activity')data={data:[]};else throw Error('Unexpected provider request');
     return {ok:true,json:async()=>data};
   }});
+  assert.equal(wallet.receive,undefined,'connected wallets cannot create payment links');
+  assert.equal(wallet.paymentRequest,undefined,'retired payment requests are not exposed');
+  for(const file of ['server/index.js','src/lingon-server/index.js']){
+    const routes=fs.readFileSync(file,'utf8').match(/for \(const action of (\[[^\n]+\])\) \{\s*app\.post\('\/api\/belna-wallet\//)?.[1];
+    assert.ok(routes,file+' registers connected wallet routes');
+    assert.doesNotMatch(routes,/'receive'|'payment-request'/,file+' does not expose payment-link routes');
+    assert.match(routes,/'quote', 'send'/,file+' retains reviewed sending');
+  }
   const before=await wallet.snapshot('alice');assert.equal(before.wallet.kind,'connected');assert.equal(before.wallet.status,'not_created');assert.equal(before.wallet.previousPersonalWallet,true);assert.equal(creates,0);
   await assert.rejects(wallet.finishConnect({id:'alice'},{}),/previous personal wallet cannot issue cards/);
   await assert.rejects(wallet.setup({id:'alice',email:'alice@example.test'},{country:'SE'}),/Confirm your email/);

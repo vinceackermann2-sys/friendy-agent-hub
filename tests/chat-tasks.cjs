@@ -480,6 +480,22 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   assert.equal(flaky.rows.get(flakyRow.id).state.status,'completed');
   assert.equal(flaky.rows.get(flakyRow.id).state.events.filter(e=>e.phase==='task_update').length,0);
 
+  // A failed main call must settle the parallel update before the edge request ends.
+  const failedWithUpdate=setup(),updateStarted=gate(),releaseUpdate=gate();
+  failedWithUpdate.d.tools.lookup=quiet.d.tools.lookup;
+  let updateSettled=false,stepSettled=false;
+  failedWithUpdate.d.progress=async()=>{updateStarted.resolve();await releaseUpdate.promise;updateSettled=true;return '';};
+  const failedRow=await failedWithUpdate.create();
+  failedWithUpdate.rows.get(failedRow.id).state.startedAt=Date.now()-30000;
+  failedWithUpdate.answers.push({functionCalls:[{name:'lookup',args:{}}]});
+  await failedWithUpdate.runtime.step('a',failedRow.id);await failedWithUpdate.runtime.step('a',failedRow.id);
+  failedWithUpdate.answers.push(async()=>{await updateStarted.promise;throw Error('main provider failed');});
+  const failingStep=failedWithUpdate.runtime.step('a',failedRow.id).then(()=>{stepSettled=true;});
+  await updateStarted.promise;await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(stepSettled,false,'the request waits for the parallel progress call to finish billing');
+  releaseUpdate.resolve();await failingStep;
+  assert.equal(updateSettled,true);assert.equal(failedWithUpdate.rows.get(failedRow.id).state.status,'failed');
+
   // A started task is confirmed in words written for the request, not a fixed sentence.
   const ackBase=(h,extra)=>({tasks:h.runtime,schemas:[],tools:{},azure:h.d.azure,store:{listMemories:async()=>[],saveTurn:async()=>{}},buildSystem:async()=>'',
     ensureCredit:async()=>{},logUsage:async()=>{},checkPrompt:h.d.checkPrompt,protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],...extra});

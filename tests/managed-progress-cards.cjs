@@ -8,7 +8,7 @@ let nextId=0;
 const narrated=[];
 const context=vm.createContext({WeakMap,Promise,state:{agent:{name:'Agent'},vault:{},memory:[]},uid:()=>`id-${++nextId}`,isActive:()=>false,
   noteActivity:(c,t)=>narrated.push(t),findReaction:emoji=>['up','down','heart','poop'].includes(emoji)?{id:emoji}:null,
-  $:()=>null,msgNode:()=>null,replaceNode:()=>{},repaintCanvasSoon:()=>{},save:()=>{},setTimeout:()=>{throw Error('Cards must not use timers');}});
+  $:()=>null,msgNode:()=>null,replaceNode:()=>{},repaintCanvasSoon:()=>{},save:()=>{},refreshBillingUsage:()=>{},setTimeout:()=>{throw Error('Cards must not use timers');}});
 vm.runInContext(source.slice(start,end),context);
 const chat={id:'chat',messages:[{id:'old',kind:'card',card:{type:'progress',status:'done',label:'Earlier published update'}},{id:'user-42',role:'user',kind:'text',text:'I finished my project!'}]};
 const first=context.makeRT(chat);

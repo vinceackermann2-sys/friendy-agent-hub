@@ -30,7 +30,6 @@ const {chromium}=require('playwright');
    else if(path==='/api/belna-wallet/controls'){if(body.dailyLimitUsd!=null)wallet.dailyCardLimitUsd=body.dailyLimitUsd;if(typeof body.frozen==='boolean')wallet.paused=body.frozen;result={wallet,activity:[]};}
    else if(path==='/api/belna-wallet/quote')result={quoteId:'test-transfer',recipient:body.recipient,amount:body.amount,fees:'Partner fees may apply.'};
    else if(path==='/api/belna-wallet/send')result={status:'succeeded'};
-   else if(path==='/api/belna-wallet/receive')result={url:'https://whop.com/checkout/test',amount:body.amount};
    else if(path==='/api/belna-wallet/withdraw-session')result={accountId:'biz_test',accessToken:'owner-only-ui-token'.repeat(3),availableBalance:12.5,pendingBalance:3,payoutCountry:'SE',expiresAt:new Date(Date.now()+15*60000).toISOString()};
    else if(path.startsWith('/api/shipping-addresses')){
     if(path.endsWith('/save')){const a={...body,id:body.id||crypto.randomUUID(),isDefault:body.isDefault||!addresses.length};a.formatted=[a.recipient,a.line1,a.line2,[a.postalCode,a.city].join(' '),a.region,a.country].filter(Boolean).join(', ');if(a.isDefault)addresses=addresses.map(x=>({...x,isDefault:false}));addresses=[...addresses.filter(x=>x.id!==a.id),a];}
@@ -75,8 +74,8 @@ const {chromium}=require('playwright');
   await leaveSettings();await page.locator('.wallet-panel [data-act="belna-wallet-card-connect"]').waitFor();
   assert.match(await page.locator('.wl-balance').innerText(),/Total balance · Belna\s+\$15\.50/);
   assert.match(await page.locator('.wl-head').innerText(),/Audit pays with Belna Wallet/);
-  assert.deepEqual(await page.locator('.wl-act').allInnerTexts(),['Add money','Send','Get paid','Withdraw']);
-  assert.equal(await page.locator('.wallet-panel [role="radiogroup"]').count(),0,'the Belna panel has no wallet switcher');
+  assert.deepEqual(await page.locator('.wl-act').allInnerTexts(),['Add money','Send','Withdraw']);
+  assert.equal(await page.locator('.wallet-panel [role="radiogroup"]').count(),1,'the Belna panel supports direct wallet switching');
   assert.equal(await page.locator('.wallet-panel').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
   assert.equal(await page.locator('.wallet-panel').locator('.wallet-virtual-card,#belna-wallet-limit,#shoppaylimit').count(),0);
   assert.match(await page.locator('.wl-setup').innerText(),/2 of 3 done/);
@@ -105,8 +104,8 @@ const {chromium}=require('playwright');
   await page.locator('.wallet-panel').getByRole('button',{name:'Add money',exact:true}).click();await page.getByRole('dialog',{name:'Add money to Belna Wallet'}).waitFor();await page.getByText('Secure bank connection · review fees and confirm').waitFor();assert.equal(requests.filter(x=>x.path.endsWith('/deposit-session')).length,1);await page.getByRole('button',{name:'Close wallet action'}).click();
   await page.locator('.wallet-panel').getByRole('button',{name:'Send',exact:true}).click();await page.locator('#belna-wallet-recipient').fill('friend@example.com');await page.locator('#belna-wallet-send-amount').fill('5');
   await page.getByRole('button',{name:'Review send',exact:true}).click();await page.getByRole('button',{name:'Confirm send',exact:true}).waitFor();assert.equal(requests.filter(x=>x.path.endsWith('/send')).length,0);
-  await page.getByRole('button',{name:'Get paid',exact:true}).click();await page.locator('#belna-wallet-receive-title').fill('Design');await page.locator('#belna-wallet-receive-amount').fill('25');
-  await page.getByRole('button',{name:'Create payment link',exact:true}).click();await page.getByRole('link',{name:'Open payment link'}).waitFor();
+  await page.getByRole('dialog',{name:'Send money',exact:true}).getByRole('button',{name:'Close wallet action'}).click();
+  assert.equal(await page.getByRole('button',{name:'Get paid',exact:true}).count(),0);
   await page.getByRole('button',{name:'Withdraw',exact:true}).click();await page.getByRole('dialog',{name:'Withdraw to your bank'}).waitFor();await page.getByText('Secure bank connection · review fees and confirm').waitFor();
   assert.equal(requests.filter(x=>x.path.endsWith('/withdraw-session')).length,1);assert.deepEqual(requests.find(x=>x.path.endsWith('/withdraw-session')).body,{});assert.ok(!(await page.evaluate(()=>JSON.stringify(localStorage))).includes('owner-only-ui-token'));
   await page.getByRole('button',{name:'Close wallet action'}).click();await page.getByRole('dialog',{name:'Withdraw to your bank'}).waitFor({state:'detached'});
@@ -131,6 +130,6 @@ const {chromium}=require('playwright');
   await page.locator('#wallet-shipping-section').waitFor();
   await page.locator('[data-act="wallet-address-edit"]').click();await page.locator('.wallet-address-form [data-act="wallet-address-delete"]').click();await page.locator('.wallet-address').waitFor({state:'detached'});assert.deepEqual(errors,[]);await context.close();
  }
- console.log('Wallet UI: desktop/mobile Settings, persisted switching, inactive connections, history, balance, card setup, allowance, pausing, reviewed sends, payment links and shipping CRUD passed');
+ console.log('Wallet UI: desktop/mobile Settings, persisted switching, inactive connections, history, balance, card setup, allowance, pausing, reviewed sends, removed payment links and shipping CRUD passed');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});
