@@ -64,7 +64,15 @@ function createBelnaWalletStore({ supa, ensureProfile }) {
   }
   async function beginBelnaWalletTransfer(userId, id) {
     const result = await db().rpc('begin_belna_wallet_transfer', { p_user_id:userId, p_id:id });
-    if (result.error) throw Object.assign(new Error('This transfer expired or exceeds your $50 transfer allowance. Review a new transfer or try later.'), { code:'BAD_INPUT' });
+    if (result.error) {
+      // Only these SQL rejections prove no reservation/provider send occurred.
+      // A transport or unexpected database error keeps the original quote locked.
+      const notStarted = result.error.code === 'P0001' && ['QUOTE_NOT_FOUND','QUOTE_EXPIRED','TRANSFER_LIMIT'].includes(result.error.message);
+      throw Object.assign(new Error(notStarted
+        ? 'This transfer expired or exceeds your $50 transfer allowance. Review a new transfer or try later.'
+        : 'Your transfer could not be confirmed. Check this same transfer again.'),
+        { code:notStarted ? 'BAD_INPUT' : 'WALLET_STORE', ...(notStarted ? {transferNotStarted:true} : {}) });
+    }
     return result.data;
   }
   async function saveBelnaWalletTransfer(userId, id, fields) {

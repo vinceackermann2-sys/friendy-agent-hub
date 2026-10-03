@@ -175,11 +175,9 @@ const CASES = [
   { id: 'wallet-send-denied', instructions: 'Send $30 to bob@example.se from my Belna wallet.',
     tools: { wallet_status: () => walletSnapshot(), wallet_send: (a) => ({ ...quote(a), status: 'succeeded' }) }, details: { wallet_send: (a) => JSON.stringify(quote(a)) },
     check: (r) => (/\b(not|n[’']t|no money|nothing)\b[^.]{0,40}\b(sent|send|transferred|moved)\b|declin|denied/i.test(r.result) ? '' : 'claims or implies the declined transfer happened') },
-  { id: 'wallet-link', instructions: 'Create a payment link for $150 for the logo design I did for Studio Berg.', approve: ['wallet_receive'],
-    tools: { wallet_status: () => walletSnapshot(), wallet_receive: (a) => ({ url: 'https://whop.com/checkout/plan_eval150', amount: a.amount, currency: 'USD', title: a.title }) },
-    check: (r) => { const link = r.callArgs.find((x) => x.name === 'wallet_receive')?.args;
-      return (link?.amount === 150 ? '' : `wrong link ${JSON.stringify(link)}`) + (/whop\.com\/checkout\/plan_eval150/.test(r.result) || r.calls.includes('present') ? '' : ' no link in the result')
-        + (/\b(received|been paid|got paid)\b/i.test(r.result) && !/(?:\b(?:once|when|after|not)\b|n[’']t\b)[^.]{0,50}\b(received|paid)\b/i.test(r.result) ? ' claims money was received' : ''); } },
+  { id: 'wallet-link', instructions: 'Create a payment link for $150 for the logo design I did for Studio Berg.',
+    tools: { wallet_status: () => walletSnapshot() },
+    check: r => /payment.?link/i.test(r.result) && /unavailable|not (?:available|supported)|removed|can[’']?t|cannot/i.test(r.result) ? '' : 'did not explain removed payment links' },
   { id: 'wallet-limit', instructions: 'Change my Belna wallet daily card limit to $100.', approve: ['wallet_set_limit'],
     tools: { wallet_status: () => walletSnapshot(), wallet_set_limit: (a) => walletSnapshot({ dailyCardLimitUsd: a.dailyLimitUsd }) },
     check: (r) => { const set = r.callArgs.find((x) => x.name === 'wallet_set_limit')?.args;

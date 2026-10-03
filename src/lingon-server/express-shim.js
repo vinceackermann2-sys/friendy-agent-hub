@@ -1,3 +1,5 @@
+import { requestBodyLimit, rawWebhook } from './request-limits.js';
+
 /* Minimal Express-compatible shim so the original Lingon backend routes run
    unchanged on the edge runtime (no Node http server available).
    Supports: app.use(mw), app.get/post/delete(path, ...handlers), path params,
@@ -18,6 +20,43 @@ function compile(pattern) {
       '$',
   );
   return { rx, keys };
+}
+
+function bodyError(status, message) {
+  return Object.assign(new Error(message), { status, requestBodyError: true });
+}
+
+async function readLimitedBody(request, limit) {
+  const length = request.headers.get('content-length');
+  if (length && /^\d+$/.test(length) && Number(length) > limit) {
+    void request.body?.cancel().catch(() => {});
+    throw bodyError(413, 'Request body is too large.');
+  }
+  if (!request.body) return '';
+  const encoding = request.headers.get('content-encoding');
+  if (encoding && encoding.toLowerCase() !== 'identity') {
+    void request.body.cancel().catch(() => {});
+    throw bodyError(415, 'Unsupported request encoding.');
+  }
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0, text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        void reader.cancel().catch(() => {});
+        throw bodyError(413, 'Request body is too large.');
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } catch (error) {
+    if (error.requestBodyError) throw error;
+    throw bodyError(400, 'Could not read request body.');
+  } finally { reader.releaseLock(); }
 }
 
 class Res {
@@ -142,18 +181,6 @@ export function createApp() {
       const res = new Res();
       const streamController = new AbortController();
       res._onCancel = () => streamController.abort();
-      let body = {};
-      let text = '';
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        text = await request.text().catch(() => '');
-        if (text) {
-          try {
-            body = JSON.parse(text);
-          } catch {
-            body = {};
-          }
-        }
-      }
       const headers = {};
       request.headers.forEach((v, k) => {
         headers[k.toLowerCase()] = v;
@@ -165,8 +192,7 @@ export function createApp() {
         originalUrl: url.pathname + url.search,
         url: url.pathname + url.search,
         query,
-        body,
-        rawText: text,
+        body: {},
         headers,
         params: {},
         ip: headers['cf-connecting-ip'] || headers['x-forwarded-for'] || 'ip',
@@ -174,6 +200,19 @@ export function createApp() {
         signal: AbortSignal.any([request.signal, streamController.signal]),
         get: (k) => headers[String(k).toLowerCase()],
       };
+      let bodyRead;
+      // Rate-limit middleware runs before reading. requireAuth calls this only
+      // after verifying the user, including for the larger upload routes.
+      req.readBody = () => bodyRead ||= (async () => {
+        if (request.method === 'GET' || request.method === 'HEAD') return;
+        const text = await readLimitedBody(request, requestBodyLimit(req.method, req.path));
+        if (rawWebhook(req.path)) { req.rawText = text; return; }
+        if (!text) return;
+        try {
+          req.body = JSON.parse(text);
+          if (req.body === null || typeof req.body !== 'object') throw new Error();
+        } catch { throw bodyError(400, 'Invalid request body.'); }
+      })();
 
       const matches = layers.filter(
         (l) => (l.method === null || l.method === request.method) && l.rx.test(url.pathname),
@@ -185,6 +224,9 @@ export function createApp() {
       const pending = [];
       const track = (p) => {
         pending.push(p);
+        // A nested next(error) can reject several continuations before the
+        // outer handler settles. Every rejection still reaches the catch below.
+        p.catch(() => {});
         return p;
       };
       const run = () =>
@@ -202,11 +244,13 @@ export function createApp() {
               req.params[k] = decodeURIComponent(m[idx + 1]);
             });
             let hi = 0;
-            const next = () =>
-              track(
+            const next = (error) => error ? track(Promise.reject(error)) : track(
                 (async () => {
                   const h = layer.handlers[hi++];
                   if (!h) return run();
+                  // Three-argument middleware (including requireAuth) controls
+                  // when to continue. Ordinary route handlers consume the body.
+                  if (!layer.isMiddleware && h.length < 3) await req.readBody();
                   await h(req, res, next);
                 })(),
               );
@@ -223,13 +267,17 @@ export function createApp() {
         } catch (e) {
           // An uncaught error may carry internal details (database or provider errors): it is
           // logged here, and the caller gets a generic message.
-          console.error('unhandled-route-error', { path: url.pathname, name: String(e?.name || ''), code: String(e?.code || '') });
-          if (!res._sent) res.status(500).json({ error: 'Something went wrong. Please try again.' });
+          const status = e.requestBodyError ? e.status : 500;
+          if (status === 500) console.error('unhandled-route-error', { path: url.pathname, name: String(e?.name || ''), code: String(e?.code || '') });
+          if (!res._sent) res.status(status).json({ error: e.requestBodyError ? e.message : 'Something went wrong. Please try again.' });
           else res.end();
         }
         if (!res._sent) res.status(404).json({ error: 'Not found' });
       })();
-      return res.promise;
+      const response = await res.promise;
+      // Authentication/rate-limit rejections never need to drain a large body.
+      if (!bodyRead) void request.body?.cancel().catch(() => {});
+      return response;
     },
   };
 

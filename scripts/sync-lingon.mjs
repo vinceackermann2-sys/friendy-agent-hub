@@ -103,6 +103,19 @@ function syncStripeProvider() {
 
 syncStripeProvider();
 
+// Security boundaries must stay identical across the two runtimes.
+for (const name of ['oauth-security', 'request-limits', 'shoppay']) {
+  const src = readFileSync(join(root, `server/${name}.js`), 'utf8');
+  const esm = src
+    .replace("const crypto = require('crypto');", "import crypto from 'node:crypto';")
+    .replace("const store = require('./store');", "import * as store from './store.js';")
+    .replace("const { currencyFor, USD_RATE } = require('./agents/product-search');", "import { currencyFor, USD_RATE } from './agents/product-search.js';")
+    .replace("const { publicUrlProblem, pinnedFetch } = require('./agents/sandbox');", "import { publicUrlProblem } from './agents/public-web.js';\nconst pinnedFetch = (url, init) => fetch(url, init);")
+    .replace(/module\.exports\s*=\s*\{/g, 'export {');
+  if (/require\(|module\.exports/.test(esm)) throw new Error(`Unconverted security module: ${name}`);
+  writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');
+}
+
 {
   const src = readFileSync(join(root, 'server/agents/wallet-tools.js'), 'utf8');
   writeFileSync(join(root, 'src/lingon-server/agents/wallet-tools.js'), src.replace('module.exports = { createWalletTools };', 'export { createWalletTools };'), 'utf8');

@@ -41,20 +41,9 @@ function createWalletTools(wallet) {
       description:'Read the owner’s Belna Wallet balance, card status and activity. Never invent availability. Card checkout is unavailable until a secure bridge is enabled. Existing cards are spending only.',
       run: async (_, ctx) => ({...await wallet.snapshot(ctx.userId),paymentSelection:await wallet.preferences(ctx.userId)}),
     },
-    wallet_receive: {
-      name:'wallet_receive', type:'function', approval:true,
-      description:'Create a Belna Wallet payment link for work the owner wants to be paid for. Requires approval of amount and description. Returns a link, not paid earnings. Label the URL Payment link. Fees and settlement times apply.',
-      approvalDetail: async ({ amount, title }) => JSON.stringify({ amount, title, currency:'USD', requestKey:crypto.randomUUID() }),
-      run: (args, ctx) => {
-        let approved;
-        try { approved=JSON.parse(ctx.approvedDetail); } catch {}
-        if (!approved || approved.amount !== args.amount || approved.title !== args.title) throw new Error('Approve this exact payment link first.');
-        return wallet.receive(ctx.userId, approved);
-      },
-    },
     wallet_send: {
       name:'wallet_send', type:'function', approval:true,
-      description:'Send dollars to another Belna Wallet by the recipient’s Belna email. Requires one-time owner approval. $50 transfer allowance per 24 hours, separate from card limits. Partner fees may apply. Never use for existing cards.',
+      description:'Transfer USD between connected Whop accounts for two Belna Wallet users. The recipient’s confirmed Belna sign-in email identifies their wallet; arbitrary emails, standalone Whop users and crypto addresses are unsupported. Requires one-time owner approval. $50 transfer allowance per 24 hours, separate from card limits. Partner fees may apply. Never use for existing cards.',
       approvalDetail: async (args, ctx) => JSON.stringify(await wallet.transferQuote(ctx.userId, args)),
       run: (args, ctx) => {
         let approved;

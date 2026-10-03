@@ -13,6 +13,7 @@ import { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costO
 import * as store from './store.js';
 import * as stripeMod from './stripe.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
+import { safeNext, bindOAuthBrowser, matchesOAuthBrowser, clearOAuthBrowser } from './oauth-security.js';
 import crypto from 'node:crypto';
 // Microsoft Foundry tool harness + Azure VM sandbox + extras
 import * as Runner from './agents/runner.js';
@@ -358,10 +359,6 @@ function siteOrigin(req) {
   if (host) return ((req.protocol || 'https') + '://' + host).replace(/\/$/, '');
   return '';
 }
-function safeNext(n) {
-  const s = String(n || '/');
-  return s.startsWith('/') && !s.startsWith('//') ? s : '/';
-}
 function pruneOAuthState() {
   if (OAUTH_STATE.size <= 500) return;
   const now = Date.now();
@@ -376,7 +373,8 @@ app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
     if (!clientId) return res.status(500).json({ error: 'Google sign-in is not configured.' });
     const state = crypto.randomBytes(32).toString('hex');
     const redirectUri = siteOrigin(req) + '/api/auth/google/callback';
-    OAUTH_STATE.set(state, { next: safeNext(req.query.next), redirectUri, termsVersion: TERMS_VERSION, exp: Date.now() + 10 * 60e3 });
+    const binding = bindOAuthBrowser(res, state, redirectUri);
+    OAUTH_STATE.set(state, { next: safeNext(req.query.next), redirectUri, binding, termsVersion: TERMS_VERSION, exp: Date.now() + 10 * 60e3 });
     pruneOAuthState();
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
       client_id: clientId,
@@ -396,10 +394,12 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
   const back = (msg) => res.redirect('/?auth_error=' + encodeURIComponent(msg || 'Sign-in failed'));
   try {
     const { code, state, error } = req.query;
-    if (error) return back(req.query.error_description || error || 'Sign-in cancelled.');
     const saved = state ? OAUTH_STATE.get(String(state)) : null;
-    if (state) OAUTH_STATE.delete(String(state)); // one-time use (CSRF protection)
-    if (!code || !saved || saved.exp < Date.now()) return back('Sign-in expired — please try again.');
+    if (!saved || saved.exp < Date.now() || !matchesOAuthBrowser(req, saved.binding)) return back('Sign-in expired — please try again.');
+    OAUTH_STATE.delete(String(state));
+    clearOAuthBrowser(res, saved.binding);
+    if (error) return back(req.query.error_description || error || 'Sign-in cancelled.');
+    if (!code) return back('Sign-in expired — please try again.');
     const clientId = googleEnv('GOOGLE_CLIENT_ID');
     const clientSecret = googleEnv('GOOGLE_CLIENT_SECRET');
     if (!clientId || !clientSecret) return back('Google sign-in is not configured.');
@@ -440,7 +440,7 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
     if (sess.error || !sess.data.session) return back((sess.error && sess.error.message) || 'Could not complete sign-in.');
     const frag = '#access_token=' + encodeURIComponent(sess.data.session.access_token)
       + '&refresh_token=' + encodeURIComponent(sess.data.session.refresh_token || '');
-    res.redirect(saved.next.split('#')[0].split('?')[0] + frag);
+    res.redirect(safeNext(saved.next.split('#')[0].split('?')[0]) + frag);
   } catch (e) {
     return back(e.message);
   }
@@ -1044,7 +1044,7 @@ app.get('/api/belna-wallet', rateLimit(30, 60000), requireAuth(async (req, res) 
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
   catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
 }));
-for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session', 'card-connect', 'card-session', 'controls', 'deposit', 'deposit-session', 'withdraw-session', 'legacy', 'legacy-withdraw-session', 'payment-request', 'receive', 'quote', 'send']) {
+for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session', 'card-connect', 'card-session', 'controls', 'deposit', 'deposit-session', 'withdraw-session', 'legacy', 'legacy-withdraw-session', 'quote', 'send']) {
   app.post('/api/belna-wallet/' + action, rateLimit(10, 60000), requireAuth(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
@@ -1052,7 +1052,6 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'oauth-finish' ? await belnaWallet.finishConnect(req.user, req.body || {})
         : action === 'legacy' ? await belnaWallet.legacySnapshot(req.user.id)
         : action === 'legacy-withdraw-session' ? await belnaWallet.legacyWithdrawalSession(req.user.id)
-        : action === 'payment-request' ? await belnaWallet.paymentRequest(req.user.id,req.body?.requestId)
         : action === 'verify' ? await belnaWallet.verify(req.user.id)
         : action === 'card-connect' ? await belnaWallet.connectCard(req.user.id)
         : action === 'controls' ? await belnaWallet.updateCard(req.user.id, req.body || {})
@@ -1062,10 +1061,9 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
         : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
-        : action === 'send' ? await belnaWallet.confirmTransfer(req.user.id, req.body || {})
-        : await belnaWallet.receive(req.user.id, req.body || {});
+        : await belnaWallet.confirmTransfer(req.user.id, req.body || {});
       res.json(result);
-    } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message }); }
+    } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message, ...(action === 'send' && e.transferNotStarted === true ? {transferNotStarted:true} : {}) }); }
   }));
 }
 app.get('/api/ucp-profile', (req, res) => {

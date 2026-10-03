@@ -4,7 +4,6 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
 
 (async () => {
   const rows = new Map(), quotes = new Map(), calls = [];
-  let checkoutOverride=null;
   let card = null, transferCalls=0, timeout=false,cardCapability='active',verificationUrl='https://verify.sumsub.com/session/abc',recoveryReady=false,applicationUrl=null,wrongParent=false,identityStatus='pending',verificationResultStatus='pending';
   const store = {
     supaConfigured:() => true,
@@ -34,8 +33,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     else if(path==='/card_transactions') data={data:[{merchant_name:'Store',usd_amount:5.25,status:'completed',secrets:'LEAK'}]};
     else if(path==='/financial_activity') data={data:[{line_type:'onchain_deposit',currency:{code:'usd'},usd_amount:'25.10',posted_at:'2026-01-01',source:{secrets:'LEAK'}},{line_type:'payment_gross',currency:{code:'btc'},usd_amount:'20'}]};
     else if(path==='/verifications') {if(init.method==='GET')return {ok:false,status:403,json:async()=>({error:{message:'Missing identity read permission'}})};data={status:verificationResultStatus,session_url:verificationResultStatus==='approved'?undefined:verificationUrl};if(verificationResultStatus==='approved')identityStatus='approved';}
-    else if(path==='/deposits') data={account_id:'biz_one',hosted_url:'https://whop.com/deposit/biz_one'};
-    else if(path==='/checkout_configurations') {assert.equal(body.account_id,'biz_one','checkout configuration must target the connected owner');assert.equal(body.plan.account_id,'biz_one','inline checkout variant must target the same owner');assert.equal(body.plan.company_id,undefined);data={account_id:body.account_id || 'biz_timewarp',plan:{currency:'usd',initial_price:body.plan.initial_price,plan_type:'one_time'},purchase_url:'https://whop.com/checkout/ch_one',...checkoutOverride};}
+    else if(path==='/deposits') data={account_id:'biz_one',hosted_url:'https://whop.com/deposit/belna-wallet-owner/'};
     else if(path==='/access_tokens')data={token:'owner-only-withdrawal-token-'.repeat(3),expires_at:body.expires_at};
     else if(path==='/transfers') { transferCalls++; if(timeout){timeout=false;throw Error('timeout');} data={object:'transfer',id:'ctt_one',status:'succeeded'}; }
     else throw Error('Unexpected API call '+path);
@@ -115,19 +113,10 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   assert.equal((await wallet.verify('u1')).url,verificationUrl,'Whop can return a Sumsub-hosted KYC session');
   verificationUrl='https://sumsub.com.evil.example/session/abc';
   await assert.rejects(wallet.verify('u1'),/secure wallet link/,'verification rejects lookalike domains');
-  assert.match((await wallet.deposit('u1')).url,/deposit/);
+  assert.equal((await wallet.deposit('u1')).url,'https://whop.com/deposit/biz_one/','hosted funding uses the verified account ID, not the provider’s broken slug URL');
   const funding=await wallet.depositSession('u1');assert.equal(funding.accountId,'biz_one');assert.equal(funding.accessToken,undefined,'connected funding has no account-management token');
   wrongParent=true;await assert.rejects(wallet.depositSession('u1'),/connection could not be confirmed/);wrongParent=false;
-  const receive=await wallet.receive('u1',{amount:10,title:'Design work',requestKey:'abcdefghijklmnop'});
-  assert.equal(receive.amount,10);
-  assert.equal(calls.find(c=>c.path==='/checkout_configurations').body.plan.account_id,'biz_one');
-  for(const invalid of [{account_id:'biz_other'},{plan:{currency:'eur',initial_price:10,plan_type:'one_time'}},{plan:{currency:'usd',initial_price:10,plan_type:'renewal'}},{plan:{currency:'usd',initial_price:100,plan_type:'one_time'}}]){
-    checkoutOverride=invalid;
-    await assert.rejects(wallet.receive('u1',{amount:10,title:'Design work',requestKey:'abcdefghijklmnop'}),/could not be confirmed/,'never share a checkout for another owner, currency, recurring plan or amount');
-  }
-  checkoutOverride=null;
-  const checkoutDenied=createBelnaWallet({store,env:{WHOP_COMPANY_API_KEY:'secret',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp',WHOP_SANDBOX:'true'},fetchImpl:async()=>({ok:false,status:403,json:async()=>({error:{message:'You do not have permission to access this resource'}})})});
-  await assert.rejects(checkoutDenied.receive('u1',{amount:10,title:'Design work',requestKey:'abcdefghijklmnop'}),/additional permissions/,'permission failures require setup rather than another identity check');
+  assert.equal(wallet.receive,undefined,'payment-link creation is unavailable');
   const tools=createWalletTools(wallet);
   await assert.rejects(wallet.withdrawalSession('u1'),/withdrawals are being connected/);
   const withdrawalWallet=createBelnaWallet({store,fetchImpl,env:{WHOP_COMPANY_API_KEY:'secret',WHOP_PLATFORM_ACCOUNT_ID:'biz_timewarp',WHOP_SANDBOX:'true',WHOP_WITHDRAWALS_ENABLED:'true'}});
@@ -142,7 +131,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   await assert.rejects(wallet.verificationSession('unknown'),/Create your/);
   wrongParent=true;await assert.rejects(wallet.verificationSession('u1'),/connection could not be confirmed/);wrongParent=false;
   assert.equal(tools.wallet_send.approval,true);
-  assert.equal(tools.wallet_receive.approval,true);
+  assert.equal(tools.wallet_receive,undefined,'the agent cannot create payment links');
   await assert.rejects(async()=>tools.wallet_send.run({recipient:'b@example.com',amount:5},{userId:'u1'}),/Approve/);
   const detail=await tools.wallet_send.approvalDetail({recipient:'b@example.com',amount:5},{userId:'u1'});
   await assert.rejects(async()=>tools.wallet_send.run({recipient:'evil@example.com',amount:5},{userId:'u1',approvedDetail:detail}),/Approve/);
@@ -177,7 +166,6 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   const {approvalCard}=require('../server/agents/cards');
   const sendCard=approvalCard('wallet_send',{recipient:'b@example.com',amount:5},detail,tools.wallet_send,'call');
   assert.equal(sendCard.title,'Send $5.00 to b@example.com');assert.deepEqual([sendCard.view.kind,sendCard.view.amount,sendCard.view.to],['money','$5.00','b@example.com']);
-  assert.equal(approvalCard('wallet_receive',{},JSON.stringify({amount:150,title:'Logo',currency:'USD'})).title,'Create a $150.00 payment link');
   assert.equal(approvalCard('wallet_set_limit',{},await tools.wallet_set_limit.approvalDetail({dailyLimitUsd:100})).title,'Set your daily card limit to $100.00');
   // Pausing only lowers risk and runs without a card; resuming needs the owner's exact approval.
   const cardChanges=[],pauseTools=createWalletTools({updateCard:async(userId,change)=>{cardChanges.push([userId,change]);return {ok:true};}});

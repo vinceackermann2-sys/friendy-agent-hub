@@ -1,3 +1,60 @@
+# Hosted funding correction — 3 October 2026
+
+Whop's deposits API returns a hosted URL containing the account slug. Its current
+hosted page sends that slug directly to account, permission and deposit APIs,
+which require a `biz_` resource ID. The adapter now builds `/deposit/biz_.../`
+only after confirming the deposits response belongs to the owner's account.
+
+Both card callbacks documented at
+https://docs.whop.com/elements/latest/wallet/deposit open that hosted page in the
+owner's existing wallet dialog. The frame supports payment, forms and sign-in
+popups, with retry, back to funding methods and a separate-tab link. Wallet
+balance refreshes while funding is open; opening the form never credits money.
+The sidebar's Wallet / Existing controls save the same owner-scoped preference
+as Settings, preserve the selected method on errors, and support keyboard use.
+
+Regression coverage includes the broken slug response, desktop/mobile switching,
+reload and failed saves, both card events, visible interactive funding frames,
+retry/back/close and the actual Whop SDK. Live public inspection reproduced the
+slug failure and confirmed the corrected page loads inside the desktop/mobile
+popup. No live card payment was submitted.
+
+# Money controls verification — 2 October 2026
+
+Send opens an owner-only dialog, alongside Add money and Withdraw.
+Send reviews a USD transfer to another connected Belna Wallet's confirmed
+sign-in email. Its rolling allowance is $50 per 24 hours. Editing the draft
+invalidates the quote; an uncertain submission retains the same quote for a
+status check, including after closing and reopening the dialog.
+
+Only exact Supabase `P0001` refusals (`QUOTE_NOT_FOUND`, `QUOTE_EXPIRED` or
+`TRANSFER_LIMIT`) return `transferNotStarted: true` and release the draft for a
+new review. Transport failures and unexpected database errors retain the
+original quote for Check transfer status. `tests/wallet-transfer-rejections.cjs`
+covers this distinction in both runtimes; `tests/wallet-money-ui.cjs` covers
+the owner's recovery controls.
+
+Earning, Get paid and payment-link creation have been removed from the app,
+agent tools and connected-wallet API. Existing financial activity remains visible.
+Sending is a real Whop ledger transfer between account IDs: the recipient’s
+confirmed Belna email is a lookup in Belna, not a provider destination or an
+email claim link. Both users need existing connected Belna Wallets. Arbitrary
+Whop emails and external crypto addresses are not supported. Historical
+personal-wallet notes below describe the retired integration.
+
+Embedded money forms wait for SDK readiness, keep a visible frame container,
+show a retry for loading failures or stalls, and destroy old frames on retry
+or close. Desktop/mobile regression checks use interactive cross-origin frames;
+the optional `WHOP_ELEMENTS_SDK_SOURCE` runs them with the actual Whop SDK.
+
+`npm test`, `npm run test:wallet`, `UI_BASE=http://127.0.0.1:8000 npm run
+test:wallet-ui` and the production build pass. Read-only live inspection confirmed
+provider account and checkout reads, transfer/card-funding capabilities, and
+visible funding and bank-withdrawal forms. Live withdrawals are enabled; card
+applications and agent card issuing remain disabled. No live payment, deposit,
+transfer or withdrawal was submitted, so completed money movement is not proven
+by these UI checks.
+
 # Connected wallet correction — 30 September 2026
 
 Belna Wallet now uses connected Whop sub-accounts (`biz_`), with each card assigned

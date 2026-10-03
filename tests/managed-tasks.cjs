@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const {webcrypto}=require('node:crypto');
 let resolveAction;const action=new Promise(resolve=>resolveAction=resolve);
-let advances=0, owner='a';const requests=[];
+let advances=0, owner='a', billingRefreshes=0;const requests=[];
 let task={id:'task',chatId:'chat',title:'Task',version:1,revision:1,status:'running',sequence:0,events:[]};
 const window={Engine:{},LingonAuth:{get:()=>({user:{id:owner}}),
   api:async(path,options)=>{
@@ -23,7 +23,8 @@ const window={Engine:{},LingonAuth:{get:()=>({user:{id:owner}}),
 const timers=new Set();
 const later=(fn,ms)=>{const t=setTimeout(()=>{timers.delete(t);fn();},ms);t.unref();timers.add(t);return t;};
 const context=vm.createContext({window,WeakMap,Promise,AbortController,TextDecoder,Uint8Array,crypto:webcrypto,setTimeout:later,clearTimeout,
-  state:{agent:{name:'Agent'},vault:{},memory:[]},uid:()=>webcrypto.randomUUID(),isActive:()=>false,$:()=>null,msgNode:()=>null,replaceNode:()=>{},repaintCanvasSoon:()=>{},save:()=>{}});
+  state:{agent:{name:'Agent'},vault:{},memory:[]},uid:()=>webcrypto.randomUUID(),isActive:()=>false,$:()=>null,msgNode:()=>null,replaceNode:()=>{},repaintCanvasSoon:()=>{},save:()=>{},
+  refreshBillingUsage:()=>billingRefreshes++});
 const src=fs.readFileSync(require.resolve('../app/app.js'),'utf8');
 vm.runInContext(src.slice(src.indexOf('const managedRunTokens'),src.indexOf('\nfunction replaceNode(c, m){',src.indexOf('const managedRunTokens'))),context);
 vm.runInContext(fs.readFileSync(require.resolve('../app/engine.managed.js'),'utf8'),context);
@@ -42,6 +43,7 @@ const chat={id:'chat',messages:[{role:'user',kind:'text',text:'Question'}]};cons
   assert.equal(requests.find(r=>r.path.endsWith('/control')).body.version,1);
   await window.Engine.controlTask(rt,'task','steer_team',{instruction:'Use Swedish'});
   assert.equal(chat.managedTasks.task.version,3);assert.equal(chat.managedTasks.peer.version,3,'shared steering reconciles every returned worker');
+  assert.ok(billingRefreshes>0,'background task changes refresh account usage while another view is open');
   owner='b';
   for(const t of timers)clearTimeout(t);
   console.log('managed task transport: foreground reply during held worker, scoped stop, stale response handling: ok');

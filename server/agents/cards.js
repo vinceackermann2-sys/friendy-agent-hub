@@ -171,7 +171,6 @@ function approvalView(name, args = {}, detail) {
     }
     // Money the owner approves: the exact amount and recipient from the approved detail, never raw JSON.
     case 'wallet_send': return { kind: 'money', action: 'send', amount: money(parsed.amount, parsed.currency), to: str(parsed.recipient, 200), note: str(parsed.fees, 200) };
-    case 'wallet_receive': return { kind: 'money', action: 'link', amount: money(parsed.amount, parsed.currency), title: str(parsed.title, 120) };
     case 'wallet_set_limit': return { kind: 'money', action: 'limit', amount: money(parsed.dailyLimitUsd, parsed.currency) };
     case 'wallet_pause': return { kind: 'money', action: parsed.paused === false ? 'resume' : 'pause' };
     default: return { kind: 'generic' };
@@ -189,7 +188,7 @@ const HEADLINES = {
   search: (v) => (v.query ? 'Search the web' : 'Read these websites'),
   web_action: (v) => (v.surface === 'computer' ? 'Use the computer' : 'Interact with this website'),
   automation: () => 'Create this automation',
-  money: (v) => (v.action === 'send' ? `Send ${v.amount}${v.to ? ` to ${v.to}` : ''}` : v.action === 'link' ? `Create a ${v.amount} payment link` : v.action === 'limit' ? `Set your daily card limit to ${v.amount}` : v.action === 'resume' ? 'Resume card spending' : 'Pause card spending'),
+  money: (v) => (v.action === 'send' ? `Send ${v.amount}${v.to ? ` to ${v.to}` : ''}` : v.action === 'limit' ? `Set your daily card limit to ${v.amount}` : v.action === 'resume' ? 'Resume card spending' : 'Pause card spending'),
 };
 function approvalCard(name, args = {}, detail = '', tool = {}, key) {
   if (name === 'ask_user') return { ...questionArgs(args), status: 'pending' };

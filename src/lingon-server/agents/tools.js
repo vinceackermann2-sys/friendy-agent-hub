@@ -1055,7 +1055,7 @@ function pickTools(task) {
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
-  if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_receive'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
+  if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
   return [...names].map((n) => TOOLS[n]).filter((tool) => tool && tool.available !== false);
 }
 

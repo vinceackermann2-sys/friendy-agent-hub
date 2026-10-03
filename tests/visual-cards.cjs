@@ -126,24 +126,48 @@ const clone=x=>x==null?x:structuredClone(x);
     write:async(row,state,token)=>{const r=rows.get(row.id);if(r.revision!==row.revision || (token && token!==r.lease))return null;r.state=clone(state);r.revision++;return clone(r);},
     release:async(u,id,token)=>{const r=rows.get(id);if(r.lease===token)r.lease=null;},
   };
-  const answers=[{functionCalls:[{name:'ask_user',args:{question:'Which helmet?',options:['Blue','Pink']}}]},{text:'Ordering the Pink helmet.'}];
-  let seen;
-  const runtime=createTaskRuntime({records,schemas:TOOL_SCHEMAS,tools:{ask_user:{...TOOLS.ask_user,run:async(args,ctx)=>{seen=ctx.answer;return TOOLS.ask_user.run(args,{...ctx,trace:()=>{}});}}},
+  const edgeRuntime=(await import('../src/lingon-server/agents/task-runtime.js')).createTaskRuntime;
+  for(const factory of [createTaskRuntime,edgeRuntime]) {
+  const answers=[{functionCalls:[{name:'ask_user',args:{question:'Which helmet?',context:'Under 80 EUR.',options:[{label:'Blue',description:'Road helmet.'},{label:'Pink',description:'City helmet.'}]}}]},{text:'Ordering the Pink helmet.'}];
+  let seen;const workerModels=[];
+  const runtime=factory({records,schemas:TOOL_SCHEMAS,tools:{ask_user:{...TOOLS.ask_user,run:async(args,ctx)=>{seen=ctx.answer;return TOOLS.ask_user.run(args,{...ctx,trace:()=>{}});}}},
     azure:{getSandbox:async()=>({mode:'local'})},memory:{list:async()=>[],rank:x=>x,finish:async()=>[]},buildSystem:async()=>'',checkPrompt:()=>{},ensureCredit:async()=>{},
-    protect:(_,s)=>s,logUsage:async()=>{},emitResultCard:()=>{},model:async()=>completed(answers.shift() || {text:'done'})});
+    protect:(_,s)=>s,logUsage:async()=>{},emitResultCard:()=>{},model:async opts=>{workerModels.push(opts);return completed(answers.shift() || {text:'done'});}});
   const task=await runtime.create({userId:'a',chatId:'chat',requestKey:'k',instructions:'Pick a helmet',history:[]});
   for(let i=0;i<4 && rows.get(task.id).state.status!=='waiting_approval';i++) await runtime.step('a',task.id);
   const waiting=rows.get(task.id).state;
   assert.equal(waiting.status,'waiting_approval');
   const cardEvent=waiting.events.find(e=>e.type==='card' && e.card.type==='question');
   assert.ok(cardEvent && cardEvent.callId,'the question card carries the call to answer');
+  await assert.rejects(runtime.control('a',task.id,{action:'decide',callId:cardEvent.callId,allow:true,answer:' ',version:waiting.version,requestId:'empty'},'chat'),/answer the question or skip/);
   await runtime.control('a',task.id,{action:'decide',callId:cardEvent.callId,allow:true,answer:'Pink',version:waiting.version,requestId:'answer'},'chat');
+  await runtime.control('a',task.id,{action:'decide',callId:cardEvent.callId,allow:true,answer:'Pink',version:waiting.version,requestId:'answer'},'chat');
+  assert.equal(rows.get(task.id).state.ownerAnswers.length,1,'replayed decisions do not duplicate owner answers');
+  assert.equal((await runtime.summaries('a','chat')).find(t=>t.id===task.id).answers.at(-1).answer,'Pink','main chat can recall task answers');
+  assert.equal((await runtime.details('a',task.id,'chat')).ownerAnswers[0].options[1].description,'City helmet.','full question meanings remain readable by the coordinator');
   for(let i=0;i<4 && !['completed','failed'].includes(rows.get(task.id).state.status);i++) await runtime.step('a',task.id);
   const done=rows.get(task.id).state;
   assert.equal(seen,'Pink');
   assert.equal(done.status,'completed');
   assert.ok(done.events.some(e=>e.type==='decision' && e.answer==='Pink'),'the decision event reports the answer');
   assert.match(done.observations.find(o=>o.name==='ask_user').text,/Pink/);
+  assert.match(workerModels.at(-1).prompt,/Owner answers to task questions[\s\S]*Which helmet[\s\S]*Pink/,'owner input is preserved separately from untrusted tool observations');
+  // Older tool observations leave the active window during a long task. The
+  // owner's answers must still be supplied, including after a task revision.
+  const long=rows.get(task.id).state;
+  long.status='queued';long.version++;long.round=1;long.result=null;
+  long.observations.push(...Array.from({length:24},(_,i)=>({id:'later'+i,name:'web_search',ok:true,text:'Long later research. '.repeat(400),version:long.version,key:'web_search:{}'})));
+  await runtime.step('a',task.id);
+  assert.match(workerModels.at(-1).prompt,/Owner answers to task questions[\s\S]*Which helmet[\s\S]*Pink/,'answers survive long task context trimming and revisions');
+  assert.match(workerModels.at(-1).prompt,/Under 80 EUR[\s\S]*City helmet/,'the meaning of the chosen option survives too');
+  answers.push({functionCalls:[{name:'ask_user',args:{question:'Which date?',options:['June','July']}}]},{text:'Continuing with defaults.'});
+  const skipped=await runtime.create({userId:'a',chatId:'chat',requestKey:'skip',instructions:'Plan a trip',history:[]});
+  for(let i=0;i<4 && rows.get(skipped.id).state.status!=='waiting_approval';i++) await runtime.step('a',skipped.id);
+  const skipApproval=rows.get(skipped.id).state.approval;
+  await runtime.control('a',skipped.id,{action:'decide',callId:skipApproval.id,allow:false,version:1,requestId:'skip'},'chat');
+  await runtime.step('a',skipped.id);
+  assert.match(workerModels.at(-1).prompt,/Owner answers to task questions[\s\S]*Which date[\s\S]*"skipped":true/,'skipping is recorded without approving an action');
+  }
   // A worker that repeats the same lookup does not stack identical cards.
   const {emitResultCard}=require('../server/agents/vm-harness');
   const repeatRows=new Map();

@@ -36,6 +36,8 @@ const openSettingsTab=async(page,t)=>{await page.locator('#main .set-page, #main
     await page.locator('#giftcode').waitFor();
     assert.equal(await page.locator('[data-act="portal"], #plancards').count(), 0);
     assert.equal(await page.locator('.billing-extra-balance').count(), 1);
+    assert.equal(await page.locator('.billing-token-breakdown, .billing-extra-stats, .billing-add-tokens').count(), 0);
+    assert.equal(await page.locator('.billing-extra-balance .billing-select-trigger, .billing-extra-balance [data-act="buycredits"]').count(), 2);
     assert.match(await page.locator('#billbody').innerText(), /Images today|Transcriptions today/);
     await page.locator('.billing-select-trigger').click();
     assert.equal(await page.locator('.billing-select').getAttribute('open'), '');
@@ -72,6 +74,6 @@ const openSettingsTab=async(page,t)=>{await page.locator('#main .set-page, #main
     assert.ok(menu && menu.x >= 0 && menu.x + menu.width <= 1280, 'token menu stays inside the desktop viewport');
     if (process.env.BILLING_DESKTOP_SCREENSHOT) await page.screenshot({ path: process.env.BILLING_DESKTOP_SCREENSHOT, fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('billing settings UI: Billing and Usage sections, limits, token picker and gift cards: ok');
+    console.log('billing settings UI: simplified Usage, combined extra tokens card, token picker and gift cards: ok');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

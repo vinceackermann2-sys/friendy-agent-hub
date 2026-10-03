@@ -54,6 +54,7 @@ window.LingonAuth = (() => {
       const e = new Error(j.error || `HTTP ${r.status}`);
       e.code = r.status;
       e.upgrade = !!j.upgrade_required;
+      e.transferNotStarted = j.transferNotStarted === true;
       throw e;
     }
     return j;
