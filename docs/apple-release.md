@@ -5,8 +5,10 @@
 - Apple account setup verified on 4 October 2026: team `6XD78664VT`, registered
   bundle ID `se.belna.app`, HealthKit and primary Sign in with Apple enabled.
 - [Belna App Store Connect record](https://appstoreconnect.apple.com/apps/6819012393/distribution):
-  iOS and macOS created; iOS listing draft saved as version 1.0.0 with manual
-  release selected. No build has been uploaded or submitted for review.
+  iOS and macOS listing drafts saved as version 1.0.0 with manual release and
+  the live support URL. iOS build 1.0.0 (14.1) is selected in the release draft,
+  processed and Ready to Submit in
+  TestFlight. No App Review submission or storefront release has been made.
 - Production database migration installed and verified: Apple tables have RLS,
   direct anonymous/account access is revoked, and only the server role can call
   cleanup/deletion functions. Hourly `belna-apple-command-expiry` is active.
@@ -14,11 +16,14 @@
   intentional for these server-only tables; permissions were verified directly.
 - Encrypted Apple identity-token migration installed and verified on production:
   RLS enabled, anonymous/account access denied, server-role access allowed.
-- [Latest native validation and signed export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37210011891)
+- [Latest native validation and TestFlight upload](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37213788005)
   passed iPhone/iPad and Mac Catalyst builds, origin/date/backup unit tests and
   native consent/Apple connection UI tests, then exported a signed App Store IPA
-  at commit `dd43031`, including the account-deletion token-revocation changes.
-  No TestFlight upload was requested in that run.
+  at commit `2f31682`, including cloud account cleanup and Apple token revocation.
+  Apple accepted the upload with no errors and processed build 14.1. The exact
+  uploaded IPA has SHA-256
+  `E4B9A27758FD6965E4675F8EAA8667594C07C94BCEA9F83433577E93A9613C98`.
+  Testing instructions are saved; no testers have been invited.
 
 - Apple Distribution certificate and App Store iOS profile created for the
   registered app and stored as encrypted GitHub signing secrets. Certificate and
@@ -28,15 +33,21 @@
   [First TestFlight upload run](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37212845388)
   passed native tests/signing/export; Apple rejected upload with 90683 for the
   missing `NSHealthUpdateUsageDescription`. An accurate read-only Health purpose
-  string is now included. The corrected build must pass upload and processing.
+  string is included in the corrected, successfully processed build 14.1.
 - Sign in with Apple key `TWD2XB32GU` registered for Belna only, downloaded,
   validated and saved in a protected local credential directory outside Git.
   Its private key and three identifiers are installed in Lovable's encrypted
-  server secrets. Lovable requires publishing before these apply on the live app.
+  server secrets. The merged changes and server secrets were published to the
+  production site on 4 October 2026.
 - Supabase's native Apple provider enabled for `se.belna.app` and verified in
   the saved provider settings on 4 October 2026. Production
-  `https://belna.se/api/apple/devices` still returns 404. The app changes are on
-  draft PR #12 and have not reached the production site.
+  `https://belna.se/api/apple/devices` returns 401 with “Sign in required.”,
+  `/api/auth/apple` rejects missing terms with 400, and `/support` and `/privacy`
+  return 200. PR #12 merged as `4359caf`; Lovable synced that exact commit before
+  publishing. These unauthenticated checks do not prove live Apple sign-in.
+- The Mac Catalyst App Store profile and Mac Installer Distribution request are
+  prepared. The workflow can sign/export a Mac package and optionally upload it;
+  signing access still requires owner approval and a successful signed Mac run.
 
 - `npm run build`: web client, SSR and Cloudflare server build passed.
 - `node tests/apple-devices.cjs`: real PostgreSQL migration, service-only access,
@@ -62,26 +73,21 @@
   iPhone/iPad and Mac Catalyst builds and unit tests passed with code signing
   disabled. Later workflow runs add native UI tests and downloadable evidence.
 
-## Must pass before TestFlight / App Review
+## Must pass before App Review
 
-- Verify the TestFlight upload workflow finishes and Apple processes the build.
-  The production origin is `https://belna.se`; verify the deployed API rollout.
 - Test Supabase's configured native Apple provider with
   first sign-in, returning sign-in, private relay email, revoked Apple identity,
   email code/password fallback and account deletion on a disposable account.
-- Publish the installed server-side Sign in with Apple signing key. The encrypted
-  identity-token migration is applied. Confirm actual Apple token revocation
+- Confirm actual Apple token revocation
   on account deletion; the App Store Connect upload key cannot do this.
-- Roll out both backend runtimes and the frontend. Verify the
-  production Apple endpoints return 401 without an account, never 404/500.
 - Verify deployed server encryption is active (local configuration is present).
 - Verify actual account deletion on a disposable production account: dedicated
   VM, OS disk, private archive/screenshots, all Library revisions and auth data.
   Cloud resources are recorded before deletion so partial failures can retry.
   Provider-retained archives leave deletion pending; retention settings are not
   disabled. Verify external service retention against the privacy policy.
-- Build a signed Release archive with the owner’s team and a unique incremented
-  build number; validate export compliance and App Store Connect's checks.
+- Complete Mac signing setup, export a signed Mac Catalyst App Store package,
+  upload it and verify Apple's processing. iOS signing/upload already passed.
 - Test on real iPhone and Mac: permission allowed/denied/revoked, selected
   contacts, iCloud sync, foreground/background, device switching, cancellation
   while an approval sheet is open, disconnect/reconnect and network loss after
@@ -98,10 +104,14 @@
   reviewer account and instructions, age rating, EU trader information and
   complete App Privacy answers covering the whole web-backed app (messages,
   files, voice, photos, profiles, purchases and optional Apple data).
-- Upload to TestFlight, install that exact build, then submit it for App Review.
+- Install the processed TestFlight build, then submit it for App Review.
   Approval and storefront release are separate steps.
 
 ## Draft listing
+
+Whole-app privacy categories and the owner information needed for review are
+prepared in [apple-review-data.md](apple-review-data.md). No privacy label,
+age-rating or trader declaration has been submitted from that draft.
 
 Name: Belna
 
@@ -114,9 +124,8 @@ wellness summaries before sharing them with your agent. You control access and
 approve changes. Keep Belna open for Apple app requests. The app works with the
 free plan and existing account plans; digital upgrades are not sold in this app.
 
-Support: `https://belna.se/support`, `support@belna.se`. The support route is
-included in this PR and needs deployment before setting App Store Connect's
-Support URL. Privacy: `https://belna.se/privacy`.
+Support: `https://belna.se/support`, `support@belna.se`. The support route is live
+and returns 200. Privacy: `https://belna.se/privacy`.
 
 Draft reviewer notes: Sign in using the supplied reviewer account or email code.
 Apple apps is the Apple logo button at the top right and is also available in
