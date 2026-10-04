@@ -7,6 +7,14 @@
 - [Belna App Store Connect record](https://appstoreconnect.apple.com/apps/6819012393/distribution):
   iOS and macOS created; iOS listing draft saved as version 1.0.0 with manual
   release selected. No build has been uploaded or submitted for review.
+- Production database migration installed and verified: Apple tables have RLS,
+  direct anonymous/account access is revoked, and only the server role can call
+  cleanup/deletion functions. Hourly `belna-apple-command-expiry` is active.
+  The security advisor's informational “RLS without policies” finding is
+  intentional for these server-only tables; permissions were verified directly.
+- [Final native validation](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37204022135)
+  passed iPhone/iPad and Mac Catalyst builds, origin/date/backup unit tests and
+  native consent/Apple connection UI tests at commit `680e976`.
 
 - `npm run build`: web client, SSR and Cloudflare server build passed.
 - `node tests/apple-devices.cjs`: real PostgreSQL migration, service-only access,
@@ -30,9 +38,9 @@
 - Configure Supabase’s Apple provider with the chosen native client ID; test
   first sign-in, returning sign-in, private relay email, revoked Apple identity,
   email code/password fallback and account deletion on a disposable account.
-- Roll out the migration and both backend runtimes together. Verify the
+- Roll out both backend runtimes and the frontend. Verify the
   production Apple endpoints return 401 without an account, never 404/500.
-- Configure automatic expiry cleanup and verify server encryption is active.
+- Verify deployed server encryption is active (local configuration is present).
 - Resolve the production Azure disk/archive and external service retention
   policy for account deletion. The present route stops the VM and erases
   database/auth data; it does not claim cloud disk/archive erasure.

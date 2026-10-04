@@ -30,14 +30,14 @@ revoke all on public.apple_devices, public.apple_device_commands from anon, auth
 grant all on public.apple_devices, public.apple_device_commands to service_role;
 -- Run hourly (e.g. your database scheduler); terminal metadata is disposable.
 create or replace function public.purge_expired_apple_commands() returns void
-language sql security definer set search_path = public as $$
+language sql security invoker set search_path = public as $$
   delete from public.apple_device_commands where expires_at < now();
 $$;
 revoke all on function public.purge_expired_apple_commands() from public, anon, authenticated;
 grant execute on function public.purge_expired_apple_commands() to service_role;
 
 create or replace function public.delete_belna_account_data(owner_id uuid) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security invoker set search_path = public as $$
 begin
   delete from public.apple_devices where user_id = owner_id;
   delete from public.profiles where id = owner_id::text;

@@ -56,6 +56,22 @@ iOS archive using automatic signing. Use Xcode Organizer to validate and upload
 to TestFlight. For Mac, archive with the Mac Catalyst destination and the
 separate sandbox entitlements. There is no arbitrary HTTP/ATS exception.
 
+The GitHub `Apple app build` workflow also supports a manually requested signed
+iOS archive and an optional TestFlight upload. It runs the unsigned builds and
+tests first. Configure these encrypted repository secrets only after the owner
+approves the signing credential setup:
+
+- `APPLE_DISTRIBUTION_P12_BASE64`, `APPLE_DISTRIBUTION_PASSWORD`
+- `APPLE_IOS_PROFILE_BASE64` (App Store profile for `se.belna.app`)
+- For upload: `APPLE_ASC_KEY_ID`, `APPLE_ASC_ISSUER_ID`,
+  `APPLE_ASC_PRIVATE_KEY_BASE64` (App Store Connect upload key)
+
+The workflow creates a temporary keychain, validates the profile’s team,
+bundle ID, expiry and required capabilities, then exports an IPA. Upload is
+disabled by default. Signing keys are removed from the runner on exit and are
+never included in build artifacts. The signing path requires real credentials
+and has not been verified by a signed upload yet.
+
 ## Backend rollout
 
 1. Deploy the server, edge mirror, web frontend and privacy changes together.
