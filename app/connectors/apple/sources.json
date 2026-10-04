@@ -1,0 +1,42 @@
+[
+  {
+    "file": "calendar.jpg",
+    "sha256": "edd45f5ac25fb194f6f7d07c8fc1a6bb5ad88eb59ecb0a3af10d26b67221bff6",
+    "name": "Calendar",
+    "publisher": "Apple",
+    "scope": "calendar",
+    "appStoreUrl": "https://apps.apple.com/us/app/calendar/id1108185179?uo=4",
+    "retrieved": "2026-10-04",
+    "artworkUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/7e/14/b0/7e14b01c-c9f8-701e-1e78-201a4ff41490/calendarCalistoga-0-0-1x_U007epad-0-1-0-85-220.png/512x512bb.jpg"
+  },
+  {
+    "file": "reminders.jpg",
+    "sha256": "8a4b9586622e1dd5f2ea26b6bb2cc859594997c07faa38038490959c385ccfbf",
+    "name": "Reminders",
+    "publisher": "Apple",
+    "scope": "reminders",
+    "appStoreUrl": "https://apps.apple.com/us/app/reminders/id1108187841?uo=4",
+    "retrieved": "2026-10-04",
+    "artworkUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/ac/53/c8/ac53c892-22b6-b0d8-ace6-9750d777b56f/remindersCalistoga-0-0-1x_U007epad-0-1-0-0-85-220.png/512x512bb.jpg"
+  },
+  {
+    "file": "contacts.jpg",
+    "sha256": "ebc47b88bff02590fd04138969c5dfdfe36be2ad1a9f4ff96ad2b3d5c5e37285",
+    "name": "Contacts",
+    "publisher": "Apple",
+    "scope": "contacts",
+    "appStoreUrl": "https://apps.apple.com/us/app/contacts/id1069512615?uo=4",
+    "retrieved": "2026-10-04",
+    "artworkUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/d9/2f/02/d92f02ff-484b-5eca-495c-36dde3c1a4e8/contactsCalistoga-0-0-1x_U007epad-0-1-0-0-85-220.png/512x512bb.jpg"
+  },
+  {
+    "file": "health.jpg",
+    "sha256": "5ae79b4945400558ff6b1f39ea9850ea3316ac83a21538f6ae6dabfdbc311e0c",
+    "name": "Apple Health",
+    "publisher": "Apple",
+    "scope": "health",
+    "appStoreUrl": "https://apps.apple.com/us/app/apple-health/id1242545199?uo=4",
+    "retrieved": "2026-10-04",
+    "artworkUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/8d/d4/fa/8dd4fae0-bba5-338b-431d-a72be194b67c/healthCalistoga-0-0-1x_U007epad-0-1-0-85-220.png/512x512bb.jpg"
+  }
+]

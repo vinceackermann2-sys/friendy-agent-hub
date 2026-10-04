@@ -3518,10 +3518,8 @@ button.wset-row{border:0;background:none;cursor:pointer;}button.wset-row:hover{b
 .native-welcome-mark{display:grid;place-items:center;margin:0 auto 16px;color:var(--acc)}
 .native-welcome-copy{max-width:340px;margin:12px auto 24px;color:var(--mut);font-size:16px;line-height:1.5}
 .apple-connectors{margin-bottom:20px}
-.apple-connector-logo.apple-calendar{color:#e84b45;background:#fff3f1}
-.apple-connector-logo.apple-reminders{color:#2878dc;background:#edf5ff}
-.apple-connector-logo.apple-contacts{color:#827263;background:#f4f0eb}
-.apple-connector-logo.apple-health{color:#e84868;background:#fff0f4}
+.conn-head .apple-connector-logo{background:transparent;border:0;border-radius:10px;overflow:visible}
+.conn-head .apple-connector-logo img{display:block;width:40px;height:40px;border-radius:10px;object-fit:contain}
 .giftmodal-redeem > summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;font-size:15px;font-weight:700;cursor:pointer;list-style:none}
 .giftmodal-redeem > summary::-webkit-details-marker{display:none}
 .giftmodal-redeem > summary::after{content:'+';font-size:22px;font-weight:400}

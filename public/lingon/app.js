@@ -7985,10 +7985,10 @@ function connectorBodyHtml(a){
   </div>`;
 }
 const APPLE_CONNECTORS = [
-  {scope:'calendar',name:'Apple Calendar',icon:'calendar',description:'Read your events and approve calendar changes.'},
-  {scope:'reminders',name:'Apple Reminders',icon:'list',description:'Read your lists and approve reminder changes.'},
-  {scope:'contacts',name:'Apple Contacts',icon:'user',description:'Find contacts and approve changes to their details.'},
-  {scope:'health',name:'Apple Health',icon:'heart',description:'Read-only wellness summaries. Review each summary before sharing.'},
+  {scope:'calendar',name:'Apple Calendar',iconSrc:'/lingon/connectors/apple/calendar.jpg',description:'Read your events and approve calendar changes.'},
+  {scope:'reminders',name:'Apple Reminders',iconSrc:'/lingon/connectors/apple/reminders.jpg',description:'Read your lists and approve reminder changes.'},
+  {scope:'contacts',name:'Apple Contacts',iconSrc:'/lingon/connectors/apple/contacts.jpg',description:'Find contacts and approve changes to their details.'},
+  {scope:'health',name:'Apple Health',iconSrc:'/lingon/connectors/apple/health.jpg',description:'Read-only wellness summaries. Review each summary before sharing.'},
 ];
 function appleConnectorRows(query,filter){
   if (!window.BelnaApple?.available) return '';
@@ -7999,7 +7999,7 @@ function appleConnectorRows(query,filter){
     const subtitle = connected ? `Connected on ${status.name}` : status ? 'Not connected on this device' : 'Checking device access…';
     return `<article class="conn-row apple-connector ${connected ? 'is-connected' : ''} ${open ? 'is-open' : ''}" data-apple-scope="${app.scope}">
       <div class="conn-head" data-act="toggle-apple-connector" data-scope="${app.scope}" role="button" tabindex="0" aria-expanded="${open}" aria-label="${app.name}, ${connected ? 'connected' : 'connection details'}">
-        <span class="app-logo apple-connector-logo apple-${app.scope}">${icon(app.icon,24)}${connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
+        <span class="app-logo apple-connector-logo"><img src="${app.iconSrc}" alt="" width="40" height="40" decoding="async">${connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
         <span class="conn-meta"><b>${app.name}</b><span>${esc(subtitle)}</span></span>
         ${connected ? '<span class="chip green">Connected</span>' : ''}
         <button type="button" class="btn ghost small conn-quick" data-act="apple-apps" data-scope="${app.scope}" aria-label="${connected ? 'Manage' : 'Connect'} ${app.name}">${connected ? 'Manage' : 'Connect'}</button>
