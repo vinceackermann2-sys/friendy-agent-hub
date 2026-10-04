@@ -1432,14 +1432,15 @@ function leavePromo(){
 
 function render(){
   applyTheme();
-  if (isPromoRoute() && !window.__promoLeft) {
+  const nativeApp = window.BelnaApple?.available;
+  if (isPromoRoute() && !window.__promoLeft && !nativeApp) {
     stopWorkspacePresence();
     return renderPromo();
   }
   if (!signedIn()) {
     stopWorkspacePresence();
     const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
-    return state.pendingPrompt || appRoute ? renderAuth() : renderLanding();
+    return nativeApp || state.pendingPrompt || appRoute ? renderAuth() : renderLanding();
   }
   ensureOwnerScope();
   startWorkspacePresence();
@@ -1460,7 +1461,9 @@ function renderAuth(){
   root.innerHTML = `
   <div class="fadeup authpage">
     <div class="authcard">
-      <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : 'Log in to manage profile and billing'}</h1>
+      ${window.BelnaApple?.available ? `<div class="native-welcome-mark" aria-hidden="true">${Mascot.logo(38)}</div>` : ''}
+      <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : window.BelnaApple?.available ? 'Welcome to Belna' : 'Log in to manage profile and billing'}</h1>
+      ${window.BelnaApple?.available ? '<p class="native-welcome-copy">Sign in to meet your personal agent. We’ll help you get set up and connect your apps.</p>' : ''}
       ${window.BelnaApple?.available ? '<button class="btn gbtn apple-signin" data-act="apple-signin">Continue with Apple</button>' : ''}
       ${state.pendingPrompt ? `<div class="kv" style="margin-top:16px;text-align:left"><div class="row"><span style="color:var(--mut)">${icon('chatb',16)}</span><div><b style="font-weight:600">${esc(state.pendingPrompt.length > 140 ? state.pendingPrompt.slice(0, 140) + '…' : state.pendingPrompt)}</b><div class="sub">Your message is saved — it will appear in the agent chat right after you sign in, before anything runs.</div></div></div></div>` : ''}
       <button class="btn gbtn" data-act="google"><span class="glogo" aria-hidden="true"><svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" overflow="hidden" viewBox="0 0 268.152 273.883"><defs><linearGradient id="google__a"><stop offset="0" stop-color="#0fbc5c"/><stop offset="1" stop-color="#0cba65"/></linearGradient><linearGradient id="google__g"><stop offset=".231" stop-color="#0fbc5f"/><stop offset=".312" stop-color="#0fbc5f"/><stop offset=".366" stop-color="#0fbc5e"/><stop offset=".458" stop-color="#0fbc5d"/><stop offset=".54" stop-color="#12bc58"/><stop offset=".699" stop-color="#28bf3c"/><stop offset=".771" stop-color="#38c02b"/><stop offset=".861" stop-color="#52c218"/><stop offset=".915" stop-color="#67c30f"/><stop offset="1" stop-color="#86c504"/></linearGradient><linearGradient id="google__h"><stop offset=".142" stop-color="#1abd4d"/><stop offset=".248" stop-color="#6ec30d"/><stop offset=".312" stop-color="#8ac502"/><stop offset=".366" stop-color="#a2c600"/><stop offset=".446" stop-color="#c8c903"/><stop offset=".54" stop-color="#ebcb03"/><stop offset=".616" stop-color="#f7cd07"/><stop offset=".699" stop-color="#fdcd04"/><stop offset=".771" stop-color="#fdce05"/><stop offset=".861" stop-color="#ffce0a"/></linearGradient><linearGradient id="google__f"><stop offset=".316" stop-color="#ff4c3c"/><stop offset=".604" stop-color="#ff692c"/><stop offset=".727" stop-color="#ff7825"/><stop offset=".885" stop-color="#ff8d1b"/><stop offset="1" stop-color="#ff9f13"/></linearGradient><linearGradient id="google__b"><stop offset=".231" stop-color="#ff4541"/><stop offset=".312" stop-color="#ff4540"/><stop offset=".458" stop-color="#ff4640"/><stop offset=".54" stop-color="#ff473f"/><stop offset=".699" stop-color="#ff5138"/><stop offset=".771" stop-color="#ff5b33"/><stop offset=".861" stop-color="#ff6c29"/><stop offset="1" stop-color="#ff8c18"/></linearGradient><linearGradient id="google__d"><stop offset=".408" stop-color="#fb4e5a"/><stop offset="1" stop-color="#ff4540"/></linearGradient><linearGradient id="google__c"><stop offset=".132" stop-color="#0cba65"/><stop offset=".21" stop-color="#0bb86d"/><stop offset=".297" stop-color="#09b479"/><stop offset=".396" stop-color="#08ad93"/><stop offset=".477" stop-color="#0aa6a9"/><stop offset=".568" stop-color="#0d9cc6"/><stop offset=".667" stop-color="#1893dd"/><stop offset=".769" stop-color="#258bf1"/><stop offset=".859" stop-color="#3086ff"/></linearGradient><linearGradient id="google__e"><stop offset=".366" stop-color="#ff4e3a"/><stop offset=".458" stop-color="#ff8a1b"/><stop offset=".54" stop-color="#ffa312"/><stop offset=".616" stop-color="#ffb60c"/><stop offset=".771" stop-color="#ffcd0a"/><stop offset=".861" stop-color="#fecf0a"/><stop offset=".915" stop-color="#fecf08"/><stop offset="1" stop-color="#fdcd01"/></linearGradient><linearGradient xlink:href="#google__a" id="google__s" x1="219.7" x2="254.467" y1="329.535" y2="329.535" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__b" id="google__m" cx="109.627" cy="135.862" r="71.46" fx="109.627" fy="135.862" gradientTransform="matrix(-1.93688 1.043 1.45573 2.55542 290.525 -400.634)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__c" id="google__n" cx="45.259" cy="279.274" r="71.46" fx="45.259" fy="279.274" gradientTransform="matrix(-3.5126 -4.45809 -1.69255 1.26062 870.8 191.554)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__d" id="google__l" cx="304.017" cy="118.009" r="47.854" fx="304.017" fy="118.009" gradientTransform="matrix(2.06435 0 0 2.59204 -297.679 -151.747)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__e" id="google__o" cx="181.001" cy="177.201" r="71.46" fx="181.001" fy="177.201" gradientTransform="matrix(-.24858 2.08314 2.96249 .33417 -255.146 -331.164)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__f" id="google__p" cx="207.673" cy="108.097" r="41.102" fx="207.673" fy="108.097" gradientTransform="matrix(-1.2492 1.34326 -3.89684 -3.4257 880.501 194.905)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__g" id="google__r" cx="109.627" cy="135.862" r="71.46" fx="109.627" fy="135.862" gradientTransform="matrix(-1.93688 -1.043 1.45573 -2.55542 290.525 838.683)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__h" id="google__j" cx="154.87" cy="145.969" r="71.46" fx="154.87" fy="145.969" gradientTransform="matrix(-.0814 -1.93722 2.92674 -.11625 -215.135 632.86)" gradientUnits="userSpaceOnUse"/><filter id="google__q" width="1.097" height="1.116" x="-.048" y="-.058" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="1.701"/></filter><filter id="google__k" width="1.033" height="1.02" x="-.017" y="-.01" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation=".242"/></filter><clipPath id="google__i" clipPathUnits="userSpaceOnUse"><path d="M371.378 193.24H237.083v53.438h77.167c-1.241 7.563-4.026 15.003-8.105 21.786-4.674 7.773-10.451 13.69-16.373 18.196-17.74 13.498-38.42 16.258-52.783 16.258-36.283 0-67.283-23.286-79.285-54.928-.484-1.149-.805-2.335-1.197-3.507a81.115 81.115 0 0 1-4.101-25.448c0-9.226 1.569-18.057 4.43-26.398 11.285-32.897 42.985-57.467 80.179-57.467 7.481 0 14.685.884 21.517 2.648a77.668 77.668 0 0 1 33.425 18.25l40.834-39.712c-24.839-22.616-57.219-36.32-95.844-36.32-30.878 0-59.386 9.553-82.748 25.7-18.945 13.093-34.483 30.625-44.97 50.985-9.753 18.879-15.094 39.8-15.094 62.294 0 22.495 5.35 43.633 15.103 62.337v.126c10.302 19.857 25.368 36.954 43.678 49.988 15.997 11.386 44.68 26.551 84.031 26.551 22.63 0 42.687-4.051 60.375-11.644 12.76-5.478 24.065-12.622 34.301-21.804 13.525-12.132 24.117-27.139 31.347-44.404 7.23-17.265 11.097-36.79 11.097-57.957 0-9.858-.998-19.87-2.689-28.968Z"/></clipPath></defs><g clip-path="url(#google__i)" transform="matrix(.95792 0 0 .98525 -90.174 -78.856)"><path fill="url(#google__j)" d="M92.076 219.958c.148 22.14 6.501 44.983 16.117 63.424v.127c6.949 13.392 16.445 23.97 27.26 34.452l65.327-23.67c-12.36-6.235-14.246-10.055-23.105-17.026-9.054-9.066-15.802-19.473-20.004-31.677h-.17l.17-.127c-2.765-8.058-3.037-16.613-3.14-25.503Z" filter="url(#google__k)"/><path fill="url(#google__l)" d="M237.083 79.025c-6.456 22.526-3.988 44.421 0 57.161 7.457.006 14.64.888 21.45 2.647a77.662 77.662 0 0 1 33.424 18.25l41.88-40.726c-24.81-22.59-54.667-37.297-96.754-37.332Z" filter="url(#google__k)"/><path fill="url(#google__m)" d="M236.943 78.847c-31.67 0-60.91 9.798-84.871 26.359a145.533 145.533 0 0 0-24.332 21.15c-1.904 17.744 14.257 39.551 46.262 39.37 15.528-17.936 38.495-29.542 64.056-29.542l.07.002-1.044-57.335c-.048 0-.093-.004-.14-.004Z" filter="url(#google__k)"/><path fill="url(#google__n)" d="m341.475 226.379-28.268 19.285c-1.24 7.562-4.028 15.002-8.107 21.786-4.674 7.772-10.45 13.69-16.373 18.196-17.702 13.47-38.328 16.244-52.687 16.255-14.842 25.102-17.444 37.675 1.043 57.934 22.877-.016 43.157-4.117 61.046-11.796 12.931-5.551 24.388-12.792 34.761-22.097 13.706-12.295 24.442-27.503 31.769-45 7.327-17.497 11.245-37.282 11.245-58.734Z" filter="url(#google__k)"/><path fill="#3086ff" d="M234.996 191.21v57.498h136.006c1.196-7.874 5.152-18.064 5.152-26.5 0-9.858-.996-21.899-2.687-30.998Z" filter="url(#google__k)"/><path fill="url(#google__o)" d="M128.39 124.327c-8.394 9.119-15.564 19.326-21.249 30.364-9.753 18.879-15.094 41.83-15.094 64.324 0 .317.026.627.029.944 4.32 8.224 59.666 6.649 62.456 0-.004-.31-.039-.613-.039-.924 0-9.226 1.57-16.026 4.43-24.367 3.53-10.289 9.056-19.763 16.123-27.926 1.602-2.031 5.875-6.397 7.121-9.016.475-.997-.862-1.557-.937-1.908-.083-.393-1.876-.077-2.277-.37-1.275-.929-3.8-1.414-5.334-1.845-3.277-.921-8.708-2.953-11.725-5.06-9.536-6.658-24.417-14.612-33.505-24.216Z" filter="url(#google__k)"/><path fill="url(#google__p)" d="M162.099 155.857c22.112 13.301 28.471-6.714 43.173-12.977l-25.574-52.664a144.74 144.74 0 0 0-26.543 14.504c-12.316 8.512-23.192 18.9-32.176 30.72Z" filter="url(#google__q)"/><path fill="url(#google__r)" d="M171.099 290.222c-29.683 10.641-34.33 11.023-37.062 29.29a144.806 144.806 0 0 0 16.792 13.984c15.996 11.386 46.766 26.551 86.118 26.551.046 0 .09-.004.137-.004v-59.157l-.094.002c-14.736 0-26.512-3.843-38.585-10.527-2.977-1.648-8.378 2.777-11.123.799-3.786-2.729-12.9 2.35-16.183-.938Z" filter="url(#google__k)"/><path fill="url(#google__s)" d="M219.7 299.023v59.996c5.506.64 11.236 1.028 17.247 1.028 6.026 0 11.855-.307 17.52-.872v-59.748a105.119 105.119 0 0 1-17.477 1.461c-5.932 0-11.7-.686-17.29-1.865Z" filter="url(#google__k)" opacity=".5"/></g></svg></span>Continue with Google${lastGoogle ? '<span class="lastused">Last used</span>' : ''}</button>
@@ -1489,7 +1492,7 @@ function renderAuth(){
       </label>
       <div class="secnote" id="amsg" style="min-height:18px;justify-content:center;margin-top:14px"></div>
       <div class="authfoot" id="authfoot">New to Belna? <button data-act="auth-mode">Create an account</button></div>
-      <div><button class="backlink" data-act="back-home">← Back to home</button></div>
+      ${window.BelnaApple?.available ? '' : '<div><button class="backlink" data-act="back-home">← Back to home</button></div>'}
     </div>
   </div>`;
   authPaintMode();
@@ -1963,13 +1966,29 @@ function paintBilling(M){
    ONE-TIME INVITE — a friend redeems one code, then both get 10M tokens.
    ================================================================ */
 let giftCache = null; // {code, link, invited, earnedTokens, rewardEachTokens}
+let giftOwner = null, giftFetchedAt = 0, giftPending = null;
+let giftImageWarmed = false;
+function warmGift(){
+  if (!signedIn() || !state.onboarded) return;
+  getGift().catch(()=>{});
+  if (!giftImageWarmed) { giftImageWarmed = true; const image = new Image(); image.src = '/lingon/mascot/gift-invite-3d.webp'; }
+}
 async function getGift(prefillCode){
   const owner = billingIdentity();
-  const j = await window.LingonAuth.api('/api/referrals/mine');
+  if (!owner) return null;
+  if (giftOwner !== owner) { giftOwner = owner; giftCache = null; giftFetchedAt = 0; giftPending = null; }
+  if (!giftCache || Date.now() - giftFetchedAt > 60000) {
+    if (!giftPending) {
+      const request = window.LingonAuth.api('/api/referrals/mine').then(j => {
+        if (owner !== billingIdentity() || giftOwner !== owner) return null;
+        giftCache = j || null; giftFetchedAt = Date.now(); return giftCache;
+      }).finally(() => { if (giftPending === request) giftPending = null; });
+      giftPending = request;
+    }
+    await giftPending;
+  }
   if (owner !== billingIdentity()) return null;
-  giftCache = j || null;
-  if (prefillCode && giftCache) giftCache.prefill = prefillCode;
-  return giftCache;
+  return giftCache ? {...giftCache,prefill:prefillCode || ''} : null;
 }
 function closeGift(){
   const m = $('#giftmodal');
@@ -1998,7 +2017,7 @@ function openGift(prefillCode){
   overlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape'){ e.stopPropagation(); closeGift(); }
     if (e.key === 'Tab'){
-      const controls = [...overlay.querySelectorAll('button:not([disabled]), input:not([disabled])')];
+      const controls = [...overlay.querySelectorAll('button:not([disabled]), input:not([disabled]), summary')].filter(control => control.getClientRects().length);
       if (!controls.length) return;
       const first = controls[0], last = controls[controls.length - 1];
       if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
@@ -2034,12 +2053,12 @@ function openGift(prefillCode){
         <button class="giftmodal-share-option" data-act="gift-copy-link"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon">${icon('copy',24)}</span><span>Copy link</span></button>
       </div>
       <div class="giftmodal-stats"><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span class="giftmodal-stat-dot" aria-hidden="true"></span><span><b>${fmtTokens(g.earnedTokens || 0)}</b> tokens earned</span></div>
-      <div class="giftmodal-redeem">
-        <h3>Have a friend’s invite?</h3><p>Redeem their code and you’ll both get 10 million tokens.</p>
+      <details class="giftmodal-redeem"${showFriendBox ? ' open' : ''}>
+        <summary>Have a friend’s invite?</summary><p>Redeem their code and you’ll both get 10 million tokens.</p>
         <label class="giftmodal-redeem-label" for="giftfriendcode">Friend’s invite code</label>
         <div class="giftmodal-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
         <button class="btn" data-act="gift-redeem">Redeem code</button></div>
-      </div>`;
+      </details>`;
   }).catch(() => {
     const body = overlay.querySelector('.giftmodal-body');
     if (body) body.innerHTML = `<p class="mut">Couldn’t load your invite right now.</p><button class="btn" data-act="opengift">Try again</button>`;
@@ -3992,7 +4011,7 @@ function paintGoals(M){
     </article>`;
   };
   M.innerHTML = `<div class="page"><div class="pageinner goals-page">
-    <header class="goals-head"><h1>Goals</h1><p>Pick a category and tell ${esc(state.agent?.name || 'your agent')} what you’re after. You’ll shape a plan together, then track it and check it off here.</p></header>
+    <header class="goals-head"><h1>Goals</h1><p>${phoneLayout() ? `Make a plan with ${esc(state.agent?.name || 'your agent')} and track your progress here.` : `Pick a category and tell ${esc(state.agent?.name || 'your agent')} what you’re after. You’ll shape a plan together, then track it and check it off here.`}</p></header>
     ${goals.length ? `<section class="goals-section" aria-labelledby="goals-yours">
       <div class="goals-section-head">
         <div><h2 id="goals-yours">Your goals</h2><span class="goals-summary">${gc.done} of ${gc.total} done${gc.active ? ` · ${gc.active} in progress` : ''}</span></div>
@@ -4004,16 +4023,17 @@ function paintGoals(M){
       </div>
       <div class="goal-list">${list.map(goalCard).join('') || `<p class="goal-empty">${filter === 'done' ? 'Nothing checked off yet. Tap the circle next to a goal when you reach it.' : 'No goals in progress. Resume a paused goal or create a new one below.'}</p>`}</div>
     </section>` : ''}
-    <section class="goals-section" aria-labelledby="goals-create">
-      <h2 id="goals-create">Create a goal</h2>
+    <${phoneLayout() ? 'details' : 'section'} class="goals-section goals-create" aria-labelledby="goals-create"${phoneLayout() && (!goals.length || state.goalCreateOpen) ? ' open' : ''}>
+      <${phoneLayout() ? 'summary' : 'h2'} id="goals-create">Create a goal${phoneLayout() ? icon('plus',18) : ''}</${phoneLayout() ? 'summary' : 'h2'}>
       <div class="goal-create-list">
         ${GOAL_CATS.map(c => {
           const n = goals.filter(g => (g.category || 'other') === c.id).length;
           return `<button class="goal-create-row" data-act="goal-start" data-c="${c.id}"><span class="goal-create-icon">${icon(c.ic,20)}</span><span class="goal-create-label">${c.label}</span>${n ? `<small>${n} ${n === 1 ? 'goal' : 'goals'}</small>` : ''}<span class="goal-create-chev">${icon('chev',16)}</span></button>`;
         }).join('')}
       </div>
-    </section>
+    </${phoneLayout() ? 'details' : 'section'}>
   </div></div>`;
+  if (phoneLayout()) M.querySelector('.goals-create')?.addEventListener('toggle', event => { state.goalCreateOpen = event.currentTarget.open; save(); });
   refreshGoals(false);
   M.querySelectorAll('.sub-add input').forEach(inp => {
     inp.addEventListener('keydown', (e) => {
@@ -4121,6 +4141,7 @@ function paintChat(M){
     M.innerHTML = `<div class="empty" style="margin:auto">${Mascot.svg(state.agent.color,'idle',90,'mascot-bob')}<div style="margin-top:14px;font-weight:700">No chat open</div><div class="t2">Start one and ${esc(state.agent.name)} is on it.</div><button class="btn" data-act="newchat">${icon('plus',15)} New chat</button></div>`;
     return;
   }
+  warmGift();
   const oldPrompt = M.dataset.chatId === c.id ? M.querySelector('#cprompt') : null;
   const draft = oldPrompt?.value || '';
   const focused = oldPrompt && document.activeElement === oldPrompt;
@@ -4435,6 +4456,7 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
     if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.classList && e.target.classList.contains('conn-head')) {
       e.preventDefault();
       if (e.target.dataset.act === 'toggle-cc') ccToggle(e.target.dataset.id);
+      else if (e.target.dataset.act === 'toggle-apple-connector') e.target.click();
       else openConnector(e.target.dataset.toolkit);
     }
     // Enter in the replace-key box saves the new key.
@@ -7962,12 +7984,40 @@ function connectorBodyHtml(a){
     </div>
   </div>`;
 }
+const APPLE_CONNECTORS = [
+  {scope:'calendar',name:'Apple Calendar',icon:'calendar',description:'Read your events and approve calendar changes.'},
+  {scope:'reminders',name:'Apple Reminders',icon:'list',description:'Read your lists and approve reminder changes.'},
+  {scope:'contacts',name:'Apple Contacts',icon:'user',description:'Find contacts and approve changes to their details.'},
+  {scope:'health',name:'Apple Health',icon:'heart',description:'Read-only wellness summaries. Review each summary before sharing.'},
+];
+function appleConnectorRows(query,filter){
+  if (!window.BelnaApple?.available) return '';
+  const status = window.BelnaApple.connectionStatus?.();
+  return APPLE_CONNECTORS.filter(app => (!query || `${app.name} ${app.description}`.toLowerCase().includes(query)) && (filter !== 'connected' || status?.capabilities[app.scope])).map(app => {
+    const connected = status?.capabilities[app.scope] === true;
+    const open = state.appOpen === 'apple-' + app.scope;
+    const subtitle = connected ? `Connected on ${status.name}` : status ? 'Not connected on this device' : 'Checking device access…';
+    return `<article class="conn-row apple-connector ${connected ? 'is-connected' : ''} ${open ? 'is-open' : ''}" data-apple-scope="${app.scope}">
+      <div class="conn-head" data-act="toggle-apple-connector" data-scope="${app.scope}" role="button" tabindex="0" aria-expanded="${open}" aria-label="${app.name}, ${connected ? 'connected' : 'connection details'}">
+        <span class="app-logo apple-connector-logo apple-${app.scope}">${icon(app.icon,24)}${connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
+        <span class="conn-meta"><b>${app.name}</b><span>${esc(subtitle)}</span></span>
+        ${connected ? '<span class="chip green">Connected</span>' : ''}
+        <button type="button" class="btn ghost small conn-quick" data-act="apple-apps" data-scope="${app.scope}" aria-label="${connected ? 'Manage' : 'Connect'} ${app.name}">${connected ? 'Manage' : 'Connect'}</button>
+        <span class="conn-chev">${icon('chev',16)}</span>
+      </div>
+      ${open ? `<div class="conn-body"><div class="conn-sec"><h3>Device access</h3><p class="conn-hint">${app.description}</p><p class="conn-hint">Manage ${app.name} in Apple apps. Keep Belna open on this device for agent requests.</p><button class="btn small" data-act="apple-apps" data-scope="${app.scope}">Manage ${app.name}</button></div></div>` : ''}
+    </article>`;
+  }).join('');
+}
+window.addEventListener('belna-apple-status', () => { if (state.view === 'apps' && $('#main')) paintApps($('#main')); });
 function paintApps(M){
   const apps = Array.isArray(state.composioApps) ? state.composioApps : [];
   const own = Array.isArray(state.customConnectors) ? state.customConnectors : [];
   const q = String(state.appQuery || '').toLowerCase().trim();
   const filter = state.appFilter === 'connected' ? 'connected' : 'all';
-  const connectedCount = apps.filter((a) => a.connected).length + own.length;
+  const appleStatus = window.BelnaApple?.connectionStatus?.();
+  const connectedCount = apps.filter((a) => a.connected).length + own.length + APPLE_CONNECTORS.filter(app => appleStatus?.capabilities[app.scope]).length;
+  const appleRows = appleConnectorRows(q,filter);
   // The owner's own APIs and MCP servers count as connected: they exist once they work.
   const ownList = q ? own.filter((c) => [c.name, c.host, c.description, c.kind === 'mcp' ? 'mcp server' : 'api'].some((v) => String(v || '').toLowerCase().includes(q))) : own;
 
@@ -8022,8 +8072,8 @@ function paintApps(M){
   const grouped = ownList.length && (list.length || state.composioLoading);
   let board = `<div class="conn-list">${ownList.length ? `${grouped ? '<h2 class="conn-group">Your own</h2>' : ''}${ownRows}${grouped ? '<h2 class="conn-group">Apps</h2>' : ''}` : ''}${rows}</div>${ask}`;
   if (state.composioLoading && !list.length) board = `<div class="conn-list">${ownRows}${'<article class="conn-row skel"></article>'.repeat(ownList.length ? 3 : 6)}</div>`;
-  else if (!state.composioLoading && !apps.length && !own.length) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Ask ${agentName} in chat to connect an app, API or MCP server.</span></div>`;
-  else if (!state.composioLoading && !list.length && !ownList.length) board = `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
+  else if (!state.composioLoading && !apps.length && !own.length && !window.BelnaApple?.available) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Ask ${agentName} in chat to connect an app, API or MCP server.</span></div>`;
+  else if (!state.composioLoading && !list.length && !ownList.length) board = appleRows ? ask : `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
 
   M.innerHTML = `<div class="page"><div class="pageinner apps-page">
     <div class="apps-toolbar">
@@ -8035,7 +8085,7 @@ function paintApps(M){
       </div>
       <button class="iconbtn" data-act="refresh-apps" title="Refresh">${icon('refresh',16)}</button>
     </div>
-    ${window.BelnaApple?.available ? '<section class="apple-apps-connection"><div><h2>Apple apps on this device</h2><p>Connect Calendar, Reminders, Contacts and available Health wellness summaries. Keep Belna open for your agent to use them.</p></div><button class="btn" data-act="apple-apps">Manage Apple apps</button></section>' : '<p class="conn-hint">Apple Calendar, Reminders, Contacts and Health connect through the Belna app on your iPhone, iPad or Mac.</p>'}
+    ${window.BelnaApple?.available ? (appleRows ? `<h2 class="conn-group">Apple apps</h2><div class="conn-list apple-connectors">${appleRows}</div>` : '') : '<p class="conn-hint">Apple Calendar, Reminders, Contacts and Health connect through the Belna app on your iPhone, iPad or Mac.</p>'}
     ${board}
   </div></div>`;
   const input = $('#appquery');
@@ -8050,6 +8100,7 @@ function paintApps(M){
     });
   }
   if (!state.composioLoading && signedIn()) refreshComposioApps();
+  if (window.BelnaApple?.available && !appleStatus) window.BelnaApple.refreshStatus?.().catch(()=>{});
 }
 
 /* ---------------- Your own connectors: APIs and MCP servers the agent sets up ---------------- */
@@ -8223,7 +8274,8 @@ window.addEventListener('focus', () => {
   // Returning from the OAuth tab: pull the fresh account list so the newly
   // connected mail/name/profile appears without a manual Refresh.
   if (signedIn() && (pendingConnect || (state.view === 'apps' && state.appOpen))) {
-    refreshComposioApps(true).then(() => { if (state.appOpen) openConnector(state.appOpen, true); });
+    window.BelnaApple?.refreshStatus?.().catch(()=>{});
+    refreshComposioApps(true).then(() => { if (state.appOpen && !state.appOpen.startsWith('apple-')) openConnector(state.appOpen, true); });
   }
 });
 document.addEventListener('visibilitychange', () => {
@@ -8360,6 +8412,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
   if (act === 'back-home'){
+    if (window.BelnaApple?.available) { state.view = 'chat'; state.canvasOpen = false; render(); return; }
     if (window.__promoLeft){ window.location.assign('/promo'); return; }
     if (isPromoRoute()){ renderPromo(); return; }
     if (window.location.pathname.replace(/\/+$/, '') === '/app'){ window.location.assign('/'); return; }
@@ -8401,7 +8454,8 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'refresh-apps'){
-    refreshComposioApps(true).then(() => { if (state.appOpen) openConnector(state.appOpen, true); });
+    window.BelnaApple?.refreshStatus?.().catch(()=>{});
+    refreshComposioApps(true).then(() => { if (state.appOpen && !state.appOpen.startsWith('apple-')) openConnector(state.appOpen, true); });
     return;
   }
   if(act==='wallet-manage' || act==='wallet-manage-shipping'){state.view='settings';state.settingsTab='wallet';save();renderApp();if(act==='wallet-manage-shipping')$('#wallet-shipping-section')?.scrollIntoView({block:'start'});return;}
@@ -9337,7 +9391,8 @@ document.addEventListener('click', async e => {
   if (act === 'pw-go'){ doAuth(authMode === 'signup' ? 'signup' : 'signin'); return; }
   if (act === 'google'){ authOAuth(); return; }
   if (act === 'apple-signin'){ authApple(); return; }
-  if (act === 'apple-apps'){ window.BelnaApple?.settings().catch(error=>toast(error.message)); return; }
+  if (act === 'toggle-apple-connector'){ state.appOpen = state.appOpen === 'apple-' + b.dataset.scope ? null : 'apple-' + b.dataset.scope; save(); paintApps($('#main')); return; }
+  if (act === 'apple-apps'){ window.BelnaApple?.settings(b.dataset.scope).catch(error=>toast(error.message)); return; }
   if (act === 'pw-mode'){ const em = ((document.getElementById('aemail') || {}).value || '').trim(); const pe = document.getElementById('pwemail'); if (pe) pe.textContent = em; showAuthPane('authpw'); return; }
   if (act === 'auth-back'){ showAuthPane('authmain'); return; }
   if (act === 'auth-mode'){ authMode = authMode === 'signin' ? 'signup' : 'signin'; authPaintMode(); return; }
@@ -9571,6 +9626,7 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) =>
     await hydrateStoredFiles();
     await loadClientState();
     await syncFromBackend(true).catch(error => console.warn('Account data restore failed:',error));
+    if (window.BelnaApple?.available) { state.view = 'chat'; state.canvasOpen = false; mobileNavOpen = false; }
     leaveSetupChat();
   }
   if (signedIn() && state.pendingPrompt && !needsOnboarding()) {
