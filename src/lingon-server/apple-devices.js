@@ -38,7 +38,7 @@ function validateAppleAction(action, args = {}) {
   return { ...APPLE_ACTIONS[action], action };
 }
 function cipherKey() {
-  const value = String(process.env.ENCRYPTION_KEY || '').trim();
+  const value = String(process.env.ENCRYPTION_KEY || process.env.LINGON_ENCRYPTION_KEY || '').trim();
   if (value.length < 16) throw fail('Apple connections require server encryption configuration.', 'UNAVAILABLE');
   return /^[a-f0-9]{64}$/i.test(value) ? Buffer.from(value, 'hex') : crypto.createHash('sha256').update(value).digest();
 }
@@ -175,4 +175,4 @@ function installAppleDeviceRoutes(app, { requireAuth, rateLimit }) {
   app.get('/api/apple/devices/:id/commands/:commandId', rateLimit(120,60000), wrap(req => appleDevices.state(req.user.id,req.params.id,req.params.commandId)));
   app.post('/api/apple/devices/:id/commands/:commandId', rateLimit(60,60000), wrap(req => appleDevices.complete(req.user.id, req.params.id, req.params.commandId, req.body || {})));
 }
-export { APPLE_ACTIONS, validateAppleAction, createAppleDeviceBroker, appleDevices, installAppleDeviceRoutes };
+export { APPLE_ACTIONS, validateAppleAction, createAppleDeviceBroker, appleDevices, installAppleDeviceRoutes, seal, unseal };

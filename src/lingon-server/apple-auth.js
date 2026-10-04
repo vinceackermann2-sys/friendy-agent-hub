@@ -1,3 +1,4 @@
+import { appleIdentity } from './apple-identity.js';
 function createAppleAccountCleanup({ adminClient, tasks, composio, azure }) {
   return async userId => {
     const admin = adminClient();
@@ -16,19 +17,22 @@ function createAppleAccountCleanup({ adminClient, tasks, composio, azure }) {
     }
   };
 }
-function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminClient, store, stripe, beforeDelete = async () => {} }) {
+function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminClient, store, stripe, identity = appleIdentity, beforeDelete = async () => {} }) {
   app.post('/api/auth/apple', rateLimit(15,60000), async (req,res) => {
     const input = req.body || {};
     if (input.terms_version !== '2026-09-24') return res.status(400).json({error:'Please accept the current Terms and Privacy Policy.'});
-    if (typeof input.identityToken !== 'string' || input.identityToken.length > 10000 || !input.identityToken.includes('.') || typeof input.nonce !== 'string' || input.nonce.length < 32 || input.nonce.length > 200) return res.status(400).json({error:'Valid Apple credential required.'});
+    if (typeof input.authorizationCode !== 'string' || !input.authorizationCode.length || input.authorizationCode.length > 2000 || typeof input.nonce !== 'string' || input.nonce.length < 32 || input.nonce.length > 200) return res.status(400).json({error:'Valid Apple credential required.'});
     const client = pubClient();
     if (!client) return res.status(503).json({error:'Account authentication is unavailable.'});
     try {
       // Supabase verifies Apple's signature, audience, expiry and nonce. Never
       // trust decoded JWT contents or a client-supplied Apple user identifier.
-      const {data,error} = await client.auth.signInWithIdToken({provider:'apple',token:input.identityToken,nonce:input.nonce});
+      const tokens = await identity.exchange(input.authorizationCode);
+      const {data,error} = await client.auth.signInWithIdToken({provider:'apple',token:tokens.identityToken,nonce:input.nonce});
       if (error || !data?.session || !data.user) return res.status(401).json({error:'Apple sign-in failed. Please try again.'});
-      await client.auth.updateUser({data:{terms_version:input.terms_version,terms_accepted_at:new Date().toISOString()}});
+      await identity.save(data.user.id,tokens.refreshToken);
+      const {error:termsError} = await client.auth.updateUser({data:{terms_version:input.terms_version,terms_accepted_at:new Date().toISOString()}});
+      if(termsError) throw new Error('Terms could not be saved.');
       res.setHeader('Cache-Control','no-store');
       return res.json({access_token:data.session.access_token,refresh_token:data.session.refresh_token,user:data.user});
     } catch { return res.status(503).json({error:'Apple sign-in is unavailable. Check the Apple provider configuration.'}); }
@@ -47,6 +51,7 @@ function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminC
         const current = await client.subscriptions.retrieve(subscription.stripe_subscription_id);
         if (current.status !== 'canceled') await client.subscriptions.cancel(current.id);
       }
+      await identity.revoke(req.user);
       // profiles.id is text, independent of auth.users in the original schema.
       // Purge it explicitly while auth is still recoverable on a partial failure.
       const {error:purgeError} = await admin.rpc('delete_belna_account_data',{owner_id:req.user.id});
@@ -54,7 +59,7 @@ function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminC
       const {error} = await admin.auth.admin.deleteUser(req.user.id);
       if (error) return res.status(503).json({error:'Your account data was deleted, but sign-in removal needs a retry. Contact support@belna.se.'});
       return res.json({ok:true,deleted:true});
-    } catch { return res.status(503).json({error:'Account deletion could not finish. Please retry or contact support@belna.se.'}); }
+    } catch(error) { return res.status(503).json({error:error.code === 'APPLE_REAUTH_REQUIRED' ? error.message : 'Account deletion could not finish. Please retry or contact support@belna.se.'}); }
   }));
 }
 export { installAppleAuthRoutes, createAppleAccountCleanup };

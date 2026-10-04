@@ -219,10 +219,12 @@ if (failures > 0) {
 }
 console.log('sync-lingon: done');
 
-for (const name of ['apple-devices','apple-auth']) {
+for (const name of ['apple-devices','apple-identity','apple-auth']) {
   const source = readFileSync(join(root, `server/${name}.js`), 'utf8');
   const esm = source.replace("const crypto = require('crypto');", "import crypto from 'node:crypto';")
     .replace("const { adminClient } = require('./auth');", "import { adminClient } from './auth.js';")
+    .replace("const { seal, unseal } = require('./apple-devices');", "import { seal, unseal } from './apple-devices.js';")
+    .replace("const { appleIdentity } = require('./apple-identity');", "import { appleIdentity } from './apple-identity.js';")
     .replace('module.exports = {', 'export {');
   if (/module\.exports|require\(/.test(esm)) throw new Error(`Unconverted Apple module: ${name}`);
   writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');

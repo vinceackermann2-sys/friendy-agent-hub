@@ -12,9 +12,20 @@
   cleanup/deletion functions. Hourly `belna-apple-command-expiry` is active.
   The security advisor's informational “RLS without policies” finding is
   intentional for these server-only tables; permissions were verified directly.
-- [Final native validation](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37204022135)
+- Encrypted Apple identity-token migration installed and verified on production:
+  RLS enabled, anonymous/account access denied, server-role access allowed.
+- [Native validation and first signed export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37207929500)
   passed iPhone/iPad and Mac Catalyst builds, origin/date/backup unit tests and
-  native consent/Apple connection UI tests at commit `680e976`.
+  native consent/Apple connection UI tests, then exported a signed App Store IPA
+  at commit `fcac6c2`. No TestFlight upload was requested in that run. Later
+  account-deletion changes require a fresh build.
+
+- Apple Distribution certificate and App Store iOS profile created for the
+  registered app and stored as encrypted GitHub signing secrets. Certificate and
+  profile expire on 4 October 2027. Upload key download remains unverified.
+- Production checks on 4 October 2026: Supabase Apple authentication is disabled
+  and `https://belna.se/api/apple/devices` returns 404. The app changes are on
+  draft PR #12 and have not reached the production site.
 
 - `npm run build`: web client, SSR and Cloudflare server build passed.
 - `node tests/apple-devices.cjs`: real PostgreSQL migration, service-only access,
@@ -23,6 +34,10 @@
 - `node tests/apple-auth.cjs`: current terms, provider-verified Apple identity and
   nonce, scoped account deletion, subscription cancellation and partial failure
   reporting passed.
+- `node tests/apple-identity.cjs`: ES256 code-exchange credentials, account-scoped
+  encrypted refresh tokens, Apple revocation, recovery after failure and
+  service-only database permissions passed. Live Apple code exchange requires
+  the production Sign in with Apple key and provider configuration.
 - `node tests/apple-native-ui.cjs`: 393×852 phone UI, native connections, JWT
   transport, capability-only registration, result delivery retry and sign-out
   locking passed with fixtures. This is not real HealthKit/device data evidence.
@@ -33,11 +48,14 @@
 
 ## Must pass before TestFlight / App Review
 
-- Obtain signing credentials for the registered team and app. The configured
+- Finish the upload-key download and encrypted GitHub upload secrets. The
   production origin is `https://belna.se`; verify the deployed API rollout.
 - Configure Supabase’s Apple provider with the chosen native client ID; test
   first sign-in, returning sign-in, private relay email, revoked Apple identity,
   email code/password fallback and account deletion on a disposable account.
+- Configure the separate server-side Sign in with Apple signing key and apply
+  the encrypted identity-token migration. Confirm actual Apple token revocation
+  on account deletion; the App Store Connect upload key cannot do this.
 - Roll out both backend runtimes and the frontend. Verify the
   production Apple endpoints return 401 without an account, never 404/500.
 - Verify deployed server encryption is active (local configuration is present).

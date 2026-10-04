@@ -152,10 +152,11 @@ final class AppleSignIn: NSObject, ASAuthorizationControllerDelegate, ASAuthoriz
     }
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-              let token = credential.identityToken, let text = String(data: token, encoding: .utf8) else {
+              let token = credential.identityToken, let text = String(data: token, encoding: .utf8),
+              let code = credential.authorizationCode, let codeText = String(data: code, encoding: .utf8) else {
             finish(.failure(DeviceError.message("Apple did not return a sign-in token."))); return
         }
-        finish(.success(["identityToken": text, "nonce": nonce]))
+        finish(.success(["identityToken": text, "authorizationCode": codeText, "nonce": nonce]))
     }
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) { finish(.failure(error)) }
     private func finish(_ result: Result<[String: String], Error>) {

@@ -70,12 +70,14 @@ The workflow creates a temporary keychain, validates the profile’s team,
 bundle ID, expiry and required capabilities, then exports an IPA. Upload is
 disabled by default. Signing keys are removed from the runner on exit and are
 never included in build artifacts. The signing path requires real credentials
-and has not been verified by a signed upload yet.
+and has passed a signed archive/export on GitHub. TestFlight upload is still
+pending; see the release evidence below.
 
 ## Backend rollout
 
 1. Deploy the server, edge mirror, web frontend and privacy changes together.
-2. Apply `supabase/migrations/20261004110000_apple_devices.sql`.
+2. Apply `supabase/migrations/20261004110000_apple_devices.sql` and
+   `supabase/migrations/20261004141615_apple_identity_tokens.sql`.
 3. Configure server `ENCRYPTION_KEY` and the Supabase service key. The app only
    uses the existing verified account JWT; no service key is bundled.
 4. Enable an hourly database job that invokes
@@ -83,8 +85,14 @@ and has not been verified by a signed upload yet.
    immediately; this job removes ciphertext/metadata that no later request has
    cleared. No health content is sent to analytics or advertising.
 5. In Supabase Auth enable the Apple provider and register the real iOS/Mac
-   bundle identifier as an allowed client ID. Native identity tokens are
-   exchanged with a SHA-256 nonce challenge and verified by Supabase.
+   bundle identifier `se.belna.app` as an allowed client ID. Configure server-only
+   `APPLE_TEAM_ID=6XD78664VT`, `APPLE_CLIENT_ID=se.belna.app`,
+   `APPLE_SIGN_IN_KEY_ID` and `APPLE_SIGN_IN_PRIVATE_KEY` using a separate Apple
+   Sign in with Apple key, never the App Store Connect upload key. `LINGON_`
+   aliases are accepted by the edge runtime. The server exchanges the native
+   authorization code; Supabase verifies the returned identity token and
+   SHA-256 nonce challenge. Only an encrypted refresh token scoped to that
+   verified account is retained, to revoke Apple's authorization on deletion.
 6. On the Apple App ID enable Sign in with Apple and HealthKit for iOS. The Mac
    target has the Contacts/Calendar sandbox permissions and microphone/camera
    entitlements, and checks Health availability at runtime.
@@ -97,9 +105,10 @@ concurrent command claims, expiry, task cancellation, auth, deletion, phone UI
 and completion retry without executing a native action twice. See
 `docs/apple-release.md` for the evidence and outstanding release gates.
 
-This source is **not an App Store submission or a signed IPA**. Apple account
-configuration, production API rollout and testing real permissions, iCloud
-sync and Health data on the owner’s devices must pass before a release.
+The [first signed IPA export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37207929500)
+passed at commit `fcac6c2`. Subsequent changes need a new signed build. App Store
+submission, production API rollout and testing real permissions, iCloud sync
+and Health data on the owner's devices must pass before a release.
 
 The first App Store build is a free companion that consumes existing account
 plans. It has no digital subscription/token purchase funnel or external
@@ -109,7 +118,9 @@ restore and subscription lifecycle handling before enabling them. This choice
 must be reflected in the App Store description and reviewer notes.
 
 Account deletion cancels Stripe subscriptions, stops tasks/watchers, disconnects
-OAuth apps, stops the account VM, removes database profile data and deletes the
-auth identity. Existing Azure disks/archive retention and any provider data
+OAuth apps, stops the account VM, revokes Apple sign-in tokens, removes database
+profile data and deletes the auth identity. Apple users from an older build must
+sign in with Apple again if no revocable token was stored. Existing Azure
+disks/archive retention and any provider data
 outside the database must be reviewed with the production retention policy;
 they are an explicit release gate, not a claim of verified workspace erasure.
