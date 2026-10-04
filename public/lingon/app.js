@@ -8259,10 +8259,11 @@ async function ccSetPermissions(id, change){
 window.addEventListener('resize', () => {
   if (state.view === 'settings' && $('#main') && !phoneLayout()) centerActiveSettingsTab($('#main'));
 });
-// Settings and Library have their own phone layout; repaint when the width crosses it.
+// These pages have their own phone layout; repaint when the width crosses it.
 window.matchMedia('(max-width: 760px)').addEventListener('change', () => {
   if (state.view === 'settings' && $('#main')) paintSettings($('#main'));
   else if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
+  else if (state.view === 'goals' && $('#main')) paintGoals($('#main'));
 });
 window.addEventListener('focus', () => {
   startWorkspacePresence();

@@ -88,7 +88,13 @@ const {chromium}=require('playwright');
       await navigate(view);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,view+' fits the phone width');
       await capture('mobile-'+view);
-      if(view==='goals')assert.equal(await page.locator('.goals-create').getAttribute('open'),null,'existing goals stay above a collapsed create section');
+      if(view==='goals'){
+        assert.equal(await page.locator('.goals-create').getAttribute('open'),null,'existing goals stay above a collapsed create section');
+        await page.setViewportSize({width:844,height:393});
+        await page.locator('section.goals-create').waitFor();
+        await page.setViewportSize({width:393,height:852});
+        await page.locator('details.goals-create').waitFor();
+      }
     }
     await navigate('chat');
     await page.locator('.chathead [data-act="togglecanvas"]').click();
