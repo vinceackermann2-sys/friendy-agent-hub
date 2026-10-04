@@ -82,9 +82,25 @@ const prefix=hash(owner)+'/';
 
   // An unavailable cleanup must prevent auth/database purge and allow a retry.
   const cleanupCalls=[];
-  const builder=table=>{const q={upsert:()=>{cleanupCalls.push('fence');return q;},update:()=>q,select:()=>q,eq:()=>q,in:()=>q,maybeSingle:()=>q,then:resolve=>resolve({data:table==='account_deletions'?{workspace_resources:manifest}:[],error:null})};return q;};
+  const builder=table=>{const q={upsert:()=>{cleanupCalls.push('fence');return q;},update:()=>q,delete:()=>q,select:()=>q,eq:()=>q,in:()=>q,maybeSingle:()=>q,then:resolve=>resolve({data:table==='account_deletions'?{workspace_resources:manifest}:[],error:null})};return q;};
   const cleanup=createAppleAccountCleanup({adminClient:()=>({from:builder,storage:{from:()=>bucket}}),tasks:{control:async()=>{}},composio:{configured:()=>false},azure:{isAzureConfigured:()=>true,planAccountErasure:async()=>manifest,eraseAccountWorkspace:async()=>{cleanupCalls.push('cloud');throw new Error('retention');}}});
   await assert.rejects(cleanup(owner),/retention/);assert.deepEqual(cleanupCalls,['fence','cloud']);
+
+  // Exercise the production edge route's actual dependency binding. A partial
+  // Azure facade previously omitted plan/erase and made all live deletions fail.
+  cleanupCalls.length=0;
+  let edgeCleanup;
+  const edgeSource=fs.readFileSync('src/lingon-server/index.js','utf8');
+  const installLine=edgeSource.split(/\r?\n/).find(line=>line.startsWith('installAppleAuthRoutes(app,'));
+  const azureFixture={isAzureConfigured:()=>true,planAccountErasure:async()=>manifest,eraseAccountWorkspace:async()=>{cleanupCalls.push('cloud');}};
+  vm.runInNewContext(installLine,{
+    app:{},requireAuth:()=>{},rateLimit:()=>{},pubClient:()=>{},store:{},stripeMod:{},chatTasks:{control:async()=>{}},
+    adminClient:()=>({from:builder,storage:{from:()=>bucket}}),composio:{configured:()=>false},
+    azure:azureFixture,isAzureConfigured:azureFixture.isAzureConfigured,deallocateVm:async()=>{},createAppleAccountCleanup,
+    installAppleAuthRoutes:(_app,options)=>{edgeCleanup=options.beforeDelete;},
+  });
+  await edgeCleanup(owner);
+  assert.deepEqual(cleanupCalls,['fence','cloud'],'deployed edge route must invoke full cloud erasure');
 
   // Production VM operations read the durable fence before provisioning or work.
   const src=fs.readFileSync('server/agents/azure-vm.js','utf8'), mod={exports:{}};
