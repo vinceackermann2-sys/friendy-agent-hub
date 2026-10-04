@@ -1,0 +1,33 @@
+name: Apple app build
+on:
+  workflow_dispatch:
+  push:
+    paths: ['native/apple/**', '.github/workflows/apple-build.yml']
+  pull_request:
+    paths: ['native/apple/**', '.github/workflows/apple-build.yml']
+permissions:
+  contents: read
+jobs:
+  apple:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release SDK
+        run: |
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          test "${SDK%%.*}" -ge 26
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd native/apple
+          xcodegen generate
+      - name: Build iPhone and iPad
+        run: xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - name: Build Mac Catalyst
+        run: xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination 'generic/platform=macOS,variant=Mac Catalyst' CODE_SIGNING_ALLOWED=NO build
+      - name: Test bridge origin and date boundaries
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for k,items in d["devices"].items() if "iOS" in k for v in items if "iPhone" in v["name"]))')
+          xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" CODE_SIGNING_ALLOWED=NO test

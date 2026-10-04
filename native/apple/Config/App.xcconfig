@@ -1,0 +1,7 @@
+// Keep developer identity in Developer.xcconfig (ignored by git).
+BELNA_ORIGIN = https:/$()/belna.se
+DEVELOPMENT_TEAM = $(BELNA_TEAM_ID)
+PRODUCT_BUNDLE_IDENTIFIER = $(BELNA_BUNDLE_ID)
+BELNA_BUNDLE_ID = se.belna.app
+// Developer.xcconfig can override these defaults; put it last.
+#include? "Developer.xcconfig"

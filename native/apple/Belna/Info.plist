@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleDisplayName</key><string>Belna</string>
+  <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+  <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+  <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+  <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>LSRequiresIPhoneOS</key><true/>
+  <key>BelnaOrigin</key><string>$(BELNA_ORIGIN)</string>
+  <key>ITSAppUsesNonExemptEncryption</key><false/>
+  <key>UILaunchScreen</key><dict/>
+  <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>Let your Belna agent read the calendar events you ask about and make changes you approve.</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>Let your Belna agent read reminders and create, update or complete reminders you approve.</string>
+  <key>NSContactsUsageDescription</key><string>Let your Belna agent find specific contacts you ask about and save contact changes you approve.</string>
+  <key>NSHealthShareUsageDescription</key><string>Read steps, walking and running distance, exercise time and sleep for your wellness summary. You review each summary before sharing it with Belna and Microsoft Azure AI.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Record a voice message you choose to send to your Belna agent for transcription.</string>
+  <key>NSCameraUsageDescription</key><string>Attach a photo you choose to share with your Belna agent.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>Choose a photo to attach to your Belna conversation.</string>
+</dict></plist>

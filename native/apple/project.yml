@@ -1,0 +1,70 @@
+name: Belna
+options:
+  bundleIdPrefix: se.belna
+  deploymentTarget:
+    iOS: '17.0'
+  xcodeVersion: '26.0'
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    MARKETING_VERSION: '1.0.0'
+    CURRENT_PROJECT_VERSION: '1'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CLANG_ENABLE_MODULES: YES
+targets:
+  Belna:
+    type: application
+    platform: iOS
+    sources:
+      - path: Belna
+        excludes: [Info.plist, '*.entitlements']
+    configFiles:
+      Debug: Config/App.xcconfig
+      Release: Config/App.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BELNA_BUNDLE_ID)
+        PRODUCT_NAME: Belna
+        INFOPLIST_FILE: Belna/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Belna/Belna.entitlements
+        'CODE_SIGN_ENTITLEMENTS[sdk=macosx*]': Belna/BelnaMac.entitlements
+        SUPPORTS_MACCATALYST: YES
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        TARGETED_DEVICE_FAMILY: '1,2'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+    dependencies:
+      - sdk: EventKit.framework
+      - sdk: Contacts.framework
+      - sdk: HealthKit.framework
+      - sdk: WebKit.framework
+      - sdk: AuthenticationServices.framework
+  BelnaTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [BelnaTests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: se.belna.app.tests
+        SUPPORTS_MACCATALYST: YES
+    dependencies:
+      - target: Belna
+schemes:
+  Belna:
+    build:
+      targets:
+        Belna: all
+        BelnaTests: [test]
+    test:
+      targets: [BelnaTests]
+    archive:
+      config: Release
