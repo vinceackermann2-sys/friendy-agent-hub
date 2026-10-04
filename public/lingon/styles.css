@@ -3515,6 +3515,122 @@ button.wset-row{border:0;background:none;cursor:pointer;}button.wset-row:hover{b
 
 .apple-apps-connection{display:flex;align-items:center;gap:20px;justify-content:space-between;padding:22px;margin:20px 0;border:1px solid var(--line,#e5e5e5);border-radius:18px;background:var(--surface,#fff)}
 .apple-apps-connection h2{font-size:18px;margin:0 0 8px}.apple-apps-connection p{font-size:14px;line-height:1.5;color:var(--mut,#666);margin:0;max-width:540px}
+.native-welcome-mark{display:grid;place-items:center;margin:0 auto 16px;color:var(--acc)}
+.native-welcome-copy{max-width:340px;margin:12px auto 24px;color:var(--mut);font-size:16px;line-height:1.5}
+.apple-connectors{margin-bottom:20px}
+.apple-connector-logo.apple-calendar{color:#e84b45;background:#fff3f1}
+.apple-connector-logo.apple-reminders{color:#2878dc;background:#edf5ff}
+.apple-connector-logo.apple-contacts{color:#827263;background:#f4f0eb}
+.apple-connector-logo.apple-health{color:#e84868;background:#fff0f4}
+.giftmodal-redeem > summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;font-size:15px;font-weight:700;cursor:pointer;list-style:none}
+.giftmodal-redeem > summary::-webkit-details-marker{display:none}
+.giftmodal-redeem > summary::after{content:'+';font-size:22px;font-weight:400}
+.giftmodal-redeem[open] > summary::after{content:'−'}
+@media(max-width:1100px){
+  .canvas .canvas-head{position:relative;padding-top:54px}
+  .canvas .canvas-head .canvas-close{position:absolute;top:8px;right:12px;z-index:3;width:44px;height:44px;margin:0!important;padding:0!important;border:0!important;background:var(--line2)!important;box-shadow:none}
+}
+@media(max-width:760px){
+  .mobile-nav-toggle{top:8px;left:8px;width:44px;height:44px;border:0;border-radius:12px;background:transparent;box-shadow:none}
+  .mobile-nav-toggle:hover,.mobile-nav-toggle:active{background:transparent;box-shadow:none}
+  .app:not(.nocanvas) .mobile-nav-toggle{visibility:hidden}
+  .page{padding:64px 16px max(24px,env(safe-area-inset-bottom));scrollbar-gutter:auto}
+  .pageinner,.set-sub,.set-inner,.profiletop .info{min-width:0;width:100%}
+  .page h1,.set-top h1,.goals-head h1{font-size:28px;line-height:1.15}
+  .set-top{margin-bottom:16px}
+  .set-top .set-round{top:8px;right:12px;width:44px;height:44px;background:transparent;box-shadow:none}
+  .set-sub-head{gap:10px}
+  .set-sub .psub{font-size:14px;line-height:1.5;margin:12px 0 20px}
+  .set-group,.set-plan{border-radius:18px;margin-bottom:16px}
+  .set-row{min-height:56px;padding:10px 16px;gap:12px}
+  .set-row + .set-row::before{left:16px;right:16px}
+  .set-label{font-size:16px}
+  .set-plan-main{padding:16px}
+  .set-plan-link{width:calc(100% - 32px);margin:0 16px;padding:13px 0;font-size:16px}
+  .set-plan-note,.set-plan-head span{font-size:13px;line-height:1.4}
+  .set-sub .profiletop{flex-direction:row;align-items:flex-start;text-align:left;gap:12px}
+  .set-sub .profiletop .info .field{width:100%;max-width:100%!important}
+  .set-sub .profiletop .sub{overflow-wrap:anywhere;font-size:12px;line-height:1.5}
+  .set-sub .psec{margin-top:22px}
+  .set-sub .kv .row{flex-wrap:wrap;gap:12px}
+  .set-sub .browser-settings-card{padding:16px}
+  .lib-hero{padding:0 48px}
+  .lib-hero-mascot{height:56px}
+  .lib-hero-mascot .mascot{width:56px;height:56px}
+  .lib-hero h1{font-size:20px;margin-top:4px}
+  .lib-hero-status{font-size:13px}
+  .lib-switch{margin-top:16px;padding:4px}
+  .lib-switch button{font-size:15px;padding:10px;min-height:44px}
+  .lib-chip{min-height:44px;font-size:13px;padding:8px 12px}
+  .lib-row{min-height:72px;padding:8px 0;gap:8px}
+  .lib-row-main{gap:12px}
+  .lib-row-copy b{font-size:15px}
+  .lib-row-copy span{font-size:12px}
+  .lib-row .art-icon,.lib-row-file{width:44px;height:44px}
+  .lib-row-file .file-format-icon{width:48px;height:48px}
+  .lib-media{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .lib-viewer-panel{max-width:100%;max-height:100dvh;border-radius:0}
+  .lib-viewer-body{padding:16px;overflow-wrap:anywhere}
+  .lib-viewer-body textarea[data-library-edit]{min-height:180px;font-size:16px}
+  .goals-head{padding:0 0 4px}
+  .goals-head p{margin-top:8px;font-size:14px;line-height:1.5}
+  .goals-section{margin-top:24px}
+  .goals-filter{width:100%;margin:4px 0 0}
+  .goals-filter button{flex:1;justify-content:center;min-height:40px}
+  .goal-card{padding:14px 12px;box-shadow:none}
+  .goal-head{gap:10px}
+  .goal-title{overflow-wrap:anywhere}
+  .goal-more{width:44px;height:44px;margin-top:-6px;margin-right:-6px}
+  .goal-menu{top:42px}
+  .goal-menu button,.sub-row{min-height:44px}
+  .sub-row .ap-x{opacity:1;min-width:32px;min-height:32px}
+  .goal-work{padding:10px;font-size:13px}
+  .goal-work summary{min-height:28px}
+  .goals-create{padding:0 12px;border:1px solid var(--line);border-radius:16px;background:#fff}
+  .goals-create > summary{min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px;list-style:none;font-size:16px;font-weight:700;cursor:pointer}
+  .goals-create > summary::-webkit-details-marker{display:none}
+  .goals-create[open] > summary .ic{transform:rotate(45deg)}
+  .goal-create-row{min-height:48px;padding:10px 0}
+  .apps-toolbar{gap:10px;position:relative}
+  .apps-toolbar h1{font-size:28px}
+  .apps-search-wrap{flex:1 1 100%;min-width:0}
+  .apps-filter{flex:1;max-width:calc(100% - 54px)}
+  .apps-filter button{flex:1;justify-content:center;min-height:40px}
+  .conn-head{padding:12px;gap:10px}
+  .conn-meta{min-width:0;flex:1}
+  .conn-meta b{font-size:14px}
+  .conn-meta > span{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .conn-quick.btn.small{min-height:44px;padding:8px 10px;font-size:12px}
+  .conn-head .conn-faces{display:none}
+  .conn-body{padding:0 12px 14px}
+  .conn-perm{gap:12px}
+  .conn-perm > div{min-width:0;overflow-wrap:anywhere}
+  input.field,textarea.field,select.field{font-size:16px}
+  #giftmodal{padding:12px;background:rgba(25,22,27,.32);backdrop-filter:none;-webkit-backdrop-filter:none;animation:none}
+  .giftmodal-card{max-height:min(86dvh,680px);border-radius:24px;animation:giftSheetIn .16s ease-out;box-shadow:0 20px 50px -20px rgba(26,18,23,.3)}
+  .giftmodal-head{padding:18px 54px 0}
+  .giftmodal-head h2{font-size:25px;margin-top:6px}
+  .giftmodal-x{top:12px;right:12px;width:44px;height:44px;background:transparent}
+  .giftmodal-body{padding:0 18px 18px}
+  .giftmodal-loading{padding:24px 0}
+  .giftmodal-illustration{height:108px;margin:4px 0;background:none}
+  .giftmodal-illustration img{width:156px;height:117px}
+  .giftmodal-code{min-height:68px;padding:12px 14px;border-radius:16px}
+  .giftmodal-code-text strong{font-size:20px;letter-spacing:.05em}
+  .giftmodal-copy{width:44px;height:44px}
+  .giftmodal-description{font-size:14px;line-height:1.45;margin-top:14px}
+  .giftmodal-share{margin-top:14px;padding:14px 0 0;gap:4px}
+  .giftmodal-share-icon{width:44px;height:44px}
+  .giftmodal-share-option{gap:6px;font-size:11px}
+  .giftmodal-stats{font-size:11px;padding:12px 0}
+  .giftmodal-redeem{padding:2px 12px;border-radius:14px}
+  .giftmodal-redeem[open]{padding-bottom:12px}
+  .giftmodal-redeem-label{margin-top:12px}
+  .giftmodal-redeem-form{flex-wrap:wrap}
+  .giftmodal-redeem-form .field,.giftmodal-redeem-form .btn{flex-basis:100%;width:100%;min-height:44px;font-size:16px}
+}
+@keyframes giftSheetIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.giftmodal-card{animation:none}}
 .belna-native [data-act="google"],.belna-native [data-act="checkout"],.belna-native [data-act="buycredits"],.belna-native [data-act="portal"],.belna-native [data-act="upgrade"],.belna-native a[href="/pricing"],.belna-native a[href="/pricing.html"]{display:none!important}
 .belna-native .apple-signin{background:#111;color:#fff;border-color:#111;min-height:48px}
 @media(max-width:600px){.apple-apps-connection{align-items:stretch;flex-direction:column}.belna-native input,.belna-native textarea,.belna-native select{font-size:16px}.belna-native .promptbox{padding-bottom:max(12px,env(safe-area-inset-bottom))}}

@@ -6,6 +6,15 @@ window.BelnaApple = (() => {
   document.documentElement.classList.add('belna-native');
   let identity = '', deviceId = '', registered = false, polling = false, lastHeartbeat = 0;
   const pendingResults = new Map();
+  let connectionStatus = null;
+  function rememberStatus(status, userId) {
+    if (window.LingonAuth.get()?.user?.id !== userId) return;
+    const next = { userId, name: String(status.name || 'This device'), capabilities: Object.fromEntries(['calendar','reminders','contacts','health'].map(scope => [scope, status.capabilities?.[scope] === true])) };
+    if (JSON.stringify(next) !== JSON.stringify(connectionStatus)) {
+      connectionStatus = next;
+      window.dispatchEvent(new Event('belna-apple-status'));
+    }
+  }
   const active = () => !document.hidden && window.LingonAuth?.signedIn();
   async function tick() {
     if (polling || !active()) return;
@@ -22,6 +31,7 @@ window.BelnaApple = (() => {
       if (Date.now() - lastHeartbeat > 15000) {
         const status = await native.request({ method: 'status', accountId: userId });
         if (window.LingonAuth.get()?.user?.id !== userId || !active()) return;
+        rememberStatus(status, userId);
         await window.LingonAuth.api('/api/apple/devices', { method: 'POST', body: JSON.stringify({ id: deviceId, platform: native.platform, name: status.name, capabilities: status.capabilities }) });
         registered = true; lastHeartbeat = Date.now();
       }
@@ -49,7 +59,7 @@ window.BelnaApple = (() => {
     } catch { /* Availability is visible in Apple apps; no noisy chat notifications. */ }
     finally { polling = false; }
   }
-  function reset() { identity = ''; registered = false; pendingResults.clear(); lastHeartbeat = 0; native.request({method:'lock'}).catch(()=>{}); }
+  function reset() { identity = ''; registered = false; connectionStatus = null; pendingResults.clear(); lastHeartbeat = 0; native.request({method:'lock'}).catch(()=>{}); window.dispatchEvent(new Event('belna-apple-status')); }
   window.addEventListener('belna-auth-changed', () => {
     if (!window.LingonAuth?.signedIn()) reset();
     else { lastHeartbeat = 0; tick(); }
@@ -66,7 +76,15 @@ window.BelnaApple = (() => {
       const out = await window.LingonAuth.api('/api/apple/devices/' + encodeURIComponent(deviceId) + '/commands/' + encodeURIComponent(commandId));
       return out.active === true;
     },
-    settings: () => native.request({method:'settings'}),
+    connectionStatus: () => connectionStatus?.userId === window.LingonAuth.get()?.user?.id ? structuredClone(connectionStatus) : null,
+    async refreshStatus() {
+      const userId = window.LingonAuth.get()?.user?.id;
+      if (!active() || !userId) return null;
+      const status = await native.request({method:'status',accountId:userId});
+      rememberStatus(status,userId);
+      return connectionStatus?.userId === userId ? structuredClone(connectionStatus) : null;
+    },
+    settings: scope => native.request({method:'settings',...(scope ? {scope} : {})}),
     async signIn(termsVersion) {
       const credential = await native.request({method:'signIn'});
       return window.LingonAuth.api('/api/auth/apple', { method: 'POST', body: JSON.stringify({ ...credential, terms_version: termsVersion }) });
