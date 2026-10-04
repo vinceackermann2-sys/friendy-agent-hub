@@ -5,8 +5,9 @@
 - Apple account setup verified on 4 October 2026: team `6XD78664VT`, registered
   bundle ID `se.belna.app`, HealthKit and primary Sign in with Apple enabled.
 - [Belna App Store Connect record](https://appstoreconnect.apple.com/apps/6819012393/distribution):
-  iOS and macOS created; iOS listing draft saved as version 1.0.0 with manual
-  release selected. iOS build 1.0.0 (14.1) is processed and Ready to Submit in
+  iOS and macOS listing drafts saved as version 1.0.0 with manual release and
+  the live support URL. iOS build 1.0.0 (14.1) is selected in the release draft,
+  processed and Ready to Submit in
   TestFlight. No App Review submission or storefront release has been made.
 - Production database migration installed and verified: Apple tables have RLS,
   direct anonymous/account access is revoked, and only the server role can call
@@ -107,6 +108,10 @@
   Approval and storefront release are separate steps.
 
 ## Draft listing
+
+Whole-app privacy categories and the owner information needed for review are
+prepared in [apple-review-data.md](apple-review-data.md). No privacy label,
+age-rating or trader declaration has been submitted from that draft.
 
 Name: Belna
 
