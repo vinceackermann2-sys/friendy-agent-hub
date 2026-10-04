@@ -5,6 +5,12 @@ struct BelnaWebView: UIViewRepresentable {
     @ObservedObject var model: NativeModel
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     func makeUIView(context: Context) -> WKWebView {
+        do { try LocalPrivacy.protectAppStorage() }
+        catch {
+            model.loading = false
+            model.loadError = "Belna could not protect local data from backups. Close the app and try again."
+            return WKWebView()
+        }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.allowsInlineMediaPlayback = true

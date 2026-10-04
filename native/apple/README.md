@@ -1,0 +1,99 @@
+# Belna for iPhone, iPad and Mac
+
+The SwiftUI app loads the existing Belna app at `https://belna.se/app` in an
+origin-restricted WKWebView. Chat, tasks, files, canvas, connected apps and
+settings share the web account. The native Apple apps screen adds device
+permissions, on-device review, Apple sign-in and file sharing. Requires iOS 17+
+or Mac Catalyst on a compatible Mac. Build with Xcode 26 / iOS 26 SDK or later.
+
+## Apple connections
+
+| Connection | Agent actions | Boundaries |
+| --- | --- | --- |
+| Calendar | Read a date range; create, update, delete events | At most 31 days per read; paginated; recurring changes stay in Calendar |
+| Reminders | Read, create, update, complete, delete | Paginated; recurring changes stay in Reminders |
+| Contacts | Search a specific name; create, update, delete | Respects limited contact access; no address book export |
+| Health | Steps, distance, exercise and merged sleep summary | Read-only, 1–7 days, wellness purpose; preview and consent for each result |
+
+Mac uses its own synced Calendar, Reminders and Contacts store. It does not
+reach directly into an iPhone. Health is only offered when
+`HKHealthStore.isHealthDataAvailable()` returns true. Apple Notes, Mail and
+Messages have no general connection in this release. The web agent can access
+an online connected Apple device; the native app must remain open. Background
+access, push notifications and unattended phone automations are not claimed.
+
+`apple_devices` discovers current permissions. `apple_execute` submits one
+durable command; `apple_result` retrieves its actual result. The server verifies
+account ownership and encrypts private command content with AES-GCM and account
+AAD. One device leases each command; running writes never replay after a crash.
+The native layer checks the exact production origin, main frame, account,
+permission, foreground state, expiry and whether the agent task is still active
+before acting. Results erase transient content after retrieval. Chats/tasks can
+retain the data the owner explicitly chose to share.
+
+## Open and build on Mac
+
+```sh
+brew install xcodegen
+cd native/apple
+xcodegen generate
+open Belna.xcodeproj
+```
+
+Select the Belna scheme and an iPhone simulator, attached iPhone, iPad or
+“My Mac (Mac Catalyst)”. `Developer.xcconfig` and build outputs are ignored by
+Git. The registered bundle ID is `se.belna.app` and the team is `6XD78664VT`.
+Use an optional `Developer.xcconfig` override for another team or test app.
+Never commit Apple signing keys. Local WebKit/chat storage is excluded from
+device backups before the agent loads.
+
+```sh
+bash scripts/archive.sh
+```
+
+The archive script checks the SDK and signing configuration, then creates an
+iOS archive using automatic signing. Use Xcode Organizer to validate and upload
+to TestFlight. For Mac, archive with the Mac Catalyst destination and the
+separate sandbox entitlements. There is no arbitrary HTTP/ATS exception.
+
+## Backend rollout
+
+1. Deploy the server, edge mirror, web frontend and privacy changes together.
+2. Apply `supabase/migrations/20261004110000_apple_devices.sql`.
+3. Configure server `ENCRYPTION_KEY` and the Supabase service key. The app only
+   uses the existing verified account JWT; no service key is bundled.
+4. Enable an hourly database job that invokes
+   `public.purge_expired_apple_commands()`. Expired content is inaccessible
+   immediately; this job removes ciphertext/metadata that no later request has
+   cleared. No health content is sent to analytics or advertising.
+5. In Supabase Auth enable the Apple provider and register the real iOS/Mac
+   bundle identifier as an allowed client ID. Native identity tokens are
+   exchanged with a SHA-256 nonce challenge and verified by Supabase.
+6. On the Apple App ID enable Sign in with Apple and HealthKit for iOS. The Mac
+   target has the Contacts/Calendar sandbox permissions and microphone/camera
+   entitlements, and checks Health availability at runtime.
+
+## Release status and review gates
+
+Unsigned iPhone/iPad and Mac Catalyst builds and origin/date unit tests have
+passed on GitHub’s macOS runner. Local tests cover database access, encryption,
+concurrent command claims, expiry, task cancellation, auth, deletion, phone UI
+and completion retry without executing a native action twice. See
+`docs/apple-release.md` for the evidence and outstanding release gates.
+
+This source is **not an App Store submission or a signed IPA**. Apple account
+configuration, production API rollout and testing real permissions, iCloud
+sync and Health data on the owner’s devices must pass before a release.
+
+The first App Store build is a free companion that consumes existing account
+plans. It has no digital subscription/token purchase funnel or external
+purchase links. Physical merchant checkout remains part of the agent. If in-app
+digital upgrades are desired, add StoreKit products, server-verified receipts,
+restore and subscription lifecycle handling before enabling them. This choice
+must be reflected in the App Store description and reviewer notes.
+
+Account deletion cancels Stripe subscriptions, stops tasks/watchers, disconnects
+OAuth apps, stops the account VM, removes database profile data and deletes the
+auth identity. Existing Azure disks/archive retention and any provider data
+outside the database must be reviewed with the production retention policy;
+they are an explicit release gate, not a claim of verified workspace erasure.

@@ -1,0 +1,90 @@
+# Apple release checklist — 4 October 2026
+
+## Recorded validation
+
+- Apple account setup verified on 4 October 2026: team `6XD78664VT`, registered
+  bundle ID `se.belna.app`, HealthKit and primary Sign in with Apple enabled.
+- [Belna App Store Connect record](https://appstoreconnect.apple.com/apps/6819012393/distribution):
+  iOS and macOS created; iOS listing draft saved as version 1.0.0 with manual
+  release selected. No build has been uploaded or submitted for review.
+
+- `npm run build`: web client, SSR and Cloudflare server build passed.
+- `node tests/apple-devices.cjs`: real PostgreSQL migration, service-only access,
+  encrypted arguments/results, account isolation, single leasing, no command
+  replay, expiry, cancelled task gate and result content erasure passed.
+- `node tests/apple-auth.cjs`: current terms, provider-verified Apple identity and
+  nonce, scoped account deletion, subscription cancellation and partial failure
+  reporting passed.
+- `node tests/apple-native-ui.cjs`: 393×852 phone UI, native connections, JWT
+  transport, capability-only registration, result delivery retry and sign-out
+  locking passed with fixtures. This is not real HealthKit/device data evidence.
+- Existing agent permission and security boundary tests passed.
+- [First macOS build run](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37200884775):
+  iPhone/iPad and Mac Catalyst builds and unit tests passed with code signing
+  disabled. Later workflow runs add native UI tests and downloadable evidence.
+
+## Must pass before TestFlight / App Review
+
+- Obtain signing credentials for the registered team and app. The configured
+  production origin is `https://belna.se`; verify the deployed API rollout.
+- Configure Supabase’s Apple provider with the chosen native client ID; test
+  first sign-in, returning sign-in, private relay email, revoked Apple identity,
+  email code/password fallback and account deletion on a disposable account.
+- Roll out the migration and both backend runtimes together. Verify the
+  production Apple endpoints return 401 without an account, never 404/500.
+- Configure automatic expiry cleanup and verify server encryption is active.
+- Resolve the production Azure disk/archive and external service retention
+  policy for account deletion. The present route stops the VM and erases
+  database/auth data; it does not claim cloud disk/archive erasure.
+- Build a signed Release archive with the owner’s team and a unique incremented
+  build number; validate export compliance and App Store Connect’s checks.
+- Test on real iPhone and Mac: permission allowed/denied/revoked, selected
+  contacts, iCloud sync, foreground/background, device switching, cancellation
+  while an approval sheet is open, disconnect/reconnect and network loss after
+  an approved change. Never retry an uncertain write automatically.
+- Test Calendar dates/time zones/DST; Reminder due times and completion; contact
+  changes; Health denied/empty/partially granted scopes and overlapping sleep
+  sources. Verify Health content never appears in analytics, long-term agent
+  memory without an explicit save request, or an iCloud backup created by Belna.
+- Test chat/streaming, agent approvals, canvas, generated files/download sharing,
+  audio transcription, photo/file attachment, OAuth app connections and physical
+  merchant checkout across iPhone sizes, iPad multitasking and Mac Catalyst.
+- Test VoiceOver, text scaling, contrast, keyboard navigation and low connectivity.
+- Supply real screenshots from the signed app, support URL/contact, privacy URL,
+  reviewer account and instructions, age rating, EU trader information and
+  complete App Privacy answers covering the whole web-backed app (messages,
+  files, voice, photos, profiles, purchases and optional Apple data).
+- Upload to TestFlight, install that exact build, then submit it for App Review.
+  Approval and storefront release are separate steps.
+
+## Draft listing
+
+Name: Belna
+
+Subtitle: Your personal AI agent
+
+Description: Work with your Belna agent on iPhone, iPad and Mac. Chat, research,
+create files and manage tasks with your existing account. Optionally connect
+Calendar, Reminders and Contacts on your device, and review read-only Health
+wellness summaries before sharing them with your agent. You control access and
+approve changes. Keep Belna open for Apple app requests. The app works with the
+free plan and existing account plans; digital upgrades are not sold in this app.
+
+Support and privacy: `https://belna.se/privacy`, `support@belna.se`. Validate a
+public support page before using it as App Store Connect’s Support URL.
+
+Draft reviewer notes: Sign in using the supplied reviewer account or email code.
+Apple apps is the Apple logo button at the top right and is also available in
+Connectors. Connecting is optional; no user data is uploaded on connection.
+Calendar/Reminders/Contacts changes ask in the agent and on the device. Every
+Health summary is previewed and explicitly shared for fitness/wellness only.
+Notes, Mail and Messages are not general integrations. Mac reads its own synced
+stores and offers Health only if HealthKit reports support. Account deletion is
+in Apple apps → Account. This companion app offers no digital purchase flow.
+
+## Apple references
+
+- [EventKit access](https://developer.apple.com/documentation/eventkit/accessing-the-event-store)
+- [HealthKit authorization](https://developer.apple.com/documentation/healthkit/authorizing-access-to-health-data)
+- [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
+- [Current SDK submission requirement](https://developer.apple.com/news/upcoming-requirements/?id=04282026a)

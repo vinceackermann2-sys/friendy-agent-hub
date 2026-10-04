@@ -11,6 +11,8 @@ const { entry } = require('./tracing');
 const { validatePage } = require('./page-validation');
 const composio = require('../composio');
 const connectors = require('../connectors');
+const { APPLE_TOOLS } = require('./apple-tools');
+const { appleDevices } = require('../apple-devices');
 const store = require('../store');
 const { createWalletTools } = require('./wallet-tools');
 const privateCheckout = require('../private-checkout-client').createPrivateCheckoutClient({exportCheckout:require('./azure-vm').exportCheckout});
@@ -529,14 +531,14 @@ const TOOLS = {
     description: 'List the apps the owner connected, the apps they can connect, what a connection cannot do, and the owner\'s own APIs and MCP servers.',
     run: async (_, ctx) => {
       // The owner's own APIs and MCP servers are listed even where the app catalog is not set up.
-      const [connected, configs, custom] = await Promise.all([composio.configured() ? composio.listConnected(ctx.userId) : [], composio.listAuthConfigs().catch(() => null), connectors.forAgent(ctx.userId).catch(() => [])]);
+      const [connected, configs, custom, apple] = await Promise.all([composio.configured() ? composio.listConnected(ctx.userId) : [], composio.listAuthConfigs().catch(() => null), connectors.forAgent(ctx.userId).catch(() => []), appleDevices.devices(ctx.userId).catch(() => [])]);
       const active = connected.filter((c) => String(c.status).toUpperCase() === 'ACTIVE')
         .map(({ id, toolkit, email, name, alias }) => ({ id, toolkit, account: email || name || alias || undefined }));
       const have = new Set(active.map((c) => c.toolkit));
       const offered = new Set([...have, ...(configs || []).map((c) => c.toolkit)]);
       ctx.trace(entry('box', `composio_apps: ${active.length} connected${custom.length ? `, ${custom.length} own` : ''}`));
       const note = [
-        configs ? 'Only the apps listed here can be connected. Anything else, or anything a limit excludes, is reachable only through the website in your browser, where the owner signs in themselves.' : '',
+        configs ? 'The catalog lists OAuth apps; appleDevices separately lists native Apple app connections. For unsupported apps, a website can work where the owner signs in themselves, but it cannot provide general Apple Health, Contacts or Reminders access.' : '',
         custom.length ? 'custom lists the owner\'s own APIs and MCP servers: see what one can do with connector_tools, then use it with connector_call.' : '',
       ].filter(Boolean).join(' ');
       return {
@@ -544,6 +546,8 @@ const TOOLS = {
         canConnect: configs ? configs.map((c) => c.toolkit).filter((t) => !have.has(t)) : undefined,
         limits: Object.fromEntries(Object.entries(APP_LIMITS).filter(([toolkit]) => offered.has(toolkit))),
         ...(custom.length ? { custom } : {}),
+        appleDevices: apple,
+        appleNote: 'Apple Calendar, Reminders, Contacts and read-only wellness summaries use apple_devices / apple_execute in the native Belna app. Open the app and connect each scope under Apple apps. Notes, Mail and Messages have no general Apple connector here.',
         note: note || undefined,
       };
     },
@@ -1031,6 +1035,7 @@ function pickTools(task) {
   const t = foldText(task);
   // web_search is read-only and cheap, so every task can look things up.
   const names = new Set(['memory_write','capability_search','web_search']);
+  if (/apple|iphone|ipad|health|wellness|fitness|steps|sleep|contacts|reminders|calendar|kalender|kontakter|paminnelse/.test(t)) { names.add('apple_devices'); names.add('apple_execute'); names.add('apple_result'); }
   if (TOOL_KEYWORDS.memory.test(t)) { names.add('memory_search'); names.add('memory_get'); names.add('memory_update'); names.add('memory_delete'); }
   if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); names.add('connect_app'); }
   if (TOOL_KEYWORDS.connectors.test(t)) { names.add('composio_apps'); names.add('connector_tools'); names.add('connector_call'); names.add('connector_setup'); }
@@ -1059,6 +1064,7 @@ function pickTools(task) {
 
 // Goals and Library tools, plus Library copies of generated pages, Canvas files and images.
 Object.assign(TOOLS, PERSONAL_TOOLS);
+Object.assign(TOOLS, APPLE_TOOLS);
 Object.assign(TOOLS, createWalletTools(belnaWallet));
 withLibraryAutosave(TOOLS);
 

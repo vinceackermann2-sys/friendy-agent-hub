@@ -15,3 +15,8 @@ Thumbs.db
 .output/
 .wrangler/
 .tanstack/
+native/apple/Config/Developer.xcconfig
+native/apple/build/
+native/apple/Belna.xcodeproj/
+*.xcuserstate
+xcuserdata/

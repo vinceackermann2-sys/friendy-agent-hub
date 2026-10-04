@@ -28,6 +28,8 @@ const { normalizeSubAgent, nextRunAt } = require('./agents/triggers');
 const Automations = require('./agents/automations');
 const composio = require('./composio');
 const connectors = require('./connectors');
+const { installAppleDeviceRoutes } = require('./apple-devices');
+const { installAppleAuthRoutes, createAppleAccountCleanup } = require('./apple-auth');
 const mail = require('./mail');
 const shoppay = require('./shoppay');
 const privateCheckout = require('./private-checkout-client').createPrivateCheckoutClient({exportCheckout:require('./agents/azure-vm').exportCheckout});
@@ -798,6 +800,9 @@ app.post('/api/app-events', rateLimit(30, 60000), requireAuth(async (req, res) =
 }));
 
 // ---------- Composio connected apps (Belna branding, per-user OAuth) ----------
+installAppleDeviceRoutes(app, { requireAuth, rateLimit });
+installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminClient, store, stripe: stripeMod, beforeDelete: createAppleAccountCleanup({adminClient,tasks:conversation.tasks,composio,azure}) });
+
 app.get('/api/composio/apps', requireAuth(async (req, res) => {
   try {
     if (!composio.configured()) return res.status(503).json({ error: 'App connections are not configured.' });

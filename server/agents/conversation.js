@@ -30,7 +30,7 @@ const COORDINATOR_TOOLS=new Set(['history_search','web_search']);
 // (Gmail, calendar, files) needs their approval, which only a task can ask for.
 // product_search finds products to buy in web stores and Shopify stores and shows them as
 // cards, with no task and no VM.
-const APP_LOOKUP_TOOLS=new Set(['shipping_addresses','wallet_status','mail_status','mail_list','mail_read','shop_status','product_search','shop_order','trigger_list','composio_apps']);
+const APP_LOOKUP_TOOLS=new Set(['shipping_addresses','wallet_status','mail_status','mail_list','mail_read','shop_status','product_search','shop_order','trigger_list','composio_apps','apple_devices']);
 // Calls that fetch information. One of these on the final round means the reply still
 // lacks what it needs, so the request becomes a task.
 const SEEKING_TOOLS=new Set([...COORDINATOR_TOOLS,...APP_LOOKUP_TOOLS,'read_doc']);

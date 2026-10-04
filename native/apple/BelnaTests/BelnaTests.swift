@@ -2,6 +2,13 @@ import XCTest
 @testable import Belna
 
 final class BelnaTests: XCTestCase {
+    func testLocalContentIsExcludedFromDeviceBackups() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try LocalPrivacy.excludeFromBackup(directory)
+        XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
     func testBridgeOnlyTrustsExactProductionOrigin() {
         XCTAssertTrue(AppConfiguration.trusted(URL(string: "https://belna.se/app")))
         XCTAssertFalse(AppConfiguration.trusted(URL(string: "https://belna.se.evil.example/app")))

@@ -76,6 +76,10 @@ final class NativeModel: NSObject, ObservableObject {
     private func lock() {
         revision += 1; cancelPrompt(); services.accountId = ""; completed.removeAll()
     }
+    private func commandActive(_ id: String) async -> Bool {
+        guard let webView else { return false }
+        return (try? await webView.callAsyncJavaScript("return await window.BelnaApple?.commandActive(id);", arguments: ["id":id], in: nil, in: .page)) as? Bool ?? false
+    }
     func request(_ body: [String: Any]) async throws -> Any {
         let method = body["method"] as? String ?? ""
         if method == "lock" { lock(); return ["ok": true] }
@@ -109,7 +113,8 @@ final class NativeModel: NSObject, ObservableObject {
             let description = try services.describe(action, args: args)
             guard await review(title: "Allow \(action)?", detail: description) else { throw DeviceError.message("The owner cancelled this Apple change.") }
         }
-        guard foreground, aiConsent, services.accountId == accountId, revision == currentRevision, expiresAt > Date() else {
+        let allowedBefore = await commandActive(commandId)
+        guard allowedBefore, foreground, aiConsent, services.accountId == accountId, revision == currentRevision, expiresAt > Date() else {
             throw DeviceError.message("The request expired or permission was withdrawn. Inspect the Apple app before retrying.")
         }
         let result = try await services.execute(action, args: args)
@@ -117,7 +122,8 @@ final class NativeModel: NSObject, ObservableObject {
             let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
             guard await review(title: "Share this wellness summary with your agent?", detail: String(decoding: data, as: UTF8.self), health: true) else { throw DeviceError.message("The owner declined to share the health summary.") }
         }
-        guard foreground, aiConsent, services.accountId == accountId, revision == currentRevision, expiresAt > Date() else { throw DeviceError.message("Request no longer active. Inspect the Apple app before retrying any changes.") }
+        let allowedAfter = await commandActive(commandId)
+        guard allowedAfter, foreground, aiConsent, services.accountId == accountId, revision == currentRevision, expiresAt > Date() else { throw DeviceError.message("Request no longer active. Inspect the Apple app before retrying any changes.") }
         // A duplicate delivery returns the original outcome instead of repeating a write.
         if completed.count >= 100 { completed.removeAll() }
         completed[commandId] = result

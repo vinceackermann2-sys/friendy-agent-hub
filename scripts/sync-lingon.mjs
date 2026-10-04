@@ -26,7 +26,7 @@ function copy(src, dest) {
 }
 
 // Frontend JS/CSS served by the TanStack route from /lingon/*
-for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.managed.js', 'mascot.js', 'styles.css', 'task-routing.js']) {
+for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.managed.js', 'mascot.js', 'styles.css', 'task-routing.js', 'apple-native.js']) {
   copy(join('app', f), join('public', 'lingon', f));
 }
 // Standalone public pages load /styles.css, while the app loads /lingon/styles.css.
@@ -183,7 +183,7 @@ for (const [name, factory] of [['whop-user-auth','createWhopUserAuth'],['persona
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['page-validation', 'goal-work', 'permission-policy', 'documents', 'task-checkpoint', 'task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs', 'product-search']) {
+for (const name of ['apple-tools', 'page-validation', 'goal-work', 'permission-policy', 'documents', 'task-checkpoint', 'task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs', 'product-search']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   if (name === 'automations') src = "import { tasks } from './conversation.js';\n" + src.replace(/^[ \t]*const \{ tasks \} = require\('\.\/conversation'\);\r?\n/gm, '');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
@@ -218,5 +218,14 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log('sync-lingon: done');
+
+for (const name of ['apple-devices','apple-auth']) {
+  const source = readFileSync(join(root, `server/${name}.js`), 'utf8');
+  const esm = source.replace("const crypto = require('crypto');", "import crypto from 'node:crypto';")
+    .replace("const { adminClient } = require('./auth');", "import { adminClient } from './auth.js';")
+    .replace('module.exports = {', 'export {');
+  if (/module\.exports|require\(/.test(esm)) throw new Error(`Unconverted Apple module: ${name}`);
+  writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');
+}
 
 {const src=readFileSync(join(root,'server/scoped-permissions.js'),'utf8');writeFileSync(join(root,'src/lingon-server/scoped-permissions.js'),src.replace('module.exports={','export {'));}
