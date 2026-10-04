@@ -36,7 +36,7 @@ for (const f of readdirSync(join(root, 'app', 'mascot')).filter((name) => name.e
   copy(join('app', 'mascot', f), join('public', 'lingon', 'mascot', f));
 }
 // Static Belna pages served from the site root
-for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'withdrawal.html', 'robots.txt', 'sitemap.xml', 'llms.txt']) {
+for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'support.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'withdrawal.html', 'robots.txt', 'sitemap.xml', 'llms.txt']) {
   copy(join('app', f), join('public', f));
 }
 // Lovable's live Vite server evaluates source files as ESM and cannot execute
@@ -54,9 +54,9 @@ function syncAzureProvider() {
     failures++;
     return;
   }
-  const esm = src
+  const esm = src.slice(0, exportsAt)
     .replace(cryptoRequire, "import crypto from 'node:crypto';")
-    .slice(0, exportsAt)
+    .replace("const { createAzureAccountErasure } = require('./azure-erasure');", "import { createAzureAccountErasure } from './azure-erasure.js';")
     + '\nexport {'
     + src.slice(exportsAt + exportsMarker.length);
   const to = join(root, edgeFile);
@@ -66,6 +66,14 @@ function syncAzureProvider() {
 }
 
 syncAzureProvider();
+
+{
+  const source = readFileSync(join(root,'server/agents/azure-erasure.js'),'utf8');
+  const esm = source.replace("const crypto = require('crypto');", "import crypto from 'node:crypto';")
+    .replace("const { XMLParser } = require('fast-xml-parser');", "import { XMLParser } from 'fast-xml-parser';")
+    .replace('module.exports = {','export {');
+  writeFileSync(join(root,'src/lingon-server/agents/azure-erasure.js'),esm,'utf8');
+}
 
 function syncFoundryProvider() {
   const srcFile = 'server/foundry.js';
@@ -219,12 +227,13 @@ if (failures > 0) {
 }
 console.log('sync-lingon: done');
 
-for (const name of ['apple-devices','apple-identity','apple-auth']) {
+for (const name of ['apple-devices','apple-identity','apple-auth','account-deletion']) {
   const source = readFileSync(join(root, `server/${name}.js`), 'utf8');
   const esm = source.replace("const crypto = require('crypto');", "import crypto from 'node:crypto';")
     .replace("const { adminClient } = require('./auth');", "import { adminClient } from './auth.js';")
     .replace("const { seal, unseal } = require('./apple-devices');", "import { seal, unseal } from './apple-devices.js';")
     .replace("const { appleIdentity } = require('./apple-identity');", "import { appleIdentity } from './apple-identity.js';")
+    .replace("const { eraseLibraryStorage } = require('./account-deletion');", "import { eraseLibraryStorage } from './account-deletion.js';")
     .replace('module.exports = {', 'export {');
   if (/module\.exports|require\(/.test(esm)) throw new Error(`Unconverted Apple module: ${name}`);
   writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');

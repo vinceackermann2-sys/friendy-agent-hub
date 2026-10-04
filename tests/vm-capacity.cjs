@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 Object.assign(process.env, {
   AZURE_TENANT_ID:'tenant', AZURE_CLIENT_ID:'client', AZURE_CLIENT_SECRET:'secret', AZURE_SUBSCRIPTION_ID:'sub', AZURE_RESOURCE_GROUP:'rg',
   AZURE_VM_SIZE:'Standard_B2als_v2', AZURE_AUTO_PROVISION:'false',
+  SUPABASE_URL:'https://db.test', SUPABASE_SERVICE_ROLE_KEY:'service',
   AZURE_SSH_PUBLIC_KEY: crypto.generateKeyPairSync('rsa', { modulusLength:2048 }).publicKey.export({ type:'spki', format:'pem' }),
 });
 const azure = require('../server/agents/azure-vm');
@@ -19,6 +20,7 @@ global.fetch = async (input, options = {}) => {
   const url = String(input), method = String(options.method || 'GET');
   const body = typeof options.body === 'string' && options.body.startsWith('{') ? JSON.parse(options.body) : null;
   calls.push({ url, method, size:body?.properties?.hardwareProfile?.vmSize });
+  if (url.includes('/rest/v1/account_deletions?')) return reply([]);
   if (url.includes('login.microsoftonline.com')) return reply({ access_token:'token', expires_in:3600 });
   if (url.startsWith('https://poll.test/')) return reply(polls.get(url));
   if (/virtualNetworks|networkSecurityGroups|networkInterfaces|publicIPAddresses|subnets/.test(url)) return method === 'GET' ? reply({ id:url.split('?')[0] }) : reply({ id:url.split('?')[0] });

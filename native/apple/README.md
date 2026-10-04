@@ -77,7 +77,9 @@ pending; see the release evidence below.
 
 1. Deploy the server, edge mirror, web frontend and privacy changes together.
 2. Apply `supabase/migrations/20261004110000_apple_devices.sql` and
-   `supabase/migrations/20261004141615_apple_identity_tokens.sql`.
+   `supabase/migrations/20261004141615_apple_identity_tokens.sql`, then
+   `supabase/migrations/20261004190000_account_deletion_fence.sql` before rolling
+   out the account cleanup guards.
 3. Configure server `ENCRYPTION_KEY` and the Supabase service key. The app only
    uses the existing verified account JWT; no service key is bundled.
 4. Enable an hourly database job that invokes
@@ -105,8 +107,8 @@ concurrent command claims, expiry, task cancellation, auth, deletion, phone UI
 and completion retry without executing a native action twice. See
 `docs/apple-release.md` for the evidence and outstanding release gates.
 
-The [first signed IPA export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37207929500)
-passed at commit `fcac6c2`. Subsequent changes need a new signed build. App Store
+The [latest signed IPA export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37210011891)
+passed at commit `dd43031`, including Apple token revocation. App Store
 submission, production API rollout and testing real permissions, iCloud sync
 and Health data on the owner's devices must pass before a release.
 
@@ -118,9 +120,11 @@ restore and subscription lifecycle handling before enabling them. This choice
 must be reflected in the App Store description and reviewer notes.
 
 Account deletion cancels Stripe subscriptions, stops tasks/watchers, disconnects
-OAuth apps, stops the account VM, revokes Apple sign-in tokens, removes database
-profile data and deletes the auth identity. Apple users from an older build must
-sign in with Apple again if no revocable token was stored. Existing Azure
-disks/archive retention and any provider data
-outside the database must be reviewed with the production retention policy;
-they are an explicit release gate, not a claim of verified workspace erasure.
+OAuth apps, removes the account VM, its OS disk and private archive/screenshots,
+erases Library files, revokes Apple sign-in tokens, removes database profile
+data and deletes the auth identity. A server-only deletion record blocks new
+workspace operations and keeps disk IDs for retries after partial failures.
+Provider-retained archives leave deletion pending. Apple users from an older
+build must sign in with Apple again if no revocable token was stored. Validate
+the whole flow on a disposable production account and confirm external provider
+retention before release; fixture tests do not establish live data erasure.

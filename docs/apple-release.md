@@ -14,17 +14,28 @@
   intentional for these server-only tables; permissions were verified directly.
 - Encrypted Apple identity-token migration installed and verified on production:
   RLS enabled, anonymous/account access denied, server-role access allowed.
-- [Native validation and first signed export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37207929500)
+- [Latest native validation and signed export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37210011891)
   passed iPhone/iPad and Mac Catalyst builds, origin/date/backup unit tests and
   native consent/Apple connection UI tests, then exported a signed App Store IPA
-  at commit `fcac6c2`. No TestFlight upload was requested in that run. Later
-  account-deletion changes require a fresh build.
+  at commit `dd43031`, including the account-deletion token-revocation changes.
+  No TestFlight upload was requested in that run.
 
 - Apple Distribution certificate and App Store iOS profile created for the
   registered app and stored as encrypted GitHub signing secrets. Certificate and
-  profile expire on 4 October 2027. Upload key download remains unverified.
-- Production checks on 4 October 2026: Supabase Apple authentication is disabled
-  and `https://belna.se/api/apple/devices` returns 404. The app changes are on
+  profile expire on 4 October 2027. Replacement Developer upload key `694D2U83DF`
+  was downloaded and validated; all three encrypted GitHub upload secrets are
+  installed. Unusable keys `BVC3YQ7WL9` and `8WM389NL8D` are revoked.
+  [First TestFlight upload run](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37212845388)
+  passed native tests/signing/export; Apple rejected upload with 90683 for the
+  missing `NSHealthUpdateUsageDescription`. An accurate read-only Health purpose
+  string is now included. The corrected build must pass upload and processing.
+- Sign in with Apple key `TWD2XB32GU` registered for Belna only, downloaded,
+  validated and saved in a protected local credential directory outside Git.
+  Its private key and three identifiers are installed in Lovable's encrypted
+  server secrets. Lovable requires publishing before these apply on the live app.
+- Supabase's native Apple provider enabled for `se.belna.app` and verified in
+  the saved provider settings on 4 October 2026. Production
+  `https://belna.se/api/apple/devices` still returns 404. The app changes are on
   draft PR #12 and have not reached the production site.
 
 - `npm run build`: web client, SSR and Cloudflare server build passed.
@@ -42,28 +53,35 @@
   transport, capability-only registration, result delivery retry and sign-out
   locking passed with fixtures. This is not real HealthKit/device data evidence.
 - Existing agent permission and security boundary tests passed.
+- Account erasure tests passed for scoped VM/disk/blob/Library removal, detached
+  disk retries, retention failure and PostgreSQL guards against late workspace
+  leases, tasks, Library writes and profile recreation. The migration is applied
+  on production: four guards installed, RLS enabled, account access denied.
+  Existing VM start, idle shutdown and capacity fallback tests also passed.
 - [First macOS build run](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37200884775):
   iPhone/iPad and Mac Catalyst builds and unit tests passed with code signing
   disabled. Later workflow runs add native UI tests and downloadable evidence.
 
 ## Must pass before TestFlight / App Review
 
-- Finish the upload-key download and encrypted GitHub upload secrets. The
-  production origin is `https://belna.se`; verify the deployed API rollout.
-- Configure Supabase’s Apple provider with the chosen native client ID; test
+- Verify the TestFlight upload workflow finishes and Apple processes the build.
+  The production origin is `https://belna.se`; verify the deployed API rollout.
+- Test Supabase's configured native Apple provider with
   first sign-in, returning sign-in, private relay email, revoked Apple identity,
   email code/password fallback and account deletion on a disposable account.
-- Configure the separate server-side Sign in with Apple signing key and apply
-  the encrypted identity-token migration. Confirm actual Apple token revocation
+- Publish the installed server-side Sign in with Apple signing key. The encrypted
+  identity-token migration is applied. Confirm actual Apple token revocation
   on account deletion; the App Store Connect upload key cannot do this.
 - Roll out both backend runtimes and the frontend. Verify the
   production Apple endpoints return 401 without an account, never 404/500.
 - Verify deployed server encryption is active (local configuration is present).
-- Resolve the production Azure disk/archive and external service retention
-  policy for account deletion. The present route stops the VM and erases
-  database/auth data; it does not claim cloud disk/archive erasure.
+- Verify actual account deletion on a disposable production account: dedicated
+  VM, OS disk, private archive/screenshots, all Library revisions and auth data.
+  Cloud resources are recorded before deletion so partial failures can retry.
+  Provider-retained archives leave deletion pending; retention settings are not
+  disabled. Verify external service retention against the privacy policy.
 - Build a signed Release archive with the owner’s team and a unique incremented
-  build number; validate export compliance and App Store Connect’s checks.
+  build number; validate export compliance and App Store Connect's checks.
 - Test on real iPhone and Mac: permission allowed/denied/revoked, selected
   contacts, iCloud sync, foreground/background, device switching, cancellation
   while an approval sheet is open, disconnect/reconnect and network loss after
@@ -96,8 +114,9 @@ wellness summaries before sharing them with your agent. You control access and
 approve changes. Keep Belna open for Apple app requests. The app works with the
 free plan and existing account plans; digital upgrades are not sold in this app.
 
-Support and privacy: `https://belna.se/privacy`, `support@belna.se`. Validate a
-public support page before using it as App Store Connect’s Support URL.
+Support: `https://belna.se/support`, `support@belna.se`. The support route is
+included in this PR and needs deployment before setting App Store Connect's
+Support URL. Privacy: `https://belna.se/privacy`.
 
 Draft reviewer notes: Sign in using the supplied reviewer account or email code.
 Apple apps is the Apple logo button at the top right and is also available in

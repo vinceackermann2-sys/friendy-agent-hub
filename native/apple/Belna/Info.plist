@@ -18,6 +18,7 @@
   <key>NSRemindersFullAccessUsageDescription</key><string>Let your Belna agent read reminders and create, update or complete reminders you approve.</string>
   <key>NSContactsUsageDescription</key><string>Let your Belna agent find specific contacts you ask about and save contact changes you approve.</string>
   <key>NSHealthShareUsageDescription</key><string>Read steps, walking and running distance, exercise time and sleep for your wellness summary. You review each summary before sharing it with Belna and Microsoft Azure AI.</string>
+  <key>NSHealthUpdateUsageDescription</key><string>Belna's Health connection is read-only. Belna does not add or change Health data. You review selected wellness summaries before sharing them with your agent.</string>
   <key>NSMicrophoneUsageDescription</key><string>Record a voice message you choose to send to your Belna agent for transcription.</string>
   <key>NSCameraUsageDescription</key><string>Attach a photo you choose to share with your Belna agent.</string>
   <key>NSPhotoLibraryUsageDescription</key><string>Choose a photo to attach to your Belna conversation.</string>

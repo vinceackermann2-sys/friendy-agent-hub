@@ -34,7 +34,7 @@
     "format": "prettier --write .",
     "test:devday": "node tests/devday-improvements.cjs && node tests/devday-sql.cjs",
     "test:devday-ui": "node tests/devday-ui.cjs",
-    "test:apple": "node tests/apple-devices.cjs && node tests/apple-identity.cjs && node tests/apple-auth.cjs && node tests/apple-native-ui.cjs && node tests/agent-permissions.cjs"
+    "test:apple": "node tests/apple-devices.cjs && node tests/apple-identity.cjs && node tests/apple-auth.cjs && node tests/account-erasure.cjs && node tests/apple-native-ui.cjs && node tests/agent-permissions.cjs"
   },
   "overrides": {
     "rolldown": "1.2.1",

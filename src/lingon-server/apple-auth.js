@@ -1,8 +1,10 @@
 import { appleIdentity } from './apple-identity.js';
+import { eraseLibraryStorage } from './account-deletion.js';
 function createAppleAccountCleanup({ adminClient, tasks, composio, azure }) {
   return async userId => {
     const admin = adminClient();
     const checked = async query => { const {data,error}=await query; if(error) throw new Error('Account cleanup storage unavailable.'); return data; };
+    await checked(admin.from('account_deletions').upsert({user_id:userId},{onConflict:'user_id',ignoreDuplicates:true}));
     // Stop watchers and tasks before deleting their backing records, so an
     // already running worker cannot recreate the account after deletion.
     await checked(admin.from('sub_agents').update({enabled:false}).eq('user_id',userId));
@@ -12,9 +14,13 @@ function createAppleAccountCleanup({ adminClient, tasks, composio, azure }) {
     if(stopping?.length) throw new Error('Wait for the current account operation to stop, then retry deletion.');
     if(composio.configured()) for(const account of await composio.listConnected(userId)) await composio.deleteConnected(userId,account.id);
     if(azure.isAzureConfigured()) {
-      try { await azure.deallocateVm(userId); }
-      catch(error) { if(!['AZURE_NOT_FOUND','AZURE_VM_MISSING'].includes(error.code)) throw error; }
+      const record = await checked(admin.from('account_deletions').select('workspace_resources').eq('user_id',userId).maybeSingle());
+      const manifest = await azure.planAccountErasure(userId,record?.workspace_resources || {});
+      await checked(admin.from('account_deletions').update({workspace_resources:manifest}).eq('user_id',userId));
+      await azure.eraseAccountWorkspace(userId,manifest);
     }
+    await eraseLibraryStorage(admin,userId);
+    await checked(admin.from('library_storage_gc').delete().eq('user_id',userId));
   };
 }
 function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminClient, store, stripe, identity = appleIdentity, beforeDelete = async () => {} }) {
@@ -43,7 +49,6 @@ function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminC
     const admin = adminClient();
     if (!admin) return res.status(503).json({error:'Account deletion is unavailable.'});
     try {
-      await beforeDelete(req.user.id);
       const subscription = await store.getSubscription(req.user.id);
       if (subscription.stripe_subscription_id) {
         const client = stripe.client();
@@ -51,6 +56,8 @@ function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminC
         const current = await client.subscriptions.retrieve(subscription.stripe_subscription_id);
         if (current.status !== 'canceled') await client.subscriptions.cancel(current.id);
       }
+      // Cancel renewal before cloud cleanup, which may wait on provider retention.
+      await beforeDelete(req.user.id);
       await identity.revoke(req.user);
       // profiles.id is text, independent of auth.users in the original schema.
       // Purge it explicitly while auth is still recoverable on a partial failure.
@@ -60,6 +67,6 @@ function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminC
       if (error) return res.status(503).json({error:'Your account data was deleted, but sign-in removal needs a retry. Contact support@belna.se.'});
       return res.json({ok:true,deleted:true});
     } catch(error) { return res.status(503).json({error:error.code === 'APPLE_REAUTH_REQUIRED' ? error.message : 'Account deletion could not finish. Please retry or contact support@belna.se.'}); }
-  }));
+  }, {allowDeleting:true}));
 }
 export { installAppleAuthRoutes, createAppleAccountCleanup };
