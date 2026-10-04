@@ -112,7 +112,7 @@ struct AppleAppsView: View {
                                         do { try await model.services.connect(scope) } catch { self.error = error.localizedDescription }
                                         busy = nil; model.refresh()
                                     }
-                                }.disabled(!model.services.available(scope) || !model.aiConsent)
+                                }.disabled(!model.services.available(scope) || !model.aiConsent || model.services.accountId.isEmpty)
                             }
                         }
                         Text(model.services.statusText(scope)).font(.footnote).foregroundStyle(.secondary)

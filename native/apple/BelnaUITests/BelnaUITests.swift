@@ -17,7 +17,9 @@ final class BelnaUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         XCTAssertTrue(loaded, "Published login must load and discover the native Apple bridge")
-        XCTAssertTrue(app.webViews.buttons["Continue with Google"].exists)
+        XCTAssertTrue(app.webViews.buttons["Login with one-time code"].waitForExistence(timeout: 10))
+        // Google's OAuth sign-in is intentionally hidden in the embedded app.
+        XCTAssertFalse(app.webViews.buttons["Continue with Google"].exists)
         XCTAssertFalse(app.staticTexts["Couldn’t open Belna"].exists)
 
         app.buttons["Apple apps and privacy"].tap()
