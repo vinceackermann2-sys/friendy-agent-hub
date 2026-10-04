@@ -10,6 +10,14 @@ on:
         description: Upload the signed iOS build to App Store Connect
         type: boolean
         default: false
+      signed_mac:
+        description: Create a signed Mac Catalyst App Store package
+        type: boolean
+        default: false
+      upload_mac:
+        description: Upload the signed Mac package to App Store Connect
+        type: boolean
+        default: false
   push:
     paths: ['native/apple/**', '.github/workflows/apple-build.yml']
   pull_request:
@@ -17,6 +25,34 @@ on:
 permissions:
   contents: read
 jobs:
+  signed-mac:
+    if: github.event_name == 'workflow_dispatch' && inputs.signed_mac
+    needs: apple
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Sign, export and optionally upload Mac
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_DISTRIBUTION_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_PASSWORD }}
+          APPLE_MAC_PROFILE_BASE64: ${{ secrets.APPLE_MAC_PROFILE_BASE64 }}
+          APPLE_MAC_INSTALLER_P12_BASE64: ${{ secrets.APPLE_MAC_INSTALLER_P12_BASE64 }}
+          APPLE_MAC_INSTALLER_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_PASSWORD }}
+          APPLE_ASC_KEY_ID: ${{ secrets.APPLE_ASC_KEY_ID }}
+          APPLE_ASC_ISSUER_ID: ${{ secrets.APPLE_ASC_ISSUER_ID }}
+          APPLE_ASC_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_ASC_PRIVATE_KEY_BASE64 }}
+          BELNA_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+          BELNA_UPLOAD_MAC: ${{ inputs.upload_mac }}
+        run: bash native/apple/scripts/mac-app-store.sh
+      - name: Save signed Mac package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Belna-signed-Mac
+          path: native/apple/build/mac-export/*.pkg
+          retention-days: 7
   signed-ios:
     if: github.event_name == 'workflow_dispatch' && inputs.signed
     needs: apple
@@ -54,6 +90,7 @@ jobs:
           SDK=$(xcrun --sdk iphoneos --show-sdk-version)
           test "${SDK%%.*}" -ge 26
           bash -n native/apple/scripts/testflight.sh
+          bash -n native/apple/scripts/mac-app-store.sh
       - name: Generate Xcode project
         run: |
           brew install xcodegen

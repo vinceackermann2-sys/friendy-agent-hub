@@ -57,21 +57,26 @@ to TestFlight. For Mac, archive with the Mac Catalyst destination and the
 separate sandbox entitlements. There is no arbitrary HTTP/ATS exception.
 
 The GitHub `Apple app build` workflow also supports a manually requested signed
-iOS archive and an optional TestFlight upload. It runs the unsigned builds and
+iOS archive, a signed Mac Catalyst package and optional uploads. It runs the unsigned builds and
 tests first. Configure these encrypted repository secrets only after the owner
 approves the signing credential setup:
 
 - `APPLE_DISTRIBUTION_P12_BASE64`, `APPLE_DISTRIBUTION_PASSWORD`
 - `APPLE_IOS_PROFILE_BASE64` (App Store profile for `se.belna.app`)
+- For Mac: `APPLE_MAC_PROFILE_BASE64`, `APPLE_MAC_INSTALLER_P12_BASE64`,
+  `APPLE_MAC_INSTALLER_PASSWORD` (Mac Catalyst App Store profile and a separate
+  Mac Installer Distribution certificate)
 - For upload: `APPLE_ASC_KEY_ID`, `APPLE_ASC_ISSUER_ID`,
   `APPLE_ASC_PRIVATE_KEY_BASE64` (App Store Connect upload key)
 
 The workflow creates a temporary keychain, validates the profile’s team,
-bundle ID, expiry and required capabilities, then exports an IPA. Upload is
+bundle ID, expiry and required capabilities, then exports an IPA or Mac PKG. Mac
+also verifies the archived sandbox/sign-in entitlements and package signature.
+Upload is
 disabled by default. Signing keys are removed from the runner on exit and are
 never included in build artifacts. The signing path requires real credentials
-and has passed a signed archive/export on GitHub. TestFlight upload is still
-pending; see the release evidence below.
+and has passed an iOS signed archive/export and TestFlight upload on GitHub.
+Mac signing setup and the signed Mac run remain pending; see the release evidence.
 
 ## Backend rollout
 
@@ -107,9 +112,10 @@ concurrent command claims, expiry, task cancellation, auth, deletion, phone UI
 and completion retry without executing a native action twice. See
 `docs/apple-release.md` for the evidence and outstanding release gates.
 
-The [latest signed IPA export](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37210011891)
-passed at commit `dd43031`, including Apple token revocation. App Store
-submission, production API rollout and testing real permissions, iCloud sync
+The [latest signed iOS upload](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37213788005)
+passed at commit `2f31682`, including account workspace cleanup and Apple token
+revocation. Apple processed version 1.0.0 (14.1). The production API and support
+page are published. App Store submission and testing real permissions, iCloud sync
 and Health data on the owner's devices must pass before a release.
 
 The first App Store build is a free companion that consumes existing account
