@@ -31,6 +31,10 @@ for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.man
 }
 // Standalone public pages load /styles.css, while the app loads /lingon/styles.css.
 copy(join('app', 'styles.css'), join('public', 'styles.css'));
+// Original Apple app artwork used to identify the native connectors.
+for (const f of readdirSync(join(root, 'app', 'connectors', 'apple')).filter((name) => name.endsWith('.jpg'))) {
+  copy(join('app', 'connectors', 'apple', f), join('public', 'lingon', 'connectors', 'apple', f));
+}
 // Mascot sprites rendered by design/mascot/build_mascot.py
 for (const f of readdirSync(join(root, 'app', 'mascot')).filter((name) => name.endsWith('.webp'))) {
   copy(join('app', 'mascot', f), join('public', 'lingon', 'mascot', f));
