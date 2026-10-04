@@ -45,6 +45,11 @@ final class NativeModel: NSObject, ObservableObject {
     func cancelPrompt() { resolvePrompt(false) }
     func review(title: String, detail: String, health: Bool = false) async -> Bool {
         guard promptContinuation == nil, foreground else { return false }
+        if showSettings {
+            showSettings = false
+            try? await Task.sleep(for: .milliseconds(350))
+            guard foreground else { return false }
+        }
         return await withCheckedContinuation { continuation in
             promptContinuation = continuation
             prompt = NativePrompt(title: title, detail: detail, health: health)

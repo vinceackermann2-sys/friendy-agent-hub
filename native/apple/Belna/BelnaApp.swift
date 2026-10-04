@@ -5,6 +5,11 @@ import WebKit
 struct BelnaApp: App {
     @StateObject private var model = NativeModel()
     @Environment(\.scenePhase) private var phase
+    init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--reset-consent-for-testing") { UserDefaults.standard.removeObject(forKey: "belna.aiConsent.v1") }
+        #endif
+    }
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model)

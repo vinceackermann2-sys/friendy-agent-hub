@@ -30,4 +30,12 @@ jobs:
       - name: Test bridge origin and date boundaries
         run: |
           DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for k,items in d["devices"].items() if "iOS" in k for v in items if "iPhone" in v["name"]))')
-          xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" CODE_SIGNING_ALLOWED=NO test
+          xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -resultBundlePath native/apple/build/BelnaTests.xcresult CODE_SIGNING_ALLOWED=NO test
+      - name: Save native test evidence and Xcode project
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Belna-Apple-build-evidence
+          path: |
+            native/apple/build/BelnaTests.xcresult
+            native/apple/Belna.xcodeproj

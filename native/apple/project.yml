@@ -58,13 +58,25 @@ targets:
         SUPPORTS_MACCATALYST: YES
     dependencies:
       - target: Belna
+  BelnaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [BelnaUITests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: se.belna.app.uitests
+        TEST_TARGET_NAME: Belna
+    dependencies:
+      - target: Belna
 schemes:
   Belna:
     build:
       targets:
         Belna: all
         BelnaTests: [test]
+        BelnaUITests: [test]
     test:
-      targets: [BelnaTests]
+      targets: [BelnaTests, BelnaUITests]
     archive:
       config: Release
