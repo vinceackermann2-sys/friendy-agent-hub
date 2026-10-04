@@ -1,6 +1,7 @@
 import { grantDecision } from '../scoped-permissions.js';
 import * as store from '../store.js';
 import * as connectors from '../connectors.js';
+import { validateAppleAction } from '../apple-devices.js';
 
 const WEB_TOOLS = new Set(['web_search','browser_open','browser_action','browser_submit','browser_fill_secret','computer_screenshot','computer_action','computer_submit','computer_fill_secret']);
 const CONNECTOR_TOOLS = new Set(['composio_apps','composio_tools','composio_execute','connector_tools','connector_call']);
@@ -9,6 +10,12 @@ const WRITE_VERB = /(?:^|_)(?:SEND|CREATE|UPDATE|DELETE|POST|WRITE|INSERT|REMOVE
 function hostOf(url){try {const u=new URL(String(url || ''));return /^https?:$/.test(u.protocol)?u.hostname.toLowerCase():'';}catch{return '';}}
 function connectorRead(slug){const value=String(slug || '').toUpperCase();return READ_PREFIX.test(value) && !WRITE_VERB.test(value);}
 async function permissionDecision(userId, name, args = {}, tool = {}) {
+  if (name === 'apple_execute') {
+    const meta = validateAppleAction(args.action, args.args);
+    const permissions = await store.getAgentPermissions(userId);
+    return { required: !meta.read || meta.scope === 'health' || permissions.connectors === 'always_ask', readOnly: meta.read, detail: `Apple ${args.action}: ${JSON.stringify(args.args || {}).slice(0,1200)}` };
+  }
+  if (name === 'apple_devices') return { required: (await store.getAgentPermissions(userId)).connectors === 'always_ask', readOnly: true };
   if(name==='composio_execute' && (!/^[A-Z0-9]+_[A-Z0-9_]+$/.test(String(args.tool || '').toUpperCase()) || String(args.tool).toLowerCase()==='composio_execute'))return {denied:true,required:false,detail:'Invalid connected-app action. Discover an exact action with composio_tools before executing it.'};
   if(['composio_execute','connector_call','web_search','browser_open'].includes(name) && store.listPermissionGrants){
     const scoped=grantDecision(await store.listPermissionGrants(userId),name,args);

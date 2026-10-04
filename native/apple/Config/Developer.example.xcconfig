@@ -1,0 +1,3 @@
+BELNA_TEAM_ID = YOUR_TEAM_ID
+BELNA_BUNDLE_ID = se.belna.app
+BELNA_ORIGIN = https:/$()/belna.se

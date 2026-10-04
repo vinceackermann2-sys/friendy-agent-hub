@@ -22,6 +22,7 @@ global.fetch = async (input, options = {}) => {
   const url = String(input), method = String(options.method || 'GET');
   const body = typeof options.body === 'string' && options.body.startsWith('{') ? JSON.parse(options.body) : null;
   calls.push({ url, method, body });
+  if (url.includes('/rest/v1/account_deletions?')) return reply([]);
   if (url.includes('login.microsoftonline.com')) return reply({ access_token:'token', expires_in:3600 });
   if (url.includes('/rest/v1/rpc/')) {
     const name = url.split('/rpc/')[1];

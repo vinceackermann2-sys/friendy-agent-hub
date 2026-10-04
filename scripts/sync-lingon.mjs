@@ -26,7 +26,7 @@ function copy(src, dest) {
 }
 
 // Frontend JS/CSS served by the TanStack route from /lingon/*
-for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.managed.js', 'mascot.js', 'styles.css', 'task-routing.js']) {
+for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.managed.js', 'mascot.js', 'styles.css', 'task-routing.js', 'apple-native.js']) {
   copy(join('app', f), join('public', 'lingon', f));
 }
 // Standalone public pages load /styles.css, while the app loads /lingon/styles.css.
@@ -36,7 +36,7 @@ for (const f of readdirSync(join(root, 'app', 'mascot')).filter((name) => name.e
   copy(join('app', 'mascot', f), join('public', 'lingon', 'mascot', f));
 }
 // Static Belna pages served from the site root
-for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'withdrawal.html', 'robots.txt', 'sitemap.xml', 'llms.txt']) {
+for (const f of ['cookies.html', 'pricing.html', 'privacy.html', 'support.html', 'promo.html', 'research.html', 'research-arche-1-0.html', 'research-100m.html', 'research-stlm-sla.html', 'research.css', 'security.html', 'terms.html', 'withdrawal.html', 'robots.txt', 'sitemap.xml', 'llms.txt']) {
   copy(join('app', f), join('public', f));
 }
 // Lovable's live Vite server evaluates source files as ESM and cannot execute
@@ -54,9 +54,9 @@ function syncAzureProvider() {
     failures++;
     return;
   }
-  const esm = src
+  const esm = src.slice(0, exportsAt)
     .replace(cryptoRequire, "import crypto from 'node:crypto';")
-    .slice(0, exportsAt)
+    .replace("const { createAzureAccountErasure } = require('./azure-erasure');", "import { createAzureAccountErasure } from './azure-erasure.js';")
     + '\nexport {'
     + src.slice(exportsAt + exportsMarker.length);
   const to = join(root, edgeFile);
@@ -66,6 +66,14 @@ function syncAzureProvider() {
 }
 
 syncAzureProvider();
+
+{
+  const source = readFileSync(join(root,'server/agents/azure-erasure.js'),'utf8');
+  const esm = source.replace("const crypto = require('crypto');", "import crypto from 'node:crypto';")
+    .replace("const { XMLParser } = require('fast-xml-parser');", "import { XMLParser } from 'fast-xml-parser';")
+    .replace('module.exports = {','export {');
+  writeFileSync(join(root,'src/lingon-server/agents/azure-erasure.js'),esm,'utf8');
+}
 
 function syncFoundryProvider() {
   const srcFile = 'server/foundry.js';
@@ -183,7 +191,7 @@ for (const [name, factory] of [['whop-user-auth','createWhopUserAuth'],['persona
 
 // These modules are shared logic; generate the ESM port instead of maintaining
 // a second coordinator/state machine that can drift from the Node deployment.
-for (const name of ['page-validation', 'goal-work', 'permission-policy', 'documents', 'task-checkpoint', 'task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs', 'product-search']) {
+for (const name of ['apple-tools', 'page-validation', 'goal-work', 'permission-policy', 'documents', 'task-checkpoint', 'task-store', 'task-runtime', 'conversation', 'workspace-runtime', 'attachments', 'upkeep', 'automations', 'personal-tools', 'cards', 'payment-safety', 'purchase', 'runner', 'memory', 'guardrails', 'vm-harness', 'product-docs', 'product-search']) {
   let src = readFileSync(join(root, `server/agents/${name}.js`), 'utf8');
   if (name === 'automations') src = "import { tasks } from './conversation.js';\n" + src.replace(/^[ \t]*const \{ tasks \} = require\('\.\/conversation'\);\r?\n/gm, '');
   src = src.replace(/const (\{[^\n]+\}) = require\('([^']+)'\);/g, (_, bindings, spec) =>
@@ -218,5 +226,17 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log('sync-lingon: done');
+
+for (const name of ['apple-devices','apple-identity','apple-auth','account-deletion']) {
+  const source = readFileSync(join(root, `server/${name}.js`), 'utf8');
+  const esm = source.replace("const crypto = require('crypto');", "import crypto from 'node:crypto';")
+    .replace("const { adminClient } = require('./auth');", "import { adminClient } from './auth.js';")
+    .replace("const { seal, unseal } = require('./apple-devices');", "import { seal, unseal } from './apple-devices.js';")
+    .replace("const { appleIdentity } = require('./apple-identity');", "import { appleIdentity } from './apple-identity.js';")
+    .replace("const { eraseLibraryStorage } = require('./account-deletion');", "import { eraseLibraryStorage } from './account-deletion.js';")
+    .replace('module.exports = {', 'export {');
+  if (/module\.exports|require\(/.test(esm)) throw new Error(`Unconverted Apple module: ${name}`);
+  writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');
+}
 
 {const src=readFileSync(join(root,'server/scoped-permissions.js'),'utf8');writeFileSync(join(root,'src/lingon-server/scoped-permissions.js'),src.replace('module.exports={','export {'));}

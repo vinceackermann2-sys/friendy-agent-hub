@@ -7,6 +7,7 @@
    Missing AZURE_* → isolated local workspace; code_run stays DISABLED.
 */
 const crypto = require('crypto');
+const { createAzureAccountErasure } = require('./azure-erasure');
 
 const SANDBOX_ROOT = '/tmp/lingon-sandboxes';
 const ARM = 'https://management.azure.com';
@@ -145,6 +146,17 @@ async function supabaseLeaseRows(userId) {
   });
   if (!response.ok) throw Object.assign(new Error('Could not read durable VM leases.'), { code: 'VM_LEASE_STORE' });
   return response.json();
+}
+
+async function assertAccountActive(userId) {
+  const cfg = supabaseLeaseConfig();
+  if (!cfg.url || !cfg.key) throw Object.assign(new Error('Account cleanup status unavailable.'), {code:'SUPABASE_NOT_CONFIGURED'});
+  const query = new URLSearchParams({select:'user_id',user_id:`eq.${String(userId)}`,limit:'1'});
+  const response = await fetch(`${cfg.url}/rest/v1/account_deletions?${query}`, {headers:{apikey:cfg.key,Authorization:`Bearer ${cfg.key}`},signal:AbortSignal.timeout(15000)});
+  if (!response.ok) throw Object.assign(new Error('Account cleanup status unavailable.'), {code:'VM_LEASE_STORE'});
+  const rows = await response.json();
+  if (!Array.isArray(rows)) throw Object.assign(new Error('Account cleanup status unavailable.'), {code:'VM_LEASE_STORE'});
+  if (rows.length) throw Object.assign(new Error('Account deletion is pending.'), {code:'ACCOUNT_DELETING'});
 }
 
 async function serverSecret(name) {
@@ -2062,6 +2074,7 @@ async function ensureVm(userId, { create = false } = {}) {
   if (!create) {
     throw Object.assign(new Error(`Azure VM ${name} is not provisioned. Run npm run azure:provision -- --create --user <id> or allow on-demand provisioning.`), { code: 'AZURE_VM_MISSING' });
   }
+  await assertAccountActive(userId);
   restoredState.delete(String(userId));
   workerReadyState.delete(String(userId));
   const infra = await ensureInfrastructure(cfg);
@@ -2105,6 +2118,7 @@ async function ensureVm(userId, { create = false } = {}) {
   const sizes = vmSizes(cfg);
   for (let i = 0; ; i++) {
     try {
+      await assertAccountActive(userId);
       const vm = await arm(cfg, 'PUT', vmPath, body(sizes[i]), COMPUTE_API);
       if (i) console.warn('[vm] created on a fallback size', { vm: name, size: sizes[i] });
       return { vmName: name, id: vm.id, vmId: vm.properties?.vmId || null, provisioningState: vm.properties?.provisioningState || 'Creating', created: true, vmSize: sizes[i] };
@@ -2231,6 +2245,7 @@ async function waitPower(userId, want, timeoutMs = 180000) {
 }
 
 async function startVm(userId) {
+  await assertAccountActive(userId);
   const cfg = azureConfig();
   const name = vmNameForUser(userId);
   const vmPath = `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}`;
@@ -2245,6 +2260,7 @@ async function startVm(userId) {
     for (let i = 0; ; i++) {
       console.warn('[vm] no capacity to start, resizing', { vm: name, from: current, to: sizes[i] });
       try {
+        await assertAccountActive(userId);
         await arm(cfg, 'PATCH', vmPath, { properties: { hardwareProfile: { vmSize: sizes[i] } } }, COMPUTE_API);
         await arm(cfg, 'POST', `${vmPath}/start`, undefined, COMPUTE_API);
         break;
@@ -2302,6 +2318,7 @@ async function acquireLease(userId, { leaseId, kind = 'app' } = {}) {
   if (!isLeaseStoreConfigured()) {
     throw Object.assign(new Error('Durable VM leases are not configured.'), { code: 'SUPABASE_NOT_CONFIGURED' });
   }
+  await assertAccountActive(userId);
   await requireVmTokens(userId);
   const expiresAt = Date.now() + LEASE_TTL_MS;
   const began = Date.now(), timing = {};
@@ -2309,6 +2326,7 @@ async function acquireLease(userId, { leaseId, kind = 'app' } = {}) {
   // A shutdown in progress counts as stale after five minutes (see acquire_agent_vm_lease), so
   // new work waits a little longer than that rather than failing while the VM stops.
   for (let attempt = 0; attempt < 220 && !acquired; attempt++) {
+    await assertAccountActive(userId);
     const result = await supabaseRpc('acquire_agent_vm_lease', {
       p_user_id: String(userId),
       p_lease_id: id,
@@ -2353,6 +2371,7 @@ async function renewLease(userId, { leaseId } = {}) {
   const id = String(leaseId || '').trim();
   if (!/^[A-Za-z0-9:_-]{6,120}$/.test(id)) throw Object.assign(new Error('Valid leaseId required.'), { code: 'BAD_INPUT' });
   if (!isLeaseStoreConfigured()) return acquireLease(userId, { leaseId: id, kind: 'app' });
+  await assertAccountActive(userId);
   await requireVmTokens(userId);
   const expiresAt = Date.now() + LEASE_TTL_MS;
   const result = await supabaseRpc('acquire_agent_vm_lease', {
@@ -2499,6 +2518,7 @@ async function sweepLeases({ limit = 20, backupMs = SWEEP_BACKUP_MS } = {}) {
 }
 
 async function ensureRunning(userId, { create = true } = {}) {
+  await assertAccountActive(userId);
   const vm = await ensureVm(userId, { create });
   const key = String(userId);
   if (workerReadyState.get(key) && vm.vmId && workerReadyState.get(key) !== vm.vmId) workerReadyState.delete(key);
@@ -2539,6 +2559,7 @@ async function prewarm(userId) {
   try {
     // Already up: the lease and its release only keep it from stopping before the task needs it.
     if (['running', 'starting'].includes(power)) return { started: false, power };
+    await assertAccountActive(userId);
     await arm(cfg, 'POST', `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${vmNameForUser(userId)}/start`, undefined, COMPUTE_API, { wait: false });
     console.info('[vm] prewarm', { vm: vmNameForUser(userId) });
     return { started: true, power: 'starting' };
@@ -2610,6 +2631,7 @@ async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
   const busy = (error) => /run command extension execution is in progress|another operation is in progress|conflict/i.test(String(error && error.message));
   let cleared = false;
   for (let attempt = 0; ; attempt++) {
+    await assertAccountActive(userId);
     try {
       const data = await arm(cfg, 'POST', path_, { commandId: 'RunShellScript', script: [script] }, COMPUTE_API);
       return parseRunOutput(data, { maxStdout });
@@ -2657,6 +2679,7 @@ async function waitWorkerReady(userId) {
 }
 
 async function restoreDurableState(userId, { vmId } = {}) {
+  await assertAccountActive(userId);
   const cfg = azureConfig();
   if (!cfg.durableState) return { restored: false, disabled: true };
   const key = String(userId);
@@ -2669,6 +2692,7 @@ async function restoreDurableState(userId, { vmId } = {}) {
 }
 
 async function snapshotDurableState(userId) {
+  await assertAccountActive(userId);
   const cfg = azureConfig();
   if (!cfg.durableState) return { saved: false, disabled: true };
   const transfer = await createDurableStateTransfer(userId);
@@ -2960,7 +2984,16 @@ async function provisionUserVm(userId) {
   return ensureVm(userId, { create: true });
 }
 
+const accountErasure = createAzureAccountErasure({config:azureConfig,arm,userHash,vmNameForUser,storageAccountName});
+const planAccountErasure = (owner,previous) => accountErasure.plan(owner,previous);
+const eraseAccountWorkspace = async (owner,manifest) => {
+  const result = await accountErasure.erase(owner,manifest);
+  for (const map of [leases,restoredState,workerReadyState]) map.delete(String(owner));
+  return result;
+};
+
 module.exports = {
+  assertAccountActive, planAccountErasure, eraseAccountWorkspace,
   azureConfig,
   isAzureConfigured,
   isLeaseStoreConfigured,

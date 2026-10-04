@@ -1,0 +1,8 @@
+// Registered Belna Apple Developer team. Credentials never belong in git.
+BELNA_ORIGIN = https:/$()/belna.se
+BELNA_TEAM_ID = 6XD78664VT
+DEVELOPMENT_TEAM = $(BELNA_TEAM_ID)
+PRODUCT_BUNDLE_IDENTIFIER = $(BELNA_BUNDLE_ID)
+BELNA_BUNDLE_ID = se.belna.app
+// Developer.xcconfig can override these defaults; put it last.
+#include? "Developer.xcconfig"

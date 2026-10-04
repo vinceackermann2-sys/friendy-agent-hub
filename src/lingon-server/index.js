@@ -13,6 +13,9 @@ import { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costO
 import * as store from './store.js';
 import * as stripeMod from './stripe.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
+import { installAppleDeviceRoutes } from './apple-devices.js';
+import { installAppleAuthRoutes, createAppleAccountCleanup } from './apple-auth.js';
+import { deallocateVm } from './agents/azure-vm.js';
 import { safeNext, bindOAuthBrowser, matchesOAuthBrowser, clearOAuthBrowser } from './oauth-security.js';
 import crypto from 'node:crypto';
 // Microsoft Foundry tool harness + Azure VM sandbox + extras
@@ -740,6 +743,9 @@ app.post('/api/app-events', rateLimit(30, 60000), requireAuth(async (req, res) =
 }));
 
 // ---------- Composio connected apps (Belna branding, per-user OAuth) ----------
+installAppleDeviceRoutes(app, { requireAuth, rateLimit });
+installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminClient, store, stripe: stripeMod, beforeDelete: createAppleAccountCleanup({adminClient,tasks:chatTasks,composio,azure:{isAzureConfigured,deallocateVm}}) });
+
 app.get('/api/composio/apps', requireAuth(async (req, res) => {
   try {
     if (!composio.configured()) return res.status(503).json({ error: 'App connections are not configured.' });
