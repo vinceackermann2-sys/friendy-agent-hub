@@ -105,7 +105,7 @@ jobs:
         env:
           BELNA_REVIEW_CREDENTIALS: ${{ secrets.BELNA_REVIEW_CREDENTIALS }}
         run: |
-          node -e 'const fs=require("fs");const c=JSON.parse(process.env.BELNA_REVIEW_CREDENTIALS);if(!c.email||!c.password)throw Error("Missing reviewer credentials");fs.writeFileSync("native/apple/BelnaUITests/ReviewerCredentials.json",JSON.stringify({email:c.email,password:c.password}));'
+          node -e 'const fs=require("fs");const c=JSON.parse(process.env.BELNA_REVIEW_CREDENTIALS);if(!c.email||!c.password)throw Error("Missing reviewer credentials");console.log("::add-mask::"+c.password);console.log("::add-mask::"+c.email);fs.writeFileSync("native/apple/BelnaUITests/ReviewerCredentials.json",JSON.stringify({email:c.email,password:c.password}));'
           cd native/apple
           xcodegen generate
       - name: Build iPhone and iPad
@@ -137,8 +137,13 @@ jobs:
         with:
           name: Belna-Apple-build-evidence
           path: |
-            native/apple/build/BelnaTests.xcresult
             native/apple/build/test-attachments
             native/apple/build/app-store-iphone
             native/apple/build/app-store-ipad
             native/apple/Belna.xcodeproj
+      - name: Save credential-free test diagnostics
+        if: always() && !(github.event_name == 'workflow_dispatch' && inputs.review_screenshots)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Belna-test-diagnostics
+          path: native/apple/build/BelnaTests.xcresult
