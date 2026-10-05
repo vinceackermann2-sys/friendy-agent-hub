@@ -25,7 +25,9 @@
   `E4B9A27758FD6965E4675F8EAA8667594C07C94BCEA9F83433577E93A9613C98`.
   Testing instructions are saved. The account holder was invited to the internal
   `Belna Device QA` group on 4 October 2026 and confirmed that sign-in, chat and
-  the Apple apps screen work on a physical iPhone using build 14.1.
+  the Apple apps screen work on a physical iPhone using build 14.1. The owner
+  subsequently confirmed native Sign in with Apple and agent requests for
+  Calendar, Reminders, Contacts and Health, including the Health sharing preview.
 
 - Live production QA on 4 October 2026 passed authenticated device registration,
   cross-account isolation, 95 KB Library upload/read/revision, and account deletion
@@ -41,8 +43,8 @@
   Updated native validation and upload are pending: GitHub rejected subsequent
   jobs before execution due to account billing/spending limits, and the owner
   confirmed the Actions allowance is exhausted. Build 14.1 remains available.
-  Physical Calendar/Reminders/Contacts/Health permission and agent tests are
-  still required; opening their settings screen alone does not verify them.
+  The owner confirmed basic physical Calendar/Reminders/Contacts/Health agent
+  requests. Denied/revoked permissions, writes and interruption tests remain.
 
 - Apple Distribution certificate and App Store iOS profile created for the
   registered app and stored as encrypted GitHub signing secrets. Certificate and
