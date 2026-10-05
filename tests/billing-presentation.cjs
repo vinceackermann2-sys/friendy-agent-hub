@@ -11,6 +11,7 @@ function functionSource(name, next) {
   return source.slice(start, end);
 }
 const context = vm.createContext({
+  window: {},
   fmtTokens: n => Number(n).toLocaleString('en-US'),
   fmtPlanTokens: n => Number(n).toLocaleString('en-US'),
   currentUser: () => ({ name: 'Guest' }),

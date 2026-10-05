@@ -47,7 +47,7 @@ const sleep = ms => new Promise(r=>setTimeout(r,ms));
   const oldKey=process.env.ENCRYPTION_KEY; process.env.ENCRYPTION_KEY='apple-test-key-never-production';
   try {
     await db.exec('create role anon; create role authenticated; create role service_role; create schema auth; create table auth.users(id uuid primary key); create table profiles(id text primary key); create table agent_chat_tasks(id text primary key,user_id text,state jsonb);');
-    await db.exec(fs.readFileSync('supabase/migrations/20261004110000_apple_devices.sql','utf8'));
+    await db.exec(fs.readFileSync('supabase/migrations/20261004133503_apple_device_connections.sql','utf8'));
     await db.query('insert into auth.users values($1),($2)',[alice,bob]);
     await db.query('insert into profiles values($1),($2)',[alice,bob]);
     const client=clientFor(db), broker=createAppleDeviceBroker({client:()=>client,wait:()=>sleep(10)});

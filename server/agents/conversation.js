@@ -14,10 +14,18 @@ const { QUICK_PERSONAL_TOOLS, personalResultCard } = require('./personal-tools')
 const { questionArgs, presentArgs, connectArgs, cardFromMarkdown, resultCard } = require('./cards');
 const { permissionDecision } = require('./permission-policy');
 const { READ_DOC_SCHEMA, READ_DOC_TOOL, readDoc } = require('./product-docs');
+const { PAYMENT_APPS } = require('./purchase');
+// "pay with Swish", "betala med Klarna": the owner names a payment app as the way to pay.
+// Some app names are also words ("ideal", "zip"), so the pay wording is required.
+// "buy … with my Belna wallet": a purchase (not a transfer) paid from the Belna Wallet.
+const BUY_WITH_BELNA=/\b(?:buy|order|purchase|köp|beställ|handla)\b[^.!?\n]{0,80}?\b(?:with|using|from|via|med|från)\s+(?:my\s+|min\s+)?belna(?:\s+(?:wallet|card|plånbok|kort))?\b/i;
+const PAY_WITH_APP=new RegExp(`\\b(?:pay|paying|paid|payment|check ?out|betala|betalning)\\b[^.!?\\n]{0,30}?\\b(?:with|via|by|using|through|med|genom)\\s+(?:my\\s+|min\\s+|mitt\\s+)?(${PAYMENT_APPS.source})`,'i');
 
 // The chat turn answers fast at low reasoning. It may look things up for up to
 // LOOKUP_ROUNDS model calls; the final call must answer or hand the work to a task.
 const LOOKUP_ROUNDS=2;
+// Lookups per reply: two searches (a second query when the first misses) and one page read.
+const LOOKUPS={search:2,read:1};
 // Chat replies and task briefs are short; longer writing is task work. The cap keeps
 // a runaway generation from stalling the conversation.
 const CHAT_MAX_OUTPUT_TOKENS=4096;
@@ -40,7 +48,10 @@ const QUIET_TOOLS=new Set(['memory_write','memory_update','react_to_message']);
 // owner answers, a connect card waits for OAuth, present shows data inline.
 const CARD_TOOLS=new Set(['ask_user','present','connect_app']);
 const CARD_POLICY=' Show, do not just tell. When a choice or confirmation decides what to do next, call ask_user with 2-6 short options (add https images when the owner picks between visuals) instead of asking in text; it ends your turn and the answer arrives as the next message. Never answer with a markdown table, checklist or list of more than four items: use present for lists, product picks, comparisons, dashboards, tables and step checklists. When the items come from search or shop results, give each its https url from them so the owner can open it, plus its price and image when shown; never search only to add links. Call it once, then add one or two sentences without repeating its contents. Whenever the owner asks to compare two or more options, show a table with present: one row per option, one column per aspect that matters to them (search once first if it needs current facts), then give your pick in a sentence. When a request needs an app that is not connected, call connect_app.';
-const LOOKUP_POLICY=' Speed matters most: answer from your own knowledge whenever it is reliable. Call web_search only when the answer depends on current or specific facts you cannot state reliably, such as news, results, prices, schedules, recent releases or a named source. Run at most one search; when the answer sits on a result page whose text is cut short, read that page once (web_search with its url). Then answer from what the sources say. Name a source only when the owner would want to check it (a price, a disputed claim), not by habit, and do not pad the reply with caveats about what you could not verify. If the search does not give a complete answer to what was asked, start a task instead of answering partly or saying you could not find it.';
+// One query written around the model's own guesses (last year's phone, a date) missed the
+// answer, and the reply then said the results did not show it. A second search with other
+// words costs one short round; a task costs half a minute.
+const LOOKUP_POLICY=' Speed matters most: answer from your own knowledge whenever it is reliable. Call web_search only when the answer depends on current or specific facts you cannot state reliably, such as news, results, prices, schedules, recent releases or a named source. Write the query as a few key words for what the owner asked, not your guesses about the answer: leave out a model name, version, date or figure you are not sure is the current one, since the newest may be one you do not know. Then answer from what the sources say, with the best answer they support: a figure from a reliable comparison, news or listings page is an answer (say briefly where it is from), and so is a clear absence (no strike in current news). Only when the results miss the question (an older model, another place, nothing current) search once more with different or broader words, or read the one page that should hold the answer (web_search with its url). Name a source only when the owner would want to check it (a price, a disputed claim), not by habit, and do not pad the reply with caveats about what you could not verify. Never tell the owner to look it up or check a site themselves. If the sources still do not answer what was asked, start a task instead of answering partly or saying you could not find it.';
 // What the agent can do, in the chat's cached instructions: "what can you do?" is often the
 // first message, and reading the page first cost it a second model round.
 const CAPABILITIES=readDoc('capabilities').text;
@@ -79,9 +90,11 @@ async function readLinkedPages(webSearch,prompt,{userId,signal}) {
   } catch {return '';}
   finally {clearTimeout(timer);signal?.removeEventListener?.('abort',onAbort);}
 }
-// A reply whose opening sentence says the lookup found nothing usable.
-const DEAD_END=/\b(?:couldn[’']?t|could not|can[’']?t|cannot|didn[’']?t|did not|was unable to|wasn[’']?t able to) (?:find|get|see|locate|confirm)\b|\bno (?:usable|reliable|clear|current) (?:forecast|answer|information|results?|data)\b|\b(?:hittar|hittade|fick|får) (?:tyvärr )?(?:ingen|inga|inte)\b|\bingen (?:användbar|tillförlitlig|aktuell) /i;
-const deadEnd=text=>{const t=String(text || '').trim();return t.length<600 && DEAD_END.test(t.split(/(?<=[.!?])\s/)[0] || '');};
+// A reply whose opening sentence says the lookup found nothing usable, or one that says the
+// results lack what was asked (and then sends the owner to check it themselves).
+const PARTIAL=/\b(?:results?|sources?|search(?:es)?|pages?|listings?)(?: I (?:found|checked|read))? (?:don[’']?t|do not|doesn[’']?t|does not|didn[’']?t|did not) (?:show|include|confirm|list|give|say|mention|state|contain)\b(?! (?:any|a|an)\b)|\bcan[’']?t (?:reliably|confidently) (?:quote|give|confirm|say|tell)\b|\b(?:resultaten|källorna|sidorna|sökningen) (?:visar|anger|bekräftar|innehåller|nämner) (?:inte|inga|ingen)\b/i;
+const DEAD_END=/\b(?:couldn[’']?t|could not|can[’']?t|cannot|didn[’']?t|did not|was unable to|wasn[’']?t able to) (?:find|get|see|locate|confirm)\b(?! (?:any|a) (?:reports?|signs?|indications?|mentions?|news|announcements?) of\b)|\bno (?:usable|reliable|clear|current) (?:forecast|answer|information|results?|data)\b|\b(?:hittar|hittade|fick|får) (?:tyvärr )?(?:ingen|inga|inte)\b|\bingen (?:användbar|tillförlitlig|aktuell) /i;
+const deadEnd=text=>{const t=String(text || '').trim();return t.length<600 && DEAD_END.test(t.split(/(?<=[.!?])\s/)[0] || '') || t.length<1200 && PARTIAL.test(t);};
 // A quick search answered when some result carries page text or an instant answer.
 const searchAnswered=out=>(Array.isArray(out)?out:[out]).some(x=>x?.ok && x.text && !/"note":"No (?:instant answer|results)/.test(x.text));
 // The chat agent's standing instructions, in fixed sections so they stay part of the
@@ -102,7 +115,7 @@ function chatInstructions(taskStorageAvailable) {
     "## The owner's accounts",
     "Before a task reads or acts in the owner's own accounts (their messages, inbox, feed, calendar, files or orders), call composio_apps: it lists the apps they connected, the apps they can connect, and what a connection cannot do. Connected, and it covers the request: start the task. Not connected, but connecting it would cover the request: call connect_app. Connecting an app is always your own connect_app card, never a task. When a limit may exclude what they asked (their personal account when only business accounts connect), or no listed app covers it, say so in one plain sentence and ask with ask_user which route they want: connecting the app where it could still apply, or opening the site in your browser, where they sign in themselves (it takes a minute or two to start). When the owner already asked for the browser, start that task at once; otherwise start it only once they choose it. When the owner asks to connect or add an API or an MCP server, start a task at once: it finds the address and asks for the key in a secure card. When they ask to save or add a login, password, API key or other credential, start a task at once that asks for it with vault_request; if the key is for a service you can call over its API, the task sets up the connection with it. The owner never has to know where a key goes or fill in a form. Never ask for a password or key in chat.",
     '## Money',
-    "Questions about the owner's money are quick lookups, never tasks: for their balance, money on its way, activity, what you pay with or whether you can pay or buy something for them, call wallet_status (and shop_status for Shop Pay) and answer from the result; read_doc does not know their setup. Before starting a purchase, check wallet_status the same way. paymentSelection.activeMethod is how you pay: belna_wallet, existing_card (Shop Pay or a card saved with the store) or null (none chosen yet: the owner picks one in the Wallet tab of the side panel). Belna Wallet card checkout works only when agentCardPayments is true; otherwise name what is missing (the identity check while status is verification_required or review) and offer a method that can pay with ask_user instead of starting a purchase. Only changes are tasks: sending money and a new daily card limit (the worker asks the owner to approve each), and pausing (freezing) or resuming the card. Earning and payment-link creation are unavailable: explain this without starting a task or claiming a link exists. Sending uses a confirmed Belna email to find another existing Belna user’s connected Whop wallet, not any email address or external crypto wallet. Creating the wallet, the identity check, adding money and bank withdrawals are the owner's own steps in the Wallet tab: you cannot do them, so say where they are (withdrawals only when withdrawalsAvailable is true; otherwise they are not connected yet). Delivery addresses come from shipping_addresses and are managed in Settings, Wallet.",
+    "Questions about the owner's money are quick lookups, never tasks: for their balance, money on its way, activity, what you pay with or whether you can pay or buy something for them, call wallet_status (and shop_status for Shop Pay) and answer from the result; read_doc does not know their setup. Before starting a purchase, check wallet_status the same way. paymentSelection.methods says which of the owner's own payment methods you may use: payment_apps (Klarna, Swish, PayPal, Afterpay, Sezzle and similar apps the owner approves each payment in), shop_pay and saved_card (a card saved in the store). Each is off until the owner turns it on in Settings → Wallet (the Payment methods button in the Wallet tab), and none of them spends the Belna Wallet balance. A Shopify checkout the owner pays on the store's own page needs no method turned on, so a purchase in a Shopify store, or one that can use a method that is on, is a task; start it without asking the owner to confirm first, since the order card asks for approval before anything is paid. When the owner asks to pay with a method that is off, or the purchase needs one, do not start the purchase: say which method is off and that the owner turns it on in Settings → Wallet (the Payment methods button in the Wallet tab), and offer the methods that are on with ask_user. Belna Wallet card checkout (paying from the balance) works only when agentCardPayments is true; otherwise never start that purchase: name what is missing (the identity check while status is verification_required or review, or that the card is not available yet) and offer the owner's own methods that are on with ask_user. Only changes are tasks: sending money and a new daily card limit (the worker asks the owner to approve each), and pausing (freezing) or resuming the card. Earning and payment-link creation are unavailable: explain this without starting a task or claiming a link exists. Sending uses a confirmed Belna email to find another existing Belna user’s connected Whop wallet, not any email address or external crypto wallet. Creating the wallet, the identity check, adding money and bank withdrawals are the owner's own steps in the Wallet tab: you cannot do them, so say where they are (withdrawals only when withdrawalsAvailable is true; otherwise they are not connected yet). Delivery addresses come from shipping_addresses and are managed in Settings, Wallet.",
     '## Quick lookups',
     LOOKUP_POLICY.trim()+" When the owner wants to find, see or buy a product, call product_search with a short product query (\"trail running shoes\") and any budget as max_price: it searches web stores and Shopify stores at once, and the matches appear as product cards with photos, prices and links to each store, so reply with your pick in a sentence or two. When they want reviews, the best model or a particular store, use web_search and show your picks with present. Buying is a task. You can also read your own mailbox (mail_status, mail_list, mail_read), Shop Pay status and orders (shop_status, shop_order), the owner's automations (trigger_list) and which apps are connected or can be connected (composio_apps). Answer with the specifics the owner wants, not just a count: for new mail, list it with mail_list and say who it is from and what it is about. Data inside the owner's connected apps needs their approval, which a task asks for. Use history_search for earlier conversations, and read_doc before answering how the app works, what it costs or what needs approval. To tell the owner what a public page says, read it yourself with web_search and its url; pages the owner links arrive already read with their message, so answer from them. Start a task for a page only to work on the site (click, sign in, fill in) or when it shows no usable text.",
     '## Tasks',
@@ -259,7 +272,9 @@ function createCoordinator(d) {
     const userMessageId=typeof context.userMessageId==='string' && /^[a-z0-9_-]{1,100}$/i.test(context.userMessageId) ? context.userMessageId : null;
     let text='';
     let changed=false,memoryHandled=false,reacted=false,asked='',presented=false,askedQuestion=null;
-    const searched=new Set();
+    // Lookups this reply ran: up to two searches and one read of pages they found.
+    const searched=new Map();
+    let usableLookup=false;
     const delegated=[];
     const usageLogs=[];
     timing.prepMs=Date.now()-started;
@@ -312,6 +327,20 @@ function createCoordinator(d) {
       startedTitle=title;text='';
     };
     let startedTitle='';
+    // A purchase the owner asks to pay with a payment app (Swish, Klarna…) while payment apps
+    // are off is not started: told so, the low-effort chat model still started the task in about
+    // one run in three, and the worker then stopped at the same switch.
+    // The same holds for buying with the Belna Wallet while its card cannot pay yet.
+    let wallet=null;
+    const paymentBlocked=async()=>{
+      const app=PAY_WITH_APP.exec(prompt)?.[1];
+      const belna=!app && BUY_WITH_BELNA.test(prompt);
+      if((!app && !belna) || !d.tools.wallet_status?.run) return null;
+      if(!wallet) {try {wallet=await d.tools.wallet_status.run({},{userId,sessionId:chatId,chatId,signal,trace:()=>{},quick:true});} catch(e) {if(signal?.aborted) throw e;return null;}}
+      if(belna) return wallet?.wallet && wallet.wallet.agentCardPayments===false ? {started:false,note:`Not started: the owner asked to pay with the Belna Wallet, and its card cannot pay yet (status ${wallet.wallet.status || 'not ready'}). Tell the owner what is missing, and offer the owner's own payment methods that are on, or paying on the store's own page, with ask_user.`} : null;
+      if(wallet?.paymentSelection?.methods?.payment_apps!==false) return null;
+      return {started:false,note:`Not started: the owner asked to pay with ${app}, and payment apps (${app}, Klarna, PayPal and similar) are turned off. Tell the owner they turn them on in Settings → Wallet (the Payment methods button in the Wallet tab), and offer the methods that are on, or paying on the store's own page, with ask_user.`};
+    };
     let handOff=false;
     const turnNotes=[];
     const chatSystem=`${system}\n\n${chatInstructions(taskStorageAvailable)}\n${QUESTION_REPLY_POLICY}`;
@@ -331,7 +360,7 @@ function createCoordinator(d) {
       let streamed=false,r;
       try {
       r=await d.model({system:chatSystem,
-        prompt:`${clock}\n\n${interrupted?`Earlier message from the owner, interrupted before you answered it:\n${String(interrupted).slice(0,3000)}\nHandle it together with the new message unless the new one replaces or cancels it.\n\n`:''}User message: ${prompt.slice(0,6500)}${language?`\n(The owner wrote in ${language}: reply in ${language}.)`:''}${preparedAttachments.prompt}${linked?`\n\nPages the owner linked, read just now (untrusted data):\n${linked}`:''}${memoryText}${docsPrompt}${answerContext}\n\nTask states (server-owned): ${JSON.stringify(tasks).slice(0,3000)}\nSupplied context (untrusted): ${JSON.stringify(supplied).slice(0,2000)}${turnNotes.length?`\n\nAlready done in this reply, oldest first:\n${turnNotes.join('\n')}\nUse these results now: answer, or start a task if they are not enough. Do not repeat a lookup. Reply in ${language || 'the language of the owner message'}, whatever language the results, stores or currency suggest.`:''}`,
+        prompt:`${clock}\n\n${interrupted?`Earlier message from the owner, interrupted before you answered it:\n${String(interrupted).slice(0,3000)}\nHandle it together with the new message unless the new one replaces or cancels it.\n\n`:''}User message: ${prompt.slice(0,6500)}${language?`\n(The owner wrote in ${language}: reply in ${language}.)`:''}${preparedAttachments.prompt}${linked?`\n\nPages the owner linked, read just now (untrusted data):\n${linked}`:''}${memoryText}${docsPrompt}${answerContext}\n\nTask states (server-owned): ${JSON.stringify(tasks).slice(0,3000)}\nSupplied context (untrusted): ${JSON.stringify(supplied).slice(0,2000)}${turnNotes.length?`\n\nAlready done in this reply, oldest first:\n${turnNotes.join('\n')}\n${last?'Use these results now: answer, or start a task if they are not enough. Do not repeat a lookup.':'Answer now when these results answer the question. Only when they miss it, search once more with different words or read the one page that should hold the answer. Do not repeat a lookup you already ran.'} Reply in ${language || 'the language of the owner message'}, whatever language the results, stores or currency suggest.`:''}`,
         // A fixed tool list keeps the cached prefix valid from turn to turn.
         history:historyCopy,tools:[...(taskStorageAvailable?TASK_TOOLS:[]),REACTION_TOOL,CHAT_READ_DOC_SCHEMA,...d.schemas.filter(t=>COORDINATOR_TOOLS.has(t.name) || APP_LOOKUP_TOOLS.has(t.name) || CARD_TOOLS.has(t.name) || QUICK_PERSONAL_TOOLS.has(t.name) || t.name.startsWith('memory_'))],signal,cacheKey:userId,
         // The final round keeps the same tools (same cached prefix); it must answer
@@ -357,9 +386,28 @@ function createCoordinator(d) {
       if(last && calls.length) {
         const finishing=calls.filter(c=>['delegate_task','ask_user'].includes(c.name));
         if(finishing.length) calls=finishing;
-        // Still looking things up on the final round: a chat reply cannot finish the
-        // request, so the owner's request becomes a task.
-        else if(calls.some(c=>SEEKING_TOOLS.has(c.name))) {handOff=true;calls=[];}
+        // Still looking things up on the final round after a lookup found pages: one text-only
+        // round answers from them (the dead-end check still hands a partial answer to a task).
+        // Without usable results, a chat reply cannot finish the request, so it becomes a task.
+        // Asked for a third lookup, the model had often already found the answer.
+        else if(calls.some(c=>SEEKING_TOOLS.has(c.name))) {
+          calls=[];
+          if(usableLookup) {
+            wrapUp=true;
+            turnNotes.push('You have run every lookup this reply allows. Answer from the results above now. If they do not answer the question, reply with only NO_ANSWER and a task will look further.');
+            if(streamed) emit({type:'message_retract',id:answerId});
+            continue;
+          }
+          // A purchase that cannot pay the way the owner asked is not handed off either.
+          const off=await paymentBlocked();
+          if(off) {
+            wrapUp=true;
+            turnNotes.push(`delegate_task result: ${JSON.stringify(off)}`);
+            if(streamed) emit({type:'message_retract',id:answerId});
+            continue;
+          }
+          handOff=true;
+        }
         // Anything else (saving memory, a goal, a reaction) runs, then one text-only
         // round writes the reply.
         else wrapUp=true;
@@ -373,7 +421,8 @@ function createCoordinator(d) {
       // A lookup that ends in "I couldn't find it" is a dead end the owner cannot use: a task
       // looks further instead. Told so in the prompt, the model still gave that reply for
       // weather questions whose first pages held no forecast.
-      if(!calls.length && searched.size && taskStorageAvailable && !presented && deadEnd(r.text)) {handOff=true;if(streamed)emit({type:'message_retract',id:answerId});break;}
+      if(!calls.length && searched.size && taskStorageAvailable && !presented && (deadEnd(r.text) || /^\s*NO_ANSWER\b/.test(r.text || ''))) {handOff=true;if(streamed)emit({type:'message_retract',id:answerId});break;}
+      if(!calls.length && wrapUp && !String(r.text || '').trim() && taskStorageAvailable && !presented && !delegated.length) {handOff=true;break;}
       if(!calls.length) {text=d.protect(prompt,r.text || 'Please tell me a little more about what you need.');break;}
       for(let i=0;i<calls.length;i++) {
         guard();
@@ -410,6 +459,9 @@ function createCoordinator(d) {
           else {emit({type:'card',id:`connect_${requestId}_${round}_${i}`,card:{...card,chat:true,status:'pending'}});asked=`Connect ${card.name} to continue.`;}
         } else if(call.name==='delegate_task' && delegated.some(prev=>sameTask(prev,a))) {
           out={skipped:true,note:'A task for this request was already started in this reply.'};
+        } else if(call.name==='delegate_task' && (out=await paymentBlocked())) {
+          // The task would only stop at the same switch; the owner hears it now instead.
+          if(last) wrapUp=true;
         } else if(call.name==='delegate_task') await startTask(a,`${round}:${i}`);
         else if(call.name==='steer_task' || call.name==='cancel_task') {
           const row=await d.tasks.control(userId,a.taskId,{action:call.name==='steer_task'?'steer':'cancel',version:a.version,instruction:a.instruction,requestId:`${requestId}:${round}:${i}`},chatId);
@@ -446,7 +498,7 @@ function createCoordinator(d) {
             // Products come from the owner's country (shops, prices, currency) unless they name another.
             const args=shop && !a.country ? {...a,country:timeZoneCountry(context.timeZone) || undefined} : a;
             if(shop) emit({type:'progress',stage:'tool',label:'Finding products'});
-            try {out=await d.tools[call.name].run(args,{userId,sessionId:chatId,chatId,signal,trace:()=>{},quick:true});}
+            try {out=await d.tools[call.name].run(args,{userId,sessionId:chatId,chatId,signal,trace:()=>{},quick:true});if(call.name==='wallet_status' && out && !out.error)wallet=out;}
             catch(e) {if(signal?.aborted) throw e;out={error:String(e.message).slice(0,300),next:shop?'Search the web instead (web_search) and show your picks with present, each with its url.':'Say in one sentence what failed, or start a task if the owner still needs this.'};}
             if(shop && !out?.error && !out?.products?.length) out={products:[],next:'No products matched in web stores or Shopify. Try once more with a broader query, or start a task to look further.'};
             // Mail, orders and products show as the same cards a task shows; the reply then adds only what matters.
@@ -457,15 +509,16 @@ function createCoordinator(d) {
           }
         }
         else if(COORDINATOR_TOOLS.has(call.name) || call.name.startsWith('memory_')){
-          // One search and one read of pages it found (web_search with urls) per reply.
+          // Two searches and one read of pages they found (web_search with urls) per reply.
           const lookup=call.name==='web_search' ? (Array.isArray(a.urls) && a.urls.length && !a.query ? 'read' : 'search') : '';
-          if(lookup && searched.has(lookup)) out={error:`Already ${lookup==='read'?'read pages':'searched'} in this reply. Answer from the results now${taskStorageAvailable?', or start a task if they are not enough':''}; use present for a comparison or list.`};
+          if(lookup && (searched.get(lookup) || 0)>=LOOKUPS[lookup]) out={error:`Already ${lookup==='read'?'read pages':'searched twice'} in this reply. Answer from the results now${taskStorageAvailable?', or start a task if they are not enough':''}; use present for a comparison or list.`};
           else {
-            if(lookup) {searched.add(lookup);emit({type:'progress',stage:'tool',label:lookup==='read'?'Reading the source':'Checking live sources'});}
+            if(lookup) {searched.set(lookup,(searched.get(lookup) || 0)+1);emit({type:'progress',stage:'tool',label:lookup==='read'?'Reading the source':'Checking live sources'});}
             // A failed lookup is reported to the model, which can still answer.
             try {out=await d.tools[call.name].run(a,{userId,sessionId:chatId,signal,trace:()=>{},quick:true});}
             catch(e) {if(signal?.aborted || call.name!=='web_search') throw e;out={error:String(e.message).slice(0,300)};}
-            if(call.name==='web_search' && taskStorageAvailable && !searchAnswered(out)) out={results:out,note:'No usable answer here. Start a task to check live sources; do not tell the owner you could not find it.'};
+            if(call.name==='web_search' && searchAnswered(out)) usableLookup=true;
+            else if(call.name==='web_search' && taskStorageAvailable) out={results:out,note:`No usable answer here. ${searched.get('search')<LOOKUPS.search?'Search once more with different, broader words; if that finds nothing either, start':'Start'} a task to check live sources; do not tell the owner you could not find it.`};
           }
           if(['memory_write','memory_update','memory_delete'].includes(call.name))memoryHandled=true;
         }

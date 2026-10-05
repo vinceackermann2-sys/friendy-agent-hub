@@ -44,6 +44,20 @@ function createPrivateCheckoutClient({env=process.env,fetchImpl=(...args)=>fetch
   factory.available=async()=>!!config() && typeof exportCheckout==='function' && await healthy();
   async function ownerState(purchaseId,userId){return call('/sessions/'+encodeURIComponent(purchaseId)+'/owner-state',{userId});}
   async function ownerInput(purchaseId,userId,event){return call('/sessions/'+encodeURIComponent(purchaseId)+'/owner-input',{userId,event});}
-  return {factory,healthy,configured:()=>!!config(),ownerState,ownerInput};
+  async function createOwnerHandoff({userId,approved,sessionId}) {
+    if (!await factory.available() || approved?.paymentMethod !== 'owner_checkout' || !sessionId) throw fail();
+    const purchaseId=crypto.randomUUID(),path='/sessions/'+encodeURIComponent(purchaseId);
+    try {
+      const imported=await call('/imports',{purchaseId,userId,approved});
+      if(!/^[a-f0-9-]{36}$/.test(imported.uploadId||''))throw fail();
+      await exportCheckout(userId,sessionId,approved,{uploadUrl:config().origin+'/imports/'+imported.uploadId});
+      const state=await ownerState(purchaseId,userId);
+      // Only expiry and opaque identity leave this boundary. The model must
+      // never receive the private screenshot, URL after payment or form values.
+      return {checkoutId:purchaseId,expiresAt:state.expiresAt};
+    }catch{await call(path,null,'DELETE').catch(()=>{});throw fail();}
+  }
+  async function closeOwnerHandoff(purchaseId,userId){return call('/sessions/'+encodeURIComponent(purchaseId)+'/owner-close',{userId});}
+  return {factory,healthy,configured:()=>!!config(),ownerState,ownerInput,createOwnerHandoff,closeOwnerHandoff};
 }
 module.exports = { createPrivateCheckoutClient };

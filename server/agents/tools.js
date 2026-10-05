@@ -24,8 +24,8 @@ const pc = require('./pc');
 const { generateImage } = require('../foundry');
 const { PLANS } = require('../plans');
 const { questionArgs, presentArgs, connectArgs } = require('./cards');
-const { forbiddenPaymentSecret, cardNumberIn } = require('./payment-safety');
-const { createPurchaseFlow } = require('./purchase');
+const { forbiddenPaymentSecret, cardNumberIn, loginFieldProblem } = require('./payment-safety');
+const { createPurchaseFlow, withPhoneApproval } = require('./purchase');
 const purchaseFlow = createPurchaseFlow({ live, wallet:belnaWallet });
 const safePageText = (value, s) => {
   let out = String(value || '');
@@ -227,6 +227,9 @@ async function fillBrowserSecret(args, ctx) {
   const { name, value } = await vaultSecret(ctx.userId, ref);
   const scoped = /^(.+\.[A-Za-z]{2,}) (?:username|password)$/i.exec(name);
   if (scoped && !hostMatches(session.url, scoped[1])) throw badInput(`This saved login belongs to ${scoped[1]}, not the current site. Nothing was typed.`);
+  const field = event.ref != null ? (session.elements || []).find((line) => line.startsWith(`[${event.ref}]`)) : '';
+  const wrongField = loginFieldProblem(name, field);
+  if (wrongField) throw badInput(wrongField);
   const out = browserResult(await live.agentInput(session, { ...event, text: value, secret: true }, ctx.trace));
   ctx.trace(entry('lock', `browser_fill_secret: ${ref} on ${host}`));
   return out;
@@ -641,7 +644,7 @@ const TOOLS = {
     name: 'browser_submit', type: 'browser', approval: true,
     description: 'The final click or key press that buys, pays, books, sends, posts, deletes or changes account settings on a website. Same arguments as browser_action plus a summary. REQUIRES owner approval.',
     approvalDetail: purchaseFlow.approvalDetail,
-    run: async (args, ctx) => pageAction('browser_submit', args, ctx),
+    run: async (args, ctx) => withPhoneApproval(args, await pageAction('browser_submit', args, ctx)),
   },
   computer_action: {
     available: false,
@@ -685,7 +688,7 @@ const TOOLS = {
       ctx.trace(entry('lock', `vault_request: saved as ${row.ref}`));
       if (kind === 'login') {
         const username = secrets.find((item) => item.name === `${host} username`);
-        return { ref: row.ref, usernameRef: username?.ref || null, name: row.name, saved: true };
+        return { usernameRef: username?.ref || null, passwordRef: row.ref, name: row.name, saved: true, note: 'Fill usernameRef into the username or email field and passwordRef into the password field, each with browser_fill_secret.' };
       }
       return { ref: row.ref, name: row.name, saved: true };
     },
@@ -698,22 +701,23 @@ const TOOLS = {
   },
   browser_auth_handoff: {
     name: 'browser_auth_handoff', type: 'browser', approval: true, sideEffects: false,
-    description: 'Pause for the owner to complete BankID, passkey, one-time code or another identity check in the live VM browser. The owner takes control; no code or PIN is shared with the agent.',
+    description: 'Pause for the owner to complete BankID, passkey, one-time code or another identity check in the live VM browser, or (purpose payment) to approve a payment-app payment after placing an approved order. The owner takes control; no code or PIN is shared with the agent.',
     approvalDetail: async (args, { userId, sessionId }) => {
       const session = await live.forTool(userId, sessionId, undefined, false);
       if (!String(session.url || '').startsWith('https://')) throw badInput('Open the secure sign-in page before requesting identity handoff.');
       live.takeOver(session, true);
-      return JSON.stringify({ liveId:session.id, website:session.url, method:String(args.method || 'Identity check').slice(0,80) });
+      return JSON.stringify({ liveId:session.id, website:session.url, method:String(args.method || 'Identity check').slice(0,80), ...(args.purpose === 'payment' ? { purpose:'payment' } : {}) });
     },
     approvalCard: (_args, detail) => {
       const info = JSON.parse(detail);
-      return { type:'auth_handoff', liveId:info.liveId, website:info.website, method:info.method };
+      return { type:'auth_handoff', liveId:info.liveId, website:info.website, method:info.method, ...(info.purpose ? { purpose:info.purpose } : {}) };
     },
     run: async (_args, ctx) => {
       const session = await live.forTool(ctx.userId, ctx.sessionId, ctx.trace, false);
       live.takeOver(session, false);
       await live.content(session);
-      return { website:safePageText(session.url,session), title:safePageText(session.title,session), note:'Owner finished the identity handoff. Check the current page before continuing.' };
+      const payment = /"purpose":"payment"/.test(ctx.approvedDetail || '');
+      return { website:safePageText(session.url,session), title:safePageText(session.title,session), note:payment ? 'The owner finished the payment step on their phone. Read the page for the store\'s confirmation; never place the order again.' : 'Owner finished the identity handoff. Check the current page before continuing.' };
     },
   },
   computer_fill_secret: {
@@ -922,7 +926,7 @@ const TOOLS = {
     run: async ({ merchant, checkoutId }, ctx) => {
       const shoppay = require('../shoppay');
       const selection=await belnaWallet.preferences(ctx.userId);
-      if(selection.spendingMethod!=='existing_card')throw new Error('Existing card is inactive. Select it in Settings before purchasing.');
+      if(!selection.methods?.shop_pay)throw new Error('Shop Pay is turned off. Ask the owner to turn it on in Settings → Wallet before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
@@ -970,7 +974,7 @@ const TOOLS = {
   },
   mail_draft: {
     name: 'mail_draft', type: 'function', approval: false,
-    description: 'Save a draft in this agent’s mailbox. Does not send.',
+    description: 'Save a draft in this agent’s mailbox. Does not send. Write it the way a person would: plain text, warm and to the point, a natural greeting and a short sign-off like “Best,”. No markdown, headings, templates or “this is an automated message”. Do not type your name, address or a signature; the app adds them under the message.',
     run: async ({ to, subject, body, id }, ctx) => {
       const mail = require('../mail');
       const draft = await mail.saveDraft(ctx.userId, { to, subject, body, id });
@@ -980,7 +984,7 @@ const TOOLS = {
   },
   mail_send: {
     name: 'mail_send', type: 'function', approval: true,
-    description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body.',
+    description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body. Write it the way a person would: plain text, warm and to the point, a natural greeting and a short sign-off like “Best,”. No markdown, headings, templates or “this is an automated message”. Do not type your name, address or a signature; the app adds them under the message.',
     run: async ({ to, subject, body, in_reply_to, agent_name }, ctx) => {
       const mail = require('../mail');
       const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, agentName: agent_name, confirm: true });
@@ -1054,7 +1058,11 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
   for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
-  if (/buy|purchase|order|shop|wallet|shipping|delivery|address|amazon|köp|adress|leverans/.test(t)) names.add('shipping_addresses');
+  if (/buy|purchase|order|shop|wallet|payment|checkout|swish|klarna|paypal|shipping|delivery|address|amazon|köp|adress|leverans/.test(t)) names.add('shipping_addresses');
+  // Paying in a store that is not on Shopify happens in the browser (a payment app the owner approves).
+  if (/\b(?:buy|purchase|checkout|swish|klarna|paypal|afterpay|sezzle|kop|kassa|betala)\b/.test(t)) {
+    for (const name of ['browser_open','browser_action','browser_submit','browser_auth_handoff']) names.add(name);
+  }
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }

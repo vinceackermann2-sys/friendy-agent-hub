@@ -90,7 +90,7 @@ function escapeHtml(value) {
 function renderBodyHtml(bodyText) {
   return String(bodyText || '')
     .split(/\n{2,}/)
-    .map((paragraph) => `<p style="margin:0 0 18px;font-size:16px;line-height:1.65;color:#17181A;">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .map((paragraph) => `<p style="margin:0 0 16px;">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
     .join('');
 }
 
@@ -99,6 +99,9 @@ function mascotUrl(color) {
   return `https://belna.se/lingon/mascot/email-${safe}.png`;
 }
 
+// Agent mail should read like a note from a person: no banner, card or
+// "automated message" framing. Belna shows up only in a small signature,
+// which still says plainly that the sender is an AI agent.
 function brandEmailHtml({ bodyText, agentName, agentAddress, agentColor, personalCheckIn = false } = {}) {
   const name = escapeHtml(String(agentName || '').trim() || 'Your agent');
   const address = escapeHtml(String(agentAddress || '').trim());
@@ -108,56 +111,34 @@ function brandEmailHtml({ bodyText, agentName, agentAddress, agentColor, persona
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
-  <title>Message from ${name}</title>
 </head>
-<body style="margin:0;padding:0;background:#F6F6F7;color:#17181A;font-family:'Segoe UI',Arial,sans-serif;-webkit-text-size-adjust:100%;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">A message from ${name} at Belna.</div>
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#F6F6F7;">
-    <tr>
-      <td align="center" style="padding:34px 16px;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:620px;">
-          <tr>
-            <td style="padding:0 4px 18px;">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td style="vertical-align:middle;padding-right:10px;"><img src="https://belna.se/email-logo.png" width="30" height="20" alt="" style="display:block;border:0;width:30px;height:20px;"></td>
-                  <td style="vertical-align:middle;font-size:19px;line-height:24px;font-weight:800;letter-spacing:-0.5px;color:#17181A;">belna</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="background:#FFFFFF;border:1px solid #E7E7EA;border-radius:18px;padding:38px 40px;box-shadow:0 10px 28px rgba(20,20,26,0.06);">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td style="padding-bottom:26px;border-bottom:1px solid #EFEFF1;">
-                    <img src="${mascotUrl(agentColor)}" width="64" height="64" alt="${name}" style="display:block;border:0;margin-bottom:12px;width:64px;height:64px;">
-                    <div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#9A9CA3;">${personalCheckIn ? 'A little note, just for you' : 'Message from a Belna agent'}</div>
-                    <div style="margin-top:5px;font-size:21px;line-height:28px;font-weight:750;letter-spacing:-0.4px;color:#17181A;">${name}</div>
-                    ${address ? `<div style="margin-top:3px;font-size:13px;line-height:19px;color:#6E7076;">${address}</div>` : ''}
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding-top:27px;">${content}</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:18px 4px 0;font-size:12px;line-height:18px;color:#9A9CA3;">
-              Sent by ${name}, a Belna agent. Replies go directly to this agent's mailbox.<br>
-              ${personalCheckIn ? '<a href="https://belna.se/app" style="color:#6E7076;">Pause personal check-ins in Automations</a><br>' : ''}
-              <a href="https://belna.se" style="color:#6E7076;text-decoration:none;">belna.se</a> · Swedish safe AI agents
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
+<body style="margin:0;padding:0;background:#FFFFFF;">
+  <div style="max-width:600px;padding:8px 4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1F2023;-webkit-text-size-adjust:100%;">
+    ${content}
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:22px;">
+      <tr>
+        <td style="vertical-align:top;padding-right:12px;"><img src="${mascotUrl(agentColor)}" width="40" height="40" alt="" style="display:block;border:0;width:40px;height:40px;"></td>
+        <td style="vertical-align:top;font-size:13px;line-height:19px;color:#6E7076;">
+          <div style="font-size:14px;font-weight:600;color:#1F2023;">${name}</div>
+          ${address ? `<a href="mailto:${address}" style="color:#6E7076;text-decoration:none;">${address}</a><br>` : ''}
+          Personal AI agent · <a href="https://belna.se" style="color:#6E7076;text-decoration:none;">belna</a>
+        </td>
+      </tr>
+    </table>
+    ${personalCheckIn ? '<p style="margin:22px 0 0;font-size:12px;line-height:18px;color:#9A9CA3;">Rather not get these notes? Pause them in <a href="https://belna.se/app" style="color:#9A9CA3;">Automations</a>.</p>' : ''}
+  </div>
 </body>
 </html>`;
+}
+
+// Plain-text part: the same note with a short signature, no template text.
+function brandEmailText({ bodyText, agentName, agentAddress, personalCheckIn = false } = {}) {
+  const name = String(agentName || '').trim() || 'Your agent';
+  const lines = [String(bodyText || '').trim(), '', '-- ', name];
+  if (agentAddress) lines.push(String(agentAddress));
+  lines.push('Personal AI agent · belna.se');
+  if (personalCheckIn) lines.push('', 'Rather not get these notes? Pause them in Automations at https://belna.se/app.');
+  return lines.join('\n');
 }
 
 function publicMailbox(row, extra = {}) {
@@ -373,7 +354,7 @@ async function send(userId, input) {
       from,
       to,
       subject,
-      text: bodyText,
+      text: brandEmailText({ bodyText, agentName: box.displayName, agentAddress: box.address, personalCheckIn:input.personalCheckIn === true }),
       html: brandEmailHtml({ bodyText, agentName: box.displayName, agentAddress: box.address, agentColor:context.agent?.color, personalCheckIn:input.personalCheckIn === true }),
       headers: Object.keys(headers).length ? headers : undefined,
       attachments: attachments.length ? attachments : undefined,
@@ -521,6 +502,7 @@ export {
   parseRecipients,
   parseAddressList,
   brandEmailHtml,
+  brandEmailText,
   mascotUrl,
   sendPersonalCheckIn,
   publicMailbox,

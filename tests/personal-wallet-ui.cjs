@@ -6,7 +6,7 @@ const {chromium}=require('playwright');
    const context=await browser.newContext({viewport:{width:1280,height:1000}}),calls=[];
    await context.addInitScript(({scenario})=>{
     localStorage.setItem('lingon.session',JSON.stringify({access_token:'fixture',user:{id:'alice',email:'alice@example.test'}}));
-    localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'alice',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet-chat',chats:[{id:'wallet-chat',title:'Wallet',messages:[],at:Date.now()}],canvasOpen:true,canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
+    localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'alice',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet-chat',chats:[{id:'wallet-chat',title:'Wallet',messages:[],at:Date.now()}],canvasOpen:true,canvasTab:'wallet',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
     if(scenario!=='payment-request')sessionStorage.setItem('belna.whopConnect',JSON.stringify({owner:scenario==='changed-owner'?'bob':'alice',state:'a'.repeat(64)}));
    },{scenario});
    const snapshot={wallet:{kind:'personal',configured:true,status:'card_required',identityVerified:true,verificationStatus:'approved',cardReady:false,cardProgramAvailable:true,balance:{available:60,pending:0},dailyCardLimitUsd:50},activity:[]};
@@ -33,7 +33,7 @@ const {chromium}=require('playwright');
     await page.getByText('Personal wallet connection was canceled or the Belna account changed. Connect again.',{exact:true}).waitFor();
     assert.equal(calls.filter(c=>c.path.endsWith('/oauth-finish')).length,0,'callback cannot bind after switching Belna accounts');
    }else{
-    await page.locator('[data-act="ctab"][data-t="payments"]').waitFor({state:'attached'});
+    await page.locator('[data-act="ctab"][data-t="wallet"]').waitFor({state:'attached'});
     assert.equal(await page.getByRole('button',{name:'Review payment',exact:true}).count(),0);
     assert.equal(calls.filter(c=>/\/(payment-request|quote|send)$/.test(c.path)).length,0,'retired payment requests cannot trigger wallet actions');
    }

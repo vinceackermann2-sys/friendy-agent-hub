@@ -14,11 +14,11 @@ assert.equal(addressShown('Anything',{shippingAddress:''}),false,'no address is 
 const {createPrivateCheckoutClient}=require('../server/private-checkout-client');
 const chrome=['C:/Program Files/Google/Chrome/Application/chrome.exe','/usr/bin/google-chrome','/usr/bin/chromium'].find(fs.existsSync);
 const html=`<!doctype html><html><body><h1>Review your order</h1><p>Red mug</p><p>Ada, Main Street 1, Stockholm, SE</p><p>Order total: $12.34</p><label>Card number<input autocomplete="cc-number"></label><label>Expiry<input autocomplete="cc-exp"></label><label>Security code<input autocomplete="cc-csc"></label><button onclick="document.body.innerHTML='<h1>Authentication required</h1><input placeholder=Code><button>Verify payment</button>'">Pay $12.34</button></body></html>`;
-let content=html;
+let content=html,latestPage;
 async function launch(){
  const browser=await puppeteer.launch({headless:true,args:['--enable-automation'],...(chrome?{executablePath:chrome}:{})});
  const newPage=browser.newPage.bind(browser);
- browser.newPage=async()=>{const p=await newPage();await p.setRequestInterception(true);p.on('request',r=>{if(!r.isInterceptResolutionHandled())r.respond({status:200,contentType:'text/html',body:content});});return p;};
+ browser.newPage=async()=>{const p=await newPage();latestPage=p;await p.setRequestInterception(true);p.on('request',r=>{if(!r.isInterceptResolutionHandled())r.respond({status:200,contentType:'text/html',body:content});});return p;};
  return browser;
 }
 (async()=>{
@@ -46,6 +46,32 @@ async function launch(){
   clock+=16*60000;await assert.rejects(runtime.ownerState(id,userId));
   clock=Date.now();content=html.replace('$12.34','$20.00');
   await assert.rejects(runtime.create({purchaseId:crypto.randomUUID(),userId,approved,state:{url}}));
+  content=html;
+  // Owner checkout imports the exact cart, supports SEK, and never lets the
+  // agent submit or read private payment fields after the transfer.
+  content=html.replaceAll('$12.34','230 SEK');
+  const previewBrowser=await launch(),preview=await previewBrowser.newPage();await preview.setViewport({width:1280,height:900});await preview.goto(url);
+  const handoffSnapshot=await browserKit().snapshot(preview);await previewBrowser.close();
+  const ownerApproved={...approved,paymentMethod:'owner_checkout',currency:'SEK',amount:230,target:'',checkoutKey:checkoutHash(handoffSnapshot,'')};
+  const ownerId=crypto.randomUUID();
+  await runtime.create({purchaseId:ownerId,userId,approved:ownerApproved,state:{url}});
+  assert.equal((await runtime.ownerState(ownerId,userId)).website,url);
+  await assert.rejects(runtime.ownerState(ownerId,'another-owner'));await assert.rejects(runtime.ownerState(ownerId));
+  await assert.rejects(runtime.ownerInput(ownerId,'another-owner',{type:'type',text:'secret'}));
+  await assert.rejects(runtime.ownerClose(ownerId,'another-owner'));
+  await assert.rejects(runtime.submit(ownerId,{purchaseId:ownerId,approved:ownerApproved,card}));
+  await runtime.ownerInput(ownerId,userId,{type:'key',key:'Tab'});
+  await runtime.ownerInput(ownerId,userId,{type:'type',text:'4242424242424242'});
+  await runtime.ownerInput(ownerId,userId,{type:'scroll',dy:650});
+  await latestPage.goto('http://merchant.example/checkout');
+  await assert.rejects(runtime.ownerState(ownerId,userId),'private screens require HTTPS');
+  await assert.rejects(runtime.ownerInput(ownerId,userId,{type:'type',text:'secret'}),'payment input is refused on HTTP');
+  assert.deepEqual(await runtime.ownerClose(ownerId,userId),{closed:true});
+  await assert.rejects(runtime.ownerState(ownerId,userId));
+  await assert.rejects(runtime.create({purchaseId:crypto.randomUUID(),userId,approved:{...ownerApproved,amount:231},state:{url}}),'a mismatching total cannot enter owner checkout');
+  await assert.rejects(runtime.create({purchaseId:crypto.randomUUID(),userId,approved:{...ownerApproved,currency:'USD'},state:{url}}),'a mismatching currency cannot enter owner checkout');
+  const expiring=crypto.randomUUID();await runtime.create({purchaseId:expiring,userId,approved:ownerApproved,state:{url}});
+  clock+=16*60000;await assert.rejects(runtime.ownerState(expiring,userId));clock=Date.now();
   content=html;
   await assert.rejects(runtime.create({purchaseId:crypto.randomUUID(),userId,approved:{...approved,website:'https://127.0.0.1/'},state:{url:'https://127.0.0.1/'}}));
   await assert.rejects(runtime.create({purchaseId:crypto.randomUUID(),userId,approved,state:{url,sensitivePresent:true}}));

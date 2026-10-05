@@ -102,12 +102,13 @@ assert.ok(start >= 0 && end > start);
   let refreshCalls = 0;
   let apiCalls = 0;
   const authContext = vm.createContext({
+    Event,
     localStorage: {
       getItem: (key) => storage.get(key) || null,
       setItem: (key, value) => storage.set(key, value),
       removeItem: (key) => storage.delete(key),
     },
-    window: { LingonConfig: { apiBase: '' } },
+    window: { LingonConfig: { apiBase: '' }, dispatchEvent: () => {} },
     fetch: async (url, opts) => {
       if (url === '/api/auth/refresh') {
         refreshCalls++;

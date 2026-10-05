@@ -31,7 +31,7 @@ window.addEventListener('message',e=>{if(e.origin!==host || e.source!==parent ||
  const browser=await chromium.launch();try{for(const width of [1280,390]){
   const context=await browser.newContext({viewport:{width,height:900}});await context.addInitScript(()=>{
    localStorage.setItem('lingon.session',JSON.stringify({access_token:'fixture',user:{id:'embed-owner',email:'owner@example.invalid'}}));
-   localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'embed-owner',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet',chats:[{id:'wallet',title:'Wallet',messages:[],at:Date.now()}],canvasOpen:true,canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
+   localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'embed-owner',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet',chats:[{id:'wallet',title:'Wallet',messages:[],at:Date.now()}],canvasOpen:true,canvasTab:'wallet',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
   });
   let scriptAttempts=0;const moneyCalls=[];
   await context.route('https://cdn.whop.com/elements/amber/elements.js',route=>++scriptAttempts===1?route.abort('failed'):route.fulfill({contentType:'application/javascript',body:sdk}));
@@ -49,7 +49,7 @@ window.addEventListener('message',e=>{if(e.origin!==host || e.source!==parent ||
    return route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
   });
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/app');
-  const panel=page.locator('.wallet-panel');if(!await panel.isVisible())await page.locator('[data-act="togglecanvas"]:visible').first().click();await page.locator('[data-act="ctab"][data-t="payments"]:visible').click();
+  const panel=page.locator('.wallet-panel');if(!await panel.isVisible())await page.locator('[data-act="togglecanvas"]:visible').first().click();await page.locator('[data-act="ctab"][data-t="wallet"]:visible').click();
   await panel.getByRole('button',{name:'Add money',exact:true}).click();let dialog=page.getByRole('dialog',{name:'Add money to Belna Wallet',exact:true});
   await dialog.getByText('The secure bank connection could not load. Please try again.',{exact:true}).waitFor();await dialog.getByRole('button',{name:'Try again',exact:true}).click();
   for(const action of ['deposit','withdraw']){

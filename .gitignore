@@ -18,6 +18,7 @@ Thumbs.db
 native/apple/Config/Developer.xcconfig
 native/apple/build/
 native/apple/private_keys/
+native/apple/BelnaUITests/ReviewerCredentials.json
 native/apple/**/*.p8
 native/apple/**/*.p12
 native/apple/**/*.mobileprovision

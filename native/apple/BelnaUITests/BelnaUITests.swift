@@ -1,6 +1,52 @@
 import XCTest
 
 final class BelnaUITests: XCTestCase {
+    func testReviewAccountScreenshots() throws {
+        guard let url = Bundle(for: Self.self).url(forResource: "ReviewerCredentials", withExtension: "json") else {
+            throw XCTSkip("Dedicated reviewer credentials are only supplied for release screenshots")
+        }
+        let credentials = try JSONDecoder().decode(ReviewCredentials.self, from: Data(contentsOf: url))
+        let app = XCUIApplication()
+        app.launchArguments = ["--reset-consent-for-testing"]
+        app.launch()
+        XCTAssertTrue(app.buttons["I agree — continue to Belna"].waitForExistence(timeout: 10))
+        app.buttons["I agree — continue to Belna"].tap()
+        let passwordMode = app.webViews.buttons["Log in with password"]
+        if passwordMode.waitForExistence(timeout: 20) {
+            let email = app.webViews.textFields["Enter Email"]
+            email.tap(); email.typeText(credentials.email)
+            passwordMode.tap()
+            let password = app.webViews.secureTextFields["Password (8+ chars)"]
+            XCTAssertTrue(password.waitForExistence(timeout: 10))
+            password.tap(); password.typeText(credentials.password)
+            // WKWebView exposes HTML checkboxes under different XCTest types on iOS.
+            let legal = app.webViews.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH %@", "I agree to the")).firstMatch
+            XCTAssertTrue(legal.waitForExistence(timeout: 10)); legal.tap()
+            app.webViews.buttons["Log in with password"].tap()
+        }
+        let name = app.webViews.buttons["Alex"]
+        if name.waitForExistence(timeout: 15) {
+            name.tap()
+            let color = app.webViews.buttons["Sky"]
+            XCTAssertTrue(color.waitForExistence(timeout: 10)); color.tap()
+        }
+        let composer = app.webViews.textViews.firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 30), "Reviewer must reach the working agent chat")
+        let chat = XCTAttachment(screenshot: app.screenshot())
+        chat.name = "App Store - Your personal agent"; chat.lifetime = .keepAlways; add(chat)
+        app.buttons["Apple apps and privacy"].tap()
+        XCTAssertTrue(app.staticTexts["Calendar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons.matching(identifier: "Connect").firstMatch.isEnabled)
+        let connections = XCTAttachment(screenshot: app.screenshot())
+        connections.name = "App Store - Optional Apple connections"; connections.lifetime = .keepAlways; add(connections)
+    }
+
+    private struct ReviewCredentials: Decodable {
+        let email: String
+        let password: String
+    }
+
     func testProductionWebViewLoadsNativeAppleSignIn() {
         let app = XCUIApplication()
         app.launchArguments = ["--reset-consent-for-testing"]

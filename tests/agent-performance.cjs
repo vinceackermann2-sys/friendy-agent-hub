@@ -12,16 +12,18 @@ const commonPrefixLength = (left, right) => {
 
 async function preparationBenchmark() {
   const delay = 80;
+  const startedOperations = new Set();
+  const pending = name => { startedOperations.add(name); return wait(delay); };
   const coordinator = createCoordinator({
-    ensureCredit: () => wait(delay),
+    ensureCredit: () => pending('credit'),
     store: {
-      searchMemories: async () => { await wait(delay); return []; },
-      syncAgentContext: async () => { await wait(delay); return { agent:{}, documents:{} }; },
-      listChatMessages: async () => { await wait(delay); return []; },
+      searchMemories: async () => { await pending('memory'); return []; },
+      syncAgentContext: async () => { await pending('context'); return { agent:{}, documents:{} }; },
+      listChatMessages: async () => { await pending('history'); return []; },
       saveTurn: async () => {},
     },
-    azure: { getSandbox: async () => { await wait(delay); return { mode:'local' }; } },
-    tasks: { summaries: async () => { await wait(delay); return []; } },
+    azure: { getSandbox: async () => { await pending('sandbox'); return { mode:'local' }; } },
+    tasks: { summaries: async () => { await pending('tasks'); return []; } },
     buildSystem: async () => '',
     rank: (items) => items,
     model: async () => ({ text:'ok' }),
@@ -29,9 +31,10 @@ async function preparationBenchmark() {
     finishMemory: async () => [], reportError: () => {},
   });
   const started = performance.now();
-  await coordinator.run({ userId:'user', chatId:'chat', requestId:'request', prompt:'hello', onEvent:() => {} });
+  const run = coordinator.run({ userId:'user', chatId:'chat', requestId:'request', prompt:'hello', onEvent:() => {} });
+  assert.deepEqual([...startedOperations].sort(),['context','credit','history','memory','sandbox','tasks'],'all preparation starts before any delayed operation resolves');
+  await run;
   const elapsed = performance.now() - started;
-  assert.ok(elapsed < 140, `credit and context should overlap; took ${elapsed.toFixed(1)}ms`);
   return elapsed;
 }
 

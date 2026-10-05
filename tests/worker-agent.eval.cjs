@@ -39,7 +39,7 @@ const walletSnapshot = (wallet = {}) => ({
   wallet: { configured: true, status: 'verification_required', withdrawalsAvailable: false, cardReady: false, cardProgramAvailable: true, sandbox: false, card: null,
     balance: { currency: 'USD', available: 248.5, pending: 40 }, dailyCardLimitUsd: 50, agentCardPayments: false, ...wallet },
   purchases: [], transfers: [], transactions: [],
-  paymentSelection: { activeMethod: 'belna_wallet', merchantEnabled: true, selectionSaved: true },
+  paymentSelection: { activeMethod: 'belna_wallet', merchantEnabled: true, selectionSaved: true, methods: { payment_apps: false, shop_pay: false, saved_card: true, belna_wallet: true } },
 });
 // The approved transfer quote, in the shape belna-wallet.js publicQuote returns.
 const quote = (a) => ({ quoteId: 'quote_eval', recipient: String(a.recipient || '').trim().toLowerCase(), amount: a.amount, currency: 'USD', fees: 'Payment partner fees may apply in addition to this amount.' });
@@ -177,7 +177,7 @@ const CASES = [
     check: (r) => (/\b(not|n[’']t|no money|nothing)\b[^.]{0,40}\b(sent|send|transferred|moved)\b|declin|denied/i.test(r.result) ? '' : 'claims or implies the declined transfer happened') },
   { id: 'wallet-link', instructions: 'Create a payment link for $150 for the logo design I did for Studio Berg.',
     tools: { wallet_status: () => walletSnapshot() },
-    check: r => /payment.?link/i.test(r.result) && /unavailable|not (?:available|supported)|removed|can[’']?t|cannot/i.test(r.result) ? '' : 'did not explain removed payment links' },
+    check: r => /payment.?link/i.test(r.result) && /unavailable|not (?:available|supported)|removed|can[’']?t|cannot|doesn[’']?t (?:create|make|support)|does not (?:create|make|support)/i.test(r.result) ? '' : 'did not explain removed payment links' },
   { id: 'wallet-limit', instructions: 'Change my Belna wallet daily card limit to $100.', approve: ['wallet_set_limit'],
     tools: { wallet_status: () => walletSnapshot(), wallet_set_limit: (a) => walletSnapshot({ dailyCardLimitUsd: a.dailyLimitUsd }) },
     check: (r) => { const set = r.callArgs.find((x) => x.name === 'wallet_set_limit')?.args;

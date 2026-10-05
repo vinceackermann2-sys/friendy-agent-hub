@@ -27,7 +27,8 @@ const {parsePersonalCheckIn,executeSubAgent}=require('../server/agents/automatio
   assert.equal(parsePersonalCheckIn(result,[{text:evidence}]).subject,'A little Swedish for your trip');
   assert.match(mail.brandEmailHtml({agentColor:'rose'}),/email-rose\.png/);
   assert.match(mail.brandEmailHtml({agentColor:'../bad'}),/email-lingon\.png/);
-  assert.match(mail.brandEmailHtml({personalCheckIn:true}),/Pause personal check-ins/);
+  assert.match(mail.brandEmailHtml({personalCheckIn:true}),/Pause them in <a href="https:\/\/belna\.se\/app"/);
+  assert.doesNotMatch(mail.brandEmailHtml({}),/Pause them/);
 
   runner.ensureCredit=async()=>{};
   store.getAgentContext=async()=>({agent:{name:'Alva',color:'rose'}});
