@@ -81,9 +81,9 @@ Mac signing setup and the signed Mac run remain pending; see the release evidenc
 ## Backend rollout
 
 1. Deploy the server, edge mirror, web frontend and privacy changes together.
-2. Apply `supabase/migrations/20261004110000_apple_devices.sql` and
-   `supabase/migrations/20261004141615_apple_identity_tokens.sql`, then
-   `supabase/migrations/20261004190000_account_deletion_fence.sql` before rolling
+2. Apply `supabase/migrations/20261004133503_apple_device_connections.sql` and
+   `supabase/migrations/20261004142921_apple_identity_tokens.sql`, then
+   `supabase/migrations/20261004153143_account_deletion_fence.sql` before rolling
    out the account cleanup guards.
 3. Configure server `ENCRYPTION_KEY` and the Supabase service key. The app only
    uses the existing verified account JWT; no service key is bundled.

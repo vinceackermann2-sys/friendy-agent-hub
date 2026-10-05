@@ -67,7 +67,7 @@ const prefix=hash(owner)+'/';
   const db = new PGlite();
   try {
     await db.exec('create role anon; create role authenticated; create role service_role; create table profiles(id text primary key); create table agent_vm_leases(user_id text); create table agent_chat_tasks(user_id text); create table library_items(user_id text,content text);');
-    await db.exec(fs.readFileSync('supabase/migrations/20261004190000_account_deletion_fence.sql','utf8'));
+    await db.exec(fs.readFileSync('supabase/migrations/20261004153143_account_deletion_fence.sql','utf8'));
     await db.query('insert into profiles values($1),($2)',[owner,other]);
     await db.query('insert into account_deletions(user_id) values($1)',[owner]);
     for(const table of ['agent_vm_leases','agent_chat_tasks','library_items']){

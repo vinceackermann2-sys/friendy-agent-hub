@@ -49,7 +49,7 @@ function createPurchaseFlow({ live, wallet }) {
       || (checkoutContext.test(session.text || '') && (!targetLine(session,args) || /\b(?:buy|purchase|pay|order|köp|betala|beställ|confirm|bekräfta)\b/i.test(target))))
       throw bad('This may place an order. Use browser_submit with full purchase details for owner approval.');
   }
-  async function details(args, userId, session) {
+  async function details(args, userId, session, ownerCheckout = false) {
     const host = pageHost(session.url);
     if (!host || !session.url.startsWith('https://')) throw bad('Purchases require an HTTPS merchant page.');
     const input = args.purchase;
@@ -83,6 +83,10 @@ function createPurchaseFlow({ live, wallet }) {
         shippingAddressParts={recipient:address.recipient,line1:address.line1,line2:address.line2 || '',postalCode:address.postalCode,city:address.city};
       }
     }
+    if (ownerCheckout) return { merchant: host, website: session.url, items, amount, currency, shippingAddress,
+      payment: 'Owner checkout', paymentMethod: 'owner_checkout',
+      ...(shippingAddressId ? {shippingAddressId} : {}), ...(shippingAddressParts ? {shippingAddressParts} : {}),
+      checkoutKey: pageKey(session, {}), target: '', pageExcerpt: safeExcerpt(session) };
     const paymentMethod = Object.hasOwn(METHOD_SWITCH, input.payment?.method) ? input.payment.method : '';
     // Each method is off until the owner turns it on in Wallet; the server checks it here,
     // whatever the model was told. Payment apps also wait for the owner's own approval.
@@ -122,7 +126,15 @@ function createPurchaseFlow({ live, wallet }) {
     if (current && JSON.stringify({ ...current, pageExcerpt: '' }) !== JSON.stringify({ ...approved, pageExcerpt: '' })) throw bad('Purchase details changed after approval. Review again.');
     if (!!current !== !!approved.paymentMethod) throw bad('Purchase approval type changed. Review again.');
   }
-  return { approvalDetail, beforeSubmit, beforeAction };
+  async function handoffDetail(args, { userId, sessionId }) {
+    const session = await live.forTool(userId, sessionId, undefined, false);
+    await live.content(session);
+    if (session.sensitivePresent || session.ownerSensitive || session.sensitiveValues?.length) throw bad('Prepare a fresh checkout without private payment information before handoff.');
+    const purchase = await details(args, userId, session, true);
+    if (!purchase) throw bad('Review the items, total, currency and delivery address before checkout handoff.');
+    return purchase;
+  }
+  return { approvalDetail, beforeSubmit, beforeAction, handoffDetail };
 }
 // After a payment-app order is placed, the payment waits for the owner's own approval.
 function withPhoneApproval(args, out) {

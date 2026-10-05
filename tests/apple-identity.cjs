@@ -37,7 +37,7 @@ const {unseal}=require('../server/apple-devices');
   const db=new PGlite();
   try{
     await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key);');
-    await db.exec(fs.readFileSync('supabase/migrations/20261004141615_apple_identity_tokens.sql','utf8'));
+    await db.exec(fs.readFileSync('supabase/migrations/20261004142921_apple_identity_tokens.sql','utf8'));
     const result=(await db.query("select relrowsecurity,has_table_privilege('anon','apple_identity_tokens','SELECT') as anon_read,has_table_privilege('authenticated','apple_identity_tokens','SELECT') as account_read,has_table_privilege('service_role','apple_identity_tokens','SELECT') as server_read from pg_class where relname='apple_identity_tokens'" )).rows[0];
     assert.deepEqual(result,{relrowsecurity:true,anon_read:false,account_read:false,server_read:true});
     const id=crypto.randomUUID();await db.query('insert into auth.users values ($1)',[id]);
