@@ -19,8 +19,10 @@ final class BelnaUITests: XCTestCase {
             let password = app.webViews.secureTextFields["Password (8+ chars)"]
             XCTAssertTrue(password.waitForExistence(timeout: 10))
             password.tap(); password.typeText(credentials.password)
-            let legal = app.webViews.checkBoxes.firstMatch
-            XCTAssertTrue(legal.exists); legal.tap()
+            // WKWebView exposes HTML checkboxes under different XCTest types on iOS.
+            let legal = app.webViews.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH %@", "I agree to the")).firstMatch
+            XCTAssertTrue(legal.waitForExistence(timeout: 10)); legal.tap()
             app.webViews.buttons["Log in with password"].tap()
         }
         let name = app.webViews.buttons["Alex"]
