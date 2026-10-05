@@ -23,7 +23,28 @@
   Apple accepted the upload with no errors and processed build 14.1. The exact
   uploaded IPA has SHA-256
   `E4B9A27758FD6965E4675F8EAA8667594C07C94BCEA9F83433577E93A9613C98`.
-  Testing instructions are saved; no testers have been invited.
+  Testing instructions are saved. The account holder was invited to the internal
+  `Belna Device QA` group on 4 October 2026 and confirmed that sign-in, chat and
+  the Apple apps screen work on a physical iPhone using build 14.1. The owner
+  subsequently confirmed native Sign in with Apple and agent requests for
+  Calendar, Reminders, Contacts and Health, including the Health sharing preview.
+
+- Live production QA on 4 October 2026 passed authenticated device registration,
+  cross-account isolation, 95 KB Library upload/read/revision, and account deletion
+  including auth identities, device rows, Library rows and all storage revisions.
+  Four disposable QA accounts were fully removed; no VM was provisioned.
+  QA exposed missing Azure cleanup functions in the edge route. PR #15 fixed
+  the binding, merged as `b852eeb`, and was published and verified live.
+- A live native simulator test loaded the published login through WKWebView and
+  found the Apple sign-in button. Its first run failed because it expected the
+  intentionally hidden Google button and found Connect buttons enabled before
+  sign-in. The existing connection handler still denied access without an account.
+  PR #14 corrects the assertions and disables these buttons until sign-in.
+  Updated native validation and upload are pending: GitHub rejected subsequent
+  jobs before execution due to account billing/spending limits, and the owner
+  confirmed the Actions allowance is exhausted. Build 14.1 remains available.
+  The owner confirmed basic physical Calendar/Reminders/Contacts/Health agent
+  requests. Denied/revoked permissions, writes and interruption tests remain.
 
 - Apple Distribution certificate and App Store iOS profile created for the
   registered app and stored as encrypted GitHub signing secrets. Certificate and
