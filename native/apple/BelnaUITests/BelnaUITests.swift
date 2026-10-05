@@ -20,9 +20,17 @@ final class BelnaUITests: XCTestCase {
             XCTAssertTrue(password.waitForExistence(timeout: 10))
             password.tap(); password.typeText(credentials.password)
             // WKWebView exposes HTML checkboxes under different XCTest types on iOS.
-            let legal = app.webViews.descendants(matching: .any)
+            let legal = app.webViews.switches
                 .matching(NSPredicate(format: "label BEGINSWITH %@", "I agree to the")).firstMatch
-            XCTAssertTrue(legal.waitForExistence(timeout: 10)); legal.tap()
+            XCTAssertTrue(legal.waitForExistence(timeout: 10))
+            if !legal.isHittable {
+                let diagnostic = XCTAttachment(screenshot: app.screenshot())
+                diagnostic.name = "Reviewer login consent control"
+                diagnostic.lifetime = .keepAlways; add(diagnostic)
+            }
+            // The web label includes links, so target the checkbox at its leading edge.
+            legal.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.2)).tap()
+            XCTAssertEqual(legal.value as? String, "1")
             app.webViews.buttons["Log in with password"].tap()
         }
         let name = app.webViews.buttons["Alex"]
