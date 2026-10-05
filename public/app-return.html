@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Back to Belna</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .app-return{max-width:440px;margin:0 auto;padding:72px 24px 48px;text-align:center;}
+    .app-return .abrand{justify-content:center;font-size:26px;}
+    .app-return h1{font-size:28px;line-height:1.2;margin:18px 0 10px;}
+    .app-return p{color:var(--mut,#6B7280);font-size:16px;line-height:1.5;margin:0 0 28px;}
+    .app-return .btn{display:inline-flex;justify-content:center;min-width:220px;}
+    .app-return small{display:block;margin-top:22px;color:var(--mut,#6B7280);font-size:13px;}
+  </style>
+</head>
+<body>
+  <!-- Checkouts started in the Belna iPhone, iPad or Mac app finish here in the browser. -->
+  <main class="app-return">
+    <div class="abrand" aria-hidden="true">belna</div>
+    <h1 id="title">You’re all set</h1>
+    <p id="detail">Go back to the Belna app to keep going.</p>
+    <a class="btn" id="back" href="belna://billing">Back to the Belna app</a>
+    <small>Don’t have the app open? <a href="/app">Open Belna on the web</a></small>
+  </main>
+  <script>
+    (function () {
+      var status = new URLSearchParams(location.search).get('billing') || '';
+      var copy = {
+        success: ['Your plan is ready', 'Payment complete. Your monthly tokens are on the way. Go back to the Belna app to keep going.'],
+        tokens: ['Tokens added', 'Payment complete. Your extra tokens appear in the app in a moment.'],
+        portal: ['Billing updated', 'Your changes are saved. Go back to the Belna app to keep going.'],
+        cancelled: ['Checkout cancelled', 'No charge was made. You can go back to the Belna app.']
+      }[status];
+      if (copy) {
+        document.getElementById('title').textContent = copy[0];
+        document.getElementById('detail').textContent = copy[1];
+        document.title = copy[0] + ' · Belna';
+      }
+      var back = document.getElementById('back');
+      back.href = 'belna://billing?status=' + encodeURIComponent(copy ? status : '');
+      // Offer the hand-off once; the button stays for browsers that ask first.
+      setTimeout(function () { location.href = back.href; }, 400);
+    })();
+  </script>
+</body>
+</html>

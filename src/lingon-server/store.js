@@ -1231,6 +1231,9 @@ async function updateMailMessage(userId, id, patch) {
     try {
       const upd = {};
       if (patch.isRead != null) upd.is_read = !!patch.isRead;
+      if (patch.folder != null) upd.folder = String(patch.folder);
+      if (patch.resendId !== undefined) upd.resend_id = patch.resendId;
+      if (patch.messageId !== undefined) upd.message_id = patch.messageId;
       const { error } = await s.from('agent_mail_messages').update(upd).eq('id', id).eq('user_id', userId);
       if (error) throw error;
     } catch (e) {
@@ -1241,6 +1244,16 @@ async function updateMailMessage(userId, id, patch) {
   d.mailMessages = (d.mailMessages || []).map((m) => m.id === id && m.userId === userId ? Object.assign({}, m, patch) : m);
   saveLocal(d);
   return (d.mailMessages || []).find((m) => m.id === id) || { id, userId, ...patch };
+}
+async function deleteMailMessage(userId, id) {
+  const s = supa();
+  if (s) {
+    const { error } = await s.from('agent_mail_messages').delete().eq('id', id).eq('user_id', userId);
+    if (error) console.warn('[store] supabase delete mail failed:', error.message);
+  }
+  const d = loadLocal();
+  d.mailMessages = (d.mailMessages || []).filter((m) => !(m.id === id && m.userId === userId));
+  saveLocal(d);
 }
 async function countUnreadMail(userId) {
   const s = supa();
@@ -1710,7 +1723,7 @@ export {
   listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent, ensureSystemSubAgents,
   listDueSubAgents, listAppSubAgentsForSync, markAppTriggerSync, markSubAgentRun, listUpkeepSignals, beginAutomationRun, getAutomationRunByDedupeKey, attachAutomationTask, listPendingAutomationRuns, finishAutomationRun, listAutomationRuns,
   getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
-  listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage,
+  listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage, deleteMailMessage,
   countUnreadMail, countOutboundMailToday,   listMailDrafts, upsertMailDraft, deleteMailDraft,
   getConnectorPermissions, setConnectorPermissions,
   listCustomConnectors, addCustomConnector, updateCustomConnector, deleteCustomConnector,

@@ -1,5 +1,6 @@
 const { appleIdentity } = require('./apple-identity');
 const { eraseLibraryStorage } = require('./account-deletion');
+const { wasUnconfirmed, secureFirstSignIn } = require('./auth-email');
 function createAppleAccountCleanup({ adminClient, tasks, composio, azure }) {
   return async userId => {
     const admin = adminClient();
@@ -23,6 +24,10 @@ function createAppleAccountCleanup({ adminClient, tasks, composio, azure }) {
     await checked(admin.from('library_storage_gc').delete().eq('user_id',userId));
   };
 }
+function appleTokenEmail(token) {
+  try { return String(JSON.parse(Buffer.from(String(token || '').split('.')[1] || '', 'base64url').toString('utf8')).email || ''); }
+  catch { return ''; }
+}
 function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminClient, store, stripe, identity = appleIdentity, beforeDelete = async () => {} }) {
   app.post('/api/auth/apple', rateLimit(15,60000), async (req,res) => {
     const input = req.body || {};
@@ -34,8 +39,12 @@ function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminC
       // Supabase verifies Apple's signature, audience, expiry and nonce. Never
       // trust decoded JWT contents or a client-supplied Apple user identifier.
       const tokens = await identity.exchange(input.authorizationCode);
+      // Read only to find an unconfirmed account with this address; Supabase verifies the token.
+      const unconfirmed = await wasUnconfirmed(appleTokenEmail(tokens.identityToken));
       const {data,error} = await client.auth.signInWithIdToken({provider:'apple',token:tokens.identityToken,nonce:input.nonce});
       if (error || !data?.session || !data.user) return res.status(401).json({error:'Apple sign-in failed. Please try again.'});
+      // Apple proved the address; a password set on the unconfirmed account before that is replaced.
+      await secureFirstSignIn(adminClient(),data.user,{wasUnconfirmed:unconfirmed});
       await identity.save(data.user.id,tokens.refreshToken);
       const {error:termsError} = await client.auth.updateUser({data:{terms_version:input.terms_version,terms_accepted_at:new Date().toISOString()}});
       if(termsError) throw new Error('Terms could not be saved.');

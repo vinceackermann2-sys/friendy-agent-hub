@@ -84,6 +84,10 @@ const CASES = [
     check: (r) => (r.calls.filter((n) => n === 'browser_open').length <= 2 ? '' : `retried the broken browser ${r.calls.filter((n) => n === 'browser_open').length} times`)
       + (r.status==='partial' && /(?:browser|computer)[^.\n]*(?:unavailable|could not|couldn't|failed|not available|not.*completed)/i.test(r.result)?'':' failed to disclose unavailable browser')
       + (r.calls.includes('web_search') && /headline|Bring anything into existence/i.test(r.result)?'':' missing web fallback headline') },
+  // A study session ends in a quiz the owner answers in the chat, not a quiz written as text.
+  { id: 'study', instructions: 'Make me a short study session on photosynthesis: a brief summary, then a 4-question quiz to test me.',
+    check: (r) => { const quiz = r.cards.find((c) => c.type === 'learn' && c.kind === 'quiz');
+      return !quiz ? `no quiz card (calls ${r.calls.join(',')})` : quiz.questions.length !== 4 ? `${quiz.questions.length} questions, wanted 4` : /chlorophyll|sunlight|light energy|glucose|carbon dioxide/i.test(r.result) ? '' : 'no summary'; } },
   // A build finishes soon after the page is published, without extra rounds.
   { id: 'build', instructions: 'Make me a tic tac toe game',
     tools: { build_page: (a) => ({ ok: true, html: require('../server/agents/page-validation').validatePage(a.html), libraryId: 'lib_eval' }) },
@@ -288,7 +292,7 @@ async function runCase(c) {
   // Updates the owner read in the chat while the task worked.
   const updates = state.events.filter((e) => e.phase === 'task_update').map((e) => e.text);
   const delivered=result+' '+JSON.stringify(state.events.filter(e=>e.type==='card').map(e=>e.card));
-  const r = { delivered,coverage:state.coverage,checkpoint:state.checkpoint,id: c.id, status: state.status, result, calls, callArgs, denied, notes, updates, ms: Date.now() - started, ...usage };
+  const r = { delivered,cards:state.events.filter(e=>e.type==='card').map(e=>e.card),coverage:state.coverage,checkpoint:state.checkpoint,id: c.id, status: state.status, result, calls, callArgs, denied, notes, updates, ms: Date.now() - started, ...usage };
   const problems = [];
   if (!['completed', 'partial'].includes(state.status)) problems.push(`status ${state.status}`);
   if (!result.trim()) problems.push('no result');

@@ -50,18 +50,42 @@ async function main() {
     await authEmail.sendAuthCode(h.admin, { email: 'new@example.com' });
     assert.equal(h.calls.links.length, 1);
 
-    // Password sign-up: a confirmation code, not a Supabase link.
+    // Password sign-up: a confirmation code, not a Supabase link. The chosen password is
+    // not stored until the code is verified, so the account starts with a random one.
     h = harness();
     const signup = await authEmail.sendAuthCode(h.admin, { email: 'a@example.com', kind: 'signup', password: 'longpassword' });
     assert.equal(signup.purpose, 'signup');
     assert.equal(h.calls.links[0].type, 'signup');
-    assert.equal(h.calls.links[0].password, 'longpassword');
+    assert.match(h.calls.links[0].password, /^[a-f0-9]{64}$/);
     assert.equal(h.calls.sent[0].body.subject, 'Confirm your Belna account');
 
-    // An unconfirmed account takes the newest password, as Supabase sign-up does.
+    // A second sign-up for an unconfirmed address cannot replace its password.
     h = harness({ users: [{ id: 'u3', email: 'a@example.com', email_confirmed_at: null }] });
     await authEmail.sendAuthCode(h.admin, { email: 'a@example.com', kind: 'signup', password: 'newpassword1' });
-    assert.deepEqual(h.calls.updates, [{ id: 'u3', attrs: { password: 'newpassword1' } }]);
+    assert.deepEqual(h.calls.updates, []);
+
+    // Confirming an address replaces a password set before the owner proved it: with the
+    // one chosen at sign-up (sent with the code), or a random one.
+    h = harness({ users: [{ id: 'u5', email: 'victim@example.com', email_confirmed_at: null }] });
+    assert.equal(await authEmail.wasUnconfirmed(' Victim@example.com '), true);
+    assert.equal(await authEmail.wasUnconfirmed(''), false);
+    const now = Date.parse('2026-10-05T12:00:00Z');
+    const justConfirmed = { id: 'u5', email_confirmed_at: '2026-10-05T11:59:30Z', identities: [{ provider: 'email' }] };
+    assert.equal(await authEmail.secureFirstSignIn(h.admin, justConfirmed, { now }), true);
+    assert.match(h.calls.updates[0].attrs.password, /^[a-f0-9]{64}$/);
+    await authEmail.secureFirstSignIn(h.admin, justConfirmed, { now, password: 'owner-chosen-pass' });
+    assert.equal(h.calls.updates[1].attrs.password, 'owner-chosen-pass');
+    await authEmail.secureFirstSignIn(h.admin, justConfirmed, { now, password: 'short' });
+    assert.match(h.calls.updates[2].attrs.password, /^[a-f0-9]{64}$/, 'a too-short password is never set');
+    // A long-confirmed account signing in again keeps its password, and cannot set one this way.
+    const returning = { id: 'u6', email_confirmed_at: '2026-01-01T00:00:00Z', identities: [{ provider: 'email' }] };
+    assert.equal(await authEmail.secureFirstSignIn(h.admin, returning, { now, password: 'attacker-pass1' }), false);
+    assert.equal(await authEmail.secureFirstSignIn(h.admin, returning, { now, wasUnconfirmed: true }), true, 'unconfirmed before this sign-in');
+    // Unknown confirmation state fails closed; an Apple-only account has no password to replace.
+    assert.equal(authEmail.firstConfirmation({ id: 'u7' }, { now }), true);
+    assert.equal(authEmail.firstConfirmation({ id: 'u8', email_confirmed_at: '2026-10-05T11:59:30Z', identities: [{ provider: 'apple' }] }, { now }), false);
+    const failing = { auth: { admin: { updateUserById: async () => ({ error: { message: 'private' } }) } } };
+    await assert.rejects(authEmail.secureFirstSignIn(failing, justConfirmed, { now }), (e) => e.status === 503 && !/private/.test(e.message));
 
     // A confirmed account gets a sign-in code, so sign-up never reveals it exists.
     h = harness({ users: [{ id: 'u4', email: 'a@example.com', email_confirmed_at: '2026-01-01' }] });

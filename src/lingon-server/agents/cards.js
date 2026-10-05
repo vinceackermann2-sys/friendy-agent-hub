@@ -1,7 +1,7 @@
 /* Visual chat cards. Tools return data; these builders turn tool arguments,
    approval details and results into the structured cards the app renders:
    questions, approvals (email, purchase, app action, website step, credential
-   use, automation), product lists, orders, emails, lists and dashboards.
+   use, automation), product lists, orders, emails, lists, dashboards and learning cards (quiz, flashcards, problems, graphs).
    Pure functions shared by the chat coordinator, task worker and VM harness,
    so every runtime shows the same card for the same action. */
 
@@ -90,6 +90,121 @@ function presentArgs(args = {}) {
   card.columns = (Array.isArray(args.columns) ? args.columns : []).slice(0, 8).map((column) => str(column, 40));
   card.rows = (Array.isArray(args.rows) ? args.rows : []).slice(0, 40).map((row) => (Array.isArray(row) ? row : [row]).slice(0, 8).map((cell) => str(cell, 140)));
   return card;
+}
+
+/* ---------- learning cards (learn) ----------
+   Interactive cards the owner works through in the chat: a quiz, flashcards, practice
+   problems with hints and a checked answer, or a graph of functions with a slider. The
+   app renders and scores them locally, so nothing here calls a model. */
+const LEARN_KINDS = new Set(['quiz', 'flashcards', 'problem', 'plot']);
+const GREEK = { alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', Delta: 'Δ', theta: 'θ', lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', Sigma: 'Σ', phi: 'φ', omega: 'ω', Omega: 'Ω' };
+const LATEX_SYMBOLS = { cdot: '·', times: '×', div: '÷', pm: '±', le: '≤', leq: '≤', ge: '≥', geq: '≥', neq: '≠', ne: '≠', approx: '≈', infty: '∞', to: '→', rightarrow: '→', degree: '°', circ: '°', ...GREEK };
+// The model sometimes writes LaTeX although the schema asks for plain math. The card shows
+// plain text (x^2 is drawn as a superscript by the app), so common LaTeX is rewritten.
+function plainMath(value, max = 600) {
+  let text = String(value ?? '').replace(/\$\$?|\\[()[\]]/g, '');
+  for (let i = 0; i < 4 && /\\[a-z]*frac|\\sqrt/.test(text); i++) {
+    text = text.replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, (_, a, b) => `${/^\w+$/.test(a) ? a : `(${a})`}/${/^\w+$/.test(b) ? b : `(${b})`}`)
+      .replace(/\\sqrt\s*\{([^{}]*)\}/g, 'sqrt($1)');
+  }
+  text = text.replace(/\\(?:left|right)\s*/g, '').replace(/\\text\s*\{([^{}]*)\}/g, '$1').replace(/\\operatorname\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\([A-Za-z]+)/g, (whole, name) => LATEX_SYMBOLS[name] ?? (/^(sin|cos|tan|log|ln|exp)$/.test(name) ? name : whole))
+    .replace(/\\,|\\;|\\!|\\ /g, ' ');
+  return str(text, max);
+}
+const learnText = (value, max) => plainMath(value, max);
+// Functions of x the app can draw: numbers, x, one slider letter, arithmetic and a few
+// named functions. Anything else is dropped rather than drawn wrong.
+const PLOT_NAMES = new Set(['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sqrt', 'abs', 'ln', 'log', 'exp', 'floor', 'ceil', 'round', 'sign', 'pi', 'e', 'x']);
+function plotExpr(value, slider) {
+  let expr = plainMath(value, 160).replace(/^\s*(?:y|f\s*\(\s*x\s*\))\s*=\s*/i, '').replace(/\*\*/g, '^').replace(/[·×]/g, '*').replace(/÷/g, '/').replace(/[−–]/g, '-').replace(/√/g, 'sqrt').replace(/π/g, 'pi').replace(/\{/g, '(').replace(/\}/g, ')').trim();
+  if (!expr || !/^[0-9a-z.+\-*/^(), ]+$/i.test(expr)) return '';
+  const names = expr.toLowerCase().match(/[a-z]+/g) || [];
+  if (names.some((name) => !PLOT_NAMES.has(name) && name !== slider)) return '';
+  let depth = 0;
+  for (const ch of expr) { depth += ch === '(' ? 1 : ch === ')' ? -1 : 0; if (depth < 0) return ''; }
+  return depth === 0 ? expr.toLowerCase() : '';
+}
+const num = (value, fallback) => (value !== null && value !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback);
+function learnArgs(args = {}) {
+  const kind = LEARN_KINDS.has(args.kind) ? args.kind : Array.isArray(args.questions) ? 'quiz' : Array.isArray(args.cards) ? 'flashcards' : Array.isArray(args.problems) ? 'problem' : args.plot ? 'plot' : 'quiz';
+  const card = { type: 'learn', kind, title: learnText(args.title, 120) || { quiz: 'Quiz', flashcards: 'Flashcards', problem: 'Practice', plot: 'Graph' }[kind] };
+  const subtitle = learnText(args.subtitle, 200);
+  if (subtitle) card.subtitle = subtitle;
+  if (kind === 'quiz') {
+    card.questions = (Array.isArray(args.questions) ? args.questions : []).slice(0, 12).map((q) => {
+      const options = [...new Set((Array.isArray(q?.options) ? q.options : []).map((o) => learnText(typeof o === 'object' ? o?.label ?? o?.text : o, 160)).filter(Boolean))].slice(0, 6);
+      // The answer is the correct option's text; a letter (B) or a 0-based number also works.
+      const said = String(q?.answer ?? '').trim();
+      const clean = (s) => learnText(s, 160).toLowerCase().replace(/[.\s]+$/, '');
+      let answer = options.findIndex((o) => clean(o) === clean(said));
+      if (answer < 0 && /^[A-F]$/i.test(said)) answer = said.toUpperCase().charCodeAt(0) - 65;
+      if (answer < 0 && /^\d$/.test(said)) answer = Number(said);
+      if (answer < 0) answer = options.findIndex((o) => clean(said) && clean(o).replace(/^[a-f][).:]\s*/, '') === clean(said).replace(/^[a-f][).:]\s*/, ''));
+      // The model puts the right option second most of the time; a fixed shuffle (the same for
+      // the same question) keeps the position from giving it away. "All of the above" and
+      // similar options refer to the order, so those questions keep theirs.
+      if (answer >= 0 && !options.some((o) => /\b(?:all|none|both|neither) of\b|\babove\b|\bbelow\b|\b(?:alla|inget|ingen|båda) av\b|ovan/i.test(o))) {
+        let seed = 0;
+        for (const ch of `${q?.question}`) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+        const order = options.map((_, i) => i);
+        const random = () => { seed = (seed + 0x6D2B79F5) >>> 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+        for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+        const shuffled = order.map((i) => options[i]);
+        answer = order.indexOf(answer);
+        options.splice(0, options.length, ...shuffled);
+      }
+      const row = { question: learnText(q?.question, 400), options, answer };
+      const explanation = learnText(q?.explanation, 500);
+      if (explanation) row.explanation = explanation;
+      return row;
+    }).filter((q) => q.question && q.options.length >= 2 && q.answer >= 0 && q.answer < q.options.length);
+  } else if (kind === 'flashcards') {
+    card.cards = (Array.isArray(args.cards) ? args.cards : []).slice(0, 30)
+      .map((c) => ({ front: learnText(c?.front, 300), back: learnText(c?.back, 400) })).filter((c) => c.front && c.back);
+  } else if (kind === 'problem') {
+    const list = Array.isArray(args.problems) ? args.problems : args.problem ? [args.problem] : [];
+    card.problems = list.slice(0, 6).map((p) => {
+      const row = { question: learnText(p?.question, 600), answer: learnText(p?.answer, 120) };
+      row.steps = (Array.isArray(p?.steps) ? p.steps : []).slice(0, 8).map((s) => learnText(s, 300)).filter(Boolean);
+      const accept = (Array.isArray(p?.accept) ? p.accept : []).slice(0, 6).map((s) => learnText(s, 120)).filter(Boolean);
+      if (accept.length) row.accept = accept;
+      const explanation = learnText(p?.explanation, 600);
+      if (explanation) row.explanation = explanation;
+      return row;
+    }).filter((p) => p.question && p.answer);
+  } else {
+    const plot = args.plot && typeof args.plot === 'object' ? args.plot : args;
+    const name = /^[a-df-wyz]$/i.test(String(plot.slider?.name || '')) ? String(plot.slider.name).toLowerCase() : '';
+    const out = {};
+    if (name) {
+      const min = num(plot.slider.min, -5), max = num(plot.slider.max, 5);
+      if (max > min) out.slider = { name, min, max, step: Math.min(Math.abs(num(plot.slider.step, (max - min) / 100)) || (max - min) / 100, max - min), value: Math.min(max, Math.max(min, num(plot.slider.value, min <= 1 && max >= 1 ? 1 : (min + max) / 2))), ...(learnText(plot.slider.label, 60) ? { label: learnText(plot.slider.label, 60) } : {}) };
+    }
+    const slider = out.slider?.name || '';
+    out.functions = (Array.isArray(plot.functions) ? plot.functions : []).slice(0, 4).map((f) => {
+      const expr = plotExpr(typeof f === 'object' ? f?.expr ?? f?.expression : f, slider);
+      return expr ? { expr, label: learnText(f?.label, 60) || `y = ${expr}` } : null;
+    }).filter(Boolean);
+    let xMin = num(plot.x_min ?? plot.xMin, -10), xMax = num(plot.x_max ?? plot.xMax, 10);
+    if (!(xMax > xMin)) [xMin, xMax] = [-10, 10];
+    out.x = [xMin, xMax];
+    const yMin = num(plot.y_min ?? plot.yMin, null), yMax = num(plot.y_max ?? plot.yMax, null);
+    if (yMin !== null && yMax !== null && yMax > yMin) out.y = [yMin, yMax];
+    out.points = (Array.isArray(plot.points) ? plot.points : []).slice(0, 24)
+      .map((p) => ({ x: num(p?.x, NaN), y: num(p?.y, NaN), label: learnText(p?.label, 40) || undefined }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    const caption = learnText(plot.caption, 300);
+    if (caption) out.caption = caption;
+    if (!slider) delete out.slider;
+    Object.assign(card, out);
+  }
+  return card;
+}
+// What the agent learns back from its own card: enough to talk about it without restating it.
+function learnSummary(card) {
+  const count = { quiz: card.questions?.length, flashcards: card.cards?.length, problem: card.problems?.length, plot: card.functions?.length || card.points?.length }[card.kind] || 0;
+  return { shown: count > 0, kind: card.kind, title: card.title, count };
 }
 
 function connectArgs(args = {}) {
@@ -215,6 +330,7 @@ function productItems(products = []) {
 function resultCard(name, out, args = {}) {
   if (!out || typeof out !== 'object') return null;
   if (name === 'present') return { ...presentArgs(args && args.title ? args : out), status: 'done' };
+  if (name === 'learn' && out.shown) return { ...learnArgs(args), status: 'done' };
   // No matches shows no card; the agent says so and looks elsewhere.
   if ((name === 'product_search' || name === 'shop_search') && Array.isArray(out.products) && out.products.length) {
     const items = productItems(out.products);
@@ -291,4 +407,4 @@ function cardFromMarkdown(text) {
   return null;
 }
 
-export { questionArgs, presentArgs, connectArgs, approvalView, approvalCard, resultCard, cardFromMarkdown, toolkitName };
+export { questionArgs, presentArgs, learnArgs, learnSummary, plainMath, connectArgs, approvalView, approvalCard, resultCard, cardFromMarkdown, toolkitName };

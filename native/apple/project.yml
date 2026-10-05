@@ -47,6 +47,7 @@ targets:
       - sdk: HealthKit.framework
       - sdk: WebKit.framework
       - sdk: AuthenticationServices.framework
+      - sdk: StoreKit.framework
   BelnaTests:
     type: bundle.unit-test
     platform: iOS

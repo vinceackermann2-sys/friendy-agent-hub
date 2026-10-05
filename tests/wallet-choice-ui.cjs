@@ -86,10 +86,9 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
     await page.screenshot({path:path.resolve(__dirname,`../artifacts/wallet-choice/belna-settings-${width}.png`),fullPage:true});
     await leaveSettings();await ensurePanel();
     await panel.getByRole('button',{name:/^Payment methods/}).click();await settings.locator('#payment-connections').getByRole('button',{name:'Connect Shop Pay',exact:true}).waitFor();await settings.locator('#wallet-shipping-section').waitFor();
-    // Payment logins live in Settings › Wallet, not the panel.
-    await settings.getByText('amazon.com',{exact:true}).waitFor();
-    assert.equal(await settings.getByText('Saved securely in Secrets',{exact:true}).count(),1);
-    assert.ok(!(await settings.innerText()).includes('sec_password'),'payment logins show metadata only');
+    // Store logins live in Settings › Secrets only, not in Wallet.
+    assert.equal(await settings.getByText('amazon.com',{exact:true}).count(),0,'no store logins in Wallet');
+    assert.ok(!(await settings.innerText()).includes('sec_password'),'Wallet never shows login secrets');
     assert.equal(await settings.getByText('Identity verification',{exact:true}).count(),0);
     await settings.getByRole('button',{name:'Connect Shop Pay',exact:true}).click();
     await settings.getByRole('button',{name:'Please wait…',exact:true}).waitFor();
@@ -109,10 +108,6 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
     await page.getByText('Shop Pay daily limit saved.',{exact:true}).waitFor();assert.equal(shop.dailyLimitUsd,75);
     await page.locator('.page').evaluate(node=>{node.scrollTop=0;});
     await page.screenshot({path:path.resolve(__dirname,`../artifacts/wallet-choice/existing-settings-${width}.png`),fullPage:true});
-    await settings.getByRole('button',{name:'Add login',exact:true}).click();await page.locator('#cprompt').waitFor();
-    assert.equal(await page.locator('#cprompt').inputValue(),'Save my login for a store or payment service: ');
-    await ensurePanel();await panel.getByRole('button',{name:'Wallet settings',exact:true}).click();await settings.getByRole('button',{name:'Manage in Secrets',exact:true}).click();
-    await page.locator('.vault-item').filter({hasText:'amazon.com'}).waitFor();
     await leaveSettings();await ensurePanel();
     await panel.getByRole('button',{name:'Wallet settings',exact:true}).click();
     await settings.getByRole('switch',{name:'Cards saved in stores',exact:true}).click();

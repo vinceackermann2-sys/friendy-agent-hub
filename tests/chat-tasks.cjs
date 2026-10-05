@@ -201,11 +201,21 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
 
   const stop=setup(),toolEntered=gate(),toolRelease=gate();stop.d.tools.shell={run:async()=>{toolEntered.resolve();return toolRelease.promise;}};
   const stopId=await planned(stop,'shell');const action=stop.runtime.step('a',stopId);await toolEntered.promise;
-  await stop.runtime.control('a',stopId,{action:'cancel',version:1},'chat');assert.equal(stop.rows.get(stopId).state.status,'stopping');
+  // A stop is immediate even while a computer action runs: the task and its card stop
+  // saying working at once, and the action that was already running finishes on its own.
+  await stop.runtime.control('a',stopId,{action:'cancel',version:1},'chat');assert.equal(stop.rows.get(stopId).state.status,'stopped');
+  assert.equal(stop.rows.get(stopId).state.events.filter(e=>e.card?.type==='computer').at(-1).card.status,'done','a stopped step closes its card at once');
+  assert.equal(await stop.runtime.step('a',stopId).then(r=>r.state.status),'stopped','a stopped task does not start new work');
   toolRelease.resolve({stdout:'Done'});await action;
   assert.equal(stop.rows.get(stopId).state.status,'stopped');assert.equal(stop.rows.get(stopId).state.observations.length,1);
-  // The step's computer card does not keep saying running once the task is stopped.
-  assert.equal(stop.rows.get(stopId).state.events.filter(e=>e.card?.type==='computer').at(-1).card.status,'done','a stopped step closes its card');
+  assert.equal(stop.rows.get(stopId).state.events.filter(e=>e.card?.type==='computer').at(-1).card.status,'done','its card stays closed');
+  // A task stopped while its computer is starting does not run the action.
+  const cold=setup(),leasing=gate(),leased=gate();let ran=false;
+  cold.d.azure.acquireLease=async()=>{leasing.resolve();await leased.promise;};cold.d.tools.shell={run:async()=>{ran=true;return {stdout:'Ran'};}};
+  const coldId=await planned(cold,'shell');const coldStep=cold.runtime.step('a',coldId);await leasing.promise;
+  await cold.runtime.control('a',coldId,{action:'cancel',version:1},'chat');assert.equal(cold.rows.get(coldId).state.status,'stopped');
+  leased.resolve();await coldStep;
+  assert.equal(ran,false,'the action never runs after a stop');assert.equal(cold.rows.get(coldId).state.status,'stopped');
   // Cancelling stops the model mid-thought, and the work done so far is still billed.
   const aborting=(began,usage)=>opts=>new Promise((_,reject)=>{began.resolve();
     opts.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError',usage})));});

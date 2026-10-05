@@ -21,12 +21,13 @@ const context = vm.createContext({
   Mascot: { svg: () => '' },
 });
 vm.runInContext([
+  functionSource('inAppleApp', 'invalidateBilling'),
   functionSource('creditView', 'pctOff'),
   functionSource('pctOff', 'billSummary'),
   functionSource('billSummary', 'billingLoadingHtml'),
   functionSource('billingLoadingHtml', 'paintBilling'),
   functionSource('usageCardHtml', 'paintGoals'),
-  'this.view = { creditView, billSummary, billingBodyHtml, usageCardHtml };',
+  'this.view = { creditView, billSummary, billingBodyHtml, usageCardHtml, billingRequestBody };',
 ].join('\n'), context);
 
 const billing = {
@@ -87,4 +88,26 @@ assert.equal(withDebt.percent, 100, 'outstanding usage consumes the next availab
 assert.equal(withDebt.extraUsed, 25);
 assert.equal(withDebt.extraRemaining, 25, 'extra tokens left reflects spendable balance after debt');
 
-console.log('billing presentation: monthly meter and extra balance stay separate: ok');
+// Apple app: no purchase buttons until the App Store storefront allows paying in the browser.
+const buying = /data-act="(?:buycredits|checkout|portal|upgrade)"/;
+context.billingCache = { ...billing, plans: [], tokenPacks: [{ tokens: 10000000, millions: 10, usd: 10 }] };
+context.window.BelnaApple = { available: true, platform: 'ios', browserPurchases: () => false };
+for (const tab of ['billing', 'usage']) {
+  const page = context.view.billingBodyHtml(tab);
+  assert.match(page, /does not sell digital subscriptions or token packs/);
+  assert.doesNotMatch(page, buying, 'storefronts without link-out show no purchase buttons');
+  assert.doesNotMatch(page, /billing-plans|buypack/);
+}
+context.window.BelnaApple = { available: true, platform: 'ios', browserPurchases: () => true };
+const appBilling = context.view.billingBodyHtml('billing'), appUsage = context.view.billingBodyHtml('usage');
+assert.match(appBilling, /Checkout opens in Safari/);
+assert.match(appBilling, /Manage in Safari/);
+assert.match(appUsage, /data-act="buycredits"[^>]*>[^<]*Pay in Safari/);
+assert.match(appUsage, /secure checkout in Safari/);
+assert.equal(JSON.parse(context.view.billingRequestBody({ plan: 'pro' })).returnTo, 'app', 'checkouts return to the app');
+context.window.BelnaApple = { available: true, platform: 'mac', browserPurchases: () => true };
+assert.match(context.view.billingBodyHtml('usage'), /Pay in browser/);
+delete context.window.BelnaApple;
+assert.equal(JSON.parse(context.view.billingRequestBody({ plan: 'pro' })).returnTo, undefined);
+
+console.log('billing presentation: monthly meter and extra balance stay separate, Apple app pays only in the browser where allowed: ok');

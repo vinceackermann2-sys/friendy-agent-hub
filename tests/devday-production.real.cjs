@@ -97,10 +97,7 @@ async function converse(session,prompt,context={}){
         },{session:owner,view});
         await page.goto(base+'/app',{waitUntil:'load'});page.setDefaultTimeout(15000);
         try{if(view==='goals'){
-          await page.locator('.goal-work summary').first().click();await page.locator('[data-goal-field=success]').first().fill('Check the complete request');await page.locator('[data-goal-field=next]').first().fill('Read the goal only');
-          await page.locator('[data-act=goal-work-save]').first().click();await page.locator('[data-act=goal-work-pause]').first().waitFor({state:'attached'});
-          if(!await page.locator('[data-act=goal-work-pause]').first().isVisible())await page.locator('.goal-work summary').first().click();await page.locator('[data-act=goal-work-pause]').first().click();
-          await page.waitForFunction(()=>!document.querySelector('[data-act=goal-work-pause]'));
+          await page.locator('.goal-card').first().waitFor();assert.equal(await page.locator('.goal-work,[data-act^=goal-work]').count(),0,'ongoing work is set up from chat, not a form');
         }else if(view==='library'){
           await page.locator('[data-act=library-item-open]').first().click();await page.locator('.lib-viewer details summary').filter({hasText:'File versions'}).click();await page.locator('[data-act=lib-versions]').click();await page.locator('[data-act=lib-version-open]').first().waitFor({state:'attached'});
           await page.locator('.lib-viewer summary').filter({hasText:'Edit this file'}).click();await page.locator('[data-library-edit]').fill('UI revision '+width);await page.locator('[data-act=lib-version-save]').click();

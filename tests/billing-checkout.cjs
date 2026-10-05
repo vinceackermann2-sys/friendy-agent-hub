@@ -123,6 +123,13 @@ Module._load = oldLoad;
     await stripe.createCheckout({ userId: 'u2', email: 'buyer@example.com', plan: 'pro' });
     assert.equal(created[1].mode, 'subscription');
     assert.deepEqual(created[1].line_items, [{ price: 'price_pro_test', quantity: 1 }]);
+    assert.match(created[1].success_url, /\/\?billing=success&/, 'web checkouts return to the site');
+    // Checkouts from the Apple app finish in the browser and hand back to the app.
+    await stripe.createTokenCheckout({ userId: 'u2', email: 'buyer@example.com', packTokens: tokenPack.tokens, returnTo: 'app' });
+    assert.match(created[2].success_url, /\/app-return\?billing=tokens&session_id=/);
+    assert.match(created[2].cancel_url, /\/app-return\?billing=cancelled$/);
+    await stripe.createCheckout({ userId: 'u2', email: 'buyer@example.com', plan: 'pro', returnTo: 'app' });
+    assert.match(created[3].success_url, /\/app-return\?billing=success&/);
   } finally {
     Module._load = oldLoad;
   }

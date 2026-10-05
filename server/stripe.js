@@ -55,6 +55,12 @@ function siteUrl(req) {
   return 'http://localhost:8000';
 }
 
+// Checkouts started in the Apple app finish in the browser, then land on a page
+// that sends the owner back to the app instead of the signed-out website.
+function returnPage(req, returnTo) {
+  return siteUrl(req) + (returnTo === 'app' ? '/app-return' : '/');
+}
+
 async function ensureCustomer({ userId, email }) {
   const s = client();
   const sub = await store.getSubscription(userId);
@@ -66,7 +72,7 @@ async function ensureCustomer({ userId, email }) {
   return { sub, customerId };
 }
 
-async function createCheckout({ userId, email, plan, extraCredits, extraTokens, promo, req }) {
+async function createCheckout({ userId, email, plan, extraCredits, extraTokens, promo, req, returnTo }) {
   const s = client();
   if (!s) {
     const e = new Error('Payments are not configured yet (missing STRIPE_SECRET_KEY).');
@@ -97,7 +103,7 @@ async function createCheckout({ userId, email, plan, extraCredits, extraTokens, 
     if (pack || tokenPack) throw Object.assign(new Error('Change your plan in the subscription portal, then buy extra tokens separately.'), { code: 'BAD_PLAN' });
     return s.billingPortal.sessions.create({
       customer: customerId || sub.stripe_customer_id,
-      return_url: siteUrl(req) + '/?billing=portal',
+      return_url: returnPage(req, returnTo) + '?billing=portal',
       flow_data: { type: 'subscription_update', subscription_update: { subscription: sub.stripe_subscription_id } },
     });
   }
@@ -131,8 +137,8 @@ async function createCheckout({ userId, email, plan, extraCredits, extraTokens, 
       extra_tokens: tokenPack ? String(tokenPack.tokens) : '',
       promo: usePromo ? '1' : '',
     },
-    success_url: origin + '/?billing=success&session_id={CHECKOUT_SESSION_ID}&plan=' + plan,
-    cancel_url: origin + '/?billing=cancelled',
+    success_url: returnPage(req, returnTo) + '?billing=success&session_id={CHECKOUT_SESSION_ID}&plan=' + plan,
+    cancel_url: returnPage(req, returnTo) + '?billing=cancelled',
   });
   if (typeof session.customer === 'string' && session.customer) {
     try { await store.setSubscription(userId, sub.plan || 'free', sub.status || 'active', { stripe_customer_id: session.customer }); } catch {}
@@ -140,7 +146,7 @@ async function createCheckout({ userId, email, plan, extraCredits, extraTokens, 
   return session;
 }
 
-async function createTokenCheckout({ userId, email, packTokens, req }) {
+async function createTokenCheckout({ userId, email, packTokens, req, returnTo }) {
   const s = client();
   if (!s) throw Object.assign(new Error('Payments are not configured yet.'), { code: 'NO_STRIPE' });
   const pack = tokenPackFor(packTokens);
@@ -155,8 +161,8 @@ async function createTokenCheckout({ userId, email, packTokens, req }) {
     client_reference_id: userId,
     line_items: [{ price, quantity: 1 }],
     metadata: { kind: 'tokens', user_id: userId, pack_tokens: String(pack.tokens) },
-    success_url: origin + '/?billing=tokens&session_id={CHECKOUT_SESSION_ID}',
-    cancel_url: origin + '/?billing=cancelled',
+    success_url: returnPage(req, returnTo) + '?billing=tokens&session_id={CHECKOUT_SESSION_ID}',
+    cancel_url: returnPage(req, returnTo) + '?billing=cancelled',
   });
   if (typeof session.customer === 'string' && session.customer) {
     try { await store.setSubscription(userId, sub.plan || 'free', sub.status || 'active', { stripe_customer_id: session.customer }); } catch {}
@@ -199,7 +205,7 @@ async function createGiftCheckout({ userId, email, amountUsd, req }) {
   return session;
 }
 
-async function createPortal({ userId, req }) {
+async function createPortal({ userId, req, returnTo }) {
   const s = client();
   if (!s) {
     const e = new Error('Payments are not configured yet.');
@@ -214,7 +220,7 @@ async function createPortal({ userId, req }) {
   }
   const portal = await s.billingPortal.sessions.create({
     customer: sub.stripe_customer_id,
-    return_url: siteUrl(req) + '/?billing=portal',
+    return_url: returnPage(req, returnTo) + '?billing=portal',
   });
   return portal;
 }

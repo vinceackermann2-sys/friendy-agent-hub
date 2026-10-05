@@ -54,6 +54,21 @@ async function main() {
     'Hi Sam,\n\nThanks!\n\n-- \nAlva\nalva@mail.belna.se\nPersonal AI agent · belna.se');
 
   assert.equal(mail.verifyWebhook('{}', {}), false);
+  // A correctly signed delivery is accepted only within five minutes of its timestamp.
+  {
+    const previous = process.env.RESEND_WEBHOOK_SECRET;
+    const key = require('node:crypto').randomBytes(24);
+    process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + key.toString('base64');
+    const signed = (ts, body = '{"type":"email.received"}') => ({ 'svix-id': 'msg_1', 'svix-timestamp': String(ts),
+      'svix-signature': 'v1,' + require('node:crypto').createHmac('sha256', key).update('msg_1.' + ts + '.' + body).digest('base64') });
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      assert.equal(mail.verifyWebhook('{"type":"email.received"}', signed(now)), true);
+      assert.equal(mail.verifyWebhook('{"type":"email.received"}', signed(now - 3600)), false, 'an old delivery cannot be replayed');
+      assert.equal(mail.verifyWebhook('{"type":"email.received"}', signed(now + 3600)), false);
+      assert.equal(mail.verifyWebhook('{"type":"other"}', signed(now)), false);
+    } finally { previous === undefined ? delete process.env.RESEND_WEBHOOK_SECRET : process.env.RESEND_WEBHOOK_SECRET = previous; }
+  }
 
   const store = require('../server/store');
   const old = {

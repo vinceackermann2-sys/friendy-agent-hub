@@ -45,6 +45,7 @@ async function copyText(text){
 const IC = {
   plus:'<path d="M12 5v14M5 12h14"/>',
   up:'<path d="M12 19V5M5 12l7-7 7 7"/>',
+  download:'<path d="M12 3v12M7 10l5 5 5-5M5 16v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4"/>',
   stop:'<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/>',
   mic:'<path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/>',
   search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
@@ -1537,6 +1538,21 @@ function authLegalAccepted(){
   box?.focus();
   return false;
 }
+// Sign-in returns the session in the URL. Only a flow this tab started may use it, so a
+// link carrying someone else's session cannot sign this browser into their account.
+const OAUTH_FLOW_KEY = 'belna.oauthFlow';
+function startOAuthFlow(){
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  const flow = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  sessionStorage.setItem(OAUTH_FLOW_KEY, flow);
+  return flow;
+}
+function takeOAuthFlow(){
+  let flow = '';
+  try { flow = sessionStorage.getItem(OAUTH_FLOW_KEY) || ''; sessionStorage.removeItem(OAUTH_FLOW_KEY); } catch {}
+  return flow;
+}
 async function authApple(){
   if (!window.BelnaApple?.available || !authLegalAccepted()) return;
   const message = document.getElementById('amsg'), button = document.querySelector('[data-act="apple-signin"]');
@@ -1557,7 +1573,7 @@ async function authOAuth(){
   if (btn) btn.disabled = true;
   if (msg) msg.textContent = 'Redirecting to Google…';
   try {
-    const r = await fetch('/api/auth/oauth-url?provider=google&next=' + encodeURIComponent('/') + '&terms_version=' + encodeURIComponent(TERMS_VERSION));
+    const r = await fetch('/api/auth/oauth-url?provider=google&next=' + encodeURIComponent('/') + '&terms_version=' + encodeURIComponent(TERMS_VERSION) + '&flow=' + encodeURIComponent(startOAuthFlow()));
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'Google sign-in unavailable');
     if (!j.url) throw new Error('Google sign-in unavailable — no redirect URL.');
@@ -1710,6 +1726,19 @@ function setBillingCache(billing){
   billingGeneration++;
   billingPending = null;
 }
+/* The Apple app sells nothing itself. Plans, token packs and the billing portal open in
+   the browser, and only in App Store storefronts that allow it (apple-native.js). */
+function inAppleApp(){ return !!window.BelnaApple?.available; }
+function canBuyHere(){ return !inAppleApp() || !!window.BelnaApple.browserPurchases?.(); }
+function payBrowserName(){ return window.BelnaApple?.platform === 'ios' ? 'Safari' : 'your browser'; }
+let billingInBrowser = false;
+// Sends checkout to the browser in the Apple app (the app's web view hands non-Belna
+// links to the system browser), or straight to Stripe on the web.
+function openBillingUrl(url){
+  if (inAppleApp()) { billingInBrowser = true; toast(`Finish in ${payBrowserName()}, then come back here.`); }
+  window.location.href = url;
+}
+function billingRequestBody(body){ return JSON.stringify(inAppleApp() ? { ...body, returnTo: 'app' } : body); }
 function invalidateBilling(){
   billingFetchedAt = 0;
   billingGeneration++;
@@ -1906,6 +1935,7 @@ function tokenPackRate(t){
   return perMillion ? `$${perMillion.toFixed(2)} per million · one-time · carries over` : 'One-time · carries over';
 }
 function tokenPackPickerHtml(b){
+  if (!canBuyHere()) return '';
   const packs = Array.isArray(b && b.tokenPacks) ? b.tokenPacks : [];
   if (!packs.length) return '<p class="billing-fine">Token packs aren’t available right now.</p>';
   return `<div class="billing-topup">
@@ -1915,9 +1945,9 @@ function tokenPackPickerHtml(b){
         <div class="billing-select-menu" aria-label="Token packs">${packs.map((t, i) => `<button type="button" class="billing-select-option${i === 0 ? ' is-selected' : ''}" data-act="select-pack" data-pack="${esc(t.tokens)}" data-rate="${esc(tokenPackRate(t))}" aria-pressed="${i === 0}"><span>${esc(t.millions)}M tokens — $${fmtC(t.usd)}</span>${icon('check',15)}</button>`).join('')}</div>
         <input type="hidden" id="buypack" value="${esc(packs[0].tokens)}">
       </details>
-      <button class="btn billing-primary" data-act="buycredits">${icon('card',14)} Continue to checkout</button>
+      <button class="btn billing-primary" data-act="buycredits">${icon('card',14)} ${!inAppleApp() ? 'Continue to checkout' : window.BelnaApple.platform === 'ios' ? 'Pay in Safari' : 'Pay in browser'}</button>
     </div>
-    <span class="billing-fine" id="buypack-rate">${esc(tokenPackRate(packs[0]))} · secure checkout</span>
+    <span class="billing-fine" id="buypack-rate">${esc(tokenPackRate(packs[0]))} · ${inAppleApp() ? `secure checkout in ${payBrowserName()}` : 'secure checkout'}</span>
   </div>`;
 }
 function fmtShortTokens(n){
@@ -1946,13 +1976,13 @@ function billingPlanOverview(b){
   return `<section class="billing-card billing-account" aria-labelledby="billing-account-title">
     <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('card',16)}</span><div><h3 id="billing-account-title">Current plan</h3><p>${paid ? 'Manage payment details, invoices, and your subscription.' : 'Your free plan is active. Choose a plan below when you need more room.'}</p></div></div>
     <div class="billing-account-row"><div><strong>${esc(billingPlanName(b))}</strong><span>${date ? `${paid ? 'Renews' : 'Monthly tokens reset'} ${esc(date)}` : 'Your monthly plan'}</span></div>
-      ${paid ? `<button class="btn billing-primary" data-act="portal">Open billing portal ${icon('aur',14)}</button>` : ''}
+      ${paid ? `<button class="btn billing-primary" data-act="portal">${inAppleApp() ? `Manage in ${payBrowserName()}` : 'Open billing portal'} ${icon('aur',14)}</button>` : ''}
     </div>
   </section>`;
 }
 function billingBodyHtml(tab = 'billing'){
   const b = billingOwner === billingIdentity() ? billingCache : null;
-  if (window.BelnaApple?.available) return `<div class="billing-content"><div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div><section class="billing-card"><h3>Your Belna account</h3><p>Your existing plan and the free plan work on this device. This app does not sell digital subscriptions or token packs.</p><a href="mailto:support@belna.se">Contact support</a></section></div>`;
+  if (!canBuyHere()) return `<div class="billing-content"><div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div><section class="billing-card"><h3>Your Belna account</h3><p>Your existing plan and the free plan work on this device. This app does not sell digital subscriptions or token packs.</p><a href="mailto:support@belna.se">Contact support</a></section></div>`;
   if (tab === 'usage') return `<div class="billing-content usage-content">
     <div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div>
     <div id="billshop">${b ? billingShopHtml(b) : ''}</div>
@@ -1960,7 +1990,7 @@ function billingBodyHtml(tab = 'billing'){
   return `<div class="billing-content">
     <div id="billbody">${b ? billingPlanOverview(b) : billingLoadingHtml()}</div>
     <section class="billing-card billing-plans" aria-labelledby="billing-plans-title">
-      <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('star',16)}</span><div><h3 id="billing-plans-title">Plans</h3><p>Start small. Switch or cancel any time.</p></div></div>
+      <div class="billing-card-head"><span class="billing-card-icon" aria-hidden="true">${icon('star',16)}</span><div><h3 id="billing-plans-title">Plans</h3><p>Start small. Switch or cancel any time.${inAppleApp() ? ` Checkout opens in ${payBrowserName()}.` : ''}</p></div></div>
       <div id="plancards">${b ? planCards(b) : ''}</div>
     </section>
   </div>`;
@@ -1974,7 +2004,7 @@ function loadBillingContent(tab = 'billing'){
       body.innerHTML = `<div class="billing-loading" role="status"><span>We couldn’t load your balance just now.</span><button class="btn ghost small" data-act="billing-refresh">Try again</button></div>`;
       return;
     }
-    body.innerHTML = window.BelnaApple?.available || tab === 'usage' ? billSummary(b) : billingPlanOverview(b);
+    body.innerHTML = !canBuyHere() || tab === 'usage' ? billSummary(b) : billingPlanOverview(b);
     if (cards && cards.isConnected) cards.innerHTML = planCards(b);
     if (shop && shop.isConnected) shop.innerHTML = billingShopHtml(b);
   });
@@ -2098,7 +2128,7 @@ function openGift(prefillCode){
   $('#giftmodal')?.remove();
   wireSheetSwipe();
   const overlay = el(`<div id="giftmodal" role="dialog" aria-modal="true" aria-labelledby="giftmodal-title">
-    <div class="giftmodal-card">
+    <div class="giftmodal-card" tabindex="-1">
       <div class="giftmodal-head">
         <button class="iconbtn giftmodal-x" data-act="closegift" data-sheet-close aria-label="Close invite">${icon('x',22)}</button>
         <div class="giftmodal-brand">${Mascot.logo(20)}<span>belna</span></div>
@@ -2123,7 +2153,8 @@ function openGift(prefillCode){
       overlay.querySelector('[data-act="gift-redeem"]')?.click();
     }
   });
-  setTimeout(() => { const x = overlay.querySelector('.giftmodal-x'); if (x) x.focus({ preventScroll: true }); }, 50);
+  // On phones the sheet itself takes focus: a ringed close button on a sheet that just rose looks like a stray tap.
+  setTimeout(() => { const x = overlay.querySelector(phoneLayout() ? '.giftmodal-card' : '.giftmodal-x'); if (x) x.focus({ preventScroll: true }); }, 50);
   getGift(prefillCode).then((g) => {
     const body = overlay.querySelector('.giftmodal-body');
     if (!body || !body.isConnected) return;
@@ -2724,7 +2755,7 @@ function renderLanding(){
         <article class="compare-side compare-belna">
           <div class="compare-copy">
             <span class="compare-kicker">With Belna</span>
-            <h2>You get one personal agent<br><span>that does the work.</span></h2>
+            <h2>You get your own personal Aupair<br><span>that does the work.</span></h2>
           </div>
           <div class="agent-system" aria-hidden="true">
             <span class="orbit-ring orbit-one"></span>
@@ -2744,7 +2775,7 @@ function renderLanding(){
       <div class="secure-agent-layout">
         <div class="secure-agent-copy">
           <h2>Your own secure agent</h2>
-          <p>Your agent gets a personal identity, private mailbox, Shop Pay checkout and its own computer — all in one place, always under your control.</p>
+          <p>Your agent gets a personal identity, private mailbox, wallet and its own computer — all in one place, always under your control.</p>
         </div>
         ${landingAgentPassport()}
       </div>
@@ -4018,6 +4049,7 @@ function paintSide(){
         ${state.userMenuOpen ? `<div class="usermenu pop">
           <button class="sitem" data-act="nav" data-view="settings">${icon('gear',15)} Settings</button>
           <button class="sitem" data-act="nav" data-view="apps">${icon('box',15)} Connectors</button>
+          ${window.BelnaApple?.available ? '' : `<a class="sitem" href="https://apps.apple.com/app/id6819012393" target="_blank" rel="noopener noreferrer" title="Download Belna for iPhone from the App Store">${icon('download',15)} Download app</a>`}
           <button class="sitem" data-act="signout">${icon('x',15)} Sign out</button>
         </div>` : ''}
         <button class="userrow" data-act="usermenu">
@@ -4083,17 +4115,6 @@ function paintGoals(M){
           ${state.goalMenu === g.id ? `<div class="goal-menu pop" role="menu">${g.done ? '' : `<button role="menuitem" data-act="goal-active" data-id="${g.id}">${icon(g.active ? 'clock' : 'up',15)} ${g.active ? 'Pause goal' : 'Resume goal'}</button>`}<button role="menuitem" data-act="goal-del" data-id="${g.id}">${icon('trash',15)} Delete goal</button></div>` : ''}
         </div>
       </div>
-      <details class="goal-work"><summary>Ongoing work${g.work?.enabled ? ' · enabled' : ''}</summary>
-        <label>What counts as success<input class="field" data-goal-field="success" value="${esc(g.work?.successCriteria || '')}" maxlength="1000"></label>
-        <label>Next action<input class="field" data-goal-field="next" value="${esc(g.work?.nextAction || '')}" maxlength="1000"></label>
-        <label>Check every (hours)<input class="field" type="number" min="1" max="720" data-goal-field="hours" value="${(g.work?.intervalMinutes || 1440)/60}"></label>
-        <label>Run budget<input class="field" type="number" min="1" max="30" data-goal-field="runs" value="${g.work?.maxRuns || 5}"></label>
-        <p class="mut">Up to 4 planning rounds per run. Can research public sources and read your Library. Account changes still require approval.</p>
-        <button class="btn small" data-act="goal-work-save" data-id="${g.id}">Enable ongoing work</button>
-        ${g.work?.enabled ? `<button class="btn ghost small" data-act="goal-work-pause" data-id="${g.id}">Pause ongoing work</button>` : ''}
-        ${g.work?.nextWakeAt && g.work?.enabled ? `<p>Next check: ${esc(new Date(g.work.nextWakeAt).toLocaleString())}</p>` : ''}
-        ${(g.activity || []).slice(-5).reverse().map(a=>`<p><small>${esc(new Date(a.at).toLocaleString())} · ${esc(a.status)}</small><br>${esc(a.summary)}</p>`).join('')}
-      </details>
       ${subs.length ? `<div class="goal-bar" role="progressbar" aria-label="${esc(g.title)} progress" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>` : ''}
       <div class="sub-list">
         ${subs.map(s => `<div class="sub-row${s.done ? ' is-done' : ''}">
@@ -4457,7 +4478,7 @@ function msgNode(c, m){
     return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
   if (m.kind === 'card') {
     const group = visualGroup(m.card);
-    return el(`<div class="msg agent" data-mid="${m.id}"${group ? ` data-vgroup="${esc(group)}"` : ''}><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body card-body">${agentNameHTML()}${cardNode(c, m)}${!(m.card.type === 'subagents' || (m.card.type === 'present' && ['dashboard','table'].includes(m.card.kind))) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
+    return el(`<div class="msg agent" data-mid="${m.id}"${group ? ` data-vgroup="${esc(group)}"` : ''}><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body card-body">${agentNameHTML()}${cardNode(c, m)}${!(m.card.type === 'subagents' || m.card.type === 'learn' || (m.card.type === 'present' && ['dashboard','table'].includes(m.card.kind))) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
   }
   return el('<div></div>');
 }
@@ -4802,6 +4823,247 @@ function presentCardHTML(c, m){
   </div>`;
 }
 
+/* ---------- learning cards: quiz, flashcards, practice problems, graphs ----------
+   The agent's learn tool sends the content; the owner works through it here, with no
+   model call. Progress lives on the card (cd.progress), so it survives a reload, shows the
+   same in Canvas and travels back to the agent with the chat's recent cards. */
+// Plain math as the agent writes it (x^2, sqrt(x), pi, <=) drawn with superscripts and symbols.
+function learnMath(s){
+  return esc(String(s ?? ''))
+    .replace(/\bsqrt\(/g, '√(').replace(/\bpi\b/g, 'π').replace(/&lt;=/g, '≤').replace(/&gt;=/g, '≥').replace(/!=/g, '≠').replace(/\+-|\+\/-/g, '±')
+    .replace(/([\w)\]])\s*\*\s*(?=[\w(√π])/g, '$1·')
+    .replace(/\^(\{([^{}]*)\}|\(([^()]*)\)|-?[\w.π]+)/g, (_, all, brace, paren) => `<sup>${brace ?? (paren !== undefined ? `(${paren})` : all)}</sup>`)
+    .replace(/([A-Za-z])_(\{([^{}]*)\}|\d+)/g, (_, base, all, brace) => `${base}<sub>${brace ?? all}</sub>`);
+}
+function learnProgress(cd){
+  const p = cd.progress && typeof cd.progress === 'object' ? cd.progress : {};
+  const n = cd.kind === 'quiz' ? (cd.questions || []).length : cd.kind === 'flashcards' ? (cd.cards || []).length : cd.kind === 'problem' ? (cd.problems || []).length : 0;
+  const list = (v, fill) => Array.from({ length:n }, (_, i) => Array.isArray(v) && v[i] !== undefined ? v[i] : fill);
+  return { i:Math.min(Math.max(0, Number(p.i) || 0), Math.max(0, n - 1)), done:!!p.done, flipped:!!p.flipped,
+    picks:list(p.picks, null), known:list(p.known, null), hints:list(p.hints, 0), solved:list(p.solved, false), shown:list(p.shown, false),
+    tries:list(p.tries, 0), last:list(p.last, ''), value:Number.isFinite(Number(p.value)) ? Number(p.value) : cd.slider?.value };
+}
+// A typed answer matches when it reads the same as the answer (or an accepted form), or
+// names the same numbers: "4", "x = 4" and "x=4.0" all match "x = 4"; "3/4" matches "0.75".
+function learnNumbers(s){
+  return (String(s).replace(/(\d),(\d)/g, '$1.$2').match(/-?\d+(?:\.\d+)?(?:\s*\/\s*-?\d+(?:\.\d+)?)?/g) || [])
+    .map(t => t.includes('/') ? t.split('/').map(Number).reduce((a, b) => a / b) : Number(t)).filter(Number.isFinite).sort((a, b) => a - b);
+}
+function learnAnswerOk(input, problem){
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '').replace(/^[a-z]=/, '').replace(/,(?=\d)/g, '.').replace(/[.。]+$/, '');
+  const said = norm(input);
+  if (!said) return false;
+  const answers = [problem.answer, ...(problem.accept || [])];
+  if (answers.some(a => norm(a) === said)) return true;
+  // Numbers decide only when the typed answer is just numbers, perhaps named (x = 2 or x = -2)
+  // or with a short unit (12 cm, 45°) or the answer's own words (7 apples).
+  const words = s => String(s).toLowerCase().replace(/\b(?:or|and|eller|och)\b/g, '').replace(/[a-z]\s*=/g, '').replace(/[-\d.,/\s;±]+/g, '');
+  const extra = words(input);
+  if (extra && extra.length > 4 && !answers.some(a => words(a) === extra)) return false;
+  const typed = learnNumbers(input);
+  return !!typed.length && answers.some(a => { const want = learnNumbers(a); return want.length === typed.length && want.every((v, i) => Math.abs(v - typed[i]) <= 1e-6 + Math.abs(v) * 1e-4); });
+}
+function learnCardHTML(c, m){
+  const cd = m.card, p = learnProgress(cd);
+  const attrs = `data-chat="${c.id}" data-msg="${m.id}"`;
+  const btn = (act, label, cls = 'ghost', extra = '') => `<button class="btn ${cls}" data-act="${act}" ${attrs} ${extra}>${label}</button>`;
+  const meter = (at, total) => `<div class="lc-meter" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${at}"><i style="width:${total ? Math.round(at / total * 100) : 0}%"></i></div>`;
+  let body = '', actions = '', sub = cd.subtitle ? esc(cd.subtitle) : '';
+  if (cd.kind === 'quiz') {
+    const qs = cd.questions || [];
+    const right = p.picks.filter((pick, i) => pick === qs[i]?.answer).length, answered = p.picks.filter(x => x !== null).length;
+    if (!sub) sub = `${qs.length} question${qs.length === 1 ? '' : 's'}`;
+    if (p.done) {
+      body = `<div class="lc-score"><b>${right}<small>/${qs.length}</small></b><span>${right === qs.length ? 'Perfect score!' : right >= qs.length * 0.7 ? 'Nicely done.' : 'Keep practising, you’ll get there.'}</span></div>
+        <ol class="lc-review">${qs.map((q, i) => { const ok = p.picks[i] === q.answer; return `<li class="${ok ? 'ok' : 'bad'}"><span class="lc-mark">${icon(ok ? 'check' : 'x', 12)}</span><div><b>${learnMath(q.question)}</b><small>${ok ? '' : `You said ${p.picks[i] === null ? 'nothing' : learnMath(q.options[p.picks[i]])} · `}Answer: ${learnMath(q.options[q.answer])}</small></div></li>`; }).join('')}</ol>`;
+      actions = btn('learn-restart', 'Try again', '');
+    } else {
+      const q = qs[p.i], pick = p.picks[p.i], done = pick !== null;
+      body = `${meter(answered, qs.length)}<div class="lc-count">Question ${p.i + 1} of ${qs.length}</div><p class="lc-q">${learnMath(q.question)}</p>
+        <div class="lc-opts">${q.options.map((o, i) => `<button class="lc-opt${done ? (i === q.answer ? ' right' : i === pick ? ' wrong' : ' dim') : ''}" data-act="learn-pick" data-o="${i}" ${attrs} ${done ? 'disabled' : ''}><span class="lc-key">${String.fromCharCode(65 + i)}</span><span>${learnMath(o)}</span>${done && (i === q.answer || i === pick) ? `<span class="lc-mark">${icon(i === q.answer ? 'check' : 'x', 12)}</span>` : ''}</button>`).join('')}</div>
+        ${done ? `<div class="lc-feedback ${pick === q.answer ? 'ok' : 'bad'}"><b>${pick === q.answer ? 'Correct!' : `Not quite. The answer is ${learnMath(q.options[q.answer])}.`}</b>${q.explanation ? ` ${learnMath(q.explanation)}` : ''}</div>` : ''}`;
+      actions = `${p.i > 0 ? btn('learn-prev', 'Back') : ''}${done ? btn('learn-next', p.i === qs.length - 1 ? 'See score' : 'Next question', '') : ''}`;
+    }
+  } else if (cd.kind === 'flashcards') {
+    const cards = cd.cards || [], card = cards[p.i];
+    const known = p.known.filter(x => x === true).length;
+    if (!sub) sub = `${cards.length} card${cards.length === 1 ? '' : 's'}`;
+    if (p.done) {
+      const again = p.known.map((k, i) => k === true ? -1 : i).filter(i => i >= 0);
+      body = `<div class="lc-score"><b>${known}<small>/${cards.length}</small></b><span>${again.length ? `${again.length} to review again.` : 'You know them all!'}</span></div>`;
+      actions = `${again.length ? btn('learn-review', `Review ${again.length} again`, '') : ''}${btn('learn-restart', 'Start over')}`;
+    } else {
+      body = `${meter(p.known.filter(x => x !== null).length, cards.length)}<div class="lc-count">Card ${p.i + 1} of ${cards.length} · ${known} known</div>
+        <button class="lc-flash${p.flipped ? ' flipped' : ''}" data-act="learn-flip" ${attrs} aria-label="${p.flipped ? 'Show the front' : 'Flip the card'}">
+          <span class="lc-face lc-front">${learnMath(card.front)}<small>Tap to flip</small></span><span class="lc-face lc-back">${learnMath(card.back)}</span></button>`;
+      actions = p.flipped ? `${btn('learn-again', 'Still learning')}${btn('learn-known', 'Got it', '')}` : `${p.i > 0 ? btn('learn-prev', 'Back') : ''}${btn('learn-flip', 'Flip', '')}`;
+    }
+  } else if (cd.kind === 'problem') {
+    const list = cd.problems || [], pr = list[p.i], i = p.i;
+    const solved = p.solved[i], shown = p.shown[i], hints = shown ? pr.steps.length : Math.min(p.hints[i], pr.steps.length);
+    if (!sub) sub = list.length > 1 ? `${list.filter((_, k) => p.solved[k]).length} of ${list.length} solved` : 'Practice problem';
+    const wrong = !solved && p.tries[i] > 0 && p.last[i];
+    body = `${list.length > 1 ? `${meter(list.filter((_, k) => p.solved[k] || p.shown[k]).length, list.length)}<div class="lc-count">Problem ${i + 1} of ${list.length}</div>` : ''}<p class="lc-q">${learnMath(pr.question)}</p>
+      ${hints ? `<ol class="lc-steps">${pr.steps.slice(0, hints).map(s => `<li>${learnMath(s)}</li>`).join('')}</ol>` : ''}
+      ${solved || shown ? `<div class="lc-feedback ${solved ? 'ok' : ''}"><b>${solved ? 'Correct!' : 'Answer:'} ${learnMath(pr.answer)}</b>${pr.explanation ? ` ${learnMath(pr.explanation)}` : ''}</div>`
+        : `<form class="lc-answer" data-learn-form ${attrs}><input name="answer" value="${esc(p.last[i] || '')}" placeholder="Your answer" autocomplete="off" spellcheck="false" aria-label="Your answer"><button class="btn" type="submit">Check</button></form>
+        ${wrong ? `<div class="lc-feedback bad"><b>Not quite.</b> ${hints < pr.steps.length ? 'Try again, or take a hint.' : 'Try again, or show the solution.'}</div>` : ''}`}`;
+    actions = solved || shown
+      ? `${i > 0 ? btn('learn-prev', 'Back') : ''}${i < list.length - 1 ? btn('learn-next', 'Next problem', '') : btn('learn-restart', 'Start over')}`
+      : `${hints < pr.steps.length ? btn('learn-hint', hints ? `Next hint (${pr.steps.length - hints} left)` : 'Hint') : ''}${btn('learn-show', 'Show solution')}`;
+  } else if (cd.kind === 'plot') {
+    if (!sub) sub = (cd.functions || []).map(f => f.label).join(' · ');
+    body = `<div class="lc-plot" data-learn-plot ${attrs}>${learnPlotSVG(cd, p.value)}</div>
+      ${(cd.functions || []).length > 1 ? `<div class="lc-legend">${cd.functions.map((f, i) => `<span><i style="background:${LEARN_COLORS[i]}"></i>${learnMath(f.label)}</span>`).join('')}</div>` : ''}
+      ${cd.slider ? `<label class="lc-slider"><span>${learnMath(cd.slider.label || cd.slider.name)} = <b data-learn-value>${learnFmt(p.value)}</b></span><input type="range" data-learn-slider ${attrs} min="${cd.slider.min}" max="${cd.slider.max}" step="${cd.slider.step}" value="${p.value}"></label>` : ''}
+      ${cd.caption ? `<p class="lc-caption">${learnMath(cd.caption)}</p>` : ''}`;
+  }
+  const tile = { quiz:'help', flashcards:'book', problem:'calc', plot:'chart' }[cd.kind] || 'book';
+  return `<div class="acard cv-card lc-card is-${esc(cd.kind || 'quiz')}" data-learn="${m.id}">
+    ${cvHead(cvTile(tile), learnMath(cd.title || 'Practice'), sub, '')}
+    <div class="bd">${body}</div>
+    ${actions ? `<div class="cv-actions">${actions}</div>` : ''}
+  </div>`;
+}
+let learnSaveTimer = 0;
+const LEARN_COLORS = ['var(--ag-dark)', 'var(--purple)', 'var(--green)', '#C2410C'];
+const learnFmt = v => { const n = Number(v); return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : ''; };
+// A small parser for the functions the agent plots: numbers, x, one slider letter, + - * / ^,
+// implicit multiplication (2x, 3(x+1)) and a few named functions. Never eval.
+const LEARN_FUNCS = { sin:Math.sin, cos:Math.cos, tan:Math.tan, asin:Math.asin, acos:Math.acos, atan:Math.atan, sqrt:Math.sqrt, abs:Math.abs, ln:Math.log, log:Math.log10, exp:Math.exp, floor:Math.floor, ceil:Math.ceil, round:Math.round, sign:Math.sign };
+const learnCompiled = new Map();
+function learnCompile(src, slider = ''){
+  const key = `${slider}:${src}`;
+  if (learnCompiled.has(key)) return learnCompiled.get(key);
+  const names = ['asin','acos','atan','sqrt','sin','cos','tan','abs','ln','log','exp','floor','ceil','round','sign','pi'];
+  const toks = [];
+  const s = String(src).toLowerCase();
+  for (let i = 0; i < s.length;) {
+    const ch = s[i];
+    if (/\s/.test(ch)) { i++; continue; }
+    const num = /^(?:\d+\.?\d*|\.\d+)/.exec(s.slice(i));
+    if (num) { toks.push({ t:'n', v:Number(num[0]) }); i += num[0].length; continue; }
+    if (/[a-z]/.test(ch)) { const name = names.find(n => s.startsWith(n, i)); toks.push({ t:'id', v:name || ch }); i += name ? name.length : 1; continue; }
+    if ('+-*/^(),'.includes(ch)) { toks.push({ t:ch }); i++; continue; }
+    learnCompiled.set(key, null); return null;
+  }
+  let k = 0;
+  const peek = () => toks[k], take = t => (toks[k] && toks[k].t === t ? toks[k++] : null);
+  const expr = () => { let a = term(); for (;;) { if (take('+')) { const l = a, r = term(); a = v => l(v) + r(v); } else if (take('-')) { const l = a, r = term(); a = v => l(v) - r(v); } else return a; } };
+  const term = () => { let a = unary(); for (;;) {
+    if (take('*')) { const l = a, r = unary(); a = v => l(v) * r(v); }
+    else if (take('/')) { const l = a, r = unary(); a = v => l(v) / r(v); }
+    else if (peek() && ['n','id','('].includes(peek().t)) { const l = a, r = power(); a = v => l(v) * r(v); }
+    else return a; } };
+  const unary = () => { if (take('-')) { const a = unary(); return v => -a(v); } if (take('+')) return unary(); return power(); };
+  const power = () => { const base = atom(); if (take('^')) { const ex = unary(); return v => Math.pow(base(v), ex(v)); } return base; };
+  const atom = () => {
+    const tok = toks[k++];
+    if (!tok) throw new Error('end');
+    if (tok.t === 'n') return () => tok.v;
+    if (tok.t === '(') { const a = expr(); if (!take(')')) throw new Error(')'); return a; }
+    if (tok.t !== 'id') throw new Error('token');
+    if (LEARN_FUNCS[tok.v]) { if (!take('(')) throw new Error('('); const a = expr(); if (!take(')')) throw new Error(')'); const f = LEARN_FUNCS[tok.v]; return v => f(a(v)); }
+    if (tok.v === 'pi') return () => Math.PI;
+    if (tok.v === 'e') return () => Math.E;
+    if (tok.v !== 'x' && tok.v !== slider) throw new Error('name');
+    const name = tok.v;
+    return v => v[name];
+  };
+  let fn = null;
+  try { fn = expr(); if (k !== toks.length) fn = null; } catch { fn = null; }
+  learnCompiled.set(key, fn);
+  return fn;
+}
+function learnNiceStep(span){
+  const raw = span / 6, pow = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / pow;
+  return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * pow;
+}
+function learnPlotSVG(cd, value){
+  const W = 360, H = 240, padL = 34, padR = 10, padT = 10, padB = 24;
+  const [x0, x1] = cd.x || [-10, 10];
+  const slider = cd.slider?.name;
+  const fns = (cd.functions || []).map(f => learnCompile(f.expr, slider));
+  const at = (fn, x, val) => { try { const v = { x }; if (slider) v[slider] = val; const y = fn(v); return Number.isFinite(y) ? y : NaN; } catch { return NaN; } };
+  let y0, y1;
+  if (cd.y) [y0, y1] = cd.y;
+  else {
+    // A range that holds across the slider, so the axes stay still while it moves.
+    const vals = [], sliderVals = slider ? [cd.slider.min, value, cd.slider.max] : [value];
+    for (const fn of fns) if (fn) for (const val of sliderVals) for (let i = 0; i <= 120; i++) { const y = at(fn, x0 + (x1 - x0) * i / 120, val); if (Number.isFinite(y)) vals.push(y); }
+    for (const pt of cd.points || []) vals.push(pt.y);
+    vals.sort((a, b) => a - b);
+    const lo = vals[Math.floor(vals.length * 0.04)] ?? -10, hi = vals[Math.ceil(vals.length * 0.96) - 1] ?? 10;
+    const span = Math.max(hi - lo, 1e-6), padY = span * 0.12;
+    y0 = Math.min(lo - padY, lo > 0 && lo < span ? 0 : Infinity); y1 = Math.max(hi + padY, hi < 0 && -hi < span ? 0 : -Infinity);
+    if (!(y1 > y0)) { y0 = lo - 1; y1 = hi + 1; }
+  }
+  const sx = x => padL + (x - x0) / (x1 - x0) * (W - padL - padR), sy = y => padT + (y1 - y) / (y1 - y0) * (H - padT - padB);
+  let grid = '';
+  const xs = learnNiceStep(x1 - x0), ys = learnNiceStep(y1 - y0);
+  for (let x = Math.ceil(x0 / xs) * xs; x <= x1 + 1e-9; x += xs) grid += `<line x1="${sx(x).toFixed(1)}" x2="${sx(x).toFixed(1)}" y1="${padT}" y2="${H - padB}" class="g"/><text x="${sx(x).toFixed(1)}" y="${H - 8}" text-anchor="middle">${learnFmt(x)}</text>`;
+  for (let y = Math.ceil(y0 / ys) * ys; y <= y1 + 1e-9; y += ys) grid += `<line x1="${padL}" x2="${W - padR}" y1="${sy(y).toFixed(1)}" y2="${sy(y).toFixed(1)}" class="g"/><text x="${padL - 5}" y="${(sy(y) + 3.5).toFixed(1)}" text-anchor="end">${learnFmt(y)}</text>`;
+  const axes = `${x0 <= 0 && x1 >= 0 ? `<line x1="${sx(0).toFixed(1)}" x2="${sx(0).toFixed(1)}" y1="${padT}" y2="${H - padB}" class="a"/>` : ''}${y0 <= 0 && y1 >= 0 ? `<line x1="${padL}" x2="${W - padR}" y1="${sy(0).toFixed(1)}" y2="${sy(0).toFixed(1)}" class="a"/>` : ''}`;
+  const curves = fns.map((fn, fi) => {
+    if (!fn) return '';
+    let d = '', pen = false, prev = NaN;
+    for (let i = 0; i <= 360; i++) {
+      const x = x0 + (x1 - x0) * i / 360, y = at(fn, x, value);
+      // A jump across most of the view is an asymptote (tan, 1/x), not a line to draw.
+      if (!Number.isFinite(y) || (Number.isFinite(prev) && Math.abs(y - prev) > (y1 - y0) * 1.5)) { pen = false; prev = y; continue; }
+      const py = Math.max(-H, Math.min(2 * H, sy(y)));
+      d += `${pen ? 'L' : 'M'}${sx(x).toFixed(1)} ${py.toFixed(1)}`; pen = true; prev = y;
+    }
+    return d ? `<path d="${d}" fill="none" stroke="${LEARN_COLORS[fi]}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>` : '';
+  }).join('');
+  const dots = (cd.points || []).filter(pt => pt.x >= x0 && pt.x <= x1 && pt.y >= y0 && pt.y <= y1).map(pt => `<circle cx="${sx(pt.x).toFixed(1)}" cy="${sy(pt.y).toFixed(1)}" r="4" class="pt"><title>${esc(pt.label || `(${pt.x}, ${pt.y})`)}</title></circle>${pt.label ? `<text x="${(sx(pt.x) + 6).toFixed(1)}" y="${(sy(pt.y) - 7).toFixed(1)}" class="pl">${esc(pt.label)}</text>` : ''}`).join('');
+  // Every graph has the same plot area, so one clip id serves them all.
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc((cd.functions || []).map(f => f.label).join(', ') || cd.title || 'Graph')}"><defs><clipPath id="lc-clip"><rect x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}"/></clipPath></defs>${grid}${axes}<g clip-path="url(#lc-clip)">${curves}</g>${dots}</svg>`;
+}
+// Clicks on a learning card change only its progress; the card is drawn again from it.
+function learnAct(c, m, act, b){
+  const cd = m.card, p = learnProgress(cd);
+  const total = cd.kind === 'quiz' ? (cd.questions || []).length : cd.kind === 'flashcards' ? (cd.cards || []).length : (cd.problems || []).length;
+  if (act === 'learn-pick' && cd.kind === 'quiz' && p.picks[p.i] === null) p.picks[p.i] = Number(b.dataset.o);
+  else if (act === 'learn-next') { if (cd.kind === 'quiz' && p.i === total - 1) p.done = true; else p.i = Math.min(total - 1, p.i + 1); p.flipped = false; }
+  else if (act === 'learn-prev') { p.i = Math.max(0, p.i - 1); p.flipped = false; }
+  else if (act === 'learn-restart') { cd.progress = cd.kind === 'plot' ? { value:cd.slider?.value } : {}; replaceNode(c, m); save(); return; }
+  else if (act === 'learn-flip') p.flipped = !p.flipped;
+  else if (act === 'learn-known' || act === 'learn-again') {
+    p.known[p.i] = act === 'learn-known'; p.flipped = false;
+    // On to the next card not yet marked, wrapping round; when every card is marked, the score.
+    const next = [...p.known.keys()].map(k => (p.i + 1 + k) % total).find(k => p.known[k] === null);
+    if (next === undefined) p.done = true; else p.i = next;
+  }
+  else if (act === 'learn-review') { p.done = false; p.i = Math.max(0, p.known.findIndex(k => k !== true)); p.known = p.known.map(k => k === true ? true : null); p.flipped = false; }
+  else if (act === 'learn-hint') p.hints[p.i] += 1;
+  else if (act === 'learn-show') p.shown[p.i] = true;
+  cd.progress = p;
+  replaceNode(c, m); save();
+}
+function learnCheck(c, m, form){
+  const cd = m.card, p = learnProgress(cd), pr = (cd.problems || [])[p.i];
+  if (!pr) return;
+  const said = String(form.elements.answer?.value || '').trim().slice(0, 200);
+  if (!said) { form.elements.answer?.focus(); return; }
+  p.last[p.i] = said; p.tries[p.i] += 1;
+  if (learnAnswerOk(said, pr)) p.solved[p.i] = true;
+  cd.progress = p;
+  replaceNode(c, m); save();
+  if (!p.solved[p.i]) document.querySelector(`[data-mid="${m.id}"] .lc-answer input`)?.focus();
+}
+// What the owner has done with a learning card, for the agent ("how did I do?").
+function learnSummaryText(cd){
+  const p = learnProgress(cd);
+  if (cd.kind === 'quiz') { const qs = cd.questions || [], answered = p.picks.filter(x => x !== null).length; if (!answered) return 'not started';
+    const missed = qs.map((q, i) => p.picks[i] !== null && p.picks[i] !== q.answer ? `${q.question} (picked ${q.options[p.picks[i]]}, answer ${q.options[q.answer]})` : '').filter(Boolean);
+    return `${answered}/${qs.length} answered, ${p.picks.filter((x, i) => x === qs[i]?.answer).length} right${missed.length ? `; missed: ${missed.join('; ')}` : ''}`.slice(0, 600); }
+  if (cd.kind === 'flashcards') { const cards = cd.cards || []; const seen = p.known.filter(x => x !== null).length; return seen ? `${p.known.filter(x => x === true).length}/${cards.length} known; still learning: ${cards.filter((_, i) => p.known[i] === false).map(x => x.front).join(', ') || 'none'}`.slice(0, 600) : 'not started'; }
+  if (cd.kind === 'problem') { const list = cd.problems || []; return `${p.solved.filter(Boolean).length}/${list.length} solved, ${p.shown.filter(Boolean).length} solutions shown, ${p.hints.reduce((a, b) => a + b, 0)} hints used`; }
+  return cd.slider ? `slider ${cd.slider.name} = ${learnFmt(p.value)}` : '';
+}
+if (typeof window !== 'undefined') window.learnSummaryText = learnSummaryText;
+
 function orderCardHTML(c, m){
   const cd = m.card;
   const placed = cd.orderStatus === 'completed';
@@ -4999,6 +5261,7 @@ function cardNode(c, m){
   if (cd.type === 'question' && !cd.onboarding && !cd.mascotColors && !cd.customName) return questionCardHTML(c, m);
   if (cd.type === 'connect') return connectCardHTML(c, m);
   if (cd.type === 'present') return presentCardHTML(c, m);
+  if (cd.type === 'learn') return learnCardHTML(c, m);
   if (cd.type === 'order') return orderCardHTML(c, m);
   if (cd.type === 'email') return emailCardHTML(c, m);
   if (cd.type === 'browser') return browserCardHTML(c, m);
@@ -5714,13 +5977,22 @@ function canvasHeroHTML(){
   return `<div class="agent-hero">
     <div class="agent-hero-fig">
       ${Mascot.svg(a.color, editing ? 'happy' : 'idle', 84)}
-      <button class="iconbtn agent-hero-edit${editing ? ' on' : ''}" data-act="agent-edit" title="Edit appearance">${icon('pencil',14)}</button>
+      <button class="iconbtn agent-hero-edit${editing ? ' on' : ''}" data-act="agent-edit" title="${editing ? 'Done' : 'Edit appearance'}" aria-label="${editing ? 'Done editing appearance' : 'Edit appearance'}" aria-pressed="${editing}">${icon(editing ? 'check' : 'pencil',14)}</button>
     </div>
     <b class="agent-hero-name">${esc(a.name)}</b>
     <span class="agent-hero-status${connection.tone ? ' ' + connection.tone : ''}"><i></i><span>${esc(connection.label)}</span></span>
     ${mailCache && mailCache.address ? `<div class="sub mono agent-hero-mail">${esc(mailCache.address)}</div>` : ''}
     ${editing ? agentAppearanceForm(a) : ''}
   </div>`;
+}
+// A new colour or accessory updates the mascot and chips in place, so the edit form
+// keeps its scroll position and focus instead of being rebuilt under the finger.
+function patchHeroLook(hero, a){
+  const fig = hero.querySelector('.agent-hero-fig > .mascot');
+  if (fig) fig.outerHTML = Mascot.svg(a.color, state.agentEdit ? 'happy' : 'idle', 84);
+  const picker = hero.querySelector('.outfit-picker');
+  if (picker) picker.outerHTML = outfitPicker(a);
+  hero.querySelectorAll('[data-act="p-color"]').forEach(s => s.classList.toggle('on', s.dataset.c === a.color));
 }
 function libraryTabContent(){
   const cat = state.libraryCat || 'all';
@@ -6339,12 +6611,6 @@ function walletBelnaGroup(){
     ${w.cardProgramAvailable===false?`<div class="wset-row"><span class="wset-copy"><b>${WALLET_CARD_TITLE}</b><small>${walletCardWaitlistSub()}</small></span>${walletCardWaitlistAction()}</div>`:''}
   </div></section>`;
 }
-function walletLoginContent(){
-  const logins=vaultDisplayEntries(state.vault?.secrets || []).filter(entry=>entry.kind==='Login');
-  const rows=logins.map(entry=>`<div class="wset-row pm-row"><span class="pm-ic" aria-hidden="true">${icon('key',15)}</span><span class="wset-copy"><b>${esc(entry.name)}</b><small>${entry.secrets.every(secret=>secret.backend)?'Saved securely in Secrets':'Saved on this device'}</small></span></div>`).join('');
-  return `<section class="wset-sec" id="store-logins" aria-label="Store logins"><h4 class="wset-label">Store logins</h4><div class="wset-group">${rows || '<div class="wset-row"><span class="wset-copy"><small>No saved logins yet.</small></span></div>'}
-    <div class="wset-row pm-links"><button type="button" class="wl-link" data-act="wallet-existing-connect"${state.vault?.encrypted===false?' disabled':''}>Add login</button><button type="button" class="wl-link" data-act="wallet-manage-logins">Manage in Secrets</button></div></div></section>`;
-}
 function walletAddressForm(){
   const a = walletAddressEdit;
   const field = (name, label, autocomplete, optional = false) => `<label class="wl-field"><span>${label}${optional ? ' <span class="mut">(optional)</span>' : ''}</span><input class="field" id="wallet-address-${name}" value="${esc(a?.[name] || '')}" autocomplete="${autocomplete}" maxlength="${({ label:40, recipient:80, line1:100, line2:60, city:60, region:60, postalCode:20 })[name]}"${optional ? '' : ' required'}></label>`;
@@ -6504,25 +6770,25 @@ const OWN_METHODS = [
   ['payment_apps', 'Payment apps and pay later', 'phone', 'Klarna, Swish, PayPal, Afterpay, Sezzle and more. You approve each payment in the app.'],
   ['shop_pay', 'Shop Pay', '', 'Shopify stores'],
 ];
-function ownMethodControl(id, label, connectLabel = 'Connect'){
+function ownMethodControl(id, label){
   const shop = shopPaySnapshot();
-  if (id === 'shop_pay' && !shop.connected) return `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured || shopPayBusy ? ' disabled' : ''}>${shopPayBusy ? (connectLabel === 'Connect' ? 'Connecting…' : 'Please wait…') : connectLabel}</button>`;
+  if (id === 'shop_pay' && !shop.connected) return `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${shopPayBusy ? ' disabled' : (shop.configured ? '' : ' disabled') + ' aria-label="Connect Shop Pay"'}>${shopPayBusy ? 'Please wait…' : 'Connect'}</button>`;
   return walletSwitch(!!walletPreferences?.methods?.[id], 'pay-method-toggle', label, `data-method="${id}"`);
 }
 function ownMethodSub(id, sub){
   const shop = shopPaySnapshot();
   if (id !== 'shop_pay' || shop.connected) return id === 'shop_pay' && shop.email ? 'Connected as ' + shop.email : sub;
-  return state.shopPayLoading ? 'Checking connection…' : shop.configured ? 'Shopify stores · connect first' : 'Currently unavailable';
+  return state.shopPayLoading ? 'Checking connection…' : shop.configured ? 'Shopify stores' : 'Currently unavailable';
 }
 // Settings › Wallet: each method's switch, the Shop Pay account and limit, and how it stays safe.
 function ownMethodsSettings(){
   const shop = shopPaySnapshot(), busy = shopPayBusy ? ' disabled' : '';
-  const rows = OWN_METHODS.map(([id, label, ic, sub]) => `<div class="wset-row pm-row"><span class="pm-ic${id === 'shop_pay' ? ' shop' : ''}" aria-hidden="true">${id === 'shop_pay' ? shopPayBrandMark() : icon(ic, 16)}</span><span class="wset-copy"><b>${esc(label)}</b><small>${esc(ownMethodSub(id, sub))}</small></span>${ownMethodControl(id, label, 'Connect Shop Pay')}</div>`).join('');
+  const rows = OWN_METHODS.map(([id, label, ic, sub]) => `<div class="wset-row pm-row"><span class="pm-ic${id === 'shop_pay' ? ' shop' : ''}" aria-hidden="true">${id === 'shop_pay' ? shopPayBrandMark() : icon(ic, 16)}</span><span class="wset-copy"><b>${esc(label)}</b><small>${esc(ownMethodSub(id, sub))}</small></span>${ownMethodControl(id, label)}</div>`).join('');
   const shopRows = shop.connected ? `<div class="wset-row"><span class="wset-copy"><b>Shop Pay daily limit</b><small>Purchases still need your approval</small></span><label class="wl-field">USD<input class="field" id="shoppaylimit" type="number" min="1" max="2000" step="0.01" value="${Number(shop.dailyLimitUsd)||200}"></label><button type="button" class="btn ghost small" data-act="shop-pay-limit"${busy}>Save limit</button></div>
     <div class="wset-row"><span class="wset-copy"><b>Shop Pay account</b><small>${esc(shop.email || 'Connected')}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-disconnect"${busy}>${shopPayBusy ? 'Please wait…' : 'Disconnect'}</button></div>` : '';
   return `<section class="wset-sec" id="payment-connections"><h4 class="wset-label">Payment methods</h4><div class="wset-group">${rows}${shopRows}</div>
     <ul class="pm-safe" aria-label="How payment methods work"><li>${icon('wallet', 14)}Never uses your Belna balance</li><li>${icon('check', 14)}You approve every purchase</li><li>${icon('lock', 14)}${esc(state.agent.name)} never sees card or bank details</li></ul>
-    ${walletPreferencesError ? `<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>` : ''}${shopPayError ? `<p class="wl-error" role="alert">${esc(shopPayError)}</p>` : ''}</section>${walletLoginContent()}`;
+    ${walletPreferencesError ? `<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>` : ''}${shopPayError ? `<p class="wl-error" role="alert">${esc(shopPayError)}</p>` : ''}</section>`;
 }
 const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
 function automationItemHtml(agent){
@@ -7176,7 +7442,7 @@ function canvasKind(cd){
   if (!cd) return '';
   if (cd.type === 'browser') return cd.desktop ? 'computer' : 'browser';
   if (['file','canvas','artifact'].includes(cd.type)) return 'file';
-  if (cd.type === 'subagents' || (cd.type === 'present' && ['dashboard','table'].includes(cd.kind))) return 'card';
+  if (cd.type === 'subagents' || cd.type === 'learn' || (cd.type === 'present' && ['dashboard','table'].includes(cd.kind))) return 'card';
   return '';
 }
 // Newest first across every chat. A task's browser or computer shows once, as its newest card.
@@ -7211,6 +7477,7 @@ function canvasItemView(ref){
   if (cd.type === 'browser') return { c, m, kind, icon:cd.desktop ? 'laptop' : 'globe', title:cd.desktop ? 'Virtual computer' : hostName(cd.url) || cd.url || 'Browser', label:cd.desktop ? 'Computer' : 'Browser' };
   if (cd.type === 'computer') return null; // shell output stays out of sight (see msgNode)
   if (kind === 'file') { const info = artifactInfo({ ...cd, name:cd.name || cd.title }); return { c, m, kind, icon:info.ic, title:info.title, label:info.label }; }
+  if (cd.type === 'learn') return { c, m, kind, icon:{ quiz:'help', flashcards:'book', problem:'calc', plot:'chart' }[cd.kind] || 'book', title:cd.title || 'Practice', label:{ quiz:'Quiz', flashcards:'Flashcards', problem:'Practice', plot:'Graph' }[cd.kind] || 'Learning' };
   return { c, m, kind, icon:cd.type === 'present' ? 'chart' : 'users', title:cd.title || cd.name || 'Canvas item', label:cd.type === 'present' ? 'Dashboard' : 'Agents' };
 }
 function canvasRefOf(r){ return r.artifact ? { kind:'artifact', chatId:r.c.id } : { kind:'card', chatId:r.c.id, msgId:r.m.id }; }
@@ -7454,10 +7721,15 @@ function paintCanvas(){
   }
   const hero = cv.querySelector('.canvas-hero');
   const a = state.agent;
-  const heroKey = a ? JSON.stringify([a.color, a.name, a.outfit || [], !!state.agentEdit, mailCache?.address || '']) : '';
+  const heroKey = a ? JSON.stringify([a.name, !!state.agentEdit, mailCache?.address || '']) : '';
+  const lookKey = a ? JSON.stringify([a.color, a.outfit || []]) : '';
+  cv.classList.toggle('agent-editing', !!(a && state.agentEdit));
   if (hero.__key !== heroKey) {
+    const opening = !!state.agentEdit && !hero.__editing, keep = hero.scrollTop;
     hero.innerHTML = canvasHeroHTML();
-    hero.__key = heroKey;
+    hero.__key = heroKey; hero.__look = lookKey; hero.__editing = !!state.agentEdit;
+    if (opening) { hero.scrollTop = 0; hero.querySelector('.agent-edit-form')?.classList.add('entering'); }
+    else hero.scrollTop = keep;
     const an = hero.querySelector('#agentname');
     if (an) an.addEventListener('change', e => {
       const v = e.target.value.trim(); if (!v) return;
@@ -7465,7 +7737,10 @@ function paintCanvas(){
       ensureMailbox(state.agent.name).then(() => { if ($('#cbody')) paintCanvas(); });
       toast('Renamed — they answer to ' + state.agent.name + ' now.');
     });
-  } else refreshWorkspaceConnectionView();
+  } else {
+    if (hero.__look !== lookKey) { patchHeroLook(hero, a); hero.__look = lookKey; }
+    refreshWorkspaceConnectionView();
+  }
   const tabs = cv.querySelector('.canvas-tabs');
   const tabsHTML = [
     ['canvas', 'easel', 'Canvas', workspaceLive() ? '<span class="livedot"></span>' : ''],
@@ -7829,7 +8104,7 @@ function settingsRowHtml(id){
 function settingsGroupHtml(ids){ return `<div class="set-group">${ids.map(settingsRowHtml).join('')}</div>`; }
 function settingsPlanHtml(b){
   if (!b) return `<button type="button" class="set-plan-main" data-act="stab" data-t="usage"><span class="set-plan-head"><b>Your plan</b></span><span class="set-plan-note">Getting your tokens ready…</span><span class="set-plan-bar"><span style="width:0%"></span></span></button>
-    <button type="button" class="set-plan-link" data-act="stab" data-t="billing">See plans</button>`;
+    <button type="button" class="set-plan-link" data-act="stab" data-t="billing">${canBuyHere() ? 'See plans' : 'Details'}</button>`;
   const v = creditView(b), pct = esc(usagePercentLabel(v));
   const reset = b.resetAt ? new Date(b.resetAt).toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '';
   const note = v.tone === 'empty' && v.extraRemaining > 0 ? 'Monthly tokens used · extra tokens still available'
@@ -7839,7 +8114,7 @@ function settingsPlanHtml(b){
       <span class="set-plan-note">${esc(note)}</span>
       <span class="set-plan-bar"><span style="width:${v.percent}%"></span></span>
     </button>
-    <button type="button" class="set-plan-link" data-act="stab" data-t="billing">${b.plan && b.plan !== 'free' ? 'Manage plan' : 'Upgrade'}</button>`;
+    <button type="button" class="set-plan-link" data-act="stab" data-t="billing">${!canBuyHere() ? 'Details' : b.plan && b.plan !== 'free' ? 'Manage plan' : 'Upgrade'}</button>`;
 }
 function fillSettingsPlan(M){
   const owner = billingIdentity();
@@ -8419,6 +8694,14 @@ document.addEventListener('submit', async e => {
     finally{button.disabled=false;}
     return;
   }
+  const learnForm = e.target.closest('[data-learn-form]');
+  if (learnForm) {
+    e.preventDefault();
+    const c = state.chats.find(x => x.id === learnForm.dataset.chat);
+    const m = c?.messages.find(x => x.id === learnForm.dataset.msg);
+    if (m?.card?.type === 'learn') learnCheck(c, m, learnForm);
+    return;
+  }
   const other = e.target.closest('[data-q-other]');
   if (other) {
     e.preventDefault();
@@ -8435,6 +8718,20 @@ document.addEventListener('submit', async e => {
   await answerOnboarding(c, m, form.elements.agentName.value);
 });
 document.addEventListener('input', e => {
+  // A graph's slider redraws only the graph while it moves; the value is saved with the card.
+  const slider = e.target.closest?.('[data-learn-slider]');
+  if (slider) {
+    const c = state.chats.find(x => x.id === slider.dataset.chat);
+    const m = c?.messages.find(x => x.id === slider.dataset.msg);
+    if (m?.card?.type !== 'learn') return;
+    m.card.progress = { ...(m.card.progress || {}), value:Number(slider.value) };
+    const card = slider.closest('.lc-card');
+    const plot = card?.querySelector('[data-learn-plot]'), shown = card?.querySelector('[data-learn-value]');
+    if (plot) plot.innerHTML = learnPlotSVG(m.card, Number(slider.value));
+    if (shown) shown.textContent = learnFmt(slider.value);
+    clearTimeout(learnSaveTimer); learnSaveTimer = setTimeout(save, 400);
+    return;
+  }
   const form = e.target.closest('[data-onboarding-name]');
   if (!form) return;
   const c = state.chats.find(c => c.id === form.dataset.chat);
@@ -8492,6 +8789,7 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'qopt' && m?.card?.onboarding) { await answerOnboarding(c, m, b.dataset.o); return; }
+  if (act.startsWith('learn-') && m?.card?.type === 'learn') { learnAct(c, m, act, b); return; }
   if (act === 'life-ask'){
     e.preventDefault();
     const prompt = (b.dataset.prompt || '').trim();
@@ -8582,8 +8880,6 @@ document.addEventListener('click', async e => {
   if(act==='belna-wallet-deposit'){openWalletWithdrawal('deposit');return;}
   if(act==='wallet-verify-money'){openWalletWithdrawal('verify');return;}
   if(act==='wallet-money-action'){if(b.dataset.action==='withdraw'){openWalletWithdrawal();return;}openWalletMoneyAction(b.dataset.action);return;}
-  if(act==='wallet-existing-connect'){askInNewChat('Save my login for a store or payment service: ');return;}
-  if(act==='wallet-manage-logins'){state.view='settings';state.settingsTab='secrets';save();renderApp();return;}
   if(act==='wallet-card-interest'){joinWalletCardWaitlist();return;}
   if(act.startsWith('wallet-address-')){
     const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy)return;
@@ -8723,11 +9019,6 @@ document.addEventListener('click', async e => {
   }
   if (act === 'usermenu'){ state.userMenuOpen = !state.userMenuOpen; save(); paintSide(); return; }
   if (act === 'stab'){ state.settingsTab = b.dataset.t; save(); paintSettings($('#main')); return; }
-  if(act==='goal-work-save' || act==='goal-work-pause'){
-    const panel=b.closest('.goal-work'),get=key=>panel.querySelector(`[data-goal-field="${key}"]`)?.value;
-    const input=act==='goal-work-pause'?{enabled:false}:{enabled:true,successCriteria:get('success'),nextAction:get('next'),intervalMinutes:Number(get('hours'))*60,maxRuns:Number(get('runs')),maxRounds:4};
-    b.disabled=true;try{await window.LingonAuth.api('/api/goals/'+encodeURIComponent(b.dataset.id)+'/work',{method:'PUT',body:JSON.stringify(input)});await refreshGoals();}catch(e){toast(e.message);}finally{b.disabled=false;}return;
-  }
   if(act==='lib-versions' || act==='lib-version-open' || act==='lib-version-save'){
     const id=b.dataset.id,loaded=libraryContent.get(id) || {};b.disabled=true;
     try{
@@ -8938,6 +9229,8 @@ document.addEventListener('click', async e => {
   if (act === 'ctab'){
     const next = b.dataset.t === 'agent' || b.dataset.t === 'trace' ? 'canvas' : b.dataset.t;
     state.canvasTab = ['canvas', 'subagents', 'mail', 'wallet', 'approvals'].includes(next) ? next : 'canvas';
+    // On phones the appearance editor fills the panel, so picking a tab closes it.
+    if (phoneLayout()) state.agentEdit = false;
     save(); paintCanvas();
     if (next === 'subagents') refreshSubAgents(true);
     if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
@@ -9592,36 +9885,40 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'buycredits'){
+    if (!canBuyHere()) return;
     try {
       const pack = Number(($('#buypack') || {}).value || 0);
       if (!pack){ toast('Pick a token pack.'); return; }
-      const j = await window.LingonAuth.api('/api/billing/tokens', { method: 'POST', body: JSON.stringify({ packTokens: pack }) });
-      if (j.url) { window.location.href = j.url; return; }
+      const j = await window.LingonAuth.api('/api/billing/tokens', { method: 'POST', body: billingRequestBody({ packTokens: pack }) });
+      if (j.url) { openBillingUrl(j.url); return; }
       toast(j.note || 'Checkout started.');
     } catch (e) { toast(e.message); }
     return;
   }
   if (act === 'checkout'){
+    if (!canBuyHere()) return;
     try {
       const plan = b.dataset.p;
-      const j = await window.LingonAuth.api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan }) });
-      if (j.url) { window.location.href = j.url; return; }
+      const j = await window.LingonAuth.api('/api/billing/checkout', { method: 'POST', body: billingRequestBody({ plan }) });
+      if (j.url) { openBillingUrl(j.url); return; }
       toast(j.note || 'Checkout started.');
     } catch (e) { toast(e.message); }
     return;
   }
   if (act === 'portal'){
+    if (!canBuyHere()) return;
     try {
-      const j = await window.LingonAuth.api('/api/billing/portal', { method: 'POST', body: JSON.stringify({}) });
-      if (j.url) { window.location.href = j.url; return; }
+      const j = await window.LingonAuth.api('/api/billing/portal', { method: 'POST', body: billingRequestBody({}) });
+      if (j.url) { openBillingUrl(j.url); return; }
     } catch (e) { toast(e.message); }
     return;
   }
   if (act === 'upgrade'){
+    if (!canBuyHere()) return;
     try {
       const plan = b.dataset.p;
-      const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: JSON.stringify({ plan }) });
-      if (j.url) { window.location.href = j.url; return; }
+      const j = await window.LingonAuth.api('/api/billing/upgrade', { method: 'POST', body: billingRequestBody({ plan }) });
+      if (j.url) { openBillingUrl(j.url); return; }
       toast(j.note || 'Request recorded.');
     } catch (e) { toast(e.message); }
     return;
@@ -9665,6 +9962,31 @@ function dl(name, content){
   toast('Downloading ' + name);
 }
 
+// Billing screens follow the account after a browser checkout, and appear once the
+// Apple app knows its storefront.
+function repaintBillingViews(){
+  // Other settings pages may hold drafts; the plan row on the list updates in place.
+  if (state.view === 'settings' && ['billing', 'usage'].includes(state.settingsTab) && $('#main')) paintSettings($('#main'));
+  else if (state.view === 'billing' && $('#main')) paintBilling($('#main'));
+  refreshBillingUsage(true);
+}
+window.addEventListener('belna-purchase-options', () => { if (signedIn()) repaintBillingViews(); });
+window.addEventListener('belna-billing-return', (e) => {
+  billingInBrowser = false;
+  if (!signedIn()) return;
+  invalidateBilling();
+  repaintBillingViews();
+  const status = e.detail?.status;
+  const note = { success: 'Payment complete — your monthly tokens are on the way.', tokens: 'Payment complete — your tokens are on the way.', portal: 'Billing updated.', cancelled: 'Checkout cancelled — no charge made.' }[status];
+  if (note) toast(note);
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !billingInBrowser || !signedIn()) return;
+  billingInBrowser = false;
+  invalidateBilling();
+  repaintBillingViews();
+});
+
 function handleBillingReturn(flag, q){
   const sid = q && q.get('session_id');
   if (flag === 'cancelled') { setTimeout(() => toast('Checkout cancelled — no charge made.'), 800); return; }
@@ -9696,6 +10018,12 @@ async function bootHash(){
     const h = window.location.hash || '';
     const m = h.match(/access_token=([^&]+)/);
     if (m){
+      const f = h.match(/[#&]flow=([^&]+)/);
+      const expected = takeOAuthFlow();
+      if (!f || !expected || decodeURIComponent(f[1]) !== expected) {
+        window.history.replaceState(null, '', window.location.pathname);
+        return 'error:This sign-in link was not started in this browser. Sign in again here.';
+      }
       const r = h.match(/refresh_token=([^&]+)/);
       const access_token = decodeURIComponent(m[1]);
       const refresh_token = r ? decodeURIComponent(r[1]) : '';

@@ -73,7 +73,7 @@ const {startAppServer}=require('./helpers/app-server.cjs');
   assert.equal(await page.locator('[data-act="stab"][data-t="payments"]').count(),0,'no Payments tab in Settings');
   await page.waitForFunction(()=>{const r=document.querySelector('#payment-connections')?.getBoundingClientRect();return r && r.top>=-2 && r.top<window.innerHeight/2;});
   assert.deepEqual(await settings.getByRole('list',{name:'How payment methods work'}).getByRole('listitem').allInnerTexts(),['Never uses your Belna balance','You approve every purchase','Audit never sees card or bank details']);
-  await settings.getByRole('region',{name:'Store logins'}).getByText('No saved logins yet.',{exact:true}).waitFor();
+  assert.equal(await settings.getByText('Store logins',{exact:true}).count(),0,'logins live in Secrets, not Wallet');
   await settings.getByText('Spend your balance with a card',{exact:true}).waitFor();
   assert.deepEqual(await own.getByRole('switch').evaluateAll(n=>n.map(x=>x.getAttribute('aria-label'))),['Cards saved in stores','Payment apps and pay later'],'two switches until Shop Pay is connected');
   for(const name of ['Payment apps and pay later','Cards saved in stores'])assert.equal(await own.getByRole('switch',{name,exact:true}).getAttribute('aria-checked'),'false',name+' starts off');

@@ -68,9 +68,21 @@ window.BelnaApple = (() => {
   window.addEventListener('belna-apple-changed', () => { lastHeartbeat = 0; tick(); });
   setInterval(tick, 1500);
   setTimeout(tick, 0);
+  // App Store rules allow buttons that send people to the browser to pay only in
+  // these storefronts (ISO 3166-1 alpha-3). Elsewhere it needs Apple's paid
+  // external-link entitlement, so the app keeps purchases out. Builds without the
+  // storefront method answer with an error, which keeps purchases out too.
+  const LINK_OUT_STOREFRONTS = ['USA'];
+  let storefront = null;
+  native.request({ method: 'storefront' }).then(out => {
+    storefront = String(out?.countryCode || '').toUpperCase();
+    window.dispatchEvent(new Event('belna-purchase-options'));
+  }).catch(() => { storefront = ''; });
   return {
     available: true,
     platform: native.platform,
+    // True once the storefront is known and allows completing purchases in the browser.
+    browserPurchases: () => !!storefront && LINK_OUT_STOREFRONTS.includes(storefront),
     async commandActive(commandId) {
       if (!active() || !deviceId || window.LingonAuth.get()?.user?.id !== identity) return false;
       const out = await window.LingonAuth.api('/api/apple/devices/' + encodeURIComponent(deviceId) + '/commands/' + encodeURIComponent(commandId));

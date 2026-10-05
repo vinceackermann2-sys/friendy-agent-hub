@@ -118,12 +118,18 @@ revocation. Apple processed version 1.0.0 (14.1). The production API and support
 page are published. App Store submission and testing real permissions, iCloud sync
 and Health data on the owner's devices must pass before a release.
 
-The first App Store build is a free companion that consumes existing account
-plans. It has no digital subscription/token purchase funnel or external
-purchase links. Physical merchant checkout remains part of the agent. If in-app
-digital upgrades are desired, add StoreKit products, server-verified receipts,
-restore and subscription lifecycle handling before enabling them. This choice
-must be reflected in the App Store description and reviewer notes.
+The app sells nothing through In-App Purchase. Settings → Billing and Usage
+show plans, token packs and the Stripe billing portal, and paying always
+happens in the system browser (Safari on iPhone/iPad). The checkout returns to
+`/app-return`, which hands back to the app through the `belna://billing` URL
+scheme, and the app reloads the account. Guideline 3.1.1(a) allows such buttons
+and links only in the United States storefront, so the native layer reports
+`Storefront.current` and `app/apple-native.js` shows purchases only for the
+storefronts in `LINK_OUT_STOREFRONTS` (`USA`). Everywhere else, and in builds
+older than this change, the app shows the plan and usage with no purchase buttons.
+Other storefronts would need Apple's StoreKit External Purchase Link
+entitlement, which carries Apple commission. Physical merchant checkout remains
+part of the agent.
 
 Account deletion cancels Stripe subscriptions, stops tasks/watchers, disconnects
 OAuth apps, removes the account VM, its OS disk and private archive/screenshots,

@@ -37,6 +37,14 @@ const { forbiddenPaymentSecret } = require('../server/agents/payment-safety');
   await assert.rejects(flow.approvalDetail({...args,ref:6},{userId:'owner',sessionId:'task'}),/only chooses an option/);
   await assert.rejects(flow.approvalDetail({...args,type:'click_text',ref:undefined,text:'Shop Pay'},{userId:'owner',sessionId:'task'}),/only chooses an option/);
   await assert.rejects(flow.beforeAction({type:'click',x:500,y:700},{userId:'owner',sessionId:'task'}),/browser_submit/);
+
+  // Sending, posting and deleting are final like an order: browser_action cannot click them.
+  const mailPage = { url:'https://mail.example/compose', text:'New message to ada@example.com', elements:['[3] button "Send" @10,10','[4] button "Delete draft" @20,20','[5] link "Sent mail" @30,30','[6] button "Accept cookies" @40,40','[7] textbox "Send to" @50,50','[8] button "Post comment" @60,60','[9] button "Skicka" @70,70','[10] button "Submit cookie choices" @80,80'] };
+  const mailFlow = createPurchaseFlow({live:{forTool:async()=>mailPage,content:async()=>mailPage}});
+  for (const step of [{type:'click',ref:3},{type:'double_click',ref:4},{type:'click',ref:8},{type:'click',ref:9},{type:'click_text',text:'Send'},{type:'click_text',text:'Unsubscribe'}])
+    await assert.rejects(mailFlow.beforeAction(step,{userId:'owner',sessionId:'task'}),/browser_submit with a summary/, JSON.stringify(step));
+  for (const step of [{type:'click',ref:5},{type:'click',ref:6},{type:'click',ref:7},{type:'click',ref:10},{type:'click_text',text:'Sent mail'},{type:'scroll'},{type:'type',ref:7,text:'Send me the report'}])
+    await mailFlow.beforeAction(step,{userId:'owner',sessionId:'task'});
   await assert.rejects(flow.approvalDetail({type:'click',ref:7,summary:'Place order'},{userId:'owner',sessionId:'task'}),/purchase needs the items/);
   // Payment apps (Swish here): only when the owner turned them on in Wallet; the owner then approves
   // the payment on their phone after the click, and the label must name the method.

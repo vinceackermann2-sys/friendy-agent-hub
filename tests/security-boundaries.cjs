@@ -30,12 +30,14 @@ async function transport(app, edge) {
   };
 }
 
-async function oauthRoutes(app, edge, helpers) {
+async function oauthRoutes(makeApp, edge, helpers) {
   const file = edge ? 'src/lingon-server/index.js' : 'server/index.js';
-  const source = fs.readFileSync(file, 'utf8');
-  const routes = source.slice(source.indexOf('const OAUTH_STATE ='), source.indexOf('// Email one-time code'));
+  const source = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+  const routes = source.slice(source.indexOf('function googleEnv('), source.indexOf('// Email one-time code'));
+  assert.ok(routes.length > 1000 && !routes.includes('OAUTH_STATE'), 'sign-in state is not kept in server memory');
   let exchanges = 0;
-  vm.runInNewContext(routes, {
+  const secured = [];
+  const install = (app) => vm.runInNewContext(routes, {
     app, crypto, require, URLSearchParams, ...helpers,
     process: { env: { GOOGLE_CLIENT_ID: 'test-id', GOOGLE_CLIENT_SECRET: 'test-secret', SITE_URL: 'https://app.example' } },
     TERMS_VERSION: 'test-terms', termsAccepted: value => value === 'test-terms',
@@ -48,40 +50,58 @@ async function oauthRoutes(app, edge, helpers) {
       createUser: async () => ({}),
       generateLink: async () => ({ data: { properties: { email_otp: '123456' } } }),
     } } }),
-    pubClient: () => ({ auth: { verifyOtp: async () => ({ data: { session: { access_token: 'session-access', refresh_token: 'session-refresh' } } }) } }),
+    pubClient: () => ({ auth: { verifyOtp: async () => ({ data: { session: { access_token: 'session-access', refresh_token: 'session-refresh' }, user: { id: 'owner' } } }) } }),
+    authEmail: { wasUnconfirmed: async () => true, secureFirstSignIn: async (_admin, user, options) => { secured.push([user.id, options.wasUnconfirmed]); return true; } },
   }, { filename: file });
-  const http = await transport(app, edge);
-  const begin = async next => {
-    const res = await http.send('/api/auth/oauth-url?' + new URLSearchParams({ terms_version: 'test-terms', next }));
+  // Two separate apps stand in for two edge instances that share no memory.
+  const startApp = makeApp(), finishApp = makeApp();
+  install(startApp); install(finishApp);
+  const start = await transport(startApp, edge), finish = await transport(finishApp, edge);
+  const begin = async (next, flow = crypto.randomBytes(24).toString('base64url')) => {
+    const res = await start.send('/api/auth/oauth-url?' + new URLSearchParams({ terms_version: 'test-terms', next, flow }));
     assert.equal(res.status, 200);
     const cookie = res.headers.get('set-cookie');
-    assert.match(cookie, /^__Host-belna_oauth_/);
+    assert.match(cookie, /^__Host-belna_oauth_[a-f0-9]{64}=/);
     for (const flag of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/']) assert.ok(cookie.includes(flag));
     assert.equal(res.headers.get('cache-control'), 'no-store');
-    return { state: new URL((await res.json()).url).searchParams.get('state'), cookie: cookie.split(';')[0] };
+    return { flow, state: new URL((await res.json()).url).searchParams.get('state'), cookie: cookie.split(';')[0] };
   };
-  const callback = (flow, cookie = flow.cookie) => http.send('/api/auth/google/callback?' + new URLSearchParams({ code: 'code', state: flow.state }), { headers: { cookie } });
+  const callback = (flow, cookie = flow.cookie, http = finish) => http.send('/api/auth/google/callback?' + new URLSearchParams({ code: 'code', state: flow.state }), { headers: { cookie } });
   try {
+    for (const flow of ['', 'short', 'x'.repeat(200), 'has space in it 1234567890']) {
+      assert.equal((await start.send('/api/auth/oauth-url?' + new URLSearchParams({ terms_version: 'test-terms', next: '/', flow }))).status, 400, 'a sign-in must carry the page flow value');
+    }
     const flow = await begin('/settings?panel=billing');
     const other = await begin('/wallet');
-    for (const cookie of ['', other.cookie, flow.cookie + '; ' + flow.cookie]) {
+    const [name, value] = flow.cookie.split('=');
+    const [payload, mac] = value.split('.');
+    const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload, 'base64url')), next: '/evil' })).toString('base64url');
+    for (const cookie of ['', other.cookie, flow.cookie + '; ' + flow.cookie, `${name}=${forged}.${mac}`, `${name}=${payload}`, `${name}=${payload}.${mac}.x`]) {
       const rejected = await callback(flow, cookie);
       assert.match(rejected.headers.get('location'), /^\/\?auth_error=/);
-      assert.equal(exchanges, 0, 'wrong browser must not exchange or consume the code');
+      assert.equal(exchanges, 0, 'wrong browser or altered cookie must not exchange or consume the code');
     }
+    // Finished on a different instance than the one that started it.
     const success = await callback(flow);
-    assert.equal(success.headers.get('location'), '/settings#access_token=session-access&refresh_token=session-refresh');
+    assert.equal(success.headers.get('location'), '/settings#access_token=session-access&refresh_token=session-refresh&flow=' + encodeURIComponent(flow.flow));
     assert.match(success.headers.get('set-cookie'), /Max-Age=0/);
-    assert.match((await callback(flow)).headers.get('location'), /^\/\?auth_error=/, 'callback cannot be replayed');
+    assert.deepEqual(secured, [['owner', true]], 'a Google sign-in that confirms the address secures the account first');
+    assert.match((await callback(flow)).headers.get('location'), /^\/\?auth_error=/, 'callback cannot be replayed on the same instance');
     assert.equal(exchanges, 1);
     assert.match((await callback(other)).headers.get('location'), /^\/wallet#access_token=/, 'parallel tabs retain independent state');
-    for (const malicious of ['/\\attacker.example', '//attacker.example', '/one/..//attacker.example', '/\t/attacker.example', 'https://attacker.example']) {
+    for (const malicious of ['/\\attacker.example', '//attacker.example', '/one/..//attacker.example', '/\t/attacker.example', 'https://attacker.example', '/' + 'a'.repeat(600)]) {
       const res = await callback(await begin(malicious));
       const location = res.headers.get('location');
       assert.equal(new URL(location, 'https://app.example').origin, 'https://app.example', malicious);
       assert.match(location, /^\/#access_token=/);
     }
-  } finally { await http.close(); }
+    // A cookie for another kind of flow (Shop Pay) does not open a Google sign-in.
+    const shopRes = { headers: new Map(), setHeader(k, v) { this.headers.set(k, v); } };
+    const shop = await begin('/');
+    helpers.bindOAuthBrowser(shopRes, { kind: 'shop', state: shop.state, secure: true });
+    const shopCookie = shopRes.headers.get('Set-Cookie').split(';')[0];
+    assert.match((await callback(shop, shopCookie)).headers.get('location'), /^\/\?auth_error=/);
+  } finally { await start.close(); await finish.close(); }
 }
 
 async function requests(app, edge) {
@@ -194,10 +214,12 @@ async function encryption() {
 }
 
 async function main() {
+  // Sign-in state is signed with a server key (see oauth-security.js).
+  process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'unit-test-service-key';
   const { createApp } = await import('../src/lingon-server/express-shim.js');
   for (const edge of [false, true]) {
     const helpers = edge ? await import('../src/lingon-server/oauth-security.js') : require('../server/oauth-security');
-    await oauthRoutes(edge ? createApp() : express(), edge, helpers);
+    await oauthRoutes(() => edge ? createApp() : express(), edge, helpers);
     await requests(edge ? createApp() : express(), edge);
   }
   await edgeStreams(createApp);

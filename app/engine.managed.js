@@ -12,6 +12,10 @@
   const owner = () => window.LingonAuth.get?.()?.user?.id;
   const unfinished = task => ['queued','running','waiting_peers','waiting_approval','stopping'].includes(task.status);
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  // The questions, cards or problems of a learning card, briefly, so the agent can talk about them.
+  const learnItems = card => (card.questions || []).map((q, i) => `${i + 1}. ${q.question}`)
+    .concat((card.cards || []).map(f => f.front), (card.problems || []).map(p => p.question), (card.functions || []).map(f => f.label))
+    .join(' | ').slice(0, 500);
   function acceptTask(rt, task) {
     rt.managedTask(task);
     void pumpTask(rt, task.id);
@@ -158,6 +162,8 @@
       type:card.type,title:card.title,name:card.name,status:card.status,text:card.text,q:card.q,choice:card.choice,kind:card.kind || card.view?.kind,
       url:card.url,note:card.note,content:String(card.content || '').slice(0,8000),
       lines:(card.lines || []).slice(-8),agents:card.agents,
+      // A learning card: what it asks and how the owner is doing, for "how did I do?".
+      ...(card.type === 'learn' ? { items:learnItems(card), progress:window.learnSummaryText?.(card) || undefined } : {}),
     }));
     return stream(rt, '/api/agent/conversation', { prompt, requestId: crypto.randomUUID(), history,
       context: { agent: { name: rt.agent.name, pers: rt.agent.pers, ownerName: rt.ownerName || undefined }, replyTo: last?.replyTo, timeZone: localTimeZone(),

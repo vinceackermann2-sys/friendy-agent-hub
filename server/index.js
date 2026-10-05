@@ -17,7 +17,7 @@ const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costOf
 const store = require('./store');
 const stripeMod = require('./stripe');
 const { pubClient, adminClient, requireAuth } = require('./auth');
-const { safeNext, bindOAuthBrowser, matchesOAuthBrowser, clearOAuthBrowser } = require('./oauth-security');
+const { safeNext, bindOAuthBrowser, readOAuthBrowser, clearOAuthBrowser, consumeOAuthState } = require('./oauth-security');
 const { requestBodyLimit } = require('./request-limits');
 // Agents-API-shaped harness backed by Microsoft Foundry + extras
 const Runner = require('./agents/runner');
@@ -32,6 +32,7 @@ const { installAppleDeviceRoutes } = require('./apple-devices');
 const { installAppleAuthRoutes, createAppleAccountCleanup } = require('./apple-auth');
 const mail = require('./mail');
 const authEmail = require('./auth-email');
+const { durableLimited, normalEmail } = require('./durable-limit');
 const shoppay = require('./shoppay');
 const privateCheckout = require('./private-checkout-client').createPrivateCheckoutClient({exportCheckout:require('./agents/azure-vm').exportCheckout});
 const belnaWallet = require('./belna-wallet').createBelnaWallet({ store,secureCheckout:privateCheckout.factory });
@@ -235,6 +236,7 @@ app.post('/api/support/submissions', rateLimit(5, 60000), requireAuth(async (req
 app.post('/api/legal/withdrawal', rateLimit(5, 60000), async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
+    if (await durableLimited([['withdrawal:ip:' + req.ip, 10, 3600]])) return res.status(429).json({ error: TOO_MANY_ATTEMPTS });
     const purchaseReference = String(req.body?.purchase_reference || '').trim();
     const purchaseKind = String(req.body?.purchase_kind || '');
     if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 254
@@ -244,6 +246,13 @@ app.post('/api/legal/withdrawal', rateLimit(5, 60000), async (req, res) => {
     }
     const admin = adminClient();
     if (!admin) return res.status(503).json({ error: 'Withdrawal requests are temporarily unavailable. Please email hej@belna.se.' });
+    // Anyone can send this form, and it emails the address entered. The cap is kept in the
+    // database because the in-memory rate limit is per server instance.
+    const since = new Date(Date.now() - 24 * 3600e3).toISOString();
+    const { count: recent, error: countError } = await admin.from('withdrawal_requests')
+      .select('id', { count: 'exact', head: true }).eq('email', email).gte('received_at', since);
+    if (countError) return res.status(503).json({ error: 'Could not save your request. Please email hej@belna.se.' });
+    if (recent >= 3) return res.status(429).json({ error: 'We already received withdrawal requests for this email today. Please email hej@belna.se if you need to add details.' });
     const { data, error } = await admin.from('withdrawal_requests')
       .insert({ email, purchase_reference: purchaseReference, purchase_kind: purchaseKind })
       .select('id,received_at').single();
@@ -254,9 +263,9 @@ app.post('/api/legal/withdrawal', rateLimit(5, 60000), async (req, res) => {
       const receipt = 'Belna withdrawal request received\n\n'
         + 'Receipt: ' + data.id + '\n'
         + 'Received (UTC): ' + data.received_at + '\n'
-        + 'Purchase type: ' + purchaseKind + '\n'
-        + 'Purchase reference: ' + purchaseReference + '\n'
-        + 'Account email: ' + email + '\n\n'
+        + 'Purchase type: ' + purchaseKind + '\n\n'
+        // The reference is typed by whoever sent the form, so it is not repeated in an
+        // email to an address they chose. Staff see it with the saved request.
         + 'This confirms receipt of your withdrawal notice. Eligibility and any refund will be reviewed under applicable law. Contact hej@belna.se with this receipt if needed.';
       try {
         const sent = await fetch('https://api.resend.com/emails', {
@@ -285,9 +294,12 @@ app.post('/api/legal/withdrawal', rateLimit(5, 60000), async (req, res) => {
 // ---------- auth (proxy so keys stay server-side) ----------
 const TERMS_VERSION = '2026-09-24';
 const termsAccepted = (value) => value === TERMS_VERSION;
+// Per address as well as per client: a sign-in code is six digits.
+const TOO_MANY_ATTEMPTS = 'Too many attempts. Please wait a few minutes and try again.';
 app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
   try {
     const { email, password, terms_version } = req.body || {};
+    if (await durableLimited([['signup:ip:' + req.ip, 10, 600], ['signup:email:' + normalEmail(email), 5, 3600]])) return res.status(429).json({ error: TOO_MANY_ATTEMPTS });
     if (!termsAccepted(terms_version)) return res.status(400).json({ error: 'Please accept the current Terms of Service and acknowledge the Privacy Policy.' });
     if (!email || !password || String(password).length < 8) return res.status(400).json({ error: 'Valid email + 8-char password required.' });
     const admin = adminClient();
@@ -297,7 +309,8 @@ app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
     // requires the user to prove control of the address before it is trusted:
     // Belna emails a code, and /api/auth/verify confirms the account.
     if (authEmail.configured()) {
-      await authEmail.sendAuthCode(admin, { email, kind: 'signup', password, data: { terms_version: TERMS_VERSION, terms_accepted_at: new Date().toISOString() } });
+      // The password is set when the code is verified: send it again with /api/auth/verify.
+      await authEmail.sendAuthCode(admin, { email, kind: 'signup', data: { terms_version: TERMS_VERSION, terms_accepted_at: new Date().toISOString() } });
       return res.json({ ok: true, code_sent: true, message: 'We sent a 6-digit code to confirm your email.' });
     }
     const { data, error } = await pub.auth.signUp({ email: String(email), password: String(password), options: { data: { terms_version: TERMS_VERSION, terms_accepted_at: new Date().toISOString() } } });
@@ -312,6 +325,7 @@ app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
 app.post('/api/auth/signin', rateLimit(15, 60000), async (req, res) => {
   try {
     const { email, password } = req.body || {};
+    if (await durableLimited([['signin:ip:' + req.ip, 30, 600], ['signin:email:' + normalEmail(email), 10, 900]])) return res.status(429).json({ error: TOO_MANY_ATTEMPTS });
     const pub = pubClient();
     if (!pub) return res.status(500).json({ error: 'Auth not configured on server.' });
     const { data, error } = await pub.auth.signInWithPassword({ email: String(email || ''), password: String(password || '') });
@@ -344,7 +358,6 @@ app.get('/api/auth/me', async (req, res) => {
 // hosted auth pages. Google verifies the email; we then bridge it into an app
 // session server-side (generateLink + verifyOtp), so billing, vault, memories
 // and RLS keep working unchanged.
-const OAUTH_STATE = new Map(); // state -> { next, redirectUri, exp }
 function googleEnv(name) {
   return String(process.env[name] || process.env['LINGON_' + name] || '').trim();
 }
@@ -359,11 +372,6 @@ function siteOrigin(req) {
   if (host) return ((req.protocol || 'https') + '://' + host).replace(/\/$/, '');
   return '';
 }
-function pruneOAuthState() {
-  if (OAUTH_STATE.size <= 500) return;
-  const now = Date.now();
-  for (const [k, v] of OAUTH_STATE) if (v.exp < now) OAUTH_STATE.delete(k);
-}
 app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
   try {
     if (!termsAccepted(req.query.terms_version)) return res.status(400).json({ error: 'Please accept the current Terms of Service and acknowledge the Privacy Policy.' });
@@ -374,9 +382,12 @@ app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
     const crypto = require('crypto');
     const state = crypto.randomBytes(32).toString('hex');
     const redirectUri = siteOrigin(req) + '/api/auth/google/callback';
-    const binding = bindOAuthBrowser(res, state, redirectUri);
-    OAUTH_STATE.set(state, { next: safeNext(req.query.next), redirectUri, binding, termsVersion: TERMS_VERSION, exp: Date.now() + 10 * 60e3 });
-    pruneOAuthState();
+    // The page that starts sign-in keeps this value; it accepts the session only when the
+    // callback returns the same one, so a link from someone else cannot sign it in.
+    const flow = String(req.query.flow || '');
+    if (!/^[A-Za-z0-9_-]{22,128}$/.test(flow)) return res.status(400).json({ error: 'Refresh the page and try signing in again.' });
+    bindOAuthBrowser(res, { kind: 'oauth', state, secure: redirectUri.startsWith('https:'),
+      record: { next: safeNext(req.query.next), redirectUri, termsVersion: TERMS_VERSION, flow } });
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -395,10 +406,10 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
   const back = (msg) => res.redirect('/?auth_error=' + encodeURIComponent(msg || 'Sign-in failed'));
   try {
     const { code, state, error } = req.query;
-    const saved = state ? OAUTH_STATE.get(String(state)) : null;
-    if (!saved || saved.exp < Date.now() || !matchesOAuthBrowser(req, saved.binding)) return back('Sign-in expired — please try again.');
-    OAUTH_STATE.delete(String(state)); // consume only from the initiating browser
-    clearOAuthBrowser(res, saved.binding);
+    const flowCookie = { kind: 'oauth', state: String(state || ''), secure: siteOrigin(req).startsWith('https:') };
+    const saved = readOAuthBrowser(req, flowCookie);
+    if (!saved || !consumeOAuthState(flowCookie.state, saved.exp)) return back('Sign-in expired — please try again.');
+    clearOAuthBrowser(res, flowCookie);
     if (error) return back(req.query.error_description || error || 'Sign-in cancelled.');
     if (!code) return back('Sign-in expired — please try again.');
     const clientId = googleEnv('GOOGLE_CLIENT_ID');
@@ -423,12 +434,13 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
     });
     const prof = await me.json().catch(() => ({}));
     const email = String((prof && prof.email) || '').toLowerCase();
-    if (!me.ok || !email || (prof && prof.email_verified === false)) return back('Google did not verify an email address.');
+    if (!me.ok || !email || !prof || prof.email_verified !== true) return back('Google did not verify an email address.');
     // bridge the Google-verified email into an app session (same account as password/OTP)
     const admin = adminClient();
     const pub = pubClient();
     if (!admin || !pub) return back('Auth not configured on server.');
     const name = String((prof && prof.name) || email.split('@')[0]);
+    const unconfirmed = await authEmail.wasUnconfirmed(email);
     const created = await admin.auth.admin.createUser({
       email, email_confirm: true,
       user_metadata: { name, provider: 'google', google_sub: prof && prof.sub, terms_version: saved.termsVersion, terms_accepted_at: new Date().toISOString() },
@@ -439,8 +451,11 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
     if (link.error || !otp) return back((link.error && link.error.message) || 'Could not start session.');
     const sess = await pub.auth.verifyOtp({ email, token: otp, type: 'magiclink' });
     if (sess.error || !sess.data.session) return back((sess.error && sess.error.message) || 'Could not complete sign-in.');
+    // Google proved the address; a password set on the unconfirmed account before that is replaced.
+    await authEmail.secureFirstSignIn(admin, sess.data.user, { wasUnconfirmed: unconfirmed });
     const frag = '#access_token=' + encodeURIComponent(sess.data.session.access_token)
-      + '&refresh_token=' + encodeURIComponent(sess.data.session.refresh_token || '');
+      + '&refresh_token=' + encodeURIComponent(sess.data.session.refresh_token || '')
+      + '&flow=' + encodeURIComponent(saved.flow);
     res.redirect(safeNext(saved.next.split('#')[0].split('?')[0]) + frag);
   } catch (e) {
     return back(e.message);
@@ -450,6 +465,7 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
 app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
   try {
     const { email, terms_version } = req.body || {};
+    if (await durableLimited([['otp:ip:' + req.ip, 20, 600], ['otp:email:' + normalEmail(email), 6, 3600]])) return res.status(429).json({ error: TOO_MANY_ATTEMPTS });
     if (!termsAccepted(terms_version)) return res.status(400).json({ error: 'Please accept the current Terms of Service and acknowledge the Privacy Policy.' });
     if (!email || !/.+@.+\..+/.test(String(email))) return res.status(400).json({ error: 'Enter a valid email.' });
     const admin = adminClient();
@@ -470,11 +486,16 @@ app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
 });
 app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
   try {
-    const { email, token } = req.body || {};
+    const { email, token, password } = req.body || {};
+    if (await durableLimited([['verify:ip:' + req.ip, 30, 600], ['verify:email:' + normalEmail(email), 10, 900]])) return res.status(429).json({ error: TOO_MANY_ATTEMPTS });
     const pub = pubClient();
     if (!pub) return res.status(500).json({ error: 'Auth not configured on server.' });
+    const unconfirmed = await authEmail.wasUnconfirmed(email);
     const { data, error } = await pub.auth.verifyOtp({ email: String(email || ''), token: String(token || '').trim(), type: 'email' });
     if (error || !data.session) return res.status(400).json({ error: (error && error.message) || 'Invalid or expired code.' });
+    // The code proves the address; a password set before that proof never survives it.
+    try { await authEmail.secureFirstSignIn(adminClient(), data.user, { wasUnconfirmed: unconfirmed, password }); }
+    catch (e) { return res.status(e.status || 503).json({ error: e.message }); }
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
     res.status(500).json({ error: 'Verify failed: ' + e.message });
@@ -567,7 +588,7 @@ app.post('/api/billing/checkout', requireAuth(async (req, res) => {
   try {
     const { plan, extraCredits, extraTokens, promo } = req.body || {};
     const email = req.user.email || undefined;
-    const session = await stripeMod.createCheckout({ userId: req.user.id, email, plan, extraCredits, extraTokens, promo, req });
+    const session = await stripeMod.createCheckout({ userId: req.user.id, email, plan, extraCredits, extraTokens, promo, req, returnTo: req.body?.returnTo === 'app' ? 'app' : '' });
     res.json({ ok: true, url: session.url });
   } catch (e) {
     const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
@@ -587,7 +608,7 @@ app.post('/api/billing/credits', requireAuth(async (req, res) => {
 app.post('/api/billing/tokens', requireAuth(async (req, res) => {
   try {
     const session = await stripeMod.createTokenCheckout({ userId: req.user.id, email: req.user.email,
-      packTokens: (req.body || {}).packTokens, req });
+      packTokens: (req.body || {}).packTokens, req, returnTo: req.body?.returnTo === 'app' ? 'app' : '' });
     res.json({ ok: true, url: session.url });
   } catch (e) {
     const code = e.code === 'BAD_PLAN' ? 400 : e.code === 'NO_STRIPE' || e.code === 'NO_PRICE' ? 503 : 502;
@@ -624,7 +645,7 @@ app.get('/api/billing/checkout-result', requireAuth(async (req, res) => {
 // Stripe customer portal (manage / cancel subscription).
 app.post('/api/billing/portal', requireAuth(async (req, res) => {
   try {
-    const portal = await stripeMod.createPortal({ userId: req.user.id, req });
+    const portal = await stripeMod.createPortal({ userId: req.user.id, req, returnTo: req.body?.returnTo === 'app' ? 'app' : '' });
     res.json({ ok: true, url: portal.url });
   } catch (e) {
     const code = e.code === 'NO_CUSTOMER' ? 400 : 502;
@@ -637,7 +658,7 @@ app.post('/api/billing/upgrade', requireAuth(async (req, res) => {
   if (!PLANS[plan] || plan === 'free') return res.status(400).json({ error: 'Choose pro or max.' });
   if (stripeMod.isConfigured() && stripeMod.priceFor(plan, promo)) {
     try {
-      const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, extraCredits, extraTokens, promo, req });
+      const session = await stripeMod.createCheckout({ userId: req.user.id, email: req.user.email, plan, extraCredits, extraTokens, promo, req, returnTo: req.body?.returnTo === 'app' ? 'app' : '' });
       return res.json({ ok: true, status: 'checkout', url: session.url, note: `Continue to Stripe to start ${PLANS[plan].name}.` });
     } catch (e) {
       return res.status(502).json({ error: e.message });
@@ -1072,6 +1093,10 @@ app.get('/api/github/diff', rateLimit(30, 60000), requireAuth(async (req, res) =
     const pat = (req.headers['x-github-token'] || '').trim();
     const { repo, number } = req.query;
     if (!pat || !repo || !number) return res.status(400).json({ error: 'token + repo + number required' });
+    // Both go into the API path, so only an owner/name pair and a number are accepted.
+    if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(String(repo)) || /(^|\/)\.\.?($|\/)/.test(String(repo)) || !/^\d{1,10}$/.test(String(number))) {
+      return res.status(400).json({ error: 'repo must be owner/name and number a pull request number.' });
+    }
     const r = await fetchAllowlisted(`https://api.github.com/repos/${repo}/pulls/${number}`, {
       headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.diff' }, signal,
     });
@@ -1166,12 +1191,22 @@ app.get('/api/shop-pay', requireAuth(async (req, res) => {
   catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
 }));
 app.post('/api/shop-pay/connect', rateLimit(20, 60000), requireAuth(async (req, res) => {
-  try { res.json(await shoppay.startConnect(req.user.id, { origin: siteOrigin(req) })); }
+  try {
+    const origin = siteOrigin(req);
+    const started = await shoppay.startConnect(req.user.id, { origin });
+    // Only this browser can finish the connect, so a link started on another account
+    // cannot attach the person who opens it to that account's Shop Pay.
+    bindOAuthBrowser(res, { kind: 'shop', state: new URL(started.url).searchParams.get('state'), secure: origin.startsWith('https:') });
+    res.json(started);
+  }
   catch (e) { res.status(shopPayErr(e)).json({ error: e.message }); }
 }));
 app.get('/api/shop-pay/callback', rateLimit(20, 60000), async (req, res) => {
   const back = (ok, msg) => res.redirect('/app?shop_pay=' + (ok ? 'connected' : 'error') + (msg ? '&shop_pay_msg=' + encodeURIComponent(String(msg).slice(0, 160)) : ''));
   try {
+    const flow = { kind: 'shop', state: String(req.query.state || ''), secure: siteOrigin(req).startsWith('https:') };
+    if (!readOAuthBrowser(req, flow)) return back(false, 'Shop Pay connect expired. Start it again from Settings in this browser.');
+    clearOAuthBrowser(res, flow);
     await shoppay.finishConnect(req.query || {});
     back(true);
   } catch (e) {

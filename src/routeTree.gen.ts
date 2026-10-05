@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
 import { Route as AppRouteImport } from './routes/app'
+import { Route as AppReturnRouteImport } from './routes/app-return'
 import { Route as CookiesRouteImport } from './routes/cookies'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as PrivacyRouteImport } from './routes/privacy'
@@ -39,6 +40,11 @@ const SplatRoute = SplatRouteImport.update({
 const AppRoute = AppRouteImport.update({
   id: '/app',
   path: '/app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppReturnRoute = AppReturnRouteImport.update({
+  id: '/app-return',
+  path: '/app-return',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CookiesRoute = CookiesRouteImport.update({
@@ -111,6 +117,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
   '/app': typeof AppRoute
+  '/app-return': typeof AppReturnRoute
   '/cookies': typeof CookiesRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -129,6 +136,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
   '/app': typeof AppRoute
+  '/app-return': typeof AppReturnRoute
   '/cookies': typeof CookiesRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -148,6 +156,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
   '/app': typeof AppRoute
+  '/app-return': typeof AppReturnRoute
   '/cookies': typeof CookiesRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -168,6 +177,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$'
     | '/app'
+    | '/app-return'
     | '/cookies'
     | '/pricing'
     | '/privacy'
@@ -186,6 +196,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$'
     | '/app'
+    | '/app-return'
     | '/cookies'
     | '/pricing'
     | '/privacy'
@@ -204,6 +215,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$'
     | '/app'
+    | '/app-return'
     | '/cookies'
     | '/pricing'
     | '/privacy'
@@ -223,6 +235,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SplatRoute: typeof SplatRoute
   AppRoute: typeof AppRoute
+  AppReturnRoute: typeof AppReturnRoute
   CookiesRoute: typeof CookiesRoute
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
@@ -259,6 +272,13 @@ declare module '@tanstack/react-router' {
       path: '/app'
       fullPath: '/app'
       preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app-return': {
+      id: '/app-return'
+      path: '/app-return'
+      fullPath: '/app-return'
+      preLoaderRoute: typeof AppReturnRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cookies': {
@@ -359,6 +379,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
   AppRoute: AppRoute,
+  AppReturnRoute: AppReturnRoute,
   CookiesRoute: CookiesRoute,
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,

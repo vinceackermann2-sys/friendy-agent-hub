@@ -288,7 +288,74 @@ const CASES = [
   // The owner writes in English from a Swedish time zone: the reply stays in English.
   { id: 'chat.language', prompt: 'Any tips for a rainy Sunday?', expect: 'answer',
     check: r => /\b(the|and|you)\b/i.test(r.text) && !/\b(och|du|att)\b/i.test(r.text) ? '' : `wrong language: ${r.text}` },
+  // Doing what the owner said: their format, count, language, tools and corrections win
+  // over the agent's own habits (cards, searches, tasks).
+  { id: 'obey.oneword', prompt: "What's the capital of Japan? Answer with one word only.", expect: 'answer',
+    check: r => /^\W*tokyo\W*$/i.test(r.text.trim()) ? '' : `not one word: ${r.text}` },
+  { id: 'obey.plainlist', prompt: 'List eight Swedish fruits and berries on one line, separated by commas. No card, just text.', expect: 'answer',
+    check: r => !r.cards.length && r.text.split(',').length >= 8 && r.text.trim().split('\n').filter(l => l.trim()).length <= 2 ? '' : `ignored the format (cards: ${r.cards.join(',') || '-'}): ${r.text.slice(0, 200)}` },
+  { id: 'obey.count', prompt: 'Give me exactly 3 name ideas for a small coffee shop.', expect: 'answer',
+    check: r => { const n = r.cardItems.length || r.text.split('\n').filter(l => /^\s*(?:[-*•]|\d+[.)])\s+/.test(l)).length; return n === 3 ? '' : `${n} ideas, wanted 3: ${r.text.slice(0, 200)}`; } },
+  { id: 'obey.french', prompt: 'Explain photosynthesis in one sentence, in French.', expect: 'answer',
+    check: r => /\b(la|les|des|est|lumière|plantes?)\b/i.test(r.text) && !/\b(the|and|is)\b/i.test(r.text) ? '' : `not French: ${r.text}` },
+  { id: 'obey.nosearch', prompt: "Don't search the web, just from memory: roughly how tall is the Eiffel Tower?", expect: 'answer',
+    check: r => !r.fns.includes('web_search') && /3[0-3]\d\s?(m|meters|metres)|1[,.]?0\d\d\s?(ft|feet)/i.test(r.text) ? '' : `searched or wrong (${r.fns.join(',')}): ${r.text.slice(0, 160)}` },
+  { id: 'obey.search', prompt: 'Search the web for the latest news about the Artemis moon program and summarize it in two sentences.', expect: 'any',
+    check: r => r.route === 'task' || r.fns.includes('web_search') ? '' : `answered without the search the owner asked for: ${r.text.slice(0, 160)}` },
+  { id: 'obey.table', prompt: 'Show me a table of the eight planets with their number of known moons.', expect: 'any',
+    check: r => r.route === 'task' || r.cards.includes('present') && r.cardItems.length >= 8 ? '' : `no table (cards ${r.cards.join(',') || '-'}): ${r.text.slice(0, 160)}` },
+  { id: 'obey.notask', prompt: "Don't start a task, just give me one quick vegetarian dinner idea.", expect: 'answer',
+    check: r => r.text.length > 20 ? '' : `empty: ${r.text}` },
+  { id: 'obey.convert', prompt: 'In Fahrenheit please', expect: 'answer',
+    history: [['user', 'What oven temperature should I roast vegetables at?'], ['agent', 'Roast them at 220°C for about 25–30 minutes, turning once.']],
+    check: r => /4[23]\d\s?°?\s?F|4[23]\d\s?(degrees )?fahrenheit/i.test(r.text) ? '' : `no Fahrenheit: ${r.text}` },
+  { id: 'obey.shorter', prompt: 'Shorter. One sentence.', expect: 'answer',
+    history: [['user', 'Why do cats purr?'], ['agent', 'Cats purr for several reasons. Most often it signals contentment, like when they are being petted or are relaxed in a warm spot. But cats also purr when they are stressed, injured or giving birth, which suggests purring can be self-soothing. Some research even suggests that the vibrations, at 25–150 Hz, may help bones and tissues heal. Mother cats purr to guide their kittens, and kittens purr while nursing to signal that all is well.']],
+    check: r => r.text.split(/(?<=[.!?])\s+/).filter(Boolean).length === 1 && r.text.length < 260 ? '' : `not one sentence: ${r.text}` },
+  { id: 'obey.translate', prompt: "Translate into Swedish: 'Good morning, did you sleep well?'", expect: 'answer',
+    check: r => /god morgon/i.test(r.text) && /sov/i.test(r.text) ? '' : `bad translation: ${r.text}` },
+  { id: 'obey.noquestions', prompt: "Pick a movie for me to watch tonight. Don't ask me anything, just choose.", expect: 'answer',
+    check: r => r.route === 'answer' && !/\?\s*$/.test(r.text.trim()) ? '' : `asked instead of choosing (${r.route}): ${r.text.slice(0, 160)}` },
+  { id: 'obey.code', prompt: 'Give me a Python one-liner that reverses a string.', expect: 'answer',
+    check: r => /\[::-1\]|reversed\(/.test(r.text) ? '' : `no code: ${r.text.slice(0, 160)}` },
+  { id: 'obey.continents', prompt: 'What are the seven continents?', expect: 'answer',
+    check: r => /antarctica/i.test(`${r.text} ${JSON.stringify(r.cardItems)}`) ? '' : `missing continents: ${r.text.slice(0, 160)}` },
+  // Learning: quizzes, flashcards, practice problems and graphs are interactive cards the
+  // owner works through, with the number of items asked for and correct answers.
+  { id: 'learn.quiz', prompt: 'Quiz me on European capitals, 5 questions.', expect: 'answer',
+    check: r => { const q = learnCard(r, 'quiz'); if (!q) return `no quiz card (${r.cards.join(',') || '-'}): ${r.text.slice(0, 160)}`;
+      if (q.questions.length !== 5) return `${q.questions.length} questions, wanted 5`;
+      const wrong = q.questions.filter(x => { const country = Object.keys(CAPITALS).find(k => new RegExp(`\\b${k}\\b`, 'i').test(x.question)); return country && !new RegExp(CAPITALS[country], 'i').test(x.options[x.answer]); });
+      return wrong.length ? `wrong answers: ${wrong.map(x => `${x.question} → ${x.options[x.answer]}`).join('; ')}` : leaked(r, q); } },
+  { id: 'learn.times', prompt: 'Make a 4 question multiplication quiz for my 8 year old.', expect: 'answer',
+    check: r => { const q = learnCard(r, 'quiz'); if (!q) return `no quiz card: ${r.text.slice(0, 160)}`;
+      if (q.questions.length !== 4) return `${q.questions.length} questions, wanted 4`;
+      const wrong = q.questions.filter(x => { const m = /(\d+)\s*(?:[×x*·]|times)\s*(\d+)/i.exec(x.question); return m && Number(String(x.options[x.answer]).replace(/[^\d.]/g, '')) !== m[1] * m[2]; });
+      return wrong.length ? `wrong answers: ${wrong.map(x => `${x.question} → ${x.options[x.answer]}`).join('; ')}` : ''; } },
+  { id: 'learn.flash', prompt: 'Make me flashcards for 8 common Spanish verbs.', expect: 'answer',
+    check: r => { const f = learnCard(r, 'flashcards'); return !f ? `no flashcards (${r.cards.join(',') || '-'}): ${r.text.slice(0, 160)}` : f.cards.length === 8 ? '' : `${f.cards.length} cards, wanted 8`; } },
+  { id: 'learn.problem', prompt: 'Give me a practice problem on solving linear equations, with hints.', expect: 'answer',
+    check: r => { const p = learnCard(r, 'problem'); return !p ? `no problem card (${r.cards.join(',') || '-'}): ${r.text.slice(0, 160)}` : p.problems.every(x => x.steps.length >= 2) ? leaked(r, p) : 'a problem without step-by-step hints'; } },
+  { id: 'learn.solve', prompt: 'Teach me how to solve 3x - 5 = 10, step by step.', expect: 'answer',
+    check: r => { const p = learnCard(r, 'problem'); const said = p ? p.problems.map(x => `${x.answer} ${x.accept || ''}`).join(' ') : r.text; return /\b5\b/.test(said) ? '' : `wrong or missing answer: ${said.slice(0, 200)}`; } },
+  { id: 'learn.plot', prompt: 'Show me what the graph of y = x^2 - 4 looks like.', expect: 'answer',
+    check: r => { const p = learnCard(r, 'plot'); return !p ? `no graph (${r.cards.join(',') || '-'}): ${r.text.slice(0, 160)}` : p.functions.some(f => /x\s*\^\s*2/.test(f.expr) && /-\s*4/.test(f.expr)) ? '' : `wrong function: ${JSON.stringify(p.functions)}`; } },
+  { id: 'learn.slider', prompt: 'Help me understand how a changes the parabola y = a*x^2.', expect: 'answer',
+    check: r => { const p = learnCard(r, 'plot'); return p && p.slider?.name === 'a' && p.functions.some(f => /\ba\b/.test(f.expr)) ? '' : `no graph with an a slider: ${JSON.stringify(p || r.cards)}`; } },
+  { id: 'learn.swedish', prompt: 'Förhör mig på fem engelska glosor, översätt till svenska.', expect: 'answer',
+    check: r => { const c = learnCard(r, 'quiz') || learnCard(r, 'flashcards'); const n = c ? (c.questions || c.cards).length : 0;
+      return !c ? `no learning card: ${r.text.slice(0, 160)}` : n !== 5 ? `${n} items, wanted 5` : /[åäö]|\b(du|och|att|på)\b/i.test(r.text) ? '' : `reply not Swedish: ${r.text}`; } },
+  { id: 'learn.plain', prompt: "What's 15% of 80?", expect: 'answer',
+    check: r => /\b12\b/.test(r.text) && !r.cards.length ? '' : `wrong or carded (${r.cards.join(',') || '-'}): ${r.text}` },
 ];
+const CAPITALS = { France: 'Paris', Germany: 'Berlin', Spain: 'Madrid', Italy: 'Rome', Portugal: 'Lisbon', Sweden: 'Stockholm', Norway: 'Oslo', Denmark: 'Copenhagen', Finland: 'Helsinki', Poland: 'Warsaw', Austria: 'Vienna', Hungary: 'Budapest', Greece: 'Athens', Ireland: 'Dublin', Netherlands: 'Amsterdam', Belgium: 'Brussels', Switzerland: 'Bern', 'Czech Republic|Czechia': 'Prague', Romania: 'Bucharest', Bulgaria: 'Sofia', Croatia: 'Zagreb', Slovakia: 'Bratislava', Slovenia: 'Ljubljana', Estonia: 'Tallinn', Latvia: 'Riga', Lithuania: 'Vilnius', Iceland: 'Reykjav', Ukraine: 'Kyiv|Kiev', Serbia: 'Belgrade', 'United Kingdom|UK': 'London' };
+function learnCard(r, kind) { return r.learn.find(c => c.kind === kind) || null; }
+// The reply around a learning card must not give its answers away.
+function leaked(r, card) {
+  const answers = (card.questions || []).map(q => q.options[q.answer]).concat((card.problems || []).map(p => p.answer)).filter(a => String(a).length > 2);
+  const hit = answers.filter(a => r.text.toLowerCase().includes(String(a).toLowerCase()));
+  return hit.length > 1 ? `reply gives away answers: ${hit.join(', ')}` : '';
+}
 
 function stubs(calls, c) {
   const tasks = {
@@ -353,7 +420,7 @@ async function runCase(c, variant) {
   // A card whose items open a page (a product in its store, a place, a source).
   const linked = events.some(e => e.type === 'card' && (e.card.items || []).some(it => /^https:\/\//.test(it.url || '')));
   const prices = events.flatMap(e => (e.type === 'card' && e.card.items || []).map(it => it.price).filter(Boolean));
-  const result = { id: c.id, route, text: final?.text || events.find(e => e.card?.ask)?.card.q || '', instructions: calls.task?.instructions || '', cards: events.filter(e => e.type === 'card').map(e => e.card.type), options: events.filter(e => e.card?.ask || e.card?.type === 'connect').flatMap(e => [e.card.q, e.card.note, ...(e.card.options || []).map(o => o.label || o)]).filter(Boolean), linked, prices, cardItems: events.flatMap(e => e.type === 'card' ? (e.card.items || e.card.rows || []) : []), searched: (calls.fns || []).includes('web_search'),
+  const result = { id: c.id, route, text: final?.text || events.find(e => e.card?.ask)?.card.q || '', instructions: calls.task?.instructions || '', cards: events.filter(e => e.type === 'card').map(e => e.card.type), options: events.filter(e => e.card?.ask || e.card?.type === 'connect').flatMap(e => [e.card.q, e.card.note, ...(e.card.options || []).map(o => o.label || o)]).filter(Boolean), linked, prices, learn: events.filter(e => e.type === 'card' && e.card.type === 'learn').map(e => e.card), cardItems: events.flatMap(e => e.type === 'card' ? (e.card.items?.length ? e.card.items : e.card.rows || []) : []), searched: (calls.fns || []).includes('web_search'),
     ms: Date.now() - started, firstTokenMs: timing.firstTokenMs ?? null, modelCalls: calls.model, input: calls.input, cached: calls.cached, output: calls.output, fns: calls.fns || [], args: calls.args || [], error };
   const problems = [];
   if (error) problems.push(`error: ${error}`);
@@ -367,7 +434,7 @@ async function runCase(c, variant) {
   if (route === 'task' && !/[åäö]|\b(jag|och|min|mitt|mina|kolla|hitta)\b/i.test(asked) && /[åäö]|\b(jag|och|för|att)\b/i.test(result.text.replace(/\p{Lu}[\p{L}-]*/gu, ''))) problems.push(`task reply in the wrong language: ${result.text.slice(0, 160)}`);
   // A dead end: the agent refuses work its tasks can do, or sends the owner to do it. Saying
   // what a connection cannot reach is honest, not a dead end, when it offers what remains.
-  if (!c.honest && /\b(can[’']?t|cannot|unable to|not able to|don[’']?t have (?:access|a live))\b[^.]{0,40}\b(open|verify|access|browse|visit|check|see|clock|tell|find)\b|\b(paste|check your (?:device|phone))\b/i.test(result.text)) problems.push(`dead end: ${result.text.slice(0, 200)}`);
+  if (!c.honest && /\b(can[’']?t|cannot|unable to|not able to|don[’']?t have (?:access|a live))\b[^.]{0,40}\b(open|verify|access|browse|visit|check|see|clock|tell|find)\b|\b(paste (?:it|the|this|that|them|here|in)|check your (?:device|phone))\b/i.test(result.text)) problems.push(`dead end: ${result.text.slice(0, 200)}`);
   if (!error && c.check) { const p = c.check(result); if (p) problems.push(p.slice(0, 300)); }
   result.pass = !problems.length;
   result.problems = problems;

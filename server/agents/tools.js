@@ -23,7 +23,7 @@ const live = require('./live');
 const pc = require('./pc');
 const { generateImage } = require('../foundry');
 const { PLANS } = require('../plans');
-const { questionArgs, presentArgs, connectArgs } = require('./cards');
+const { questionArgs, presentArgs, learnArgs, learnSummary, connectArgs } = require('./cards');
 const { forbiddenPaymentSecret, cardNumberIn, loginFieldProblem } = require('./payment-safety');
 const { createPurchaseFlow, withPhoneApproval } = require('./purchase');
 const purchaseFlow = createPurchaseFlow({ live, wallet:belnaWallet });
@@ -810,6 +810,17 @@ const TOOLS = {
       return { shown: true, kind: card.kind, title: card.title, note: 'The owner now sees this card in the chat. Do not show it again; continue the work or give your final answer.' };
     },
   },
+  learn: {
+    name: 'learn', type: 'function', approval: false,
+    description: 'Show an interactive learning card in chat: a quiz, flashcards, practice problems with hints and a checked answer, or a graph of functions.',
+    run: async (args, ctx) => {
+      const card = learnArgs(args);
+      const out = learnSummary(card);
+      ctx.trace(entry('board', `learn: ${card.kind} ${card.title}`));
+      return out.shown ? { ...out, note: 'The owner now sees this card in the chat and works through it there. Do not show it again or reveal its answers; continue the work or give your final answer.' }
+        : { ...out, note: `Nothing to show: every ${card.kind === 'plot' ? 'function was unreadable (use x, numbers, + - * / ^ and sin, cos, sqrt, abs, ln, log, exp)' : 'item was incomplete (a quiz question needs options and an answer matching one of them)'}. Fix the arguments and call learn again.` };
+    },
+  },
   connect_app: {
     name: 'connect_app', type: 'function', approval: true, sideEffects: false,
     description: 'Ask the owner to connect an app (e.g. gmail, googlecalendar, slack, github, notion) with secure OAuth when a request needs it and it is not connected. Waits until they connect or decline.',
@@ -1033,6 +1044,8 @@ const TOOL_KEYWORDS = {
   computer: /(computer|desktop|application|\bapp\b|window|file manager|spreadsheet|text editor|dator|datorn|skrivbord|fonster|programmet|datamaskin|skrivebord|vindue|rechner|anwendung|fenster|ordinateur|bureau|logiciel|fenetre|ordenador|escritorio|aplicacion|ventana)/,
   vault: /(log ?in|sign ?in|password|passcode|credential|api ?key|access token|secret|account|checkout|pay\b|payment|card|logga in|inloggning|losenord|konto|betala|betalning|kort|logg inn|passord|log ind|adgangskode|anmelden|einloggen|passwort|konto|zahlung|karte|connexion|mot de passe|compte|paiement|carte|iniciar sesion|contrasena|cuenta|pago|tarjeta)/,
   shop: /(shop pay|shopify|shop_pay|\bshop\b|catalog|checkout|order|merchant|butik|bestall|kassa|bestell|kasse|boutique|commande|panier|marchand|tienda|pedido|carrito)/,
+  // Studying and practice: quizzes, flashcards, problems and graphs the owner works through.
+  learn: /(quiz|flash ?cards?|practi[cs]e|exercises?|study|studying|revise|revision|homework|lesson|exam\b|test me|teach me|learn|tutor|equation|algebra|calculus|geometry|trigonometr|fractions?|\bmath|\bplot\b|graph of|forhor|glosor|plugga|ova pa|lar mig|matte|ekvation|uppgift|lekser|ubung|lernen|apprendre|exercice|ejercicio|aprender)/,
   wallet: /(wallet|pay|payment|transfer|usdc|\beth\b|invoice|payout|spend|debit card|virtual card|buy |purchase|planbok|betal|overfor|faktura|kop |lommebok|tegnebog|geldborse|bezahl|zahlung|uberweis|rechnung|kaufe|portefeuille|paie|paiement|virement|facture|achet|billetera|cartera|pago|paga|transferencia|factura|compra)/,
 };
 function pickTools(task) {
@@ -1045,6 +1058,7 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.connectors.test(t)) { names.add('composio_apps'); names.add('connector_tools'); names.add('connector_call'); names.add('connector_setup'); }
   if (TOOL_KEYWORDS.mail.test(t)) { names.add('mail_status'); names.add('mail_list'); names.add('mail_read'); names.add('mail_draft'); names.add('mail_send'); }
   if (TOOL_KEYWORDS.page.test(t)) names.add('build_page');
+  if (TOOL_KEYWORDS.learn.test(t)) names.add('learn');
   if (TOOL_KEYWORDS.image.test(t)) names.add('image_generate');
   if (TOOL_KEYWORDS.browser.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('browser_submit'); names.add('computer_screenshot'); }
   if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }

@@ -13,6 +13,7 @@ struct BelnaApp: App {
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model)
+                .onOpenURL { model.returnedFromBrowser($0) }
                 .onChange(of: phase) { _, value in
                     model.foreground = value == .active
                     if value != .active { model.cancelPrompt() }

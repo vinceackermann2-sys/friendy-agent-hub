@@ -155,7 +155,10 @@ Calendar/Reminders/Contacts changes ask in the agent and on the device. Every
 Health summary is previewed and explicitly shared for fitness/wellness only.
 Notes, Mail and Messages are not general integrations. Mac reads its own synced
 stores and offers Health only if HealthKit reports support. Account deletion is
-in Apple apps → Account. This companion app offers no digital purchase flow.
+in Apple apps → Account. The app has no In-App Purchase. On the United States
+storefront only (guideline 3.1.1(a)), Settings → Billing and Usage link to plan
+and token checkout and the billing portal in Safari. On other storefronts the
+app shows the plan and usage with no purchase buttons or links.
 
 ## Apple references
 

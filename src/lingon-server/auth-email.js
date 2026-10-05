@@ -140,20 +140,17 @@ async function deliver({ email, code, purpose }) {
    account; an address that already has a confirmed account gets a sign-in
    code instead, so the response never reveals whether the account exists.
    Either code is verified with verifyOtp({ type: 'email' }). */
-async function sendAuthCode(admin, { email, kind = 'signin', password, data } = {}) {
+async function sendAuthCode(admin, { email, kind = 'signin', data } = {}) {
   const address = String(email || '').trim().toLowerCase();
   const user = await findUser(address);
   if (user && sentRecently(user)) throw fail('Please wait a minute before asking for another code.', 'COOLDOWN', 429);
   let type = 'magiclink';
   let params = { type, email: address, options: { data } };
   if (kind === 'signup' && !user?.email_confirmed_at) {
+    // The chosen password is set only when the code is verified (secureFirstSignIn),
+    // by whoever proves they own the address; until then the account has a random one.
     type = 'signup';
-    params = { type, email: address, password: String(password || ''), options: { data } };
-    // Like Supabase's own sign-up, the latest password wins on an unconfirmed account.
-    if (user) {
-      const updated = await admin.auth.admin.updateUserById(user.id, { password: params.password });
-      if (updated.error) throw fail(updated.error.message, 'AUTH', 400);
-    }
+    params = { type, email: address, password: randomPassword(), options: { data } };
   }
   let link = await admin.auth.admin.generateLink(params);
   if (type === 'signup' && /already|exists/i.test(link.error?.message || '')) {
@@ -166,9 +163,47 @@ async function sendAuthCode(admin, { email, kind = 'signin', password, data } = 
   return { purpose: type === 'signup' ? 'signup' : 'signin' };
 }
 
+function randomPassword() {
+  const bytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Supabase's public sign-up endpoint accepts a password for any address, and the
+// account stays unconfirmed until someone proves they own it. A password set
+// before that proof belongs to whoever chose it, not to the owner, so when a code,
+// Google or Apple sign-in confirms the address, any existing password is replaced:
+// with the one the owner chose at sign-up, or a random one (Belna signs in without).
+const FIRST_CONFIRMATION_MS = 10 * 60_000;
+async function wasUnconfirmed(email) {
+  const address = String(email || '').trim().toLowerCase();
+  if (!address.includes('@')) return false;
+  const user = await findUser(address);
+  return !!user && !user.email_confirmed_at;
+}
+function firstConfirmation(user, { wasUnconfirmed = false, now = Date.now() } = {}) {
+  const identities = Array.isArray(user?.identities) ? user.identities : null;
+  // An account with no email identity (Apple only) never had a password to inherit.
+  if (!wasUnconfirmed && identities && !identities.some((i) => i?.provider === 'email')) return false;
+  const confirmedAt = Date.parse(user?.email_confirmed_at || user?.confirmed_at || '');
+  return wasUnconfirmed || !Number.isFinite(confirmedAt) || now - confirmedAt < FIRST_CONFIRMATION_MS;
+}
+async function secureFirstSignIn(admin, user, { wasUnconfirmed = false, password, now } = {}) {
+  if (!user?.id || !firstConfirmation(user, { wasUnconfirmed, now })) return false;
+  if (!admin) throw fail('Account authentication is unavailable.', 'AUTH', 503);
+  const chosen = typeof password === 'string' && password.length >= 8 ? password : randomPassword();
+  const { error } = await admin.auth.admin.updateUserById(user.id, { password: chosen });
+  if (error) throw fail('We couldn’t finish securing your account. Please try again.', 'AUTH', 503);
+  return true;
+}
+
 export {
   configured,
   sendAuthCode,
+  wasUnconfirmed,
+  firstConfirmation,
+  secureFirstSignIn,
+  randomPassword,
   codeEmailHtml,
   codeEmailText,
   sentRecently,

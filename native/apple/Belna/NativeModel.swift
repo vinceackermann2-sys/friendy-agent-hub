@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import AuthenticationServices
 import CryptoKit
+import StoreKit
 
 struct NativePrompt: Identifiable {
     let id = UUID()
@@ -36,6 +37,14 @@ final class NativeModel: NSObject, ObservableObject {
     func reload() {
         loadError = nil; loading = true
         webView?.load(URLRequest(url: AppConfiguration.origin.appendingPathComponent("app")))
+    }
+    /// belna://billing?status=… from the page a browser checkout ends on. It only asks the
+    /// web app to reload the account and never carries payment data.
+    func returnedFromBrowser(_ url: URL) {
+        guard url.scheme == "belna", url.host == "billing" else { return }
+        let status = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "status" }?.value ?? ""
+        let known = ["success", "tokens", "portal", "cancelled"].contains(status) ? status : ""
+        webView?.callAsyncJavaScript("window.dispatchEvent(new CustomEvent('belna-billing-return', { detail: { status } }))", arguments: ["status": known], in: nil, in: .page, completionHandler: nil)
     }
     func resolvePrompt(_ allow: Bool) {
         let continuation = promptContinuation
@@ -84,6 +93,9 @@ final class NativeModel: NSObject, ObservableObject {
         let method = body["method"] as? String ?? ""
         if method == "lock" { lock(); return ["ok": true] }
         if method == "settings" { showSettings = true; return ["ok": true] }
+        // The web app offers plans and token packs (paid in the browser) only where the
+        // App Store storefront allows linking out. Older builds lack this method.
+        if method == "storefront" { return ["countryCode": await Storefront.current?.countryCode ?? ""] }
         if method == "disconnect" { revision += 1; cancelPrompt(); services.disconnectAll(); refresh(); return ["ok": true] }
         guard aiConsent, foreground else { throw DeviceError.message("Open Belna and agree to AI data sharing first.") }
         if method == "signIn" {

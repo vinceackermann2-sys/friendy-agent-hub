@@ -26,6 +26,22 @@ function createPurchaseFlow({ live, wallet }) {
     const raw = `${session.url}\n${String(session.text || '').slice(-3500)}\n${(session.elements || []).join('\n').slice(0,6500)}\n${selected}`;
     return crypto.createHash('sha256').update(raw).digest('hex');
   };
+  // A click that sends, posts, deletes or submits for the owner is final, like placing an
+  // order: it goes through browser_submit so the owner approves it. browser_action and
+  // browser_submit run the same click, so the label decides which one is allowed.
+  // Consent and cookie choices are not final. Coordinate-only clicks carry no label.
+  const FINAL_ACTION = /^(?:send|post|publish|tweet|delete|erase|remove account|unsubscribe|transfer|submit|deactivate|close account|cancel (?:subscription|order|account|membership)|skicka|publicera|radera|säg upp|avsluta konto)(?:\s|$)/;
+  const FINAL_ROLES = /^(?:button|input:submit|input:button|menuitem|link)$/;
+  function finalActionLabel(session, args) {
+    const m = /^\[\d+\] (\S+) "([^"]*)"/.exec(targetLine(session, args));
+    if (m && !FINAL_ROLES.test(m[1].toLowerCase())) return '';
+    const label = args.type === 'click_text' ? String(args.text || '') : m ? m[2] : '';
+    const text = flat(label);
+    // Text that exactly names a field or option ("Send to") selects it, it does not send.
+    if (args.type === 'click_text' && (session.elements || []).some((line) => CHOICE.test(line) && flat(/"([^"]*)"/.exec(line)?.[1]) === text)) return '';
+    if (!text || text.split(' ').length > 5 || /cookie|consent|samtycke|preferences|choices|inställningar/.test(text)) return '';
+    return FINAL_ACTION.test(text) ? label : '';
+  }
   function targetLine(session, args) {
     return args.ref ? (session.elements || []).find((line) => line.startsWith(`[${args.ref}]`)) || '' : '';
   }
@@ -44,6 +60,8 @@ function createPurchaseFlow({ live, wallet }) {
     const target = `${targetLine(session,args)} ${args.type==='click_text' ? args.text : ''}`;
     // Choosing an option or filling a field ("Klarna – pay later", a delivery choice) never
     // places the order; clicking one is a normal step. Pressing Enter in a field may submit.
+    const final = ['click','double_click','click_text'].includes(args.type) && finalActionLabel(session, args);
+    if (final) throw bad(`"${final.slice(0, 60)}" sends, posts, deletes or submits something for the owner. Use browser_submit with a summary of exactly what it does, so the owner approves it first.`);
     if (choiceTarget(session, args) && ['click','double_click','click_text'].includes(args.type)) return;
     if (/\b(?:place order|pay now|buy now|complete purchase|confirm purchase|köp nu|betala nu|slutför köp|bekräfta köp|beställ nu)\b/i.test(target)
       || (checkoutContext.test(session.text || '') && (!targetLine(session,args) || /\b(?:buy|purchase|pay|order|köp|betala|beställ|confirm|bekräfta)\b/i.test(target))))

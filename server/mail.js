@@ -334,8 +334,24 @@ async function send(userId, input) {
   }
   const attachments = parseAttachments(input.attachments);
   const box = await ensureMailbox(userId, input.agentName || 'Agent');
+  // Reserve this message before counting, so parallel sends cannot all pass the daily
+  // limit; the reservation stays out of every folder until the provider accepts it.
+  const reserved = await store.insertMailMessage(userId, {
+    mailboxAddress: box.address,
+    direction: 'outbound',
+    folder: 'outbox',
+    fromAddress: box.address,
+    fromName: box.displayName,
+    toAddresses: to,
+    subject,
+    bodyText,
+    inReplyTo: input.inReplyTo || null,
+    threadId: input.threadId || input.inReplyTo || null,
+    isRead: true,
+  });
   const today = await store.countOutboundMailToday(userId);
-  if (today >= MAX_SEND_PER_DAY) {
+  if (today > MAX_SEND_PER_DAY) {
+    await store.deleteMailMessage(userId, reserved.id);
     const e = new Error('Daily send limit reached.');
     e.code = 'LIMIT';
     throw e;
@@ -347,7 +363,9 @@ async function send(userId, input) {
     headers['In-Reply-To'] = String(input.inReplyTo);
     headers.References = String(input.references || input.inReplyTo);
   }
-  const sent = await rfetch('/emails', {
+  let sent;
+  try {
+    sent = await rfetch('/emails', {
     method: 'POST',
     idempotencyKey: input.idempotencyKey,
     body: {
@@ -360,21 +378,13 @@ async function send(userId, input) {
       attachments: attachments.length ? attachments : undefined,
     },
   });
-  const row = await store.insertMailMessage(userId, {
-    mailboxAddress: box.address,
-    direction: 'outbound',
-    folder: 'sent',
-    fromAddress: box.address,
-    fromName: box.displayName,
-    toAddresses: to,
-    subject,
-    bodyText,
-    inReplyTo: input.inReplyTo || null,
-    threadId: input.threadId || input.inReplyTo || null,
-    resendId: sent && sent.id ? sent.id : null,
-    messageId: sent && sent.id ? sent.id : null,
-    isRead: true,
-  });
+  } catch (error) {
+    await store.deleteMailMessage(userId, reserved.id).catch(() => {});
+    throw error;
+  }
+  const accepted = { folder: 'sent', resendId: sent && sent.id ? sent.id : null, messageId: sent && sent.id ? sent.id : null };
+  await store.updateMailMessage(userId, reserved.id, accepted);
+  const row = { ...reserved, ...accepted };
   if (input.draftId) await store.deleteMailDraft(userId, input.draftId).catch(() => {});
   return publicMessage(row, { full: true });
 }
@@ -405,6 +415,8 @@ function verifyWebhook(raw, headers) {
   const ts = headers['svix-timestamp'] || headers['webhook-timestamp'] || '';
   const sig = headers['svix-signature'] || headers['webhook-signature'] || '';
   if (!id || !ts || !sig) return false;
+  const seconds = Number(ts);
+  if (!Number.isFinite(seconds) || Math.abs(Date.now() / 1000 - seconds) > 300) return false;
   const payload = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw || '');
   const key = secret.startsWith('whsec_') ? Buffer.from(secret.slice(6), 'base64') : Buffer.from(secret);
   const expected = crypto.createHmac('sha256', key).update(id + '.' + ts + '.' + payload).digest('base64');

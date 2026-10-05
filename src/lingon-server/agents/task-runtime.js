@@ -174,6 +174,16 @@ function createTaskRuntime(d) {
   }
   const interrupt=row=>{const entry=running.get(row?.id);if(entry && entry.stale(row.state))entry.controller.abort();return row;};
   const event = (s, e) => { s.events.push({ ...e, version:s.version, seq:s.events.length+1 }); };
+  // A stop takes effect at once. An action already running on the computer finishes on its
+  // own (cutting it off would leave its outcome unknown), but nothing new starts and the task
+  // and its card stop saying working; the action's result still shows when it returns.
+  function halt(s) {
+    s.version++;s.pending=[];
+    if(s.approval) event(s,{type:'decision',callId:s.approval.id,status:'expired'});
+    s.approval=null;s.status='stopped';
+    const open=s.inflight?.kind==='tool' && s.events.findLast(e=>e.type==='card' && e.id===s.inflight.id);
+    if(open?.card?.status==='running') event(s,{type:'card',id:open.id,card:{...open.card,note:'Stopped.',status:'done'}});
+  }
   // A tool result as the worker reads it next round.
   function observe(s, call, version, out, failure) {
     // An empty list (no automations, empty inbox, no matches) is a valid answer, not a failure;
@@ -299,9 +309,7 @@ function createTaskRuntime(d) {
       } else if(action==='continue' && s.status==='partial') {
         s.version++;s.round=0;s.status='queued';s.result=null;s.lastUpdateAt=Date.now();
       } else if(action==='cancel') {
-        s.version++;s.pending=[];
-        if(s.approval) event(s,{type:'decision',callId:s.approval.id,status:'expired'});
-        s.approval=null;s.status=s.inflight?.kind==='tool' ? 'stopping' : 'stopped';
+        halt(s);
       } else if(action==='decide') {
         if(typeof allow!=='boolean' || !s.approval || s.approval.id!==callId || s.approval.version!==s.version) throw fault('Approval is no longer pending.');
         // A question card answers with the chosen option; it reaches the tool as ctx.answer.
@@ -338,9 +346,7 @@ function createTaskRuntime(d) {
     for(const r of rows) if(r.id!==id && stop.has(r.id) && LIVE.has(r.state.status)) {
       interrupt(await change(userId,r.id,s=>{
         if(!LIVE.has(s.status)) return;
-        s.version++;s.pending=[];
-        if(s.approval) event(s,{type:'decision',callId:s.approval.id,status:'expired'});
-        s.approval=null;s.status=s.inflight?.kind==='tool' ? 'stopping' : 'stopped';
+        halt(s);
         if(requestId) s.controls.push(`${requestId}:child`);
       }));
     }
@@ -717,6 +723,8 @@ function createTaskRuntime(d) {
     let lease=false,renew;
     const leaseId=`task:${taskId}:${call.id}`;
     try {
+      // Starting the computer can take minutes; a task stopped meanwhile does not start it.
+      if(signal?.aborted) throw fault('Action skipped because the task changed.');
       if(VM.has(call.name)) {
         await d.azure.acquireLease(userId,{leaseId,kind:'agent'});lease=true;
         renew=setInterval(()=>d.azure.renewLease(userId,{leaseId}).catch(()=>{}),20000);renew.unref?.();
