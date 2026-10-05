@@ -18,6 +18,10 @@ on:
         description: Upload the signed Mac package to App Store Connect
         type: boolean
         default: false
+      review_screenshots:
+        description: Capture signed-in App Store screenshots on iPhone and iPad
+        type: boolean
+        default: false
   push:
     paths: ['native/apple/**', '.github/workflows/apple-build.yml']
   pull_request:
@@ -96,6 +100,14 @@ jobs:
           brew install xcodegen
           cd native/apple
           xcodegen generate
+      - name: Prepare isolated reviewer screenshot credentials
+        if: github.event_name == 'workflow_dispatch' && inputs.review_screenshots
+        env:
+          BELNA_REVIEW_CREDENTIALS: ${{ secrets.BELNA_REVIEW_CREDENTIALS }}
+        run: |
+          node -e 'const fs=require("fs");const c=JSON.parse(process.env.BELNA_REVIEW_CREDENTIALS);if(!c.email||!c.password)throw Error("Missing reviewer credentials");fs.writeFileSync("native/apple/BelnaUITests/ReviewerCredentials.json",JSON.stringify({email:c.email,password:c.password}));'
+          cd native/apple
+          xcodegen generate
       - name: Build iPhone and iPad
         run: xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
       - name: Build Mac Catalyst
@@ -110,6 +122,15 @@ jobs:
           if test -d native/apple/build/BelnaTests.xcresult; then
             xcrun xcresulttool export attachments --path native/apple/build/BelnaTests.xcresult --output-path native/apple/build/test-attachments
           fi
+      - name: Capture required App Store display sizes
+        if: github.event_name == 'workflow_dispatch' && inputs.review_screenshots
+        run: |
+          for KIND in iphone ipad; do
+            DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); kind=sys.argv[1]; names={"iphone":"iPhone 17 Pro Max","ipad":"iPad Pro 13-inch"}; print(next(v["udid"] for k,items in d["devices"].items() if "iOS" in k for v in items if names[kind] in v["name"]))' "$KIND")
+            xcrun simctl status_bar "$DEVICE" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100 || true
+            xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -only-testing:BelnaUITests/BelnaUITests/testReviewAccountScreenshots -resultBundlePath "native/apple/build/AppStore-$KIND.xcresult" CODE_SIGNING_ALLOWED=NO test
+            xcrun xcresulttool export attachments --path "native/apple/build/AppStore-$KIND.xcresult" --output-path "native/apple/build/app-store-$KIND"
+          done
       - name: Save native test evidence and Xcode project
         if: always()
         uses: actions/upload-artifact@v4
@@ -118,4 +139,6 @@ jobs:
           path: |
             native/apple/build/BelnaTests.xcresult
             native/apple/build/test-attachments
+            native/apple/build/app-store-iphone
+            native/apple/build/app-store-ipad
             native/apple/Belna.xcodeproj
