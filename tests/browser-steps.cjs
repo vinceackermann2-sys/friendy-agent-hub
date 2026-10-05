@@ -10,9 +10,9 @@ const crypto = require('node:crypto');
 const chrome = ['C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find((file) => fs.existsSync(file));
 if (!chrome) { console.log('browser steps: skipped (local Chrome unavailable)'); process.exit(0); }
 
-const envNames = ['AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP'];
+const envNames = ['AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY'];
 const beforeEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
-Object.assign(process.env, { AZURE_TENANT_ID:'tenant', AZURE_CLIENT_ID:'client', AZURE_CLIENT_SECRET:'secret', AZURE_SUBSCRIPTION_ID:'sub', AZURE_RESOURCE_GROUP:'rg' });
+Object.assign(process.env, { AZURE_TENANT_ID:'tenant', AZURE_CLIENT_ID:'client', AZURE_CLIENT_SECRET:'secret', AZURE_SUBSCRIPTION_ID:'sub', AZURE_RESOURCE_GROUP:'rg', SUPABASE_URL:'https://db.test', SUPABASE_SERVICE_ROLE_KEY:'service' });
 const azure = require('../server/agents/azure-vm');
 const puppeteer = require('puppeteer-core');
 
@@ -38,6 +38,7 @@ const reply = (body, status = 200, headers = {}) => new Response(typeof body ===
 const realFetch = global.fetch;
 global.fetch = async (input, options = {}) => {
   const url = String(input), method = String(options.method || 'GET');
+  if (url.startsWith('https://db.test/rest/v1/account_deletions?')) return reply([]);
   if (url.includes('login.microsoftonline.com')) return reply({ access_token:'token', expires_in:3600 });
   if (url.endsWith('/realtime/v1/api/broadcast')) {
     calls.broadcasts++;

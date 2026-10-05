@@ -78,6 +78,7 @@ const TOOL_SCHEMAS = [
   { name: 'mail_send', description: 'Send email from the agent own mailbox. REQUIRES owner approval of exact to/subject/body. Write it the way a person would: plain text, warm and to the point, a natural greeting and a short sign-off like “Best,”. No markdown, headings, templates or “this is an automated message”. Do not type your name, address or a signature; the app adds them under the message.', parameters: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, in_reply_to: { type: 'string' }, agent_name: { type: 'string' } }, required: ['to', 'subject', 'body'] } },
   { name: 'code_run', description: 'Execute code ONLY inside the hardened worker container inside the user Azure VM. Disabled without the Azure boundary.', parameters: { type: 'object', properties: { language: { type: 'string' }, code: { type: 'string', maxLength: 20000 } }, required: ['language', 'code'] } },
   ...PERSONAL_TOOL_SCHEMAS,
+  ...APPLE_TOOL_SCHEMAS,
 // Only tools this runtime implements are offered: the edge build's tools.js has no
 // desktop computer or live-browser relay, and a schema without a tool wastes a turn.
 ].filter((tool) => TOOLS[tool.name] && TOOLS[tool.name].available !== false).map(withActivity);
@@ -90,8 +91,6 @@ vaultRequestSchema.description = 'Ask the owner to save a website login (usernam
 vaultRequestSchema.parameters.properties.kind = { type: 'string', enum: ['login', 'api_key', 'secret'], description: 'login shows username/email and password; api_key shows one masked key field.' };
 TOOL_SCHEMAS.find((tool) => tool.name === 'browser_fill_secret').description = 'Fill an approved saved login credential on the matching website. Never use it for card numbers, CVC or BankID codes.';
 
-TOOL_SCHEMAS.push(...APPLE_TOOL_SCHEMAS);
-
 function selectToolSchemas(prompt, history = [], approvedCall = null) {
   const recent = Array.isArray(history) ? history.slice(-4).map((item) => item?.text || '').join('\n') : '';
   const context=`${prompt || ''}\n${recent}`;
@@ -100,8 +99,6 @@ function selectToolSchemas(prompt, history = [], approvedCall = null) {
   if (approvedCall?.name) toolNames.add(approvedCall.name);
   return TOOL_SCHEMAS.filter((schema) => toolNames.has(schema.name));
 }
-
-TOOL_SCHEMAS.push(...APPLE_TOOL_SCHEMAS);
 
 // Keep invariant policy first so the provider can reuse a shared request prefix, while
 // user-specific profile, sandbox, documents and memories remain authoritative.
