@@ -22,6 +22,11 @@ on:
         description: Capture signed-in App Store screenshots on iPhone and iPad
         type: boolean
         default: false
+      review_screenshot_device:
+        description: Required screenshot devices to capture
+        type: choice
+        options: [both, iphone, ipad]
+        default: both
   push:
     paths: ['native/apple/**', '.github/workflows/apple-build.yml']
   pull_request:
@@ -115,7 +120,7 @@ jobs:
       - name: Test bridge origin and date boundaries
         run: |
           DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for k,items in d["devices"].items() if "iOS" in k for v in items if "iPhone" in v["name"]))')
-          xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -resultBundlePath native/apple/build/BelnaTests.xcresult CODE_SIGNING_ALLOWED=NO test
+          xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -skip-testing:BelnaUITests/BelnaUITests/testReviewAccountScreenshots -resultBundlePath native/apple/build/BelnaTests.xcresult CODE_SIGNING_ALLOWED=NO test
       - name: Export iPhone test screenshots
         if: always()
         run: |
@@ -124,12 +129,21 @@ jobs:
           fi
       - name: Capture required App Store display sizes
         if: github.event_name == 'workflow_dispatch' && inputs.review_screenshots
+        env:
+          REVIEW_SCREENSHOT_DEVICE: ${{ inputs.review_screenshot_device }}
         run: |
-          for KIND in iphone ipad; do
+          case "$REVIEW_SCREENSHOT_DEVICE" in
+            iphone|ipad) KINDS="$REVIEW_SCREENSHOT_DEVICE" ;;
+            both|"") KINDS="iphone ipad" ;;
+            *) exit 1 ;;
+          esac
+          for KIND in $KINDS; do
             DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); kind=sys.argv[1]; names={"iphone":"iPhone 17 Pro Max","ipad":"iPad Pro 13-inch"}; print(next(v["udid"] for k,items in d["devices"].items() if "iOS" in k for v in items if names[kind] in v["name"]))' "$KIND")
             xcrun simctl status_bar "$DEVICE" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100 || true
-            xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -only-testing:BelnaUITests/BelnaUITests/testReviewAccountScreenshots -resultBundlePath "native/apple/build/AppStore-$KIND.xcresult" CODE_SIGNING_ALLOWED=NO test
+            RESULT=0
+            xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -only-testing:BelnaUITests/BelnaUITests/testReviewAccountScreenshots -resultBundlePath "native/apple/build/AppStore-$KIND.xcresult" CODE_SIGNING_ALLOWED=NO test || RESULT=$?
             xcrun xcresulttool export attachments --path "native/apple/build/AppStore-$KIND.xcresult" --output-path "native/apple/build/app-store-$KIND"
+            test "$RESULT" -eq 0
           done
       - name: Sanitize screenshot evidence
         id: sanitize-evidence

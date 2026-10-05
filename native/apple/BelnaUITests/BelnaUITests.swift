@@ -12,7 +12,15 @@ final class BelnaUITests: XCTestCase {
         XCTAssertTrue(app.buttons["I agree — continue to Belna"].waitForExistence(timeout: 10))
         app.buttons["I agree — continue to Belna"].tap()
         let passwordMode = app.webViews.buttons["Log in with password"]
-        if passwordMode.waitForExistence(timeout: 20) {
+        let composer = app.webViews.textViews.firstMatch
+        if !composer.exists {
+            guard passwordMode.waitForExistence(timeout: 60) else {
+                let startup = XCTAttachment(screenshot: app.screenshot())
+                startup.name = "Reviewer web startup diagnostic"
+                startup.lifetime = .keepAlways; add(startup)
+                XCTFail("Reviewer password login must load before entering credentials")
+                return
+            }
             let email = app.webViews.textFields["Enter Email"]
             email.tap(); email.typeText(credentials.email)
             passwordMode.tap()
@@ -39,7 +47,6 @@ final class BelnaUITests: XCTestCase {
             let color = app.webViews.buttons["Sky"]
             XCTAssertTrue(color.waitForExistence(timeout: 10)); color.tap()
         }
-        let composer = app.webViews.textViews.firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "Reviewer must reach the working agent chat")
         let chat = XCTAttachment(screenshot: app.screenshot())
         chat.name = "App Store - Your personal agent"; chat.lifetime = .keepAlways; add(chat)
