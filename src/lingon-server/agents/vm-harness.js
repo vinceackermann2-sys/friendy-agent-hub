@@ -90,6 +90,8 @@ vaultRequestSchema.description = 'Ask the owner to save a website login (usernam
 vaultRequestSchema.parameters.properties.kind = { type: 'string', enum: ['login', 'api_key', 'secret'], description: 'login shows username/email and password; api_key shows one masked key field.' };
 TOOL_SCHEMAS.find((tool) => tool.name === 'browser_fill_secret').description = 'Fill an approved saved login credential on the matching website. Never use it for card numbers, CVC or BankID codes.';
 
+TOOL_SCHEMAS.push(...APPLE_TOOL_SCHEMAS);
+
 function selectToolSchemas(prompt, history = [], approvedCall = null) {
   const recent = Array.isArray(history) ? history.slice(-4).map((item) => item?.text || '').join('\n') : '';
   const context=`${prompt || ''}\n${recent}`;

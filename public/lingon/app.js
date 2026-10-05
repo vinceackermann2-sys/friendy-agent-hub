@@ -1537,6 +1537,19 @@ function authLegalAccepted(){
   box?.focus();
   return false;
 }
+async function authApple(){
+  if (!window.BelnaApple?.available || !authLegalAccepted()) return;
+  const message = document.getElementById('amsg'), button = document.querySelector('[data-act="apple-signin"]');
+  if (button) button.disabled = true;
+  if (message) message.textContent = 'Signing in with Apple…';
+  try {
+    const session = await window.BelnaApple.signIn(TERMS_VERSION);
+    window.LingonAuth.set(session);
+    try { localStorage.setItem('belna.lastProvider','apple'); } catch {}
+    await afterSignIn(session.user);
+  } catch (error) { if (message) message.textContent = error.message || 'Apple sign-in could not finish.'; }
+  finally { if (button) button.disabled = false; }
+}
 async function authOAuth(){
   if (!authLegalAccepted()) return;
   const msg = document.getElementById('amsg');
