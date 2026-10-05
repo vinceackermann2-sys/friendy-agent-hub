@@ -97,7 +97,12 @@ const rejects = (name, args, pattern) => assert.rejects(TOOLS[name].run(args, ct
     assert.deepEqual(await TOOLS.vault_request.run({ name: 'GitHub password' }, ctx), { ref: 'sec_gh12', name: 'GitHub password', saved: true });
     store.listSecrets = async () => [{ id:'sec_loginp', ref:'sec_pw12', name:'github.com password' }, { id:'sec_loginu', ref:'sec_un12', name:'github.com username' }];
     assert.deepEqual(await TOOLS.vault_request.run({ name: 'GitHub password', host: 'https://www.github.com/login', kind:'login' }, ctx),
-      { ref:'sec_pw12', usernameRef:'sec_un12', name:'github.com password', saved:true }, 'the model receives only login refs');
+      { usernameRef:'sec_un12', passwordRef:'sec_pw12', name:'github.com password', saved:true, note:'Fill usernameRef into the username or email field and passwordRef into the password field, each with browser_fill_secret.' }, 'the model receives only login refs');
+    const { loginFieldProblem } = require('../server/agents/payment-safety');
+    assert.match(loginFieldProblem('github.com password', '[3] input:email "Email"'), /password field/, 'a password never goes into a visible field');
+    assert.match(loginFieldProblem('github.com username', '[4] input:password "Password"'), /username or email field/);
+    assert.equal(loginFieldProblem('github.com password', '[4] input:password "Password"'), '');
+    assert.equal(loginFieldProblem('github.com username', '[3] input:email "Email"'), '');
     assert.throws(() => TOOLS.vault_request.approvalCard({ name:'Login', kind:'login' }), /valid host/);
     assert.throws(() => TOOLS.vault_request.approvalCard({ name: 'Bank PIN' }), /identity app/);
     assert.ok(require('../server/agents/tools').pickTools('log in to my bank').some((tool) => tool.name === 'vault_request'));

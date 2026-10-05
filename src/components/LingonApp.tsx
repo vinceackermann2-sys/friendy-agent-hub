@@ -32,6 +32,7 @@ function loadScript(src: string) {
 const SCRIPTS = [
   "/lingon/config.js",
   "/lingon/auth.js",
+  "/lingon/apple-native.js",
   "/lingon/mascot.js",
   "/lingon/task-routing.js",
   "/lingon/engine.real.js",

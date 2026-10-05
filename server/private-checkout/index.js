@@ -30,6 +30,7 @@ app.post('/sessions/:id/submit',run(r=>runtime.submit(r.params.id,r.body)));
 app.delete('/sessions/:id',run(async r=>{await runtime.destroy(r.params.id);return {closed:true};}));
 app.post('/sessions/:id/owner-state',run(r=>runtime.ownerState(r.params.id,r.body.userId)));
 app.post('/sessions/:id/owner-input',run(r=>runtime.ownerInput(r.params.id,r.body.userId,r.body.event)));
+app.post('/sessions/:id/owner-close',run(r=>runtime.ownerClose(r.params.id,r.body.userId)));
 app.use((error,req,res,next)=>res.status(400).json({error:'Invalid checkout request.'}));
 const server=app.listen(Number(process.env.PRIVATE_CHECKOUT_PORT||8020),'127.0.0.1');
 const stop=async()=>{server.close();await runtime.closeAll();process.exit(0);};process.on('SIGTERM',stop);process.on('SIGINT',stop);

@@ -500,7 +500,7 @@ const fresh = () => ({
   // The owner's own APIs and MCP servers, from /api/connectors; never kept in browser storage.
   customConnectors:[], customConnectorsAvailable:true,
   shopPay:null, shopPayLoading:false, shopPayOrders:[],
-  // right-side canvas: canvasTab 'canvas' | 'subagents' | 'mail' | 'payments' | 'approvals'
+  // Wallet holds Belna money; Payments holds payment methods, delivery and checkouts ready to pay.
   agentEdit:false, mailTab:'inbox',
   // What the Canvas shows now, from any chat (see canvasItemView); null shows the Canvas history.
   canvasItem:null,
@@ -527,13 +527,15 @@ state.canvasOpen = false;
 if (state.agentPanel) state.canvasTab = 'approvals';
 delete state.agentPanel;
 if (state.canvasTab === 'agent') state.canvasTab = 'approvals';
-if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
-if (!['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+if (state.canvasTab === 'trace' || state.canvasTab === 'live') state.canvasTab = 'canvas';
+if (state.canvasTab === 'payments') state.canvasTab = 'wallet';
+if (!['canvas', 'subagents', 'mail', 'wallet', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
 delete state.agentTab;
 delete state.walletTab;
 if (!state.mailTab) state.mailTab = 'inbox';
 if (!state.settingsTab) state.settingsTab = 'profiles';
 if (state.settingsTab === 'theme') state.settingsTab = 'profiles';
+if (state.settingsTab === 'payments') state.settingsTab = 'wallet';
 if (state.settingsTab === 'library') {
   state.settingsTab = 'profiles';
   if (state.view === 'settings') state.view = 'library';
@@ -1010,7 +1012,7 @@ function refreshComposioApps(force = false) {
         state.composioLoading = false;
         save();
         if (state.view === 'apps' && $('#main')) paintApps($('#main'));
-        if (state.canvasOpen && state.canvasTab === 'payments' && $('#cbody')) $('#cbody').innerHTML = paymentsTabContent();
+        if (state.canvasOpen && state.canvasTab === 'wallet' && $('#cbody')) $('#cbody').innerHTML = walletTabContent();
         if (force) {
           try {
             const o = await window.LingonAuth.api('/api/trigger-options');
@@ -1432,14 +1434,15 @@ function leavePromo(){
 
 function render(){
   applyTheme();
-  if (isPromoRoute() && !window.__promoLeft) {
+  const nativeApp = window.BelnaApple?.available;
+  if (isPromoRoute() && !window.__promoLeft && !nativeApp) {
     stopWorkspacePresence();
     return renderPromo();
   }
   if (!signedIn()) {
     stopWorkspacePresence();
     const appRoute = window.location.pathname.replace(/\/+$/, '') === '/app';
-    return state.pendingPrompt || appRoute ? renderAuth() : renderLanding();
+    return nativeApp || state.pendingPrompt || appRoute ? renderAuth() : renderLanding();
   }
   ensureOwnerScope();
   startWorkspacePresence();
@@ -1460,7 +1463,10 @@ function renderAuth(){
   root.innerHTML = `
   <div class="fadeup authpage">
     <div class="authcard">
-      <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : 'Log in to manage profile and billing'}</h1>
+      ${window.BelnaApple?.available ? `<div class="native-welcome-mark" aria-hidden="true">${Mascot.logo(38)}</div>` : ''}
+      <h1>${state.pendingPrompt ? 'Sign up / log in to send it to your agent' : window.BelnaApple?.available ? 'Welcome to Belna' : 'Log in to manage profile and billing'}</h1>
+      ${window.BelnaApple?.available ? '<p class="native-welcome-copy">Sign in to meet your personal agent. We’ll help you get set up and connect your apps.</p>' : ''}
+      ${window.BelnaApple?.available ? '<button class="btn gbtn apple-signin" data-act="apple-signin">Continue with Apple</button>' : ''}
       ${state.pendingPrompt ? `<div class="kv" style="margin-top:16px;text-align:left"><div class="row"><span style="color:var(--mut)">${icon('chatb',16)}</span><div><b style="font-weight:600">${esc(state.pendingPrompt.length > 140 ? state.pendingPrompt.slice(0, 140) + '…' : state.pendingPrompt)}</b><div class="sub">Your message is saved — it will appear in the agent chat right after you sign in, before anything runs.</div></div></div></div>` : ''}
       <button class="btn gbtn" data-act="google"><span class="glogo" aria-hidden="true"><svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" overflow="hidden" viewBox="0 0 268.152 273.883"><defs><linearGradient id="google__a"><stop offset="0" stop-color="#0fbc5c"/><stop offset="1" stop-color="#0cba65"/></linearGradient><linearGradient id="google__g"><stop offset=".231" stop-color="#0fbc5f"/><stop offset=".312" stop-color="#0fbc5f"/><stop offset=".366" stop-color="#0fbc5e"/><stop offset=".458" stop-color="#0fbc5d"/><stop offset=".54" stop-color="#12bc58"/><stop offset=".699" stop-color="#28bf3c"/><stop offset=".771" stop-color="#38c02b"/><stop offset=".861" stop-color="#52c218"/><stop offset=".915" stop-color="#67c30f"/><stop offset="1" stop-color="#86c504"/></linearGradient><linearGradient id="google__h"><stop offset=".142" stop-color="#1abd4d"/><stop offset=".248" stop-color="#6ec30d"/><stop offset=".312" stop-color="#8ac502"/><stop offset=".366" stop-color="#a2c600"/><stop offset=".446" stop-color="#c8c903"/><stop offset=".54" stop-color="#ebcb03"/><stop offset=".616" stop-color="#f7cd07"/><stop offset=".699" stop-color="#fdcd04"/><stop offset=".771" stop-color="#fdce05"/><stop offset=".861" stop-color="#ffce0a"/></linearGradient><linearGradient id="google__f"><stop offset=".316" stop-color="#ff4c3c"/><stop offset=".604" stop-color="#ff692c"/><stop offset=".727" stop-color="#ff7825"/><stop offset=".885" stop-color="#ff8d1b"/><stop offset="1" stop-color="#ff9f13"/></linearGradient><linearGradient id="google__b"><stop offset=".231" stop-color="#ff4541"/><stop offset=".312" stop-color="#ff4540"/><stop offset=".458" stop-color="#ff4640"/><stop offset=".54" stop-color="#ff473f"/><stop offset=".699" stop-color="#ff5138"/><stop offset=".771" stop-color="#ff5b33"/><stop offset=".861" stop-color="#ff6c29"/><stop offset="1" stop-color="#ff8c18"/></linearGradient><linearGradient id="google__d"><stop offset=".408" stop-color="#fb4e5a"/><stop offset="1" stop-color="#ff4540"/></linearGradient><linearGradient id="google__c"><stop offset=".132" stop-color="#0cba65"/><stop offset=".21" stop-color="#0bb86d"/><stop offset=".297" stop-color="#09b479"/><stop offset=".396" stop-color="#08ad93"/><stop offset=".477" stop-color="#0aa6a9"/><stop offset=".568" stop-color="#0d9cc6"/><stop offset=".667" stop-color="#1893dd"/><stop offset=".769" stop-color="#258bf1"/><stop offset=".859" stop-color="#3086ff"/></linearGradient><linearGradient id="google__e"><stop offset=".366" stop-color="#ff4e3a"/><stop offset=".458" stop-color="#ff8a1b"/><stop offset=".54" stop-color="#ffa312"/><stop offset=".616" stop-color="#ffb60c"/><stop offset=".771" stop-color="#ffcd0a"/><stop offset=".861" stop-color="#fecf0a"/><stop offset=".915" stop-color="#fecf08"/><stop offset="1" stop-color="#fdcd01"/></linearGradient><linearGradient xlink:href="#google__a" id="google__s" x1="219.7" x2="254.467" y1="329.535" y2="329.535" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__b" id="google__m" cx="109.627" cy="135.862" r="71.46" fx="109.627" fy="135.862" gradientTransform="matrix(-1.93688 1.043 1.45573 2.55542 290.525 -400.634)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__c" id="google__n" cx="45.259" cy="279.274" r="71.46" fx="45.259" fy="279.274" gradientTransform="matrix(-3.5126 -4.45809 -1.69255 1.26062 870.8 191.554)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__d" id="google__l" cx="304.017" cy="118.009" r="47.854" fx="304.017" fy="118.009" gradientTransform="matrix(2.06435 0 0 2.59204 -297.679 -151.747)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__e" id="google__o" cx="181.001" cy="177.201" r="71.46" fx="181.001" fy="177.201" gradientTransform="matrix(-.24858 2.08314 2.96249 .33417 -255.146 -331.164)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__f" id="google__p" cx="207.673" cy="108.097" r="41.102" fx="207.673" fy="108.097" gradientTransform="matrix(-1.2492 1.34326 -3.89684 -3.4257 880.501 194.905)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__g" id="google__r" cx="109.627" cy="135.862" r="71.46" fx="109.627" fy="135.862" gradientTransform="matrix(-1.93688 -1.043 1.45573 -2.55542 290.525 838.683)" gradientUnits="userSpaceOnUse"/><radialGradient xlink:href="#google__h" id="google__j" cx="154.87" cy="145.969" r="71.46" fx="154.87" fy="145.969" gradientTransform="matrix(-.0814 -1.93722 2.92674 -.11625 -215.135 632.86)" gradientUnits="userSpaceOnUse"/><filter id="google__q" width="1.097" height="1.116" x="-.048" y="-.058" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="1.701"/></filter><filter id="google__k" width="1.033" height="1.02" x="-.017" y="-.01" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation=".242"/></filter><clipPath id="google__i" clipPathUnits="userSpaceOnUse"><path d="M371.378 193.24H237.083v53.438h77.167c-1.241 7.563-4.026 15.003-8.105 21.786-4.674 7.773-10.451 13.69-16.373 18.196-17.74 13.498-38.42 16.258-52.783 16.258-36.283 0-67.283-23.286-79.285-54.928-.484-1.149-.805-2.335-1.197-3.507a81.115 81.115 0 0 1-4.101-25.448c0-9.226 1.569-18.057 4.43-26.398 11.285-32.897 42.985-57.467 80.179-57.467 7.481 0 14.685.884 21.517 2.648a77.668 77.668 0 0 1 33.425 18.25l40.834-39.712c-24.839-22.616-57.219-36.32-95.844-36.32-30.878 0-59.386 9.553-82.748 25.7-18.945 13.093-34.483 30.625-44.97 50.985-9.753 18.879-15.094 39.8-15.094 62.294 0 22.495 5.35 43.633 15.103 62.337v.126c10.302 19.857 25.368 36.954 43.678 49.988 15.997 11.386 44.68 26.551 84.031 26.551 22.63 0 42.687-4.051 60.375-11.644 12.76-5.478 24.065-12.622 34.301-21.804 13.525-12.132 24.117-27.139 31.347-44.404 7.23-17.265 11.097-36.79 11.097-57.957 0-9.858-.998-19.87-2.689-28.968Z"/></clipPath></defs><g clip-path="url(#google__i)" transform="matrix(.95792 0 0 .98525 -90.174 -78.856)"><path fill="url(#google__j)" d="M92.076 219.958c.148 22.14 6.501 44.983 16.117 63.424v.127c6.949 13.392 16.445 23.97 27.26 34.452l65.327-23.67c-12.36-6.235-14.246-10.055-23.105-17.026-9.054-9.066-15.802-19.473-20.004-31.677h-.17l.17-.127c-2.765-8.058-3.037-16.613-3.14-25.503Z" filter="url(#google__k)"/><path fill="url(#google__l)" d="M237.083 79.025c-6.456 22.526-3.988 44.421 0 57.161 7.457.006 14.64.888 21.45 2.647a77.662 77.662 0 0 1 33.424 18.25l41.88-40.726c-24.81-22.59-54.667-37.297-96.754-37.332Z" filter="url(#google__k)"/><path fill="url(#google__m)" d="M236.943 78.847c-31.67 0-60.91 9.798-84.871 26.359a145.533 145.533 0 0 0-24.332 21.15c-1.904 17.744 14.257 39.551 46.262 39.37 15.528-17.936 38.495-29.542 64.056-29.542l.07.002-1.044-57.335c-.048 0-.093-.004-.14-.004Z" filter="url(#google__k)"/><path fill="url(#google__n)" d="m341.475 226.379-28.268 19.285c-1.24 7.562-4.028 15.002-8.107 21.786-4.674 7.772-10.45 13.69-16.373 18.196-17.702 13.47-38.328 16.244-52.687 16.255-14.842 25.102-17.444 37.675 1.043 57.934 22.877-.016 43.157-4.117 61.046-11.796 12.931-5.551 24.388-12.792 34.761-22.097 13.706-12.295 24.442-27.503 31.769-45 7.327-17.497 11.245-37.282 11.245-58.734Z" filter="url(#google__k)"/><path fill="#3086ff" d="M234.996 191.21v57.498h136.006c1.196-7.874 5.152-18.064 5.152-26.5 0-9.858-.996-21.899-2.687-30.998Z" filter="url(#google__k)"/><path fill="url(#google__o)" d="M128.39 124.327c-8.394 9.119-15.564 19.326-21.249 30.364-9.753 18.879-15.094 41.83-15.094 64.324 0 .317.026.627.029.944 4.32 8.224 59.666 6.649 62.456 0-.004-.31-.039-.613-.039-.924 0-9.226 1.57-16.026 4.43-24.367 3.53-10.289 9.056-19.763 16.123-27.926 1.602-2.031 5.875-6.397 7.121-9.016.475-.997-.862-1.557-.937-1.908-.083-.393-1.876-.077-2.277-.37-1.275-.929-3.8-1.414-5.334-1.845-3.277-.921-8.708-2.953-11.725-5.06-9.536-6.658-24.417-14.612-33.505-24.216Z" filter="url(#google__k)"/><path fill="url(#google__p)" d="M162.099 155.857c22.112 13.301 28.471-6.714 43.173-12.977l-25.574-52.664a144.74 144.74 0 0 0-26.543 14.504c-12.316 8.512-23.192 18.9-32.176 30.72Z" filter="url(#google__q)"/><path fill="url(#google__r)" d="M171.099 290.222c-29.683 10.641-34.33 11.023-37.062 29.29a144.806 144.806 0 0 0 16.792 13.984c15.996 11.386 46.766 26.551 86.118 26.551.046 0 .09-.004.137-.004v-59.157l-.094.002c-14.736 0-26.512-3.843-38.585-10.527-2.977-1.648-8.378 2.777-11.123.799-3.786-2.729-12.9 2.35-16.183-.938Z" filter="url(#google__k)"/><path fill="url(#google__s)" d="M219.7 299.023v59.996c5.506.64 11.236 1.028 17.247 1.028 6.026 0 11.855-.307 17.52-.872v-59.748a105.119 105.119 0 0 1-17.477 1.461c-5.932 0-11.7-.686-17.29-1.865Z" filter="url(#google__k)" opacity=".5"/></g></svg></span>Continue with Google${lastGoogle ? '<span class="lastused">Last used</span>' : ''}</button>
       <div class="ordiv"><span></span>OR<span></span></div>
@@ -1488,7 +1494,7 @@ function renderAuth(){
       </label>
       <div class="secnote" id="amsg" style="min-height:18px;justify-content:center;margin-top:14px"></div>
       <div class="authfoot" id="authfoot">New to Belna? <button data-act="auth-mode">Create an account</button></div>
-      <div><button class="backlink" data-act="back-home">← Back to home</button></div>
+      ${window.BelnaApple?.available ? '' : '<div><button class="backlink" data-act="back-home">← Back to home</button></div>'}
     </div>
   </div>`;
   authPaintMode();
@@ -1550,6 +1556,19 @@ async function authOAuth(){
       : (e.message || 'Google sign-in unavailable');
   }
 }
+async function authApple(){
+  if (!window.BelnaApple?.available || !authLegalAccepted()) return;
+  const message = document.getElementById('amsg'), button = document.querySelector('[data-act="apple-signin"]');
+  if (button) button.disabled = true;
+  if (message) message.textContent = 'Signing in with Apple…';
+  try {
+    const session = await window.BelnaApple.signIn(TERMS_VERSION);
+    window.LingonAuth.set(session);
+    try { localStorage.setItem('belna.lastProvider','apple'); } catch {}
+    await afterSignIn(session.user);
+  } catch (error) { if (message) message.textContent = error.message || 'Apple sign-in could not finish.'; }
+  finally { if (button) button.disabled = false; }
+}
 // Probe whether Google OAuth is configured so the button can explain itself
 // instead of failing silently. Non-fatal — button stays clickable as fallback.
 async function paintGoogleState(){
@@ -1607,6 +1626,13 @@ async function doAuth(kind){
     const r = await fetch('/api/auth/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, terms_version: TERMS_VERSION }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Auth failed');
+    if (j.code_sent){
+      if (msg) msg.textContent = '';
+      document.getElementById('otpemail').textContent = email;
+      showAuthPane('authotp');
+      document.getElementById('acode').focus();
+      return;
+    }
     if (j.confirm_email){
       if (msg) msg.textContent = j.message || 'Check your email to confirm your account, then log in.';
       return;
@@ -1913,6 +1939,7 @@ function billingPlanOverview(b){
 }
 function billingBodyHtml(tab = 'billing'){
   const b = billingOwner === billingIdentity() ? billingCache : null;
+  if (window.BelnaApple?.available) return `<div class="billing-content"><div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div><section class="billing-card"><h3>Your Belna account</h3><p>Your existing plan and the free plan work on this device. This app does not sell digital subscriptions or token packs.</p><a href="mailto:support@belna.se">Contact support</a></section></div>`;
   if (tab === 'usage') return `<div class="billing-content usage-content">
     <div id="billbody">${b ? billSummary(b) : billingLoadingHtml()}</div>
     <div id="billshop">${b ? billingShopHtml(b) : ''}</div>
@@ -1934,7 +1961,7 @@ function loadBillingContent(tab = 'billing'){
       body.innerHTML = `<div class="billing-loading" role="status"><span>We couldn’t load your balance just now.</span><button class="btn ghost small" data-act="billing-refresh">Try again</button></div>`;
       return;
     }
-    body.innerHTML = tab === 'usage' ? billSummary(b) : billingPlanOverview(b);
+    body.innerHTML = window.BelnaApple?.available || tab === 'usage' ? billSummary(b) : billingPlanOverview(b);
     if (cards && cards.isConnected) cards.innerHTML = planCards(b);
     if (shop && shop.isConnected) shop.innerHTML = billingShopHtml(b);
   });
@@ -1948,17 +1975,105 @@ function paintBilling(M){
    ONE-TIME INVITE — a friend redeems one code, then both get 10M tokens.
    ================================================================ */
 let giftCache = null; // {code, link, invited, earnedTokens, rewardEachTokens}
+let giftOwner = null, giftFetchedAt = 0, giftPending = null;
+let giftImageWarmed = false;
+function warmGift(){
+  if (!signedIn() || !state.onboarded) return;
+  getGift().catch(()=>{});
+  if (!giftImageWarmed) { giftImageWarmed = true; const image = new Image(); image.src = '/lingon/mascot/gift-invite-3d.webp'; }
+}
 async function getGift(prefillCode){
   const owner = billingIdentity();
-  const j = await window.LingonAuth.api('/api/referrals/mine');
+  if (!owner) return null;
+  if (giftOwner !== owner) { giftOwner = owner; giftCache = null; giftFetchedAt = 0; giftPending = null; }
+  if (!giftCache || Date.now() - giftFetchedAt > 60000) {
+    if (!giftPending) {
+      const request = window.LingonAuth.api('/api/referrals/mine').then(j => {
+        if (owner !== billingIdentity() || giftOwner !== owner) return null;
+        giftCache = j || null; giftFetchedAt = Date.now(); return giftCache;
+      }).finally(() => { if (giftPending === request) giftPending = null; });
+      giftPending = request;
+    }
+    await giftPending;
+  }
   if (owner !== billingIdentity()) return null;
-  giftCache = j || null;
-  if (prefillCode && giftCache) giftCache.prefill = prefillCode;
-  return giftCache;
+  return giftCache ? {...giftCache,prefill:prefillCode || ''} : null;
 }
+/* ---------- Phone sheets ----------
+   On phones the invite, wallet and file-viewer popups are sheets: they rise from the bottom,
+   stop short of the top so the app shows behind them, and close with a swipe down. */
+const SHEET_PANELS = '.giftmodal-card, .wallet-withdraw-dialog, .lib-viewer-panel';
+function sheetAnimates(){ return phoneLayout() && !window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+// The app shrinks back behind body-level sheets, like an iOS page sheet.
+function syncSheetBackdrop(){
+  document.body.classList.toggle('sheet-open', !!document.querySelector('#giftmodal:not(.sheet-out), .wallet-withdraw-overlay:not(.sheet-out)'));
+}
+// Slides the sheet down, then runs done (which removes it). Desktop and reduced motion close at once.
+function dismissSheet(overlay, done){
+  if (!overlay || !overlay.isConnected || !sheetAnimates()){ done(); syncSheetBackdrop(); return; }
+  if (overlay.classList.contains('sheet-out')) return;
+  overlay.classList.add('sheet-out');
+  syncSheetBackdrop();
+  setTimeout(() => { done(); syncSheetBackdrop(); }, 260);
+}
+let sheetSwipeWired = false;
+function wireSheetSwipe(){
+  if (sheetSwipeWired) return;
+  sheetSwipeWired = true;
+  new MutationObserver(syncSheetBackdrop).observe(document.body, { childList: true });
+  let drag = null;
+  const scrolledDown = (node, panel) => {
+    for (let n = node; n && n !== panel.parentNode; n = n.parentNode){
+      if (n.nodeType === 1 && n.scrollTop > 0 && n.scrollHeight > n.clientHeight) return true;
+    }
+    return false;
+  };
+  document.addEventListener('touchstart', (e) => {
+    drag = null;
+    if (!sheetAnimates() || e.touches.length !== 1) return;
+    const panel = e.target.closest && e.target.closest(SHEET_PANELS);
+    if (!panel || panel.parentNode.classList.contains('sheet-out')) return;
+    if (e.target.closest('input, textarea, select, iframe, [contenteditable="true"], .giftmodal-share')) return;
+    const t = e.touches[0];
+    drag = { panel, x: t.clientX, y: t.clientY, at: performance.now(), dy: 0, on: false, blocked: scrolledDown(e.target, panel) };
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!drag || drag.blocked) return;
+    const t = e.touches[0], dx = t.clientX - drag.x, dy = t.clientY - drag.y;
+    if (!drag.on){
+      if (Math.abs(dy) < 6 && Math.abs(dx) < 6) return;
+      // Upward or sideways moves scroll the sheet as usual.
+      if (dy <= 0 || Math.abs(dx) > dy){ drag = null; return; }
+      drag.on = true;
+      drag.panel.parentNode.classList.add('sheet-dragging');
+    }
+    e.preventDefault();
+    drag.dy = Math.max(0, dy);
+    drag.panel.style.transform = `translateY(${drag.dy}px)`;
+  }, { passive: false });
+  const end = () => {
+    if (!drag || !drag.on){ drag = null; return; }
+    const { panel, dy, at } = drag, overlay = panel.parentNode;
+    drag = null;
+    overlay.classList.remove('sheet-dragging');
+    const fast = dy / Math.max(1, performance.now() - at) > 0.55;
+    const close = panel.querySelector('[data-sheet-close]');
+    if (close && (dy > Math.min(150, panel.offsetHeight * 0.28) || (fast && dy > 40))){
+      panel.style.setProperty('--sheet-drag', dy + 'px');
+      close.click();
+      return;
+    }
+    panel.style.transition = 'transform .32s cubic-bezier(.32,.72,0,1)';
+    panel.style.transform = '';
+    setTimeout(() => { panel.style.transition = ''; }, 340);
+  };
+  document.addEventListener('touchend', end);
+  document.addEventListener('touchcancel', end);
+}
+
 function closeGift(){
   const m = $('#giftmodal');
-  if (m) m.remove();
+  if (m) dismissSheet(m, () => m.remove());
 }
 function giftShareMessage(){
   const code = (giftCache && giftCache.code) || '';
@@ -1967,11 +2082,12 @@ function giftShareMessage(){
 }
 function openGift(prefillCode){
   if (!signedIn()){ renderAuth(); toast('Sign in to use your invite code.'); return; }
-  closeGift();
+  $('#giftmodal')?.remove();
+  wireSheetSwipe();
   const overlay = el(`<div id="giftmodal" role="dialog" aria-modal="true" aria-labelledby="giftmodal-title">
     <div class="giftmodal-card">
       <div class="giftmodal-head">
-        <button class="iconbtn giftmodal-x" data-act="closegift" aria-label="Close invite">${icon('x',22)}</button>
+        <button class="iconbtn giftmodal-x" data-act="closegift" data-sheet-close aria-label="Close invite">${icon('x',22)}</button>
         <div class="giftmodal-brand">${Mascot.logo(20)}<span>belna</span></div>
         <h2 id="giftmodal-title">Invite a friend</h2>
       </div>
@@ -1983,7 +2099,7 @@ function openGift(prefillCode){
   overlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape'){ e.stopPropagation(); closeGift(); }
     if (e.key === 'Tab'){
-      const controls = [...overlay.querySelectorAll('button:not([disabled]), input:not([disabled])')];
+      const controls = [...overlay.querySelectorAll('button:not([disabled]), input:not([disabled]), summary')].filter(control => control.getClientRects().length);
       if (!controls.length) return;
       const first = controls[0], last = controls[controls.length - 1];
       if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
@@ -2019,12 +2135,12 @@ function openGift(prefillCode){
         <button class="giftmodal-share-option" data-act="gift-copy-link"${alreadyUsed ? ' disabled title="Invite already redeemed"' : ''}><span class="giftmodal-share-icon">${icon('copy',24)}</span><span>Copy link</span></button>
       </div>
       <div class="giftmodal-stats"><span><b>${Number(g.invited || 0)}</b> friend${Number(g.invited || 0) === 1 ? '' : 's'} redeemed</span><span class="giftmodal-stat-dot" aria-hidden="true"></span><span><b>${fmtTokens(g.earnedTokens || 0)}</b> tokens earned</span></div>
-      <div class="giftmodal-redeem">
-        <h3>Have a friend’s invite?</h3><p>Redeem their code and you’ll both get 10 million tokens.</p>
+      <details class="giftmodal-redeem"${showFriendBox ? ' open' : ''}>
+        <summary>Have a friend’s invite?</summary><p>Redeem their code and you’ll both get 10 million tokens.</p>
         <label class="giftmodal-redeem-label" for="giftfriendcode">Friend’s invite code</label>
         <div class="giftmodal-redeem-form"><input class="field mono" id="giftfriendcode" placeholder="BELNA-XXXXXX" autocomplete="off" spellcheck="false" value="${esc(showFriendBox ? friendCode : '')}">
         <button class="btn" data-act="gift-redeem">Redeem code</button></div>
-      </div>`;
+      </details>`;
   }).catch(() => {
     const body = overlay.querySelector('.giftmodal-body');
     if (body) body.innerHTML = `<p class="mut">Couldn’t load your invite right now.</p><button class="btn" data-act="opengift">Try again</button>`;
@@ -3125,6 +3241,7 @@ function renderApp(){
     <button class="canvas-scrim" data-act="closecanvas" aria-label="Close canvas" tabindex="-1"></button>
   </div>`;
   wireShellKeys();
+  wireSheetSwipe();
   paintSide(); paintMain(); paintCanvas();
   syncShellClasses();
   // Goals and Library are account data the agent can change; refresh at most every 30s.
@@ -3493,7 +3610,7 @@ function refreshSystemFiles(force = false){
    on demand and is cached for this session. */
 const MAX_LIBRARY_UPLOAD_MB = 10;
 const libraryContent = new Map(); // item id -> { loading } | { content } | { error }
-let libraryPending = null, libraryContentOwner = null, libraryViewer = null, libraryCheckedAt = 0, libraryOwner = null;
+let libraryPending = null, libraryContentOwner = null, libraryViewer = null, libraryViewerShown = null, libraryCheckedAt = 0, libraryOwner = null;
 function refreshLibrary(force = true){
   if (!signedIn() || !window.LingonAuth?.api) return Promise.resolve();
   if (libraryPending) return libraryPending;
@@ -3575,6 +3692,9 @@ function addLibraryUploads(fileList){
 // so HTML runs in a sandboxed frame, never with the app's origin.
 function libraryViewerHtml(){
   const item = libraryViewer && (state.libraryServer || []).find(x => x.id === libraryViewer);
+  // Repaints of an open viewer (content loading, edits) don't replay the sheet's rise.
+  const still = !!item && libraryViewerShown === item.id;
+  libraryViewerShown = item ? item.id : null;
   if (!item) return '';
   const loaded = libraryItemContent(item.id);
   const content = String(loaded.content || '');
@@ -3583,12 +3703,12 @@ function libraryViewerHtml(){
     : /^data:audio\//.test(content) ? `<audio class="lib-viewer-audio" src="${esc(content)}" controls></audio>`
     : loaded.extractedText ? `<pre class="cv-pre">${esc(loaded.extractedText)}</pre>${(loaded.extractionWarnings || []).map(w=>`<p>${esc(w)}</p>`).join('')}`
     : canvasDocumentHTML({ name:item.title, format:item.kind === 'web' ? 'html' : ext || 'text' }, loaded);
-  return `<div class="lib-viewer" role="dialog" aria-modal="true" aria-label="${esc(item.title)}">
+  return `<div class="lib-viewer${still ? ' sheet-still' : ''}" role="dialog" aria-modal="true" aria-label="${esc(item.title)}">
     <button class="lib-viewer-scrim" data-act="lib-viewer-close" aria-label="Close" tabindex="-1"></button>
     <div class="lib-viewer-panel">
       <div class="lib-viewer-bar"><span>${item.source === 'upload' ? 'Your upload' : 'Made by agent'} · ${esc(fmtBytes(Number(item.size || 0)))} · ${esc(fmtAgo(item.createdAt))}</span>
         <button class="iconbtn" data-act="lib-download" data-id="lib:${esc(item.id)}" title="Download" aria-label="Download ${esc(item.title)}">${icon('down',16)}</button>
-        <button class="iconbtn" data-act="lib-viewer-close" title="Close" aria-label="Close">${icon('x',16)}</button></div>
+        <button class="iconbtn" data-act="lib-viewer-close" data-sheet-close title="Close" aria-label="Close">${icon('x',16)}</button></div>
       <div class="lib-viewer-body">${body}
       <details><summary>File versions · ${loaded.revision || item.revision || 1}</summary>
         <button class="btn ghost small" data-act="lib-versions" data-id="${esc(item.id)}">Load version history</button>
@@ -3977,7 +4097,7 @@ function paintGoals(M){
     </article>`;
   };
   M.innerHTML = `<div class="page"><div class="pageinner goals-page">
-    <header class="goals-head"><h1>Goals</h1><p>Pick a category and tell ${esc(state.agent?.name || 'your agent')} what you’re after. You’ll shape a plan together, then track it and check it off here.</p></header>
+    <header class="goals-head"><h1>Goals</h1><p>${phoneLayout() ? `Make a plan with ${esc(state.agent?.name || 'your agent')} and track your progress here.` : `Pick a category and tell ${esc(state.agent?.name || 'your agent')} what you’re after. You’ll shape a plan together, then track it and check it off here.`}</p></header>
     ${goals.length ? `<section class="goals-section" aria-labelledby="goals-yours">
       <div class="goals-section-head">
         <div><h2 id="goals-yours">Your goals</h2><span class="goals-summary">${gc.done} of ${gc.total} done${gc.active ? ` · ${gc.active} in progress` : ''}</span></div>
@@ -3989,16 +4109,17 @@ function paintGoals(M){
       </div>
       <div class="goal-list">${list.map(goalCard).join('') || `<p class="goal-empty">${filter === 'done' ? 'Nothing checked off yet. Tap the circle next to a goal when you reach it.' : 'No goals in progress. Resume a paused goal or create a new one below.'}</p>`}</div>
     </section>` : ''}
-    <section class="goals-section" aria-labelledby="goals-create">
-      <h2 id="goals-create">Create a goal</h2>
+    <${phoneLayout() ? 'details' : 'section'} class="goals-section goals-create" aria-labelledby="goals-create"${phoneLayout() && (!goals.length || state.goalCreateOpen) ? ' open' : ''}>
+      <${phoneLayout() ? 'summary' : 'h2'} id="goals-create">Create a goal${phoneLayout() ? icon('plus',18) : ''}</${phoneLayout() ? 'summary' : 'h2'}>
       <div class="goal-create-list">
         ${GOAL_CATS.map(c => {
           const n = goals.filter(g => (g.category || 'other') === c.id).length;
           return `<button class="goal-create-row" data-act="goal-start" data-c="${c.id}"><span class="goal-create-icon">${icon(c.ic,20)}</span><span class="goal-create-label">${c.label}</span>${n ? `<small>${n} ${n === 1 ? 'goal' : 'goals'}</small>` : ''}<span class="goal-create-chev">${icon('chev',16)}</span></button>`;
         }).join('')}
       </div>
-    </section>
+    </${phoneLayout() ? 'details' : 'section'}>
   </div></div>`;
+  if (phoneLayout()) M.querySelector('.goals-create')?.addEventListener('toggle', event => { state.goalCreateOpen = event.currentTarget.open; save(); });
   refreshGoals(false);
   M.querySelectorAll('.sub-add input').forEach(inp => {
     inp.addEventListener('keydown', (e) => {
@@ -4106,6 +4227,7 @@ function paintChat(M){
     M.innerHTML = `<div class="empty" style="margin:auto">${Mascot.svg(state.agent.color,'idle',90,'mascot-bob')}<div style="margin-top:14px;font-weight:700">No chat open</div><div class="t2">Start one and ${esc(state.agent.name)} is on it.</div><button class="btn" data-act="newchat">${icon('plus',15)} New chat</button></div>`;
     return;
   }
+  warmGift();
   const oldPrompt = M.dataset.chatId === c.id ? M.querySelector('#cprompt') : null;
   const draft = oldPrompt?.value || '';
   const focused = oldPrompt && document.activeElement === oldPrompt;
@@ -4420,6 +4542,7 @@ const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</sp
     if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.classList && e.target.classList.contains('conn-head')) {
       e.preventDefault();
       if (e.target.dataset.act === 'toggle-cc') ccToggle(e.target.dataset.id);
+      else if (e.target.dataset.act === 'toggle-apple-connector') e.target.click();
       else openConnector(e.target.dataset.toolkit);
     }
     // Enter in the replace-key box saves the new key.
@@ -4510,7 +4633,7 @@ function cvOrderHTML(c, v){
       ${it.price ? `<span class="cv-price">${esc(it.price)}</span>` : ''}</div>`;
   }).join('');
   return `<div class="cv-order">${v.website ? `<div class="cv-kvs">${cvRow('Website', esc(v.website))}</div>` : ''}${items}
-    ${v.payment ? `<div class="cv-pay">${icon('card',16)}<div><b>${esc(v.payment)}</b>${v.email ? `<small>${esc(v.email)}</small>` : ''}</div></div>` : ''}
+    ${v.payment ? `<div class="cv-pay">${icon(v.phoneApproval ? 'phone' : 'card',16)}<div><b>${esc(v.payment)}</b>${v.phoneApproval ? `<small>You approve the payment in ${esc(v.phoneApproval)} yourself</small>` : v.fundedBy === 'balance' ? '<small>Paid from your Belna balance</small>' : v.fundedBy === 'own' ? `<small>${esc(['Your own payment method · not your Belna balance', v.email].filter(Boolean).join(' · '))}</small>` : v.email ? `<small>${esc(v.email)}</small>` : ''}</div></div>` : ''}
     ${(v.delivery || []).length ? `<div class="cv-kvs">${cvRow('Deliver to', esc(v.delivery.join(' · ')))}</div>` : ''}
     ${v.total ? `<div class="cv-total"><span>${v.estimated === false ? 'Total' : 'Estimated total'}</span><b>${esc(v.total)}</b></div>` : ''}
     ${v.checkoutExcerpt ? `<p class="cv-fine">Live checkout text: ${esc(v.checkoutExcerpt)}</p>` : ''}
@@ -4669,12 +4792,12 @@ function presentCardHTML(c, m){
 function orderCardHTML(c, m){
   const cd = m.card;
   const placed = cd.orderStatus === 'completed';
-  const title = placed ? 'Order placed' : cd.continueUrl ? 'Finish checkout' : 'Checkout ready';
+  const title = placed ? 'Order placed' : cd.continueUrl ? 'Ready to pay' : 'Checkout ready';
   const cont = safeLink(cd.continueUrl), view = safeLink(cd.orderUrl);
   return `<div class="acard cv-card cv-order-card">
     ${cvHead(cvTile(placed ? 'check' : 'card', placed ? 'green' : ''), title, esc(cd.merchant || ''), placed ? '<span class="chip green">placed</span>' : cont ? '<span class="chip">needs you</span>' : '')}
-    <div class="bd">${cvOrderHTML(c, { ...cd, payment:'', estimated:!placed })}</div>
-    ${cont || view ? `<div class="cv-actions">${cont ? `<a class="btn" href="${esc(cont)}" target="_blank" rel="noopener noreferrer">Finish in Shop Pay</a>` : ''}${view ? `<a class="btn ghost" href="${esc(view)}" target="_blank" rel="noopener noreferrer">View order</a>` : ''}</div>` : ''}
+    <div class="bd">${cvOrderHTML(c, { ...cd, payment:'', estimated:!placed })}${cont && !placed ? '<p class="cv-fine">Pay with Swish, Klarna, PayPal or a card on the store’s own checkout.</p>' : ''}</div>
+    ${cont || view ? `<div class="cv-actions">${cont ? `<a class="btn" href="${esc(cont)}" target="_blank" rel="noopener noreferrer">Pay at ${esc(cd.merchant || 'the store')}</a>` : ''}${view ? `<a class="btn ghost" href="${esc(view)}" target="_blank" rel="noopener noreferrer">View order</a>` : ''}</div>` : ''}
   </div>`;
 }
 function emailCardHTML(c, m){
@@ -4851,11 +4974,14 @@ function cardNode(c, m){
   const pending = cd.status === 'pending';
 
   if (cd.type === 'memory') return '';
-  if (cd.type === 'auth_handoff') return `<div class="acard cv-card cv-approval ${pending ? 'is-pending' : ''}">
-    ${cvHead(cvTile('shieldcheck'), esc(cd.method || 'Identity check'), esc(cd.website || 'Secure website'), cvDecisionChip(cd.status))}
-    <div class="bd"><p>Complete this sign-in in the live browser. For BankID, check the website and request shown in your BankID app before approving. Your code and PIN stay with you.</p></div>
-    ${pending ? `<div class="cv-actions"><button class="btn ghost" data-act="watchlive">Open live browser</button><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Cancel</button><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">I’ve finished</button></div>` : ''}
+  if (cd.type === 'auth_handoff') {
+    const pay = cd.purpose === 'payment';
+    return `<div class="acard cv-card cv-approval ${pending ? 'is-pending' : ''}">
+    ${cvHead(cvTile(pay ? 'phone' : 'shieldcheck'), pay ? 'Approve the payment on your phone' : esc(cd.method || 'Identity check'), esc(pay ? [cd.method, hostName(cd.website)].filter(Boolean).join(' · ') : cd.website || 'Secure website'), cvDecisionChip(cd.status))}
+    <div class="bd"><p>${pay ? `Open the live browser and scan the QR code with ${esc(/klarna/i.test(cd.method) ? 'Klarna or BankID' : /swish/i.test(cd.method) ? 'Swish' : 'BankID')} on your phone, or finish the step the checkout shows. Check the store and amount in the app before you approve.` : 'Complete this sign-in in the live browser. For BankID, check the website and request shown in your BankID app before approving. Your code and PIN stay with you.'}</p></div>
+    ${pending ? `<div class="cv-actions"><button class="btn ghost" data-act="watchlive">${pay ? 'Show QR' : 'Open live browser'}</button><button class="btn ghost" data-act="managed-deny" data-chat="${k}" data-msg="${mid}">Cancel</button><button class="btn" data-act="managed-allow" data-chat="${k}" data-msg="${mid}">${pay ? 'Done' : 'I’ve finished'}</button></div>` : ''}
   </div>`;
+  }
   if (cd.type === 'approval' && cd.managedCallId) return approvalCardHTML(c, m);
   if (cd.type === 'question' && !cd.onboarding && !cd.mascotColors && !cd.customName) return questionCardHTML(c, m);
   if (cd.type === 'connect') return connectCardHTML(c, m);
@@ -5695,6 +5821,12 @@ function libraryPhoneContent(){
       ? `<div class="lib-media">${items.map(libTileHtml).join('')}</div>`
       : `<div class="lib-list">${items.map(libRowHtml).join('')}</div>`}`;
 }
+function closeLibraryViewer(){
+  libraryViewer = null;
+  const viewer = $('#main .lib-viewer');
+  if (!viewer){ paintLibrary($('#main')); return; }
+  dismissSheet(viewer, () => { if (viewer.isConnected) paintLibrary($('#main')); });
+}
 function paintLibrary(M){
   const phone = phoneLayout();
   const scroller = () => M.querySelector(phone ? '.lib-mpage' : '.lib-main');
@@ -5702,7 +5834,7 @@ function paintLibrary(M){
   M.innerHTML = (phone
     ? `<div class="page lib-mpage${state.libraryCat === 'system' ? ' is-system' : ''}"><div class="lib-minner">${libraryPhoneContent()}</div></div>`
     : `<div class="page lib-page"><div class="pageinner lib-pageinner">${libraryTabContent()}</div></div>`) + libraryViewerHtml();
-  M.querySelector('.lib-viewer')?.addEventListener('keydown', e => { if (e.key === 'Escape'){ libraryViewer = null; paintLibrary(M); } });
+  M.querySelector('.lib-viewer')?.addEventListener('keydown', e => { if (e.key === 'Escape') closeLibraryViewer(); });
   M.querySelector('.lib-viewer [data-act="lib-viewer-close"]:not(.lib-viewer-scrim)')?.focus();
   if (scroller()) scroller().scrollTop = previousScroll;
   const libSearch = M.querySelector('#libsearch');
@@ -5792,8 +5924,8 @@ async function updateShopPay(action,payload={}){
     }
     state.shopPay=j.shopPay || {connected:false,configured:true};state.shopPayOrders=j.orders || [];
     save();
-    if(action==='disconnect' && walletPreferences?.activeMethod==='existing_card' && !walletPreferences.merchantEnabled){
-      const preferences=await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:null})});
+    if(action==='disconnect' && walletPreferences?.methods?.shop_pay){
+      const preferences=await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({methods:{shop_pay:false}})});
       if(owner!==scopeBelnaWallet())return;
       walletPreferences=preferences;
     }
@@ -5808,12 +5940,12 @@ async function finishShopPayChoice(){
   try{
     const preferences=await window.LingonAuth.api('/api/wallet-preferences');
     if(owner!==scopeBelnaWallet() || !shopPaySnapshot().connected)return;
-    if((preferences.activeMethod || null)===pending.activeMethod){
-      const selected=await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'existing_card'})});
+    if(!preferences.methods?.shop_pay){
+      const selected=await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({methods:{shop_pay:true}})});
       if(owner!==scopeBelnaWallet())return;
       walletPreferences=selected;walletExistingOpen=false;repaintWallet();
     }
-  }catch(e){if(owner===scopeBelnaWallet()){walletPreferencesError=e.message || 'Shop Pay connected. Choose your existing card to use it.';repaintWallet();}}
+  }catch(e){if(owner===scopeBelnaWallet()){walletPreferencesError=e.message || 'Shop Pay connected. Turn it on in Wallet to use it.';repaintWallet();}}
 }
 let walletHistory=[];
 let walletPreferences=null,walletPreferencesLoading=false,walletConnectOpen=false,walletExistingOpen=false,walletAction=null;
@@ -5853,13 +5985,13 @@ async function processPersonalWalletReturn(){
       const pref=await window.LingonAuth.api('/api/wallet-preferences');
       if(owner!==billingIdentity())return;
       if(!pref.selectionSaved && !pref.activeMethod)await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})});
-      state.view='chat';state.canvasOpen=true;state.canvasTab='payments';save();renderApp();
+      state.view='chat';state.canvasOpen=true;state.canvasTab='wallet';save();renderApp();
       toast(result.wallet?.cardProgramAvailable === false ? 'Your wallet is connected.' : 'Your wallet is connected. Set up your virtual card next.');
     }
   }catch(e){toast(e.message||'Your personal wallet could not be connected.');}
 }
 function walletVisible(){
-  return document.visibilityState !== 'hidden' && ((state.view==='settings' && state.settingsTab==='wallet') || (state.view==='chat' && state.canvasOpen && state.canvasTab==='payments'));
+  return document.visibilityState !== 'hidden' && ((state.view==='settings' && ['wallet','payments'].includes(state.settingsTab)) || (state.view==='chat' && state.canvasOpen && ['wallet','payments'].includes(state.canvasTab)));
 }
 function refreshReturningWallet(){
   if(!signedIn() || !walletVisible())return;
@@ -5880,9 +6012,9 @@ function scheduleWalletSetupRefresh(){
 async function openWalletVerification(purchaseId){
  const owner=scopeBelnaWallet();if(!owner || !/^[a-f0-9-]{36}$/.test(purchaseId||''))return;
  walletVerificationClose?.();const previous=document.activeElement;
- const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-verification-dialog" role="dialog" aria-modal="true" aria-label="Private bank verification"><header><div><h3>Verify your payment</h3><p>Only you can see this bank verification. Your agent cannot access it.</p></div><button class="btn ghost small" aria-label="Close payment verification">'+icon('x',18)+'</button></header><p role="status">Opening your private verification…</p><img alt="Your private bank verification" tabindex="0"><form><label>Code or response<input class="field" type="password" autocomplete="off" maxlength="200"></label><button class="btn small" type="submit">Enter response</button><button class="btn ghost small" type="button" data-key="Tab">Next field</button><button class="btn ghost small" type="button" data-key="Enter">Continue</button></form></section></div>');
+ const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-verification-dialog" role="dialog" aria-modal="true" aria-label="Private bank verification"><header><div><h3>Verify your payment</h3><p>Only you can see this bank verification. Your agent cannot access it.</p></div><button class="btn ghost small" data-sheet-close aria-label="Close payment verification">'+icon('x',18)+'</button></header><p role="status">Opening your private verification…</p><img alt="Your private bank verification" tabindex="0"><form><label>Code or response<input class="field" type="password" autocomplete="off" maxlength="200"></label><button class="btn small" type="submit">Enter response</button><button class="btn ghost small" type="button" data-key="Tab">Next field</button><button class="btn ghost small" type="button" data-key="Enter">Continue</button></form></section></div>');
  let closed=false,busy=false,timer,expiry;
- const close=()=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(expiry);overlay.querySelector('img').removeAttribute('src');overlay.querySelector('input').value='';overlay.remove();document.removeEventListener('keydown',key);if(walletVerificationClose===close)walletVerificationClose=null;previous?.focus?.();};
+ const close=()=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(expiry);overlay.querySelector('img').removeAttribute('src');overlay.querySelector('input').value='';dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',key);if(walletVerificationClose===close)walletVerificationClose=null;previous?.focus?.();};
  const key=e=>{if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button,input,img')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}};
  const api=event=>window.LingonAuth.api('/api/belna-wallet/purchases/'+purchaseId+'/'+(event?'owner-input':'owner-state'),{method:'POST',body:JSON.stringify(event?{event}:{})});
  const refresh=async()=>{if(closed)return;if(owner!==billingIdentity()){close();return;}try{const state=await api();if(closed||owner!==billingIdentity()){close();return;}if(!/^[A-Za-z0-9+/=]+$/.test(state.image||'') || state.image.length>3000000)throw Error('Could not show your bank verification.');const until=Date.parse(state.expiresAt);if(!Number.isFinite(until)||until<=Date.now())throw Error('Your bank verification expired.');overlay.querySelector('img').src='data:image/jpeg;base64,'+state.image;overlay.querySelector('[role="status"]').textContent='Click the bank screen or enter its requested response below.';clearTimeout(expiry);expiry=setTimeout(close,Math.min(15*60000,until-Date.now()));timer=setTimeout(refresh,2000);}catch(e){if(!closed){overlay.querySelector('[role="status"]').textContent=e.message||'This verification is unavailable. Check wallet activity.';overlay.querySelector('img').removeAttribute('src');}}};
@@ -5911,9 +6043,9 @@ async function openWalletWithdrawal(kind='withdraw'){
   if(kind!=='verify')walletMoneyClose?.();
   walletWithdrawalClose?.();
   const previous=document.activeElement;
-  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">'+(kind==='deposit'?'Add money to Belna Wallet':kind==='verify'?'Continue your wallet setup':'Withdraw to your bank')+'</h3><p>'+(kind==='deposit'?'Choose how to fund your wallet. Review the method and fees before continuing.':kind==='verify'?'Complete the secure check required for this money action.':'Choose your bank, review fees and arrival time, then confirm.')+'</p></div><button class="btn ghost small" aria-label="Close wallet action">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure wallet connection…</div><div id="wallet-withdraw-element"></div><button type="button" class="btn ghost small wallet-action-retry" hidden>Try again</button></section></div>');
+  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">'+(kind==='deposit'?'Add money to Belna Wallet':kind==='verify'?'Continue your wallet setup':'Withdraw to your bank')+'</h3><p>'+(kind==='deposit'?'Choose how to fund your wallet. Review the method and fees before continuing.':kind==='verify'?'Complete the secure check required for this money action.':'Choose your bank, review fees and arrival time, then confirm.')+'</p></div><button class="btn ghost small" data-sheet-close aria-label="Close wallet action">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure wallet connection…</div><div id="wallet-withdraw-element"></div><button type="button" class="btn ghost small wallet-action-retry" hidden>Try again</button></section></div>');
   let element,group,expiryTimer,frameTimer,identityTimer,fundingTimer,closed=false,loading=false,funding=false,verifying=kind==='verify',mountId=0;
-  const close=()=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearTimeout(frameTimer);clearInterval(identityTimer);clearInterval(fundingTimer);try{element?.destroy?.();group?.destroy?.();}catch{}overlay.remove();document.removeEventListener('keydown',onKey);if(walletWithdrawalClose===close)walletWithdrawalClose=null;restoreWalletFocus(previous);if(funding && owner===billingIdentity())refreshBelnaWallet(true);};
+  const close=()=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearTimeout(frameTimer);clearInterval(identityTimer);clearInterval(fundingTimer);try{element?.destroy?.();group?.destroy?.();}catch{}dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletWithdrawalClose===close)walletWithdrawalClose=null;restoreWalletFocus(previous);if(funding && owner===billingIdentity())refreshBelnaWallet(true);};
   const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const focusable=[...overlay.querySelectorAll('button:not([hidden]):not(:disabled),iframe,[tabindex="0"]')];const first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
   walletWithdrawalClose=close;overlay.querySelector('button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};document.addEventListener('keydown',onKey);document.body.append(overlay);overlay.querySelector('button').focus();
   identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close();},1000);
@@ -5970,9 +6102,9 @@ async function openWalletCardSetup(){
   walletMoneyClose?.();
   walletCardSetupClose?.();
   const previous=document.activeElement;
-  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-card-setup-title"><header><div><h3 id="wallet-card-setup-title">Continue card setup</h3><p>Complete your private card issuer verification. Your agent cannot see it.</p></div><button class="btn ghost small" aria-label="Close card setup">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening secure card setup…</div><div id="wallet-card-setup-element"></div></section></div>');
+  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-card-setup-title"><header><div><h3 id="wallet-card-setup-title">Continue card setup</h3><p>Complete your private card issuer verification. Your agent cannot see it.</p></div><button class="btn ghost small" data-sheet-close aria-label="Close card setup">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening secure card setup…</div><div id="wallet-card-setup-element"></div></section></div>');
   let element,cards,group,expiryTimer,identityTimer,closed=false;
-  const close=(refresh=true)=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearInterval(identityTimer);try{element?.destroy?.();cards?.destroy?.();group?.destroy?.();}catch{}overlay.remove();document.removeEventListener('keydown',onKey);if(walletCardSetupClose===close)walletCardSetupClose=null;previous?.focus?.();if(refresh)refreshBelnaWallet(true);};
+  const close=(refresh=true)=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearInterval(identityTimer);try{element?.destroy?.();cards?.destroy?.();group?.destroy?.();}catch{}dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletCardSetupClose===close)walletCardSetupClose=null;previous?.focus?.();if(refresh)refreshBelnaWallet(true);};
   const onKey=e=>{if(e.key==='Escape'){e.preventDefault();close();}};
   walletCardSetupClose=close;overlay.querySelector('header button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};document.addEventListener('keydown',onKey);document.body.append(overlay);overlay.querySelector('button').focus();
   identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close(false);},1000);
@@ -6027,10 +6159,11 @@ function scopeBelnaWallet(){
 }
 function repaintWallet(){
   if(walletMoneyRoot)repaintWalletRoot(walletMoneyRoot,walletActionContent);
-  const root=state.view==='settings' && state.settingsTab==='wallet' ? $('#wallet-settings-content') : state.canvasOpen && state.canvasTab==='payments' ? $('#cbody') : null;
+  const settings=state.view==='settings' && ['wallet','payments'].includes(state.settingsTab);
+  const root=settings ? $('#wallet-settings-content') : state.canvasOpen && ['wallet','payments'].includes(state.canvasTab) ? $('#cbody') : null;
   if(!root)return;
   if(walletAddressEdit && document.activeElement?.closest('.wallet-address-form') || walletLimitEdit && document.activeElement?.id==='belna-wallet-limit')return;
-  repaintWalletRoot(root,state.view==='settings' && state.settingsTab==='wallet'?walletSettingsContent:paymentsTabContent);
+  repaintWalletRoot(root,settings ? walletSettingsContent : walletTabContent);
 }
 function repaintWalletRoot(root,content){
   // Background refreshes must not erase a country, payment draft, or keyboard focus.
@@ -6082,9 +6215,13 @@ async function joinWalletCardWaitlist(){
   }catch(e){if(owner===scopeBelnaWallet())walletCardWaitlistError=e.message || 'Your interest could not be saved. Please try again.';}
   finally{if(owner===scopeBelnaWallet()){walletCardWaitlistBusy=false;repaintWallet();}}
 }
-function walletCardWaitlistContent(){
-  const joined=walletCardWaitlist?.joined===true;
-  return `<section class="wl-waitlist" aria-label="Belna card waitlist"><span class="wl-waitlist-icon" aria-hidden="true">${icon('card',20)}</span><div class="wl-copy"><b>One-time virtual cards <span class="wl-tag">Coming soon</span></b><small>${joined?'You’re on the card waitlist.':'A virtual card for each purchase you approve.'}</small>${walletCardWaitlistError?`<small class="wl-error" role="alert">${esc(walletCardWaitlistError)}</small>`:''}</div>${joined?`<span class="wl-ok" role="status">${icon('check',13)} Interest registered</span>`:`<button type="button" class="btn ghost small" data-act="wallet-card-interest"${walletCardWaitlistBusy || walletCardWaitlistLoading?' disabled':''}>${walletCardWaitlistBusy?'Saving…':'Apply interest'}</button>`}</section>`;
+const WALLET_CARD_TITLE = 'Spend your balance with a card';
+function walletCardWaitlistSub(){
+  return `Coming soon${walletCardWaitlistError ? ` <span class="wl-error" role="alert">${esc(walletCardWaitlistError)}</span>` : ''}`;
+}
+function walletCardWaitlistAction(){
+  if (walletCardWaitlist?.joined === true) return `<span class="wl-ok" role="status">${icon('check', 13)} Registered</span>`;
+  return `<button type="button" class="btn ghost small" data-act="wallet-card-interest"${walletCardWaitlistBusy || walletCardWaitlistLoading ? ' disabled' : ''}>${walletCardWaitlistBusy ? 'Saving…' : 'Apply interest'}</button>`;
 }
 function walletTotalBalance(w){
   const available=w?.balance?.available,pending=w?.balance?.pending;
@@ -6156,39 +6293,6 @@ function walletRow({ ic = 'wallet', mark = '', tone = '', title, sub = '', right
 }
 const walletSwitch = (on, act, label, extra = '') => `<button type="button" class="wl-switch${on ? ' on' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-act="${act}" ${extra}${belnaWalletBusy || shopPayBusy ? ' disabled' : ''}><span></span></button>`;
 
-/* ----- Tao pays with: the choice, in Settings and on an empty panel ----- */
-function walletMethodPicker(compact=false,setupOnly=false){
-  scopeBelnaWallet();
-  const { w, created } = belnaWalletState(), shop = shopPaySnapshot(), active = walletPreferences?.activeMethod || null;
-  const existing = !!(shop.connected || walletPreferences?.merchantEnabled), busy = belnaWalletBusy || walletPreferencesLoading || shopPayBusy ? ' disabled' : '';
-  const option = (id, ic, title, desc, connected, side, extra = '') => {
-    const on = active === id;
-    const act = connected || id === null ? `data-act="wallet-switch" data-method="${id || ''}"` : `data-act="${id === 'belna_wallet' ? 'wallet-connect-belna' : 'wallet-existing-options'}"`;
-    return `<div class="wpay-opt${on ? ' on' : ''}" data-option="${id || 'off'}"><div class="wpay-line"><button type="button" class="wpay-main" role="radio" aria-checked="${on}" ${act}${!connected && id ? ` aria-expanded="${id==='belna_wallet'?walletConnectOpen:walletExistingOpen}"` : ''}${busy}><span class="wpay-radio" aria-hidden="true"></span><span class="wpay-ic ${ic}" aria-hidden="true">${ic === 'belna' ? icon('wallet', 16) : ic === 'card' ? icon('card', 16) : icon('x', 14)}</span><span class="wpay-copy"><b>${title}</b><small>${desc}</small></span></button>${side ? `<span class="wpay-side">${side}</span>` : ''}</div>${extra}</div>`;
-  };
-  const belnaSide = created ? compact ? '' : `<b>${esc(walletMoney(w.balance?.available))}</b> available`
-    : `<button type="button" class="btn ghost small" data-act="wallet-connect-belna" aria-expanded="${walletConnectOpen}"${busy}>Set up</button>`;
-  const belnaSetup = !created && walletConnectOpen ? `<div class="wpay-extra"><label class="wl-field">Country you live in<select class="field" id="belna-wallet-country">${walletCountryOptions('SE')}</select></label><button type="button" class="btn small" data-act="belna-wallet-setup"${!w?.configured || belnaWalletBusy ? ' disabled' : ''}>${belnaWalletBusy?'Creating wallet…':'Create wallet'}</button>${!w?.configured ? '<p class="wl-hint">Wallet setup is currently unavailable. Please try again later.</p>' : `<p class="wl-hint">${w.cardProgramAvailable===false?'Add, send and receive money in your own wallet. Card payments are currently off.':'Create your own wallet, then verify your identity and connect your virtual card.'}</p>`}</div>` : '';
-  const previousWallet = w?.previousPersonalWallet ? '<p class="wl-hint">Your previous personal balance stays in your previous wallet. <a href="https://whop.com/home/" target="_blank" rel="noopener noreferrer">Open previous wallet</a></p>' : '';
-  const existingSide = existing ? compact ? '' : esc(shop.connected ? 'Shop Pay connected' : 'Store cards on')
-    : `<button type="button" class="btn ghost small" data-act="wallet-existing-options" aria-expanded="${walletExistingOpen}"${busy}>Connect</button>`;
-  const existingSetup = walletExistingOpen ? `<div class="wpay-extra wl-list boxed">${walletRow({ tone:'shop', title:'Shop Pay', sub:esc(shop.connected ? shop.email || 'Connected' : shop.configured ? 'Your saved Shop Pay payment method' : 'Not available yet'),
-      right: shop.connected ? `<span class="wl-ok">${icon('check', 13)} Connected</span>` : `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured || shopPayBusy || belnaWalletBusy ? ' disabled' : ''}>${shopPayBusy?'Connecting…':'Connect Shop Pay'}</button>` })}${walletRow({ ic:'bag', title:'Cards saved in stores', sub:'Use a saved card at stores such as Amazon. You approve each purchase.',
-      right: walletPreferences?.merchantEnabled ? `<span class="wl-ok">${icon('check', 13)} On</span>` : `<button type="button" class="btn ghost small" data-act="wallet-merchant-connect"${busy}>Turn on</button>` })}${walletLoginContent()}${shopPayError ? `<p class="wl-error" role="alert">${esc(shopPayError)}</p>` : ''}</div>` : '';
-  if(setupOnly)return belnaSetup+existingSetup;
-  return `<div class="wpay${compact?' compact':''}" role="radiogroup" aria-label="Wallet choice">
-    ${option('belna_wallet', 'belna', 'Belna Wallet', w?.cardProgramAvailable===false?'Add, send and receive money · cards off':compact?'Use your wallet balance':'Your own wallet balance. One-time card per approved purchase.', created, belnaSide, belnaSetup + previousWallet)}
-    ${option('existing_card', 'card', 'A card you already use', compact?'Shop Pay and saved payment logins':'Shop Pay or a card saved in a store you sign in to.', existing, existingSide, existingSetup)}
-    ${option(null, 'off', 'Off', compact?'Pause agent payments':esc(state.agent.name) + ' can find products and prices, but can’t pay.', true, '')}
-  </div>`;
-}
-function walletPanelMethodPicker(){
-  const {created}=belnaWalletState(),existing=!!(shopPaySnapshot().connected || walletPreferences?.merchantEnabled),active=walletPreferences?.activeMethod;
-  const busy=belnaWalletBusy || walletPreferencesLoading || shopPayBusy ? ' disabled' : '';
-  const option=(method,label,connected,action)=>`<button type="button" class="wl-method${active===method?' on':''}" role="radio" aria-checked="${active===method}" aria-label="${method==='belna_wallet'?'Belna Wallet':'Existing cards'}" data-act="${connected?'wallet-switch':action}"${connected?` data-method="${method}"`:` aria-expanded="${method==='belna_wallet'?walletConnectOpen:walletExistingOpen}"`}${busy}>${label}</button>`;
-  return `<div class="wl-methods" role="radiogroup" aria-label="Wallet choice">${option('belna_wallet','Wallet',created,'wallet-connect-belna')}${option('existing_card','Existing',existing,'wallet-existing-options')}</div>${walletMethodPicker(true,true)}`;
-}
-
 /* ----- Settings › Wallet ----- */
 function walletCardStatus(w){
   if (w.cardApplicationStatus === 'unsupported_personal_wallet') return { text:'Cards are unavailable for this wallet', tone:'warn' };
@@ -6216,23 +6320,17 @@ function walletBelnaGroup(){
   return `<section class="wset-sec"><h4 class="wset-label">Belna Wallet</h4><div class="wset-group">
     <button type="button" class="wset-row wset-link" data-act="wallet-open-panel"><span class="wset-copy"><b>Balance</b><small>${esc([pending > 0 ? walletMoney(pending) + ' pending' : '', 'USD', country].filter(Boolean).join(' · '))}</small></span><span class="wset-value">${esc(walletMoney(w.balance?.available))}</span>${icon('chevr', 16)}</button>
     ${w.cardProgramAvailable===false ? '' : `<div class="wset-row"><span class="wset-copy"><b>Card payments</b><small${card.tone ? ` class="${card.tone}"` : ''}>${esc(card.text)}</small></span>${cardActions}</div>`}
-    ${w.withdrawalsAvailable===false?'<div class="wset-row"><span class="wset-copy"><b>Bank withdrawals</b><small>Currently unavailable. We’ll show Withdraw when it’s ready.</small></span></div>':''}
+    ${w.withdrawalsAvailable===false?'<div class="wset-row"><span class="wset-copy"><b>Bank withdrawals</b><small>Not available yet</small></span></div>':''}
     ${w.cardProgramAvailable === false ? '' : limitRow}
     ${w.cardProgramAvailable === false ? '' : `<div class="wset-row"><span class="wset-copy"><b>Pause card spending</b><small>Also cancels purchase cards that are waiting.</small></span>${walletSwitch(!!w.paused, 'belna-wallet-freeze', 'Pause card spending', `data-frozen="${!w.paused}"`)}</div>`}
-  </div>${w.cardProgramAvailable===false?walletCardWaitlistContent():''}</section>`;
+    ${w.cardProgramAvailable===false?`<div class="wset-row"><span class="wset-copy"><b>${WALLET_CARD_TITLE}</b><small>${walletCardWaitlistSub()}</small></span>${walletCardWaitlistAction()}</div>`:''}
+  </div></section>`;
 }
 function walletLoginContent(){
   const logins=vaultDisplayEntries(state.vault?.secrets || []).filter(entry=>entry.kind==='Login');
-  const saved=logins.map(entry=>walletRow({ic:'key',title:entry.name,sub:entry.secrets.every(secret=>secret.backend)?'Saved securely in Secrets':'Saved on this device',right:'<span class="wl-tag">Saved login</span>'})).join('');
-  return `<section class="wallet-logins" aria-label="Payment logins"><div class="wl-sec-head"><h4>Payment logins</h4><button type="button" class="wl-link" data-act="wallet-existing-connect"${state.vault?.encrypted===false?' disabled':''}>Add login</button></div><p class="wl-hint">Use your saved store or payment-service login. ${esc(state.agent.name)} asks for passwords in a secure box and asks you to finish bank verification.</p>${saved?`<div class="wl-list">${saved}</div>`:'<p class="wl-empty">No saved logins yet.</p>'}<button type="button" class="wl-link" data-act="wallet-manage-logins">Manage in Secrets</button></section>`;
-}
-function walletExistingGroup(){
-  const shop = shopPaySnapshot(), merchant = !!walletPreferences?.merchantEnabled;
-  return `<section class="wset-sec"><h4 class="wset-label">Your payment connections</h4><div class="wset-group">
-    <div class="wset-row"><span class="wset-copy"><b>Shop Pay</b><small>${esc(shop.connected ? 'Connected as ' + (shop.email || 'your Shop Pay account') : shop.configured ? 'Connect your Shop account for checkout' : state.shopPayLoading ? 'Checking availability…' : 'Shop Pay setup is currently unavailable')}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-${shop.connected?'disconnect':'connect'}"${shopPayBusy || (!shop.connected && !shop.configured)?' disabled':''}>${shopPayBusy?'Please wait…':shop.connected?'Disconnect':'Connect Shop Pay'}</button></div>
-    ${shop.connected ? `<div class="wset-row"><span class="wset-copy"><b>Shop Pay daily limit</b><small>Every purchase still needs your approval.</small></span><label class="wl-field">USD<input class="field" id="shoppaylimit" type="number" min="1" max="2000" step="0.01" value="${Number(shop.dailyLimitUsd)||200}"></label><button type="button" class="btn ghost small" data-act="shop-pay-limit"${shopPayBusy?' disabled':''}>Save limit</button></div>` : ''}
-    <div class="wset-row"><span class="wset-copy"><b>Cards saved in stores</b><small>Like Amazon. You sign in when ${esc(state.agent.name)} opens the store.</small></span>${walletSwitch(merchant, 'wallet-merchant-toggle', 'Cards saved in stores')}</div>
-  </div>${shopPayError?`<p class="wl-error" role="alert">${esc(shopPayError)}</p>`:''}${walletLoginContent()}<button type="button" class="wl-link" data-act="shop-pay-refresh">Refresh connections</button></section>`;
+  const rows=logins.map(entry=>`<div class="wset-row pm-row"><span class="pm-ic" aria-hidden="true">${icon('key',15)}</span><span class="wset-copy"><b>${esc(entry.name)}</b><small>${entry.secrets.every(secret=>secret.backend)?'Saved securely in Secrets':'Saved on this device'}</small></span></div>`).join('');
+  return `<section class="wset-sec" id="store-logins" aria-label="Store logins"><h4 class="wset-label">Store logins</h4><div class="wset-group">${rows || '<div class="wset-row"><span class="wset-copy"><small>No saved logins yet.</small></span></div>'}
+    <div class="wset-row pm-links"><button type="button" class="wl-link" data-act="wallet-existing-connect"${state.vault?.encrypted===false?' disabled':''}>Add login</button><button type="button" class="wl-link" data-act="wallet-manage-logins">Manage in Secrets</button></div></div></section>`;
 }
 function walletAddressForm(){
   const a = walletAddressEdit;
@@ -6270,27 +6368,45 @@ function setWalletPreferences(payload){
 }
 function walletSettingsContent(){
   scopeBelnaWallet();
-  const active=walletPreferences?.activeMethod, {w}=belnaWalletState();
-  const existing=active==='existing_card', belna=active==='belna_wallet';
+  const {w,created}=belnaWalletState();
   return `<div class="wset">
     ${belnaWalletError ? `<p class="wl-error" role="alert">${esc(belnaWalletError)}</p>` : ''}
-    <section class="wset-sec"><h4 class="wset-label">Choose your wallet</h4>${walletMethodPicker()}${walletPreferencesError?`<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>`:''}<p class="wset-foot">${belna && w?.cardProgramAvailable===false?'Belna Wallet holds your money. Choose your existing card for shopping.':'You approve every purchase. Switching keeps your connections and history.'}</p></section>
-    ${belna?walletBelnaGroup():existing?walletExistingGroup():''}
-    ${existing || belna && w?.cardProgramAvailable!==false ? `<section class="wset-sec" id="wallet-shipping-section">${walletShippingContent()}</section>` : ''}
+    ${created?walletBelnaGroup():walletCreateContent()}
+    ${w?.previousPersonalWallet?'<p class="wl-hint">Your previous personal balance stays in your previous wallet. <a href="https://whop.com/home/" target="_blank" rel="noopener noreferrer">Open previous wallet</a></p>':''}
+    ${created && w?.cardProgramAvailable!==false?`<section class="wset-sec"><h4 class="wset-label">Agent purchases</h4><div class="wset-group"><div class="wset-row"><span class="wset-copy"><b>Pay from Belna Wallet</b><small>One-time card for each purchase you approve.</small></span>${walletPreferences?.activeMethod==='belna_wallet'?'<span class="wl-ok">Selected</span>':'<button type="button" class="btn ghost small" data-act="wallet-switch" data-method="belna_wallet">Use wallet</button>'}</div></div></section>`:''}
+    ${ownMethodsSettings()}
+    <section class="wset-sec" id="wallet-shipping-section">${walletShippingContent()}</section>
   </div>`;
+}
+function walletCreateContent(){
+  const {w}=belnaWalletState();
+  return `<section class="wl-choose"><span class="wl-ico">${icon('wallet',24)}</span><h4>Your own Belna Wallet</h4><p class="wl-lede">Add, send and receive money. Your balance and activity live here.</p><label class="wl-field">Country you live in<select class="field" id="belna-wallet-country">${walletCountryOptions('SE')}</select></label><button type="button" class="btn small" data-act="belna-wallet-setup"${!w?.configured || belnaWalletBusy?' disabled':''}>${belnaWalletBusy?'Creating wallet…':'Create Belna Wallet'}</button>${!w?.configured?'<p class="wl-hint">Wallet setup is currently unavailable. Try again later.</p>':''}</section>`;
 }
 
 /* ----- Chat panel ----- */
 const WALLET_ACTIVITY_ICONS = { 'Deposit':'plus', 'Payment received':'arrin', 'Received money':'arrin', 'Refund':'arrin', 'Sent money':'aur', 'Withdrawal':'bank', 'Payment fee':'receipt', 'Purchase':'bag' };
+// Activity is one list: Belna Wallet money and purchases paid with your own methods, newest
+// first, in the same rows. Own-method rows name the method, since they never touch the balance.
+function walletOwnSpend(){
+  return [...walletHistory.map(x => ({ ...x, method:'Your own payment method' })), ...(state.shopPayOrders || []).map(o => ({ title:o.title || o.merchant || 'Purchase', amount:o.amount, currency:o.currency, status:o.status, at:o.at, method:'Shop Pay', continueUrl:o.continueUrl }))];
+}
 function walletActivityContent(){
   const c = belnaWalletCache || {};
   const verifications = (c.purchases || []).filter(p => p.status === 'submitted' && !p.cardCanceled && Date.parse(p.expiresAt) > Date.now())
     .map(p => walletRow({ ic:'shieldcheck', tone:'warn', cls:'attn', title:'Verify your payment at ' + (p.merchant || 'the store'), sub:'Your bank asks you to confirm this purchase.', right:`<button type="button" class="btn small" data-act="wallet-verify-payment" data-id="${esc(p.purchaseId)}">Verify</button>` })).join('');
-  const data = c.activity?.length ? c.activity : [...(c.transfers || []).map(x => ({ title:'Sent to ' + x.recipient, amount:x.amount, status:x.status, at:x.at })), ...(c.purchases || []).map(x => ({ title:x.merchant, amount:x.amount, status:x.status, at:x.at })), ...(c.transactions || [])];
+  const belna = c.activity?.length ? c.activity : [...(c.transfers || []).map(x => ({ title:'Sent to ' + x.recipient, amount:x.amount, status:x.status, at:x.at })), ...(c.purchases || []).map(x => ({ title:x.merchant, amount:x.amount, status:x.status, at:x.at })), ...(c.transactions || [])];
   const home = walletDefaultAddress();
-  const rows = data.map(x => {
-    const title = String(x.title || 'Wallet activity'), incoming = /received|deposit|refund/i.test(title), outgoing = !incoming && /purchase|sent|withdrawal|fee/i.test(title);
-    const status = walletStatusLabel(x.status), sub = [walletDate(x.at), status !== 'Completed' ? status : ''].filter(Boolean).join(' · ');
+  const items = [...belna.map(x => ({ x, own:false })), ...walletOwnSpend().map(x => ({ x, own:true }))]
+    .map((item, i) => ({ ...item, i, t:Date.parse(item.x.at || '') || 0 })).sort((a, b) => b.t - a.t || a.i - b.i);
+  const rows = items.map(({ x, own }) => {
+    const title = String(x.title || (own ? 'Purchase' : 'Wallet activity')), status = walletStatusLabel(x.status);
+    if (own) {
+      const attn = /needs_buyer|escalated/.test(String(x.status)), url = safeCheckoutUrl(x.continueUrl);
+      return walletRow({ ic:'bag', tone:attn ? 'warn' : '', cls:attn ? 'attn' : '', title, sub:esc([walletDate(x.at), x.method, status !== 'Completed' ? status : ''].filter(Boolean).join(' · ')),
+        right:`<span class="pay-side"><span class="wl-amt">−${esc(walletAmount(x))}</span>${attn && url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Pay</a>` : ''}</span>` });
+    }
+    const incoming = /received|deposit|refund/i.test(title), outgoing = !incoming && /purchase|sent|withdrawal|fee/i.test(title);
+    const sub = [walletDate(x.at), status !== 'Completed' ? status : ''].filter(Boolean).join(' · ');
     return walletRow({ ic:WALLET_ACTIVITY_ICONS[title] || (incoming ? 'arrin' : outgoing ? 'aur' : 'wallet'), tone:incoming ? 'in' : '', title, sub:esc(sub),
       right:`<span class="wl-amt${incoming ? ' in' : ''}">${incoming ? '+' : outgoing ? '−' : ''}${esc(walletAmount(x))}</span>` });
   }).join('');
@@ -6302,9 +6418,9 @@ function openWalletMoneyAction(kind){
   walletMoneyClose?.();walletWithdrawalClose?.();walletCardSetupClose?.(false);
   const previous=document.activeElement;
   walletAction=kind;walletActionError='';if(!['processing','awaiting_confirmation'].includes(belnaTransferQuote?.status))belnaTransferQuote=null;
-  const overlay=el(`<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-money-dialog wl" role="dialog" aria-modal="true" aria-labelledby="wallet-money-title"><header><div><h3 id="wallet-money-title">Send money</h3><p>Review the recipient and amount before you confirm.</p></div><button type="button" class="btn ghost small" aria-label="Close wallet action">${icon('x',18)}</button></header><div id="wallet-money-content"></div></section></div>`);
+  const overlay=el(`<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-money-dialog wl" role="dialog" aria-modal="true" aria-labelledby="wallet-money-title"><header><div><h3 id="wallet-money-title">Send money</h3><p>Review the recipient and amount before you confirm.</p></div><button type="button" class="btn ghost small" data-sheet-close aria-label="Close wallet action">${icon('x',18)}</button></header><div id="wallet-money-content"></div></section></div>`);
   let closed=false,identityTimer;
-  const close=()=>{if(closed)return;closed=true;clearInterval(identityTimer);overlay.remove();document.removeEventListener('keydown',onKey);if(walletMoneyClose===close){walletMoneyClose=null;walletMoneyRoot=null;walletAction=null;walletActionError='';}restoreWalletFocus(previous);};
+  const close=()=>{if(closed)return;closed=true;clearInterval(identityTimer);dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletMoneyClose===close){walletMoneyClose=null;walletMoneyRoot=null;walletAction=null;walletActionError='';}restoreWalletFocus(previous);};
   const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button:not(:disabled),input:not(:disabled),a[href]')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
   walletMoneyClose=close;walletMoneyRoot=overlay.querySelector('#wallet-money-content');walletMoneyRoot.innerHTML=walletActionContent();
   overlay.querySelector('header button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};
@@ -6322,7 +6438,7 @@ function walletActionContent(){
   return '';
 }
 function walletSetupContent(w){
-  if (w.cardProgramAvailable === false) return walletCardWaitlistContent();
+  if (w.cardProgramAvailable === false) return '';
   if (w.cardReady ?? w.status === 'ready') return w.paused
     ? `<div class="wl-note warn">${icon('lock', 17)}<span><b>Card spending is paused</b><small>Resume it in wallet settings.</small></span><button type="button" class="btn ghost small" data-act="wallet-manage">Settings</button></div>`
     : `<div class="wl-note ok">${icon('shieldcheck', 17)}<span><b>Card payments are on</b><small>${w.agentCardPayments ? `${esc(state.agent.name)} gets a one-time card for each purchase you approve.` : 'Agent card checkout isn’t available yet.'}</small></span></div>`;
@@ -6340,44 +6456,61 @@ function walletSetupContent(w){
     ${step(2, verified, verified?'Identity verified':'Verify your identity', identityCopy, verified||w.verificationStatus==='manual_review'?'':`<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>${w.verificationStatus==='pending'||w.verificationStatus==='action_required'?'Continue':'Start'}</button>`)}
     ${step(3, false, 'Connect your card', cardCopy, cardAction)}</ol>${denied||w.status==='card_unavailable'?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a> ':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></section>`;
 }
-function walletExistingPanel(){
-  const shop = shopPaySnapshot(), home = walletDefaultAddress(), busy = belnaWalletBusy ? ' disabled' : '';
-  const connections = walletRow({ tone:'shop', title:'Shop Pay', sub:esc(shop.connected ? shop.email || 'Connected' : 'Not connected'),
-      right: shop.connected ? `<span class="wl-ok">${icon('check', 13)} Connected</span>` : `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured || shopPayBusy ? ' disabled' : ''}>${shopPayBusy?'Connecting…':'Connect Shop Pay'}</button>` })
-    + walletRow({ ic:'bag', title:'Cards saved in stores', sub:'You sign in when ' + esc(state.agent.name) + ' opens the store',
-      right: walletPreferences?.merchantEnabled ? `<span class="wl-ok">${icon('check', 13)} On</span>` : `<button type="button" class="btn ghost small" data-act="wallet-merchant-connect"${busy}>Turn on</button>` })
-    + `<button type="button" class="wl-row wl-row-link" data-act="wallet-manage-shipping"><span class="wl-ico" aria-hidden="true">${icon('pin', 17)}</span><span class="wl-copy"><b>${home ? 'Delivers to ' + esc(home.label) : 'No delivery address yet'}</b><small>${home ? esc(home.formatted) : 'Add one so orders know where to go'}</small></span>${icon('chevr', 16)}</button>`;
-  const orders = [...walletHistory.map(x => ({ ...x, method:'' })), ...(state.shopPayOrders || []).map(o => ({ title:o.title || o.merchant || 'Purchase', amount:o.amount, currency:o.currency, status:o.status, at:o.at, method:'Shop Pay', continueUrl:o.continueUrl }))];
-  const rows = orders.map(x => {
-    const title = String(x.title || 'Purchase'), attn = /needs_buyer|escalated/.test(String(x.status)), url = /^https:\/\//.test(x.continueUrl || '') ? x.continueUrl : '';
-    const sub = [walletDate(x.at), x.method, walletStatusLabel(x.status)].filter(Boolean).join(' · ');
-    return walletRow({ mark:title.trim().slice(0, 1).toUpperCase() || '?', tone:attn ? 'warn' : '', cls:attn ? 'attn' : '', title, sub:esc(sub),
-      right:`<span class="wl-amt">${esc(walletAmount(x))}</span>${attn && url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Finish</a>` : ''}` });
-  }).join('');
-  return `<div class="wl-list boxed" aria-label="Connections">${connections}</div>${shopPayError?`<p class="wl-error" role="alert">${esc(shopPayError)}</p>`:''}${walletLoginContent()}
-    <section class="wl-sec" aria-label="Purchases"><div class="wl-sec-head"><h4>Purchases</h4></div>${rows ? `<div class="wl-list">${rows}</div>` : '<p class="wl-empty">Purchases you approve will appear here.</p>'}</section>
-    <p class="wl-foot">${icon('lock', 14)} No wallet balance here. ${esc(state.agent.name)} never sees your card.</p>`;
-}
-function paymentsTabContent(){
+function walletTabContent(){
   scopeBelnaWallet();
-  const { w, created } = belnaWalletState(), active = walletPreferences?.activeMethod;
-  const name = active === 'existing_card' ? 'a card you already use' : active === 'belna_wallet' && created ? 'Belna Wallet' : '';
+  const { w, created } = belnaWalletState();
   let body = belnaWalletError ? `<p class="wl-error" role="alert">${esc(belnaWalletError)}</p>` : '';
-  if (active === 'existing_card') body += walletExistingPanel();
-  else if (active === 'belna_wallet' && created) {
+  if (created) {
     const pending = Number(w.balance?.pending);
     const act = (attrs, ic, label, on = false) => `<button type="button" class="wl-act${on ? ' on' : ''}" ${attrs}${on ? ' aria-pressed="true"' : ''}><span class="wl-act-ic" aria-hidden="true">${icon(ic, 19)}</span>${label}</button>`;
     body += `<section class="wl-balance" aria-label="Belna Wallet balance"><span class="wl-label">Total balance · Belna</span><div class="wl-big"><strong>${esc(walletMoney(walletTotalBalance(w)))}</strong><span>USD</span></div>${pending > 0 ? `<span class="wl-pending">${esc(walletMoney(w.balance?.available))} available · ${esc(walletMoney(pending))} pending</span>` : ''}${w.sandbox ? '<span class="wl-tag">Test wallet · no real money</span>' : ''}${walletBalanceChart(w)}</section>
-      <div class="wl-acts${w.withdrawalsAvailable===false?' limited':''}" aria-label="Wallet actions">${act('data-act="belna-wallet-deposit"', 'plus', 'Add money')}${act('data-act="wallet-money-action" data-action="send"', 'aur', 'Send', walletAction === 'send')}${w.withdrawalsAvailable===false?'':act('data-act="wallet-money-action" data-action="withdraw"', 'bank', 'Withdraw')}</div>${w.withdrawalsAvailable===false?'<p class="wl-hint">Bank withdrawals are currently unavailable.</p>':''}
-      ${walletSetupContent(w)}${walletActivityContent()}`;
+      <div class="wl-acts" aria-label="Wallet actions">${act('data-act="belna-wallet-deposit"', 'plus', 'Add money')}${act('data-act="wallet-money-action" data-action="send"', 'aur', 'Send', walletAction === 'send')}${act('data-act="wallet-money-action" data-action="withdraw"' + (w.withdrawalsAvailable===false ? ' disabled' : ''), 'bank', 'Withdraw')}</div>${w.withdrawalsAvailable===false?'<p class="wl-hint">Bank withdrawals are currently unavailable.</p>':''}
+      ${walletActivityContent()}${walletSetupContent(w)}`;
   } else {
     const loading = (belnaWalletLoading && !belnaWalletCache) || (walletPreferencesLoading && !walletPreferences);
-    body += loading ? '<p class="wl-empty">Loading your wallet…</p>' : `<div class="wl-choose"><span class="wl-ico" aria-hidden="true">${icon('wallet',22)}</span><b>${walletPreferences?.selectionSaved?'Payments are off':'Choose your wallet'}</b><p class="wl-lede">Manage Belna Wallet and your existing payment connections in Settings.</p><button type="button" class="btn small" data-act="wallet-manage">Choose wallet</button></div>`;
+    body += loading ? '<p class="wl-empty">Loading Belna Wallet…</p>' : walletCreateContent() + (walletOwnSpend().length ? walletActivityContent() : '');
   }
-  const heading = active === 'belna_wallet' && created && w?.cardProgramAvailable === false ? 'Belna Wallet' : name ? `${esc(state.agent.name)} pays with ${name}` : '';
-  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Wallet</h3>${heading ? `<p>${heading}</p>` : ''}</div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${walletPanelMethodPicker()}${walletPreferencesError?`<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>`:''}${body}</div>`;
+  return `<div class="appr-panel wallet-panel wl"><div class="wl-head"><div><h3>Belna Wallet</h3><p>Your balance, money and wallet activity.</p></div><button type="button" class="iconbtn" data-act="wallet-manage" title="Wallet settings" aria-label="Wallet settings">${icon('gear', 16)}</button></div>${body}${walletPaymentsLink()}</div>`;
 }
-
+// Your own payment methods are not the Belna balance: one button leads to them in Settings.
+function walletPaymentsLink(){
+  const { w, created } = belnaWalletState();
+  const on = OWN_METHODS.filter(([id]) => walletPreferences?.methods?.[id]).map(([, label]) => label);
+  const card = created && w.cardProgramAvailable === false ? walletRow({ ic:'card', title:WALLET_CARD_TITLE, sub:walletCardWaitlistSub(), right:walletCardWaitlistAction() }) : '';
+  return `<section class="wl-sec" aria-label="Card and payment methods"><div class="wl-list boxed">${card}<button type="button" class="wl-row wl-row-link" data-act="payments-manage"><span class="wl-ico" aria-hidden="true">${icon('bag', 17)}</span><span class="wl-copy"><b>Payment methods</b><small>${esc(on.length ? on.join(', ') + ' on' : 'Store cards, payment apps, Shop Pay')} · never uses your balance</small></span>${icon('chevr', 16)}</button></div></section>`;
+}
+function safeCheckoutUrl(value){
+  try{const u=new URL(value);return u.protocol==='https:' && !u.username && !u.password?u.href:'';}catch{return '';}
+}
+/* ----- Your own payment methods, in Settings › Wallet ----- */
+// Swish, Klarna, Shop Pay and cards saved in stores are charged to the owner's own accounts,
+// never the Belna balance. Each is off until the owner turns it on, and the server refuses a
+// purchase with a method that is off. Belna never takes card or bank details.
+const OWN_METHODS = [
+  ['saved_card', 'Cards saved in stores', 'card', 'Stores you sign in to, like Amazon'],
+  ['payment_apps', 'Payment apps and pay later', 'phone', 'Klarna, Swish, PayPal, Afterpay, Sezzle and more. You approve each payment in the app.'],
+  ['shop_pay', 'Shop Pay', '', 'Shopify stores'],
+];
+function ownMethodControl(id, label, connectLabel = 'Connect'){
+  const shop = shopPaySnapshot();
+  if (id === 'shop_pay' && !shop.connected) return `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${!shop.configured || shopPayBusy ? ' disabled' : ''}>${shopPayBusy ? (connectLabel === 'Connect' ? 'Connecting…' : 'Please wait…') : connectLabel}</button>`;
+  return walletSwitch(!!walletPreferences?.methods?.[id], 'pay-method-toggle', label, `data-method="${id}"`);
+}
+function ownMethodSub(id, sub){
+  const shop = shopPaySnapshot();
+  if (id !== 'shop_pay' || shop.connected) return id === 'shop_pay' && shop.email ? 'Connected as ' + shop.email : sub;
+  return state.shopPayLoading ? 'Checking connection…' : shop.configured ? 'Shopify stores · connect first' : 'Currently unavailable';
+}
+// Settings › Wallet: each method's switch, the Shop Pay account and limit, and how it stays safe.
+function ownMethodsSettings(){
+  const shop = shopPaySnapshot(), busy = shopPayBusy ? ' disabled' : '';
+  const rows = OWN_METHODS.map(([id, label, ic, sub]) => `<div class="wset-row pm-row"><span class="pm-ic${id === 'shop_pay' ? ' shop' : ''}" aria-hidden="true">${id === 'shop_pay' ? shopPayBrandMark() : icon(ic, 16)}</span><span class="wset-copy"><b>${esc(label)}</b><small>${esc(ownMethodSub(id, sub))}</small></span>${ownMethodControl(id, label, 'Connect Shop Pay')}</div>`).join('');
+  const shopRows = shop.connected ? `<div class="wset-row"><span class="wset-copy"><b>Shop Pay daily limit</b><small>Purchases still need your approval</small></span><label class="wl-field">USD<input class="field" id="shoppaylimit" type="number" min="1" max="2000" step="0.01" value="${Number(shop.dailyLimitUsd)||200}"></label><button type="button" class="btn ghost small" data-act="shop-pay-limit"${busy}>Save limit</button></div>
+    <div class="wset-row"><span class="wset-copy"><b>Shop Pay account</b><small>${esc(shop.email || 'Connected')}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-disconnect"${busy}>${shopPayBusy ? 'Please wait…' : 'Disconnect'}</button></div>` : '';
+  return `<section class="wset-sec" id="payment-connections"><h4 class="wset-label">Payment methods</h4><div class="wset-group">${rows}${shopRows}</div>
+    <ul class="pm-safe" aria-label="How payment methods work"><li>${icon('wallet', 14)}Never uses your Belna balance</li><li>${icon('check', 14)}You approve every purchase</li><li>${icon('lock', 14)}${esc(state.agent.name)} never sees card or bank details</li></ul>
+    ${walletPreferencesError ? `<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>` : ''}${shopPayError ? `<p class="wl-error" role="alert">${esc(shopPayError)}</p>` : ''}</section>${walletLoginContent()}`;
+}
 const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
 function automationItemHtml(agent){
   const open = state.automationOpenId === agent.id;
@@ -7279,12 +7412,13 @@ function canvasMorph(update, ref){
 
 function paintCanvas(){
   const cv = $('#canvas'); if (!cv) return;
-  if(state.view==='settings' && state.canvasTab==='payments'){cv.replaceChildren();return;}
+  if(state.view==='settings' && ['wallet','payments'].includes(state.canvasTab)){cv.replaceChildren();return;}
   applyAgentBrand();
   scopeMailCache();
   if (state.canvasTab === 'agent') state.canvasTab = 'approvals';
-  if (state.canvasTab === 'trace' || state.canvasTab === 'wallet' || state.canvasTab === 'live') state.canvasTab = 'canvas';
-  if (!['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
+  if (state.canvasTab === 'trace' || state.canvasTab === 'live') state.canvasTab = 'canvas';
+  if (state.canvasTab === 'payments') state.canvasTab = 'wallet';
+  if (!['canvas', 'subagents', 'mail', 'wallet', 'approvals'].includes(state.canvasTab)) state.canvasTab = 'canvas';
   const c = chat();
   const top = state.canvasTab || 'canvas';
   // A chat card still streaming its task's browser keeps the connection.
@@ -7325,7 +7459,7 @@ function paintCanvas(){
     ['subagents', 'clock', 'Automations', ''],
     ['approvals', 'shieldcheck', 'Approvals', ''],
     ['mail', 'mail', 'Mail', mailCache && mailCache.unread ? `<span class="cnt" aria-hidden="true">${mailCache.unread}</span>` : ''],
-    ['payments', 'wallet', 'Wallet', ''],
+    ['wallet', 'wallet', 'Wallet', ''],
   ].map(([t, ic, label, badge]) => `<button class="canvas-tab${top === t ? ' on' : ''}" role="tab" aria-selected="${top === t}" data-act="ctab" data-t="${t}" title="${label}" aria-label="${label}${t === 'mail' && mailCache?.unread ? `, ${mailCache.unread} unread` : ''}">${icon(ic,18)}${badge}</button>`).join('');
   if (tabs.__html !== tabsHTML) { tabs.innerHTML = tabsHTML; tabs.__html = tabsHTML; }
   cv.classList.toggle('item-open', top === 'canvas' && !!canvasItemView(state.canvasItem));
@@ -7344,8 +7478,8 @@ function paintCanvas(){
     paintMail(body);
     return;
   }
-  if (top === 'payments'){
-    body.innerHTML = paymentsTabContent();
+  if (top === 'wallet'){
+    body.innerHTML = walletTabContent();
     if (signedIn()) refreshShopPay();
     if (signedIn()) refreshBelnaWallet();
     return;
@@ -7766,7 +7900,7 @@ function paintSettings(M){
   } else if (tab === 'support'){
     body = settingsSupportBody();
   }
-  const description = ({ wallet:'Choose your wallet and manage its connections.', billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.';
+  const description = ({ wallet:'Your Belna balance, your own payment methods and delivery addresses.', billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.';
   if (phone) M.innerHTML = `<div class="page set-page"><div class="pageinner set-sub">
     <div class="set-sub-head"><button class="set-round" data-act="stab" data-t="home" aria-label="Back to Settings" title="Settings">${icon('chevl',20)}</button><h1>${esc(SETTINGS_TABS.find(([id]) => id === tab)[1])}</h1></div>
     <p class="psub">${description}</p>
@@ -7834,7 +7968,7 @@ function paintSettings(M){
   if (tab === 'billing' || tab === 'usage'){
     loadBillingContent(tab);
   }
-  if(tab==='wallet'){refreshBelnaWallet();refreshShopPay();}
+  if(['wallet','payments'].includes(tab)){refreshBelnaWallet();refreshShopPay();}
   // Vault entries that belong to a connector say so; the reply repaints this tab.
   if (tab === 'secrets' && signedIn() && ccLoadedFor !== billingIdentity()) refreshCustomConnectors();
   // One status check per user if presence has not reported yet; the reply repaints this tab.
@@ -7947,12 +8081,40 @@ function connectorBodyHtml(a){
     </div>
   </div>`;
 }
+const APPLE_CONNECTORS = [
+  {scope:'calendar',name:'Apple Calendar',iconSrc:'/lingon/connectors/apple/calendar.jpg',description:'Read your events and approve calendar changes.'},
+  {scope:'reminders',name:'Apple Reminders',iconSrc:'/lingon/connectors/apple/reminders.jpg',description:'Read your lists and approve reminder changes.'},
+  {scope:'contacts',name:'Apple Contacts',iconSrc:'/lingon/connectors/apple/contacts.jpg',description:'Find contacts and approve changes to their details.'},
+  {scope:'health',name:'Apple Health',iconSrc:'/lingon/connectors/apple/health.jpg',description:'Read-only wellness summaries. Review each summary before sharing.'},
+];
+function appleConnectorRows(query,filter){
+  if (!window.BelnaApple?.available) return '';
+  const status = window.BelnaApple.connectionStatus?.();
+  return APPLE_CONNECTORS.filter(app => (!query || `${app.name} ${app.description}`.toLowerCase().includes(query)) && (filter !== 'connected' || status?.capabilities[app.scope])).map(app => {
+    const connected = status?.capabilities[app.scope] === true;
+    const open = state.appOpen === 'apple-' + app.scope;
+    const subtitle = connected ? `Connected on ${status.name}` : status ? 'Not connected on this device' : 'Checking device access…';
+    return `<article class="conn-row apple-connector ${connected ? 'is-connected' : ''} ${open ? 'is-open' : ''}" data-apple-scope="${app.scope}">
+      <div class="conn-head" data-act="toggle-apple-connector" data-scope="${app.scope}" role="button" tabindex="0" aria-expanded="${open}" aria-label="${app.name}, ${connected ? 'connected' : 'connection details'}">
+        <span class="app-logo apple-connector-logo"><img src="${app.iconSrc}" alt="" width="40" height="40" decoding="async">${connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
+        <span class="conn-meta"><b>${app.name}</b><span>${esc(subtitle)}</span></span>
+        ${connected ? '<span class="chip green">Connected</span>' : ''}
+        <button type="button" class="btn ghost small conn-quick" data-act="apple-apps" data-scope="${app.scope}" aria-label="${connected ? 'Manage' : 'Connect'} ${app.name}">${connected ? 'Manage' : 'Connect'}</button>
+        <span class="conn-chev">${icon('chev',16)}</span>
+      </div>
+      ${open ? `<div class="conn-body"><div class="conn-sec"><h3>Device access</h3><p class="conn-hint">${app.description}</p><p class="conn-hint">Manage ${app.name} in Apple apps. Keep Belna open on this device for agent requests.</p><button class="btn small" data-act="apple-apps" data-scope="${app.scope}">Manage ${app.name}</button></div></div>` : ''}
+    </article>`;
+  }).join('');
+}
+window.addEventListener('belna-apple-status', () => { if (state.view === 'apps' && $('#main')) paintApps($('#main')); });
 function paintApps(M){
   const apps = Array.isArray(state.composioApps) ? state.composioApps : [];
   const own = Array.isArray(state.customConnectors) ? state.customConnectors : [];
   const q = String(state.appQuery || '').toLowerCase().trim();
   const filter = state.appFilter === 'connected' ? 'connected' : 'all';
-  const connectedCount = apps.filter((a) => a.connected).length + own.length;
+  const appleStatus = window.BelnaApple?.connectionStatus?.();
+  const connectedCount = apps.filter((a) => a.connected).length + own.length + APPLE_CONNECTORS.filter(app => appleStatus?.capabilities[app.scope]).length;
+  const appleRows = appleConnectorRows(q,filter);
   // The owner's own APIs and MCP servers count as connected: they exist once they work.
   const ownList = q ? own.filter((c) => [c.name, c.host, c.description, c.kind === 'mcp' ? 'mcp server' : 'api'].some((v) => String(v || '').toLowerCase().includes(q))) : own;
 
@@ -8007,8 +8169,8 @@ function paintApps(M){
   const grouped = ownList.length && (list.length || state.composioLoading);
   let board = `<div class="conn-list">${ownList.length ? `${grouped ? '<h2 class="conn-group">Your own</h2>' : ''}${ownRows}${grouped ? '<h2 class="conn-group">Apps</h2>' : ''}` : ''}${rows}</div>${ask}`;
   if (state.composioLoading && !list.length) board = `<div class="conn-list">${ownRows}${'<article class="conn-row skel"></article>'.repeat(ownList.length ? 3 : 6)}</div>`;
-  else if (!state.composioLoading && !apps.length && !own.length) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Ask ${agentName} in chat to connect an app, API or MCP server.</span></div>`;
-  else if (!state.composioLoading && !list.length && !ownList.length) board = `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
+  else if (!state.composioLoading && !apps.length && !own.length && !window.BelnaApple?.available) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Ask ${agentName} in chat to connect an app, API or MCP server.</span></div>`;
+  else if (!state.composioLoading && !list.length && !ownList.length) board = appleRows ? ask : `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
 
   M.innerHTML = `<div class="page"><div class="pageinner apps-page">
     <div class="apps-toolbar">
@@ -8020,6 +8182,7 @@ function paintApps(M){
       </div>
       <button class="iconbtn" data-act="refresh-apps" title="Refresh">${icon('refresh',16)}</button>
     </div>
+    ${window.BelnaApple?.available ? (appleRows ? `<h2 class="conn-group">Apple apps</h2><div class="conn-list apple-connectors">${appleRows}</div>` : '') : '<p class="conn-hint">Apple Calendar, Reminders, Contacts and Health connect through the Belna app on your iPhone, iPad or Mac.</p>'}
     ${board}
   </div></div>`;
   const input = $('#appquery');
@@ -8034,6 +8197,7 @@ function paintApps(M){
     });
   }
   if (!state.composioLoading && signedIn()) refreshComposioApps();
+  if (window.BelnaApple?.available && !appleStatus) window.BelnaApple.refreshStatus?.().catch(()=>{});
 }
 
 /* ---------------- Your own connectors: APIs and MCP servers the agent sets up ---------------- */
@@ -8192,10 +8356,11 @@ async function ccSetPermissions(id, change){
 window.addEventListener('resize', () => {
   if (state.view === 'settings' && $('#main') && !phoneLayout()) centerActiveSettingsTab($('#main'));
 });
-// Settings and Library have their own phone layout; repaint when the width crosses it.
+// These pages have their own phone layout; repaint when the width crosses it.
 window.matchMedia('(max-width: 760px)').addEventListener('change', () => {
   if (state.view === 'settings' && $('#main')) paintSettings($('#main'));
   else if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
+  else if (state.view === 'goals' && $('#main')) paintGoals($('#main'));
 });
 window.addEventListener('focus', () => {
   startWorkspacePresence();
@@ -8207,7 +8372,8 @@ window.addEventListener('focus', () => {
   // Returning from the OAuth tab: pull the fresh account list so the newly
   // connected mail/name/profile appears without a manual Refresh.
   if (signedIn() && (pendingConnect || (state.view === 'apps' && state.appOpen))) {
-    refreshComposioApps(true).then(() => { if (state.appOpen) openConnector(state.appOpen, true); });
+    window.BelnaApple?.refreshStatus?.().catch(()=>{});
+    refreshComposioApps(true).then(() => { if (state.appOpen && !state.appOpen.startsWith('apple-')) openConnector(state.appOpen, true); });
   }
 });
 document.addEventListener('visibilitychange', () => {
@@ -8344,6 +8510,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'top'){ e.preventDefault(); window.scrollTo({ top:0, behavior:'smooth' }); return; }
   if (act === 'back-home'){
+    if (window.BelnaApple?.available) { state.view = 'chat'; state.canvasOpen = false; render(); return; }
     if (window.__promoLeft){ window.location.assign('/promo'); return; }
     if (isPromoRoute()){ renderPromo(); return; }
     if (window.location.pathname.replace(/\/+$/, '') === '/app'){ window.location.assign('/'); return; }
@@ -8385,17 +8552,19 @@ document.addEventListener('click', async e => {
     return;
   }
   if (act === 'refresh-apps'){
-    refreshComposioApps(true).then(() => { if (state.appOpen) openConnector(state.appOpen, true); });
+    window.BelnaApple?.refreshStatus?.().catch(()=>{});
+    refreshComposioApps(true).then(() => { if (state.appOpen && !state.appOpen.startsWith('apple-')) openConnector(state.appOpen, true); });
     return;
   }
-  if(act==='wallet-manage' || act==='wallet-manage-shipping'){state.view='settings';state.settingsTab='wallet';save();renderApp();if(act==='wallet-manage-shipping')$('#wallet-shipping-section')?.scrollIntoView({block:'start'});return;}
+  if(act==='wallet-manage' || act==='wallet-manage-shipping' || act==='payments-manage'){state.view='settings';state.settingsTab='wallet';save();renderApp();if(act==='wallet-manage-shipping')$('#wallet-shipping-section')?.scrollIntoView({block:'start'});if(act==='payments-manage')$('#payment-connections')?.scrollIntoView({block:'start'});return;}
   if(act==='wallet-connect-belna'){walletConnectOpen=true;walletExistingOpen=false;repaintWallet();$('#belna-wallet-country')?.focus();return;}
-  if(act==='wallet-existing-options'){walletExistingOpen=b.getAttribute('role')==='radio'?true:!walletExistingOpen;walletConnectOpen=false;repaintWallet();return;}
-  if(act==='wallet-merchant-connect'){setWalletPreferences({merchantEnabled:true,activeMethod:'existing_card'});return;}
+  if(act==='wallet-existing-options'){$('#payment-connections')?.scrollIntoView({block:'start'});$('#payment-connections [data-act="shop-pay-connect"]')?.focus({preventScroll:true});return;}
+  if(act==='wallet-merchant-connect'){setWalletPreferences({methods:{saved_card:true}});return;}
+  if(act==='pay-method-toggle'){const m=b.dataset.method;setWalletPreferences({methods:{[m]:!walletPreferences?.methods?.[m]}});return;}
   if(act==='wallet-switch'){setWalletPreferences({activeMethod:b.dataset.method || null});return;}
-  if(act==='wallet-merchant-toggle'){const on=!walletPreferences?.merchantEnabled;setWalletPreferences({merchantEnabled:on,...(!on && walletPreferences?.activeMethod==='existing_card' && !shopPaySnapshot().connected?{activeMethod:null}:{})});return;}
+  if(act==='wallet-merchant-toggle'){setWalletPreferences({methods:{saved_card:!walletPreferences?.methods?.saved_card}});return;}
   if(act==='wallet-limit-edit' || act==='wallet-limit-cancel'){walletLimitEdit=act==='wallet-limit-edit';repaintWallet();if(walletLimitEdit)$('#belna-wallet-limit')?.focus();return;}
-  if(act==='wallet-open-panel'){state.view='chat';state.canvasTab='payments';state.canvasOpen=true;save();renderApp();refreshBelnaWallet(true);refreshShopPay(true);return;}
+  if(act==='wallet-open-panel'){state.view='chat';state.canvasTab='wallet';state.canvasOpen=true;save();renderApp();refreshBelnaWallet(true);return;}
   if(act==='wallet-verify-payment'){openWalletVerification(b.dataset.id);return;}
   if(act==='belna-wallet-deposit'){openWalletWithdrawal('deposit');return;}
   if(act==='wallet-verify-money'){openWalletWithdrawal('verify');return;}
@@ -8754,12 +8923,12 @@ document.addEventListener('click', async e => {
   }
   if (act === 'togglecanvas'){ setCanvasOpen(!canvasShouldShow()); return; }
   if (act === 'ctab'){
-    const next = b.dataset.t === 'agent' || b.dataset.t === 'trace' || b.dataset.t === 'wallet' ? 'canvas' : b.dataset.t;
-    state.canvasTab = ['canvas', 'subagents', 'mail', 'payments', 'approvals'].includes(next) ? next : 'canvas';
+    const next = b.dataset.t === 'agent' || b.dataset.t === 'trace' ? 'canvas' : b.dataset.t;
+    state.canvasTab = ['canvas', 'subagents', 'mail', 'wallet', 'approvals'].includes(next) ? next : 'canvas';
     save(); paintCanvas();
     if (next === 'subagents') refreshSubAgents(true);
     if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
-    if (next === 'payments') { refreshComposioApps(true); refreshShopPay(true); }
+    if (next === 'wallet') { refreshBelnaWallet(true); refreshShopPay(true); }
     return;
   }
   if (act === 'appr-toggle'){
@@ -8890,7 +9059,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'lib-download'){ downloadLibraryItem(libraryItemById(b.dataset.id)); return; }
   if (act === 'library-item-open'){ libraryViewer = b.dataset.libId || null; paintLibrary($('#main')); return; }
-  if (act === 'lib-viewer-close'){ libraryViewer = null; paintLibrary($('#main')); return; }
+  if (act === 'lib-viewer-close'){ closeLibraryViewer(); return; }
   if (act === 'lib-upload'){ $('#libupload')?.click(); return; }
   if (act === 'libcat'){
     state.libraryCat = b.dataset.cat || 'all'; state.librarySelect = false; state.librarySelected = [];
@@ -9320,6 +9489,9 @@ document.addEventListener('click', async e => {
   if (act === 'signup'){ doAuth('signup'); return; }
   if (act === 'pw-go'){ doAuth(authMode === 'signup' ? 'signup' : 'signin'); return; }
   if (act === 'google'){ authOAuth(); return; }
+  if (act === 'apple-signin'){ authApple(); return; }
+  if (act === 'toggle-apple-connector'){ state.appOpen = state.appOpen === 'apple-' + b.dataset.scope ? null : 'apple-' + b.dataset.scope; save(); paintApps($('#main')); return; }
+  if (act === 'apple-apps'){ window.BelnaApple?.settings(b.dataset.scope).catch(error=>toast(error.message)); return; }
   if (act === 'pw-mode'){ const em = ((document.getElementById('aemail') || {}).value || '').trim(); const pe = document.getElementById('pwemail'); if (pe) pe.textContent = em; showAuthPane('authpw'); return; }
   if (act === 'auth-back'){ showAuthPane('authmain'); return; }
   if (act === 'auth-mode'){ authMode = authMode === 'signin' ? 'signup' : 'signin'; authPaintMode(); return; }
@@ -9553,6 +9725,7 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) =>
     await hydrateStoredFiles();
     await loadClientState();
     await syncFromBackend(true).catch(error => console.warn('Account data restore failed:',error));
+    if (window.BelnaApple?.available) { state.view = 'chat'; state.canvasOpen = false; mobileNavOpen = false; }
     leaveSetupChat();
   }
   if (signedIn() && state.pendingPrompt && !needsOnboarding()) {
@@ -9577,11 +9750,12 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) =>
       window.history.replaceState(null, '', window.location.pathname);
       if (f) handleBillingReturn(f, q);
       if (shop) {
-        state.view = 'chat';
-        state.canvasOpen = true;
-        state.canvasTab = 'payments';
+        // Back to the payment methods in Settings, where Shop Pay was connected.
+        state.view = 'settings';
+        state.settingsTab = 'wallet';
         save();
         renderApp();
+        $('#payment-connections')?.scrollIntoView({block:'start'});
         refreshShopPay(true).then(()=>{if(shop==='connected')return finishShopPayChoice();try{sessionStorage.removeItem('belna.shopPayChoice');}catch{}});
         setTimeout(() => toast(shop === 'connected' ? 'Shop Pay connected. Purchases still need your approval.' : ('Shop Pay: ' + (msg || 'could not connect.'))), 400);
       }

@@ -19,6 +19,8 @@ const belnaWallet = createBelnaWallet({ store,secureCheckout:privateCheckout.fac
 import { normalizeSubAgent, nextRunAt } from './triggers.js';
 import * as composio from '../composio.js';
 import * as connectors from '../connectors.js';
+import { APPLE_TOOLS } from './apple-tools.js';
+import { appleDevices } from '../apple-devices.js';
 import * as mail from '../mail.js';
 import * as shoppay from '../shoppay.js';
 import { execInSandbox, isAzureConfigured } from './azure-vm.js';
@@ -26,8 +28,8 @@ import { generateImage } from '../foundry.js';
 import { PLANS } from '../plans.js';
 import { questionArgs, presentArgs, connectArgs } from './cards.js';
 import { PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave } from './personal-tools.js';
-import { forbiddenPaymentSecret, cardNumberIn } from './payment-safety.js';
-import { createPurchaseFlow } from './purchase.js';
+import { forbiddenPaymentSecret, cardNumberIn, loginFieldProblem } from './payment-safety.js';
+import { createPurchaseFlow, withPhoneApproval } from './purchase.js';
 
 const privateBrowserSessions = new Set();
 const privateBrowserValues = new Map();
@@ -443,6 +445,9 @@ async function fillBrowserSecret(args, ctx) {
   const { name, value } = await vaultSecret(ctx.userId, ref);
   const scoped = /^(.+\.[A-Za-z]{2,}) (?:username|password)$/i.exec(name);
   if (scoped && !hostMatches(here.url, scoped[1])) throw badInput(`This saved login belongs to ${scoped[1]}, not the current site. Nothing was typed.`);
+  const field = event.ref != null ? (here?.elements || []).find((line) => String(line).startsWith(`[${event.ref}]`)) : '';
+  const wrongField = loginFieldProblem(name, field);
+  if (wrongField) throw badInput(wrongField);
   const out = await execInSandbox(ctx.userId, 'browser_action', { event: { ...event, text: value, secret: true }, sessionId: ctx.sessionId }, opts);
   privateBrowserSessions.add(sessionKey(ctx.userId,ctx.sessionId));
   const values = privateBrowserValues.get(sessionKey(ctx.userId,ctx.sessionId)) || [];
@@ -547,14 +552,14 @@ const TOOLS = {
     description: 'List the apps the owner connected, the apps they can connect, what a connection cannot do, and the owner\'s own APIs and MCP servers.',
     run: async (_, ctx) => {
       // The owner's own APIs and MCP servers are listed even where the app catalog is not set up.
-      const [connected, configs, custom] = await Promise.all([composio.configured() ? composio.listConnected(ctx.userId) : [], composio.listAuthConfigs().catch(() => null), connectors.forAgent(ctx.userId).catch(() => [])]);
+      const [connected, configs, custom, apple] = await Promise.all([composio.configured() ? composio.listConnected(ctx.userId) : [], composio.listAuthConfigs().catch(() => null), connectors.forAgent(ctx.userId).catch(() => []), appleDevices.devices(ctx.userId).catch(() => [])]);
       const active = connected.filter((c) => String(c.status).toUpperCase() === 'ACTIVE')
         .map(({ id, toolkit, email, name, alias }) => ({ id, toolkit, account: email || name || alias || undefined }));
       const have = new Set(active.map((c) => c.toolkit));
       const offered = new Set([...have, ...(configs || []).map((c) => c.toolkit)]);
       ctx.trace(entry('box', `composio_apps: ${active.length} connected${custom.length ? `, ${custom.length} own` : ''}`));
       const note = [
-        configs ? 'Only the apps listed here can be connected. Anything else, or anything a limit excludes, is reachable only through the website in your browser, where the owner signs in themselves.' : '',
+        configs ? 'The catalog lists OAuth apps; appleDevices separately lists native Apple app connections. For unsupported apps, a website can work where the owner signs in themselves, but it cannot provide general Apple Health, Contacts or Reminders access.' : '',
         custom.length ? 'custom lists the owner\'s own APIs and MCP servers: see what one can do with connector_tools, then use it with connector_call.' : '',
       ].filter(Boolean).join(' ');
       return {
@@ -562,6 +567,8 @@ const TOOLS = {
         canConnect: configs ? configs.map((c) => c.toolkit).filter((t) => !have.has(t)) : undefined,
         limits: Object.fromEntries(Object.entries(APP_LIMITS).filter(([toolkit]) => offered.has(toolkit))),
         ...(custom.length ? { custom } : {}),
+        appleDevices: apple,
+        appleNote: 'Apple Calendar, Reminders, Contacts and read-only wellness summaries use apple_devices / apple_execute in the native Belna app. Open the app and connect each scope under Apple apps. Notes, Mail and Messages have no general Apple connector here.',
         note: note || undefined,
       };
     },
@@ -692,7 +699,7 @@ const TOOLS = {
       // Only a click that happened goes in the purchase history.
       if (args.purchase) await belnaWallet.recordExistingPurchase(ctx.userId, JSON.parse(ctx.approvedDetail)).catch(() => {});
       ctx.trace(entry('globe', `browser_submit: ${event.type} on ${out.vmName}`));
-      return safeBrowserResult(out, ctx);
+      return withPhoneApproval(args, safeBrowserResult(out, ctx));
     },
   },
   computer_action: {
@@ -737,7 +744,7 @@ const TOOLS = {
       ctx.trace(entry('lock', `vault_request: saved as ${row.ref}`));
       if (kind === 'login') {
         const username = secrets.find((item) => item.name === `${host} username`);
-        return { ref: row.ref, usernameRef: username?.ref || null, name: row.name, saved: true };
+        return { usernameRef: username?.ref || null, passwordRef: row.ref, name: row.name, saved: true, note: 'Fill usernameRef into the username or email field and passwordRef into the password field, each with browser_fill_secret.' };
       }
       return { ref: row.ref, name: row.name, saved: true };
     },
@@ -925,7 +932,7 @@ const TOOLS = {
     approvalDetail: async ({ merchant, checkoutId }, { userId }) => JSON.stringify(await shoppay.purchaseQuote(userId, { merchant, checkoutId })),
     run: async ({ merchant, checkoutId }, ctx) => {
       const selection=await belnaWallet.preferences(ctx.userId);
-      if(selection.spendingMethod!=='existing_card')throw new Error('Existing card is inactive. Select it in Settings before purchasing.');
+      if(!selection.methods?.shop_pay)throw new Error('Shop Pay is turned off. Ask the owner to turn it on in Settings → Wallet before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
@@ -969,7 +976,7 @@ const TOOLS = {
   },
   mail_draft: {
     name: 'mail_draft', type: 'function', approval: false,
-    description: 'Save a draft in this agent’s mailbox. Does not send.',
+    description: 'Save a draft in this agent’s mailbox. Does not send. Write it the way a person would: plain text, warm and to the point, a natural greeting and a short sign-off like “Best,”. No markdown, headings, templates or “this is an automated message”. Do not type your name, address or a signature; the app adds them under the message.',
     run: async ({ to, subject, body, id }, ctx) => {
       const draft = await mail.saveDraft(ctx.userId, { to, subject, body, id });
       ctx.trace(entry('mail', `mail_draft: ${draft.subject}`));
@@ -978,7 +985,7 @@ const TOOLS = {
   },
   mail_send: {
     name: 'mail_send', type: 'function', approval: true,
-    description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body.',
+    description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body. Write it the way a person would: plain text, warm and to the point, a natural greeting and a short sign-off like “Best,”. No markdown, headings, templates or “this is an automated message”. Do not type your name, address or a signature; the app adds them under the message.',
     run: async ({ to, subject, body, in_reply_to, agent_name }, ctx) => {
       const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, agentName: agent_name, confirm: true });
       ctx.trace(entry('mail', `mail_send: ${out.subject} → ${(out.to || []).join(', ')}`));
@@ -1031,6 +1038,7 @@ function pickTools(task) {
   const t = foldText(task);
   // web_search is read-only and cheap, so every task can look things up.
   const names = new Set(['memory_write','capability_search','web_search']);
+  if (/apple|iphone|ipad|health|wellness|fitness|steps|sleep|contacts|reminders|calendar|kalender|kontakter|paminnelse/.test(t)) { names.add('apple_devices'); names.add('apple_execute'); names.add('apple_result'); }
   if (TOOL_KEYWORDS.memory.test(t)) { names.add('memory_search'); names.add('memory_get'); names.add('memory_update'); names.add('memory_delete'); }
   if (TOOL_KEYWORDS.apps.test(t)) { names.add('composio_apps'); names.add('composio_tools'); names.add('composio_execute'); names.add('connect_app'); }
   if (TOOL_KEYWORDS.connectors.test(t)) { names.add('composio_apps'); names.add('connector_tools'); names.add('connector_call'); names.add('connector_setup'); }
@@ -1051,7 +1059,11 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.history.test(t)) names.add('history_search');
   for (const name of pickPersonalTools(t)) names.add(name);
   if (TOOL_KEYWORDS.triggers.test(t)) { names.add('trigger_list'); names.add('trigger_create'); }
-  if (/buy|purchase|order|shop|wallet|shipping|delivery|address|amazon|köp|adress|leverans/.test(t)) names.add('shipping_addresses');
+  if (/buy|purchase|order|shop|wallet|payment|checkout|swish|klarna|paypal|shipping|delivery|address|amazon|köp|adress|leverans/.test(t)) names.add('shipping_addresses');
+  // Paying in a store that is not on Shopify happens in the browser (a payment app the owner approves).
+  if (/\b(?:buy|purchase|checkout|swish|klarna|paypal|afterpay|sezzle|kop|kassa|betala)\b/.test(t)) {
+    for (const name of ['browser_open','browser_action','browser_submit','browser_auth_handoff']) names.add(name);
+  }
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
@@ -1061,6 +1073,7 @@ function pickTools(task) {
 
 // Goals and Library tools, plus Library copies of generated pages, Canvas files and images.
 Object.assign(TOOLS, PERSONAL_TOOLS);
+Object.assign(TOOLS, APPLE_TOOLS);
 Object.assign(TOOLS, createWalletTools(belnaWallet));
 withLibraryAutosave(TOOLS);
 

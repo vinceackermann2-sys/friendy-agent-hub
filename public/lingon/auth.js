@@ -12,6 +12,7 @@ window.LingonAuth = (() => {
     else localStorage.setItem(SKEY, JSON.stringify(s));
     // No demo/local identity: userId is the real Supabase id or null.
     try { window.LingonConfig.userId = (s && s.user && s.user.id) || null; } catch {}
+    window.dispatchEvent(new Event('belna-auth-changed'));
   };
   const headers = (extra = {}) => {
     const s = get();

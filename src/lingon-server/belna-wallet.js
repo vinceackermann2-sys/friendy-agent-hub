@@ -450,11 +450,17 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if(!/^[a-zA-Z0-9_-]{16,100}$/.test(id||''))throw fail('That address is invalid.');
     return {addresses:(await store.deleteShippingAddress(userId,id)).map(addressView)};
   }
-  // spendingMethod is what a purchase may use now. An owner who never chose keeps paying as
-  // before Belna Wallet, with Shop Pay or a card saved at the merchant; a saved choice,
-  // including none (paused), is respected.
-  const prefView=p=>({activeMethod:p?.active_method || null,merchantEnabled:p?.merchant_enabled===true,selectionSaved:!!p,
-    spendingMethod:p ? p.active_method || null : 'existing_card'});
+  // methods says which ways a purchase may pay now. The owner's own methods (Swish, Klarna,
+  // Shop Pay, a card saved in a store) are each off until the owner turns them on, and none
+  // spends the Belna Wallet balance; belna_wallet is the wallet's own card. Before the list
+  // existed, choosing "existing payments" meant Shop Pay, so that choice keeps Shop Pay on.
+  const prefView=p=>{
+    const list=Array.isArray(p?.enabled_methods) ? p.enabled_methods : p?.active_method==='existing_card' ? ['shop_pay'] : [];
+    const methods={payment_apps:list.includes('payment_apps'),shop_pay:list.includes('shop_pay'),saved_card:p?.merchant_enabled===true,belna_wallet:p?.active_method==='belna_wallet'};
+    const own=methods.payment_apps || methods.shop_pay || methods.saved_card;
+    return {activeMethod:p?.active_method || null,merchantEnabled:methods.saved_card,selectionSaved:!!p,methods,
+      spendingMethod:methods.belna_wallet ? 'belna_wallet' : own ? 'existing_card' : null};
+  };
   async function preferences(userId) {return prefView(durable() ? await store.getWalletPreferences(userId) : null);}
   const cardInterestView=row=>({joined:!!row,joinedAt:row?.created_at || null});
   async function cardWaitlist(userId){
@@ -477,8 +483,18 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
       if(input.activeMethod==='existing_card' && !fields.merchant_enabled && !(await store.getShopPayAccount(userId))?.encryptedShopToken)throw fail('Connect Shop Pay or logged-in payments first.');
       fields.active_method=input.activeMethod;
     }
-    return prefView(await store.saveWalletPreferences(userId,fields));
+    if(Object.hasOwn(input,'methods')){
+      const m=input.methods;
+      if(!m || typeof m!=='object' || Array.isArray(m) || Object.entries(m).some(([k,v])=>!OWN_METHODS.includes(k) || typeof v!=='boolean'))throw fail('Choose a valid payment method.');
+      if(m.shop_pay && !(await store.getShopPayAccount(userId))?.encryptedShopToken)throw fail('Connect Shop Pay first.');
+      const on=new Set(Object.entries(prefView(current).methods).filter(([k,v])=>v && k!=='saved_card' && k!=='belna_wallet').map(([k])=>k));
+      for(const [k,v] of Object.entries(m)){if(k==='saved_card')fields.merchant_enabled=v;else if(v)on.add(k);else on.delete(k);}
+      fields.enabled_methods=[...on];
+    }
+    try{return prefView(await store.saveWalletPreferences(userId,fields));}
+    catch(e){if(/enabled_methods/.test(String(e?.message)))throw fail('Payment methods can’t be saved until the latest update is installed.','NOT_SET_UP');throw e;}
   }
+  const OWN_METHODS=['payment_apps','shop_pay','saved_card'];
   async function recordExistingPurchase(userId,approved){
     if(!['shop_pay','saved_card'].includes(approved?.paymentMethod))throw fail('Approve this purchase first.');
     if(durable())await store.recordExistingPurchase(userId,approved);

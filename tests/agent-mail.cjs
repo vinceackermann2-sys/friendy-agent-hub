@@ -45,6 +45,13 @@ async function main() {
   assert.match(branded, /Hello &lt;team&gt;/);
   assert.match(branded, /alva@mail\.belna\.se/);
   assert.doesNotMatch(branded, /Hello <team>/);
+  // Agent mail reads like a personal note: no banner or automated-message framing,
+  // and a short signature that still says it comes from an AI agent.
+  assert.doesNotMatch(branded, /Message from a Belna agent|automated|email-logo\.png/i);
+  assert.match(branded, /Personal AI agent/);
+  assert.match(branded, /Hello &lt;team&gt;,<\/p><p style="margin:0 0 16px;">The report is ready\./);
+  assert.equal(mail.brandEmailText({ bodyText: 'Hi Sam,\n\nThanks!', agentName: 'Alva', agentAddress: 'alva@mail.belna.se' }),
+    'Hi Sam,\n\nThanks!\n\n-- \nAlva\nalva@mail.belna.se\nPersonal AI agent · belna.se');
 
   assert.equal(mail.verifyWebhook('{}', {}), false);
 

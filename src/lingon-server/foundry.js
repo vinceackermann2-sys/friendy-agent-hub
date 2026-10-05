@@ -288,6 +288,17 @@ function functionCall(item) {
   return { name: String(item?.name || ''), args, callId: item?.call_id || item?.id || null };
 }
 
+// The model sometimes writes its built-in citation markers (\uE200cite\uE202turn0search3\uE201)
+// after a sentence that used search results; they reached the owner as "citeturn0search3".
+// A marker still open at the end of streamed text is held back until it closes.
+const CITATION_MARKER = /[ \t]*\uE200[^\uE200\uE201]*\uE201|[\uE200-\uE2FF]/g;
+function visibleText(text) {
+  let s = String(text || '');
+  const open = s.lastIndexOf('\uE200');
+  if (open >= 0 && s.indexOf('\uE201', open) < 0) s = s.slice(0, open);
+  return s.replace(CITATION_MARKER, '');
+}
+
 function extractResponse(data, modelName, { allowEmptyText = false, body = null } = {}) {
   let text = '';
   const functionCalls = [];
@@ -300,7 +311,7 @@ function extractResponse(data, modelName, { allowEmptyText = false, body = null 
       functionCalls.push(functionCall(item));
     }
   }
-  text = text.trim();
+  text = visibleText(text).trim();
   if (!text && !(allowEmptyText && functionCalls.length)) {
     const detail = data?.incomplete_details?.reason || data?.error?.message || 'Empty response from Microsoft Foundry';
     throw Object.assign(new Error(detail), { code: 'EMPTY' });
@@ -350,7 +361,7 @@ async function attemptResponse(options, modelName) {
   const body = responseBody({ ...options, model: modelName, stream: true });
   let accepted = false;
   let completed = null;
-  let streamedText = '';
+  let streamedText = '', shownText = '';
   try {
     const response = await fetch(`${config.openai}/responses`, {
       method: 'POST',
@@ -388,7 +399,12 @@ async function attemptResponse(options, modelName) {
       try { event = JSON.parse(payload); } catch { return; }
       if (event.type === 'response.output_text.delta' && event.delta) {
         streamedText += event.delta;
-        try { options.onDelta?.(event.delta, streamedText); } catch {}
+        const visible = visibleText(streamedText);
+        if (visible.length > shownText.length && visible.startsWith(shownText)) {
+          const piece = visible.slice(shownText.length);
+          shownText = visible;
+          try { options.onDelta?.(piece, visible); } catch {}
+        }
       } else if (event.type === 'response.output_item.done' && event.item) {
         doneItems.push(event.item);
       } else if ((argumentLimit || callLimit) && event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
@@ -436,7 +452,7 @@ async function attemptResponse(options, modelName) {
   } catch (error) {
     if (error && typeof error === 'object') {
       // Text already reached the client; a retry would duplicate it.
-      if (streamedText) { error.streamed = true; error.partialText = streamedText; }
+      if (streamedText) { error.streamed = true; error.partialText = visibleText(streamedText); }
       // Once the service accepted the request it has done billable work, even if
       // the turn then failed, timed out or was cancelled.
       if (accepted) {

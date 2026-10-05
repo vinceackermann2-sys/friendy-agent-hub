@@ -14,11 +14,11 @@ const {chromium}=require('playwright');
    if(!localStorage.getItem('lingon.v1'))localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'ui-audit',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet-chat',chats:[{id:'wallet-chat',title:'Wallet setup',messages:[],at:Date.now()}],canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
   });
   await context.route('https://whop.com/deposit/**',route=>route.fulfill({contentType:'text/html',body:'<p>Secure connected wallet deposit</p>'}));
-  const requests=[],wallet={configured:true,status:'not_created',cardProgramAvailable:true,card:null,balance:null};let addresses=[],prefs={activeMethod:null,merchantEnabled:false},identityApproved=false,cardApplicationState=null;
+  const requests=[],wallet={configured:true,status:'not_created',cardProgramAvailable:true,card:null,balance:null};let addresses=[],prefs={activeMethod:null,merchantEnabled:false,methods:{payment_apps:false,shop_pay:false,saved_card:false,belna_wallet:false}},identityApproved=false,cardApplicationState=null;
   await context.route('**/api/**',async route=>{
    const req=route.request(),path=new URL(req.url()).pathname,body=(()=>{try{return req.postData()?JSON.parse(req.postData()):{};}catch{return {};}})();let result={};
    if(req.method()==='POST')requests.push({path,body});
-   if(path==='/api/wallet-preferences'){if(req.method()==='POST')prefs={...prefs,...body};result=prefs;}
+   if(path==='/api/wallet-preferences'){if(req.method()==='POST'){const {methods,...rest}=body;prefs={...prefs,...rest,methods:{...prefs.methods,...(methods||{})}};prefs.methods.belna_wallet=prefs.activeMethod==='belna_wallet';prefs.merchantEnabled=prefs.methods.saved_card;}result=prefs;}
    else if(path==='/api/wallet-history')result={history:[{title:'Amazon',amount:29,currency:'USD',status:'awaiting_confirmation'}]};
    else if(path==='/api/belna-wallet'){if(identityApproved&&!wallet.cardReady)Object.assign(wallet,{status:cardApplicationState==='unavailable'?'card_unavailable':['needs_verification','needs_information'].includes(cardApplicationState)?'card_action_required':['pending','manual_review','approved'].includes(cardApplicationState)?'review':['denied','locked','canceled'].includes(cardApplicationState)?'denied':'card_required',cardApplicationStatus:cardApplicationState,identityVerified:true,verificationStatus:'approved'});result={wallet,activity:[{title:'Deposit',amount:12.5,status:'recorded'}]};}
    else if(path==='/api/shop-pay')result={shopPay:{configured:true,connected:false},orders:[]};
@@ -39,19 +39,18 @@ const {chromium}=require('playwright');
    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
   });
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
-  const option=method=>page.locator(`.wpay-opt[data-option="${method || 'off'}"]:visible`);
   await page.goto(process.env.UI_BASE||'http://127.0.0.1:8000/app');
-  // Wallet selection lives in Settings; the right-side panel stays focused on the wallet.
-  await page.locator('[data-act="togglecanvas"]').first().click();await page.locator('[data-act="ctab"][data-t="payments"]').click();
-  await page.getByRole('button',{name:'Choose wallet',exact:true}).click();
-  await page.locator('#wallet-settings-content .wpay').waitFor();assert.equal(await page.locator('#wallet-settings-content .wpay-opt').count(),3);
-  assert.equal(await option('').getAttribute('class').then(c=>/\bon\b/.test(c)),true,'Off is selected while nothing is chosen');
-  await page.locator('#wallet-settings-content .wpay-side [data-act="wallet-existing-options"]').click();await page.getByRole('button',{name:'Connect Shop Pay',exact:true}).waitFor();
-  await page.getByRole('button',{name:'Turn on',exact:true}).click();await option('existing_card').locator('[aria-checked="true"]').waitFor();await leaveSettings();
-  await page.locator('.wl-head').getByText('Audit pays with a card you already use',{exact:true}).waitFor();
-  assert.match(await page.locator('.wallet-panel').innerText(),/Amazon[\s\S]*Submitted/);
-  // Delivery addresses live in Settings › Wallet.
-  await page.locator('.wallet-panel [data-act="wallet-manage-shipping"]').click();await page.locator('#wallet-settings-content').waitFor();
+  // Your own payment methods and delivery are in Settings › Wallet; each method is off until turned on.
+  await page.locator('[data-act="togglecanvas"]').first().click();await page.locator('[data-act="ctab"][data-t="wallet"]').click();
+  assert.equal(await page.locator('[data-act="ctab"][data-t="payments"]').count(),0,'no separate Payments tab');
+  await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.locator('#payment-connections').waitFor();
+  for(const name of ['Payment apps and pay later','Cards saved in stores'])assert.equal(await page.locator('#payment-connections').getByRole('switch',{name,exact:true}).getAttribute('aria-checked'),'false',name+' starts off');
+  await page.getByRole('button',{name:'Connect Shop Pay',exact:true}).waitFor();
+  await page.getByRole('switch',{name:'Cards saved in stores',exact:true}).click();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Cards saved in stores"][aria-checked="true"]').waitFor();await leaveSettings();
+  await page.locator('.wallet-panel').getByRole('button',{name:/^Payment methods/}).filter({hasText:'Cards saved in stores on'}).waitFor();
+  assert.match(await page.locator('.wallet-panel').getByRole('region',{name:'Wallet activity'}).innerText(),/Amazon[\s\S]*Submitted/,'own-method purchases show in Activity even before a Belna Wallet exists');
+  await page.locator('.wallet-panel [data-act="payments-manage"]').click();await page.locator('#wallet-settings-content').waitFor();
+  assert.equal(await page.locator('#wallet-settings-content').getByText('Amazon',{exact:true}).count(),0,'purchases are not listed in Settings');
   assert.ok(await page.locator('#wallet-settings-content').isVisible(),'wallet settings open from the delivery action');
   await page.getByRole('button',{name:'Add address',exact:true}).click();
   for(const [name,value] of Object.entries({label:'Home',recipient:'Ada Lovelace',line1:'Main Street 1',city:'Stockholm',postalCode:'11122'}))await page.locator('#wallet-address-'+name).fill(value);
@@ -59,11 +58,11 @@ const {chromium}=require('playwright');
   await page.locator('.wallet-address').waitFor();assert.match(await page.locator('.wallet-address').innerText(),/Default/);
   await page.locator('[data-act="wallet-address-edit"]').click();await page.locator('#wallet-address-line1').fill('New Street 2');await page.getByRole('button',{name:'Save address',exact:true}).click();
   await page.getByText('Ada Lovelace, New Street 2, 11122 Stockholm, SE',{exact:true}).waitFor();
-  // Belna Wallet set up in Settings does not replace the card already paying; the owner switches to it.
-  await option('belna_wallet').locator('.wpay-side [data-act="wallet-connect-belna"]').click();await page.locator('#belna-wallet-country').selectOption('SE');
-  await page.getByRole('button',{name:'Create wallet',exact:true}).click();await option('belna_wallet').locator('.wpay-main[data-act="wallet-switch"]').waitFor();
-  assert.equal(await option('existing_card').getAttribute('class').then(c=>/\bon\b/.test(c)),true,'the card already paying stays active');
-  await option('belna_wallet').locator('.wpay-main').click();await page.locator('.wpay-opt.on').filter({hasText:'Belna Wallet'}).waitFor();
+  // Belna Wallet set up in Settings leaves your own methods as they are.
+  await page.locator('#belna-wallet-country').selectOption('SE');
+  await page.getByRole('button',{name:'Create Belna Wallet',exact:true}).click();await page.getByText('Daily card allowance',{exact:true}).waitFor();
+  assert.equal(prefs.methods.saved_card,true,'creating a wallet keeps your own methods');
+  await page.getByRole('button',{name:'Use wallet',exact:true}).click();await page.getByText('Selected',{exact:true}).waitFor();
   assert.deepEqual(requests.find(x=>x.path.endsWith('/setup')).body,{country:'SE'});
   assert.equal(await page.locator('[data-act="belna-wallet-verify"]').count(),1);
   identityApproved=true;
@@ -71,11 +70,11 @@ const {chromium}=require('playwright');
   await page.getByText('Identity verified · connect card',{exact:true}).waitFor();
   assert.equal(await page.locator('[data-act="belna-wallet-verify"]').count(),0,'returning from KYC refreshes Wallet settings and removes repeat verification');
   assert.equal(wallet.cardReady,false,'identity approval does not enable card spending');
-  await leaveSettings();await page.locator('.wallet-panel [data-act="belna-wallet-card-connect"]').waitFor();
+  await leaveSettings();await page.locator('[data-act="ctab"][data-t="wallet"]').click();await page.locator('.wallet-panel [data-act="belna-wallet-card-connect"]').waitFor();
   assert.match(await page.locator('.wl-balance').innerText(),/Total balance · Belna\s+\$15\.50/);
-  assert.match(await page.locator('.wl-head').innerText(),/Audit pays with Belna Wallet/);
+  assert.match(await page.locator('.wl-head').innerText(),/Belna Wallet/);
   assert.deepEqual(await page.locator('.wl-act').allInnerTexts(),['Add money','Send','Withdraw']);
-  assert.equal(await page.locator('.wallet-panel [role="radiogroup"]').count(),1,'the Belna panel supports direct wallet switching');
+  assert.equal(await page.locator('.wallet-panel [role="radiogroup"]').count(),0,'Wallet keeps Belna money separate from payment preferences');
   assert.equal(await page.locator('.wallet-panel').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
   assert.equal(await page.locator('.wallet-panel').locator('.wallet-virtual-card,#belna-wallet-limit,#shoppaylimit').count(),0);
   assert.match(await page.locator('.wl-setup').innerText(),/2 of 3 done/);
@@ -117,19 +116,18 @@ const {chromium}=require('playwright');
   assert.deepEqual(requests.filter(x=>x.path.endsWith('/controls')).at(-1).body,{dailyLimitUsd:75});
   await page.getByRole('switch',{name:'Pause card spending'}).click();await page.locator('[role="switch"][aria-label="Pause card spending"][aria-checked="true"]').waitFor();
   assert.deepEqual(requests.filter(x=>x.path.endsWith('/controls')).at(-1).body,{frozen:true});
-  // Switching keeps every connection; it only changes how future purchases are paid.
-  await page.locator('[data-act="wallet-switch"][data-method="existing_card"]:visible').click();
-  await page.locator('.wpay-opt.on').filter({hasText:'A card you already use'}).waitFor();assert.equal(await option('belna_wallet').evaluate(el=>el.classList.contains('on')),false);
-  await page.reload();await page.locator('[data-act="wallet-switch"][data-method="belna_wallet"]:visible').waitFor();await page.locator('[data-act="wallet-switch"][data-method="belna_wallet"]:visible').click();
-  await page.locator('.wpay-opt.on').filter({hasText:'Belna Wallet'}).waitFor();
+  // Choosing Belna Wallet keeps your own methods; they are switched one by one and never spend the balance.
+  assert.equal(prefs.activeMethod,'belna_wallet');
+  await page.locator('#payment-connections').getByRole('switch',{name:'Payment apps and pay later',exact:true}).click();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Payment apps and pay later"][aria-checked="true"]').waitFor();
+  await page.reload();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Payment apps and pay later"][aria-checked="true"]').waitFor();
+  assert.equal(prefs.methods.saved_card,true);assert.equal(prefs.activeMethod,'belna_wallet');
   await leaveSettings();if(!await page.getByText('Total balance · Belna',{exact:true}).isVisible())await page.locator('[data-act="togglecanvas"]').first().click();await page.getByText('Total balance · Belna',{exact:true}).waitFor();assert.match(await page.locator('.wallet-panel').innerText(),/\$12\.50/);
   assert.match(await page.locator('.wallet-panel').innerText(),/Card spending is paused/);
-  await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.locator('[data-act="wallet-switch"][data-method=""]:visible').click();await page.locator('.wpay-opt.on:visible').filter({hasText:'Off'}).waitFor();
-  assert.equal(await page.locator('#wallet-shipping-section').count(),0,'Off hides payment-specific settings');
-  await page.locator('[data-act="wallet-switch"][data-method="existing_card"]:visible').click();
-  await page.locator('#wallet-shipping-section').waitFor();
+  await page.getByRole('button',{name:'Wallet settings',exact:true}).click();
+  for(const name of ['Payment apps and pay later','Cards saved in stores']){await page.locator('#payment-connections').getByRole('switch',{name,exact:true}).click();await page.locator('#payment-connections').locator(`[role="switch"][aria-label="${name}"][aria-checked="false"]`).waitFor();}
+  assert.equal(await page.locator('#wallet-shipping-section').count(),1,'delivery can be managed while every method is off');
   await page.locator('[data-act="wallet-address-edit"]').click();await page.locator('.wallet-address-form [data-act="wallet-address-delete"]').click();await page.locator('.wallet-address').waitFor({state:'detached'});assert.deepEqual(errors,[]);await context.close();
  }
- console.log('Wallet UI: desktop/mobile Settings, persisted switching, inactive connections, history, balance, card setup, allowance, pausing, reviewed sends, removed payment links and shipping CRUD passed');
+ console.log('Wallet UI: desktop/mobile Settings, own methods off until turned on and persisted, no Payments tab, history, balance, card setup, allowance, pausing, reviewed sends, removed payment links and shipping CRUD passed');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});

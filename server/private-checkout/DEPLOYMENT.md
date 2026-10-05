@@ -41,3 +41,25 @@ The generic checkout recognizer deliberately refuses ambiguous forms or totals.
 An issuer card being usable where Visa is accepted is not a guarantee that every
 merchant's web checkout can be automated. Processor frames, redirects, delayed
 bank challenges, coupons, shipping variants and confirmations need live testing.
+
+Owner checkout handoffs also use this host. Deploy the updated runtime with the
+app release: it accepts `owner_checkout` imports and exposes authenticated
+`/sessions/:id/owner-state`, `/owner-input` and `/owner-close`. Keep the service
+credential on the app server. The app routes bind requests to the signed-in
+owner; the runtime checks that owner again. Cart transfer must reproduce the
+reviewed checkout hash, items, delivery address and final total before opening.
+SEK and other currencies are supported for owner payments; the USD restriction
+continues to apply to agent-issued Belna Wallet cards.
+
+The owner chooses a method the merchant actually offers. Provider redirects and
+popups stay within the isolated browser. Phone-based Swish or BankID may need a
+provider QR flow; custom mobile app links are not forwarded to the owner's
+device. Test real merchant/provider flows before enabling them in production.
+There are no direct Swish, Klarna or PayPal integrations added by this feature.
+
+Handoffs expire after 15 minutes and are discarded on service restart. Closing
+or finishing one destroys the private browser; it neither confirms payment nor
+undoes a merchant order. The owner must check the merchant receipt or provider
+before starting a new checkout. Never log or return payment-page observations
+to the model. `npm run test:checkout` exercises private Chromium, owner isolation,
+expiry, incorrect totals, the no-agent-submit boundary and both app API runtimes.

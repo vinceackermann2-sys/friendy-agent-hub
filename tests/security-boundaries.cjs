@@ -9,11 +9,12 @@ const { requestBodyLimit } = require('../server/request-limits');
 function authFor(file) {
   const source = fs.readFileSync(file, 'utf8')
     .replace("import { createClient } from '@supabase/supabase-js';", "const { createClient } = require('@supabase/supabase-js');")
+    .replace("import { accountDeletionPending } from './account-deletion.js';", "const { accountDeletionPending } = require('./account-deletion');")
     .replace('export {', 'module.exports = {');
   const context = {
     module: { exports: {} },
-    process: { env: { SUPABASE_URL: 'https://auth.example', SUPABASE_ANON_KEY: 'test-key' } },
-    require: () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: 'owner' } } }) } }) }),
+    process: { env: { SUPABASE_URL: 'https://auth.example', SUPABASE_ANON_KEY: 'test-key', SUPABASE_SERVICE_ROLE_KEY:'fixture-server' } },
+    require: name => name === './account-deletion' ? require('../server/account-deletion') : ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: 'owner' } } }) },from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:null})})})}) }) }),
   };
   vm.runInNewContext(source, context, { filename: file });
   return context.module.exports.requireAuth;

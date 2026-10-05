@@ -311,7 +311,7 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   await withTasks(async opts=>{handoffChoices.push(opts.toolChoice);searchModel.push(opts);return {functionCalls:[{name:'web_search',args:{query:'latest race'}}]};})
     .run({userId:'a',chatId:'chat',requestId:'handoff',prompt:'Who won the latest race?',onEvent:e=>handoffEvents.push(e)});
   assert.deepEqual(handoffChoices,['auto','auto','auto'],'the final round can still delegate');
-  assert.match(searchModel[1].prompt,/Start a task to check live sources/,'an empty search points to a task');
+  assert.match(searchModel[1].prompt,/Search once more with different, broader words; if that finds nothing either, start a task to check live sources/,'an empty search points to another query, then a task');
   const handedOff=handoffEvents.find(e=>e.type==='task');
   assert.ok(handedOff,'the request became a task');
   assert.equal([...handoff.rows.values()].at(-1).state.instructions.split('\n')[0],'Who won the latest race?');

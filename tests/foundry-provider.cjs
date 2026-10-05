@@ -97,6 +97,17 @@ global.fetch = async (url, options = {}) => {
   assert.equal(cutOff.usage.estimated, true);
   assert.ok(cutOff.usage.input_tokens > 0 && cutOff.usage.output_tokens > 0);
 
+  // Built-in citation markers never reach the owner, streamed or final, even split across deltas.
+  const citedDeltas = [];
+  queued.push(() => sse([
+    { type: 'response.output_text.delta', delta: 'About 11.3 kr. \uE200cite' },
+    { type: 'response.output_text.delta', delta: '\uE202turn0search3\uE201\nFees vary.' },
+    { type: 'response.completed', response: { output: [{ type: 'message', content: [{ type: 'output_text', text: 'About 11.3 kr. \uE200cite\uE202turn0search3\uE201\nFees vary.' }] }], usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 } } },
+  ]));
+  const cited = await provider.callFoundry({ prompt: 'Rate', onDelta: (d) => citedDeltas.push(d) });
+  assert.equal(cited.text, 'About 11.3 kr.\nFees vary.');
+  assert.ok(!/cite|turn0/.test(citedDeltas.join('')), citedDeltas.join(''));
+
   // An accepted attempt that fails before any text is retried, and both attempts are billed.
   before = calls.length;
   queued.push(() => sse([{ type: 'error', status: 503, message: 'reset during reasoning' }]));

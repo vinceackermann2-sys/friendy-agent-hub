@@ -145,13 +145,15 @@ function approvalView(name, args = {}, detail) {
       const items = (Array.isArray(parsed.items) ? parsed.items : []).slice(0, 8).map((item) => ({
         title: str(item.title, 140) || 'Item', quantity: Number(item.quantity) || 1, price: money(item.price, parsed.currency) }));
       return { kind: 'purchase', merchant: str(parsed.merchant || args.merchant, 120), website: str(`https://${parsed.merchant || args.merchant}`, 300), items, total: money(parsed.amount, parsed.currency),
-        payment: 'Shop Pay', email: str(parsed.buyerEmail, 120), delivery: (Array.isArray(parsed.delivery) ? parsed.delivery : []).map((d) => str(d, 200)).slice(0, 2), estimated:false };
+        payment: 'Shop Pay', fundedBy: 'own', email: str(parsed.buyerEmail, 120), delivery: (Array.isArray(parsed.delivery) ? parsed.delivery : []).map((d) => str(d, 200)).slice(0, 2), estimated:false };
     }
     case 'browser_submit':
       if (parsed.paymentMethod && args.purchase) return { kind:'purchase', merchant:str(parsed.merchant,120), website:str(parsed.website,500),
         items:(parsed.items || []).slice(0,12).map((item)=>({title:str(item.title,140),quantity:Number(item.quantity)||1,price:money(item.price,parsed.currency)})),
         total:money(parsed.amount,parsed.currency), payment:str(parsed.payment,80), delivery:[str(parsed.shippingAddress,300)], estimated:false,
-        checkoutExcerpt:str(parsed.pageExcerpt,650) };
+        checkoutExcerpt:str(parsed.pageExcerpt,650), fundedBy:parsed.paymentMethod==='belna_wallet'?'balance':'own',
+        // Swish and Klarna: the owner approves the payment on their phone after this click.
+        ...(parsed.paymentMethod==='payment_app' ? { phoneApproval:str(parsed.payment,80) } : {}) };
       return { kind:'submit', summary:str(args.summary,300), surface:'browser', action:str(args.type,30), website:str(parsed.website,500) };
     case 'computer_submit':
       return { kind: 'submit', summary: str(args.summary, 300), surface: name === 'computer_submit' ? 'computer' : 'browser', action: str(args.type || args.action, 30) };

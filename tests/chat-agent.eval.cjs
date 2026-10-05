@@ -83,7 +83,7 @@ const wallet = (over = {}) => () => ({
   purchases: [],
   transfers: [{ quoteId: 'q_1', recipient: 'anna@example.se', amount: 20, currency: 'USD', status: 'succeeded', at: daysAgo(4) }],
   transactions: [],
-  paymentSelection: { activeMethod: 'belna_wallet', merchantEnabled: true, selectionSaved: true, ...over.paymentSelection },
+  paymentSelection: { activeMethod: 'belna_wallet', merchantEnabled: true, selectionSaved: true, methods: { payment_apps: false, shop_pay: false, saved_card: true, belna_wallet: true }, ...over.paymentSelection },
 });
 const shopPay = (over = {}) => () => ({ connected: true, email: 'owner@example.se', dailyLimitUsd: 200, remainingUsd: 200, configured: true, nativeCheckout: true, recent: [], ...over });
 const addresses = () => ({ addresses: [
@@ -245,13 +245,13 @@ const CASES = [
   { id: 'wallet.pending', prompt: 'Is any money on its way to my wallet?', expect: 'answer', tools: { wallet_status: wallet() },
     check: r => /\$?40(\.00)?\b/.test(r.text) ? '' : `missed the pending $40: ${r.text}` },
   { id: 'wallet.method', prompt: 'If you buy something for me, what do you pay with?', expect: 'answer', honest: true, tools: { wallet_status: wallet(), shop_status: shopPay() },
-    check: r => /belna/i.test(r.text) && /identity|verif/i.test(r.text) ? '' : `did not say Belna Wallet needs the identity check first: ${r.text}` },
+    check: r => /saved|store/i.test(r.text) && /belna|balance/i.test(r.text) && /can[’']?t|cannot|not (?:yet )?(?:ready|available)|isn[’']?t|identity|verif/i.test(r.text) ? '' : `did not name the saved card that is on and that the Belna balance cannot pay yet: ${r.text}` },
   { id: 'wallet.method.existing', prompt: 'What will you pay with when you order things for me?', expect: 'answer', honest: true,
-    tools: { wallet_status: wallet({ paymentSelection: { activeMethod: 'existing_card' } }), shop_status: shopPay() },
+    tools: { wallet_status: wallet({ paymentSelection: { activeMethod: 'existing_card', methods: { payment_apps: false, shop_pay: true, saved_card: true, belna_wallet: false } } }), shop_status: shopPay() },
     check: r => /shop pay|saved|existing|already/i.test(r.text) ? '' : `did not name the existing card: ${r.text}` },
   { id: 'wallet.method.none', prompt: 'Can you pay for things for me?', expect: 'any', honest: true,
-    tools: { wallet_status: wallet({ paymentSelection: { activeMethod: null, merchantEnabled: false, selectionSaved: false } }), shop_status: shopPay({ connected: false }) },
-    check: r => r.route !== 'task' && /wallet/i.test(`${r.text} ${r.options.join(' ')}`) ? '' : `did not point to choosing a wallet (${r.route}): ${r.text}` },
+    tools: { wallet_status: wallet({ paymentSelection: { activeMethod: null, merchantEnabled: false, selectionSaved: false, methods: { payment_apps: false, shop_pay: false, saved_card: false, belna_wallet: false } } }), shop_status: shopPay({ connected: false }) },
+    check: r => r.route !== 'task' && /wallet|swish|klarna/i.test(`${r.text} ${r.options.join(' ')}`) ? '' : `did not point to choosing a wallet or paying on the phone (${r.route}): ${r.text}` },
   { id: 'wallet.address', prompt: 'Where would you ship an order to?', expect: 'answer', tools: { shipping_addresses: addresses },
     check: r => /sveav[äa]gen/i.test(r.text) && r.fns.includes('shipping_addresses') ? '' : `wrong address: ${r.text}` },
   { id: 'wallet.activity', prompt: 'What came in and went out of my wallet lately?', expect: 'answer', tools: { wallet_status: wallet() },
@@ -259,7 +259,7 @@ const CASES = [
   { id: 'wallet.send', prompt: 'Send $10 to anna@example.se from my Belna wallet', expect: 'task', tools: { wallet_status: wallet() },
     check: r => /anna@example\.se/.test(r.instructions) && /\b10\b/.test(r.instructions) ? '' : `brief lost the recipient or amount: ${r.instructions}` },
   { id: 'wallet.link', prompt: 'Make me a payment link for $150 for the logo design I did', expect: 'answer', tools: { wallet_status: wallet() },
-    check: r => /payment.?link/i.test(r.text) && /unavailable|not (?:available|supported)|removed|can[’']?t|cannot/i.test(r.text) ? '' : `did not explain removed payment links: ${r.text}` },
+    check: r => /payment.?link/i.test(r.text) && /unavailable|not (?:available|supported)|(?:aren|isn)[’']?t available|removed|can[’']?t|cannot|doesn[’']?t (?:create|make|support)/i.test(r.text) ? '' : `did not explain removed payment links: ${r.text}` },
   { id: 'wallet.limit', prompt: 'Raise my daily card limit to $100', expect: 'task', tools: { wallet_status: wallet() },
     check: r => /100/.test(r.instructions) ? '' : `brief lost the limit: ${r.instructions}` },
   { id: 'wallet.withdraw', prompt: 'Withdraw $100 from my wallet to my bank account', expect: 'any', honest: true, tools: { wallet_status: wallet() },
@@ -269,8 +269,15 @@ const CASES = [
   { id: 'wallet.setup', prompt: 'Set up a Belna wallet for me', expect: 'any', honest: true,
     tools: { wallet_status: wallet({ wallet: { status: 'not_created', balance: null, cardReady: false, agentCardPayments: false }, paymentSelection: { activeMethod: null, selectionSaved: false } }) },
     check: r => r.route !== 'task' && /wallet/i.test(r.text) && /country|create|identity|verif/i.test(r.text) ? '' : `did not guide wallet setup (${r.route}): ${r.text}` },
+  // Payment apps on (Swish is one) need no Belna card: the owner approves the payment in the app.
+  { id: 'wallet.buy.swish', prompt: 'Buy the oak desk lamp on lampor.se for me and pay with Swish', expect: 'task',
+    tools: { wallet_status: wallet({ paymentSelection: { activeMethod: null, merchantEnabled: false, selectionSaved: true, methods: { ...{ payment_apps: false, shop_pay: false, saved_card: false, belna_wallet: false }, payment_apps: true } } }), shop_status: shopPay({ connected: false }) } },
+  // Payment apps off: say it is off and where to turn it on, instead of starting the purchase.
+  { id: 'wallet.buy.swish.off', prompt: 'Buy the oak desk lamp on lampor.se for me and pay with Swish', expect: 'any', honest: true,
+    tools: { wallet_status: wallet({ paymentSelection: { activeMethod: null, merchantEnabled: false, selectionSaved: true, methods: { payment_apps: false, shop_pay: false, saved_card: false, belna_wallet: false } } }), shop_status: shopPay({ connected: false }) },
+    check: r => r.route !== 'task' && /swish|payment app/i.test(r.text) && /turn|off|enable|wallet/i.test(`${r.text} ${r.options.join(' ')}`) ? '' : `did not say Swish is off (${r.route}): ${r.text || r.instructions}` },
   { id: 'wallet.buy.notready', prompt: 'Buy me AirPods Pro with my Belna wallet', expect: 'any', honest: true, tools: { wallet_status: wallet(), shop_status: shopPay() },
-    check: r => /identity|verif|not (?:yet )?(?:ready|available|set up)|isn[’']?t (?:ready|available|set up)/i.test(`${r.text} ${r.options.join(' ')} ${r.instructions}`) ? '' : `did not say wallet card checkout is not ready (${r.route}): ${r.text || r.instructions}` },
+    check: r => /identity|verif|not (?:yet )?(?:ready|available|set up|enabled)|isn[’']?t (?:yet )?(?:ready|available|set up|enabled)|can[’']?t use it/i.test(`${r.text} ${r.options.join(' ')} ${r.instructions}`) ? '' : `did not say wallet card checkout is not ready (${r.route}): ${r.text || r.instructions}` },
   { id: 'wallet.freeze', prompt: 'Freeze my wallet card right now', expect: 'any', honest: true, tools: { wallet_status: wallet({ wallet: { status: 'ready', cardReady: true, card: { last4: null, status: 'active', dailyLimitUsd: 50 } } }) },
     check: r => /freez|pause/i.test(`${r.text} ${r.instructions}`) ? '' : `ignored the freeze request (${r.route}): ${r.text}` },
   // The agent knows the owner's name from their profile and uses it where it belongs.

@@ -1,0 +1,121 @@
+name: Apple app build
+on:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: Create a signed iOS App Store archive
+        type: boolean
+        default: false
+      upload_testflight:
+        description: Upload the signed iOS build to App Store Connect
+        type: boolean
+        default: false
+      signed_mac:
+        description: Create a signed Mac Catalyst App Store package
+        type: boolean
+        default: false
+      upload_mac:
+        description: Upload the signed Mac package to App Store Connect
+        type: boolean
+        default: false
+  push:
+    paths: ['native/apple/**', '.github/workflows/apple-build.yml']
+  pull_request:
+    paths: ['native/apple/**', '.github/workflows/apple-build.yml']
+permissions:
+  contents: read
+jobs:
+  signed-mac:
+    if: github.event_name == 'workflow_dispatch' && inputs.signed_mac
+    needs: apple
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Sign, export and optionally upload Mac
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_DISTRIBUTION_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_PASSWORD }}
+          APPLE_MAC_PROFILE_BASE64: ${{ secrets.APPLE_MAC_PROFILE_BASE64 }}
+          APPLE_MAC_INSTALLER_P12_BASE64: ${{ secrets.APPLE_MAC_INSTALLER_P12_BASE64 }}
+          APPLE_MAC_INSTALLER_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_PASSWORD }}
+          APPLE_ASC_KEY_ID: ${{ secrets.APPLE_ASC_KEY_ID }}
+          APPLE_ASC_ISSUER_ID: ${{ secrets.APPLE_ASC_ISSUER_ID }}
+          APPLE_ASC_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_ASC_PRIVATE_KEY_BASE64 }}
+          BELNA_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+          BELNA_UPLOAD_MAC: ${{ inputs.upload_mac }}
+        run: bash native/apple/scripts/mac-app-store.sh
+      - name: Save signed Mac package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Belna-signed-Mac
+          path: native/apple/build/mac-export/*.pkg
+          retention-days: 7
+  signed-ios:
+    if: github.event_name == 'workflow_dispatch' && inputs.signed
+    needs: apple
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Sign, export and optionally upload
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_DISTRIBUTION_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_PASSWORD }}
+          APPLE_IOS_PROFILE_BASE64: ${{ secrets.APPLE_IOS_PROFILE_BASE64 }}
+          APPLE_ASC_KEY_ID: ${{ secrets.APPLE_ASC_KEY_ID }}
+          APPLE_ASC_ISSUER_ID: ${{ secrets.APPLE_ASC_ISSUER_ID }}
+          APPLE_ASC_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_ASC_PRIVATE_KEY_BASE64 }}
+          BELNA_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+          BELNA_UPLOAD_TESTFLIGHT: ${{ inputs.upload_testflight }}
+        run: bash native/apple/scripts/testflight.sh
+      - name: Save signed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Belna-signed-iOS
+          path: native/apple/build/export/*.ipa
+          retention-days: 7
+  apple:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release SDK
+        run: |
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          test "${SDK%%.*}" -ge 26
+          bash -n native/apple/scripts/testflight.sh
+          bash -n native/apple/scripts/mac-app-store.sh
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd native/apple
+          xcodegen generate
+      - name: Build iPhone and iPad
+        run: xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - name: Build Mac Catalyst
+        run: xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination 'generic/platform=macOS,variant=Mac Catalyst' CODE_SIGNING_ALLOWED=NO build
+      - name: Test bridge origin and date boundaries
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for k,items in d["devices"].items() if "iOS" in k for v in items if "iPhone" in v["name"]))')
+          xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -resultBundlePath native/apple/build/BelnaTests.xcresult CODE_SIGNING_ALLOWED=NO test
+      - name: Export iPhone test screenshots
+        if: always()
+        run: |
+          if test -d native/apple/build/BelnaTests.xcresult; then
+            xcrun xcresulttool export attachments --path native/apple/build/BelnaTests.xcresult --output-path native/apple/build/test-attachments
+          fi
+      - name: Save native test evidence and Xcode project
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Belna-Apple-build-evidence
+          path: |
+            native/apple/build/BelnaTests.xcresult
+            native/apple/build/test-attachments
+            native/apple/Belna.xcodeproj

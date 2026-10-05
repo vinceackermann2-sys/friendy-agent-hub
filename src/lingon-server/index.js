@@ -13,6 +13,10 @@ import { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costO
 import * as store from './store.js';
 import * as stripeMod from './stripe.js';
 import { pubClient, adminClient, requireAuth, getUserFromRequest } from './auth.js';
+import { installAppleDeviceRoutes } from './apple-devices.js';
+import { installAppleAuthRoutes, createAppleAccountCleanup } from './apple-auth.js';
+import { deallocateVm } from './agents/azure-vm.js';
+import * as azure from './agents/azure-vm.js';
 import { safeNext, bindOAuthBrowser, matchesOAuthBrowser, clearOAuthBrowser } from './oauth-security.js';
 import crypto from 'node:crypto';
 // Microsoft Foundry tool harness + Azure VM sandbox + extras
@@ -26,6 +30,7 @@ import * as Automations from './agents/automations.js';
 import * as composio from './composio.js';
 import * as connectors from './connectors.js';
 import * as mail from './mail.js';
+import * as authEmail from './auth-email.js';
 import * as shoppay from './shoppay.js';
 import { createBelnaWallet } from './belna-wallet.js';
 import { createPrivateCheckoutClient } from './private-checkout-client.js';
@@ -301,12 +306,18 @@ app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
     const pub = pubClient();
     if (!admin || !pub) return res.status(500).json({ error: 'Auth not configured on server.' });
     // SECURITY: never auto-confirm emails on public sign-up. A normal sign-up
-    // requires the user to prove control of the address before it is trusted.
+    // requires the user to prove control of the address before it is trusted:
+    // Belna emails a code, and /api/auth/verify confirms the account.
+    if (authEmail.configured()) {
+      await authEmail.sendAuthCode(admin, { email, kind: 'signup', password, data: { terms_version: TERMS_VERSION, terms_accepted_at: new Date().toISOString() } });
+      return res.json({ ok: true, code_sent: true, message: 'We sent a 6-digit code to confirm your email.' });
+    }
     const { data, error } = await pub.auth.signUp({ email: String(email), password: String(password), options: { data: { terms_version: TERMS_VERSION, terms_accepted_at: new Date().toISOString() } } });
     if (error) return res.status(400).json({ error: error.message });
     if (!data.session || !data.user) return res.json({ ok: true, confirm_email: true, message: 'Check your inbox to confirm your email, then sign in.' });
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
     res.status(500).json({ error: 'Signup failed: ' + e.message });
   }
 });
@@ -451,12 +462,19 @@ app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
     const { email, terms_version } = req.body || {};
     if (!termsAccepted(terms_version)) return res.status(400).json({ error: 'Please accept the current Terms of Service and acknowledge the Privacy Policy.' });
     if (!email || !/.+@.+\..+/.test(String(email))) return res.status(400).json({ error: 'Enter a valid email.' });
+    const admin = adminClient();
+    // Belna sends its own branded code; Supabase's mailer is only a local fallback.
+    if (admin && authEmail.configured()) {
+      await authEmail.sendAuthCode(admin, { email, kind: 'signin', data: { terms_version: TERMS_VERSION, terms_accepted_at: new Date().toISOString() } });
+      return res.json({ ok: true });
+    }
     const pub = pubClient();
     if (!pub) return res.status(500).json({ error: 'Auth not configured on server.' });
     const { error } = await pub.auth.signInWithOtp({ email: String(email), options: { data: { terms_version: TERMS_VERSION, terms_accepted_at: new Date().toISOString() } } });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ ok: true });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
     res.status(500).json({ error: 'Could not send code: ' + e.message });
   }
 });
@@ -740,6 +758,9 @@ app.post('/api/app-events', rateLimit(30, 60000), requireAuth(async (req, res) =
 }));
 
 // ---------- Composio connected apps (Belna branding, per-user OAuth) ----------
+installAppleDeviceRoutes(app, { requireAuth, rateLimit });
+installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminClient, store, stripe: stripeMod, beforeDelete: createAppleAccountCleanup({adminClient,tasks:chatTasks,composio,azure}) });
+
 app.get('/api/composio/apps', requireAuth(async (req, res) => {
   try {
     if (!composio.configured()) return res.status(503).json({ error: 'App connections are not configured.' });
@@ -1019,6 +1040,15 @@ app.get('/api/shipping-addresses',requireAuth(async(req,res)=>{
 for(const action of ['save','delete'])app.post('/api/shipping-addresses/'+action,rateLimit(20,60000),requireAuth(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
   try{res.json(await belnaWallet[action==='save'?'saveAddress':'deleteAddress'](req.user.id,req.body||{}));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
+}));
+for (const action of ['owner-state','owner-input','owner-close']) app.post('/api/payments/checkouts/:id/'+action,rateLimit(90,60000),requireAuth(async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  try {
+    if(!/^[a-f0-9-]{36}$/.test(req.params.id))return res.status(404).json({error:'Checkout not found.'});
+    // The private service binds every session to the authenticated owner.
+    // Never accept userId from the request or return these views to agent tools.
+    res.json(action==='owner-state'?await privateCheckout.ownerState(req.params.id,req.user.id):action==='owner-close'?await privateCheckout.closeOwnerHandoff(req.params.id,req.user.id):await privateCheckout.ownerInput(req.params.id,req.user.id,req.body?.event));
+  }catch{res.status(409).json({error:'This private checkout is unavailable or expired. Check the merchant before preparing another checkout.'});}
 }));
 for (const action of ['owner-state','owner-input']) app.post('/api/belna-wallet/purchases/:id/'+action,rateLimit(90,60000),requireAuth(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');

@@ -18,4 +18,14 @@ function forbiddenPaymentSecret(name, value) {
   return /\b(?:cvc2?|cvv2?|cid|card\s*(?:number|no\.?|security\s*code)|kortnummer|säkerhetskod|bank\s*id|one[ -]?time[ -]?code|otp|verification[ -]?code|pin)\b/i.test(String(name || ''))
     || cardNumberIn(value);
 }
-export { cardNumberIn, forbiddenPaymentSecret };
+// A saved login goes only into its own kind of field: a password into a password field, a
+// username never into one. fieldLine is the page element, e.g. [3] input:password "Password".
+function loginFieldProblem(secretName, fieldLine) {
+  const kind = /\bpassword$/i.test(String(secretName || '')) ? 'password' : /\busername$/i.test(String(secretName || '')) ? 'username' : '';
+  if (!kind || !fieldLine) return '';
+  const password = /^\[\d+\] input:password\b/.test(fieldLine);
+  if (kind === 'password' && !password) return 'That is the saved password; fill it into the password field. Nothing was typed.';
+  if (kind === 'username' && password) return 'That is the saved username or email; fill it into the username or email field. Nothing was typed.';
+  return '';
+}
+export { cardNumberIn, forbiddenPaymentSecret, loginFieldProblem };

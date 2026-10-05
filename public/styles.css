@@ -595,7 +595,7 @@ footer{ max-width:1120px; margin:60px auto 0; padding:26px 24px 40px; color:var(
 }
 .canvas-head-row{ display:flex; align-items:center; gap:10px; }
 /* Icon-only pill tabs (Canvas, Automations, Approvals, Mail, Payments); names live in title/aria-label and each panel's heading. */
-.canvas-tabs{ flex:1; min-width:0; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:4px; margin:0 0 12px; padding:4px; border-radius:999px; background:#F0F0F2; }
+.canvas-tabs{ flex:1; min-width:0; display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:4px; margin:0 0 12px; padding:4px; border-radius:999px; background:#F0F0F2; }
 .canvas-tab{ position:relative; height:38px; display:grid; place-items:center; border:0; border-radius:999px; background:transparent; color:var(--mut); transition:background .15s, color .15s, box-shadow .15s; }
 .canvas-tab:hover{ color:var(--ink); }
 .canvas-tab.on{ background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(20,20,26,.06), 0 4px 12px -6px rgba(20,20,26,.18); }
@@ -1530,6 +1530,12 @@ button.appr-row:hover,button.appr-row:focus-visible{ background:var(--bg); outli
 .outfit-chip .mascot{ overflow:visible; }
 .outfit-chip:hover{ color:var(--ink); border-color:#C9C9CF; }
 .outfit-chip.on{ color:var(--ink); border-color:var(--ag, var(--ink)); background:rgba(var(--ag-rgb, 0,0,0), .08); box-shadow:inset 0 0 0 1px var(--ag, var(--ink)); }
+.pay-side{flex:none;display:flex;align-items:center;gap:12px;}
+.pm-ic{flex:none;width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:#F1F3F6;color:#4B5563;}
+.pm-ic.shop{width:46px;padding:0 5px;background:#5A31F4;color:#fff;}.pm-ic.shop svg{width:100%;height:auto;}
+.pm-links{gap:20px;padding-top:12px;padding-bottom:12px;}
+.pm-safe{display:flex;flex-wrap:wrap;gap:6px 18px;margin:10px 4px 0;padding:0;list-style:none;color:var(--mut);font-size:12.5px;line-height:1.4;}
+.pm-safe li{display:flex;align-items:center;gap:6px;}.pm-safe .ic{flex:none;color:#2F7A4E;}
 .payments-limit{ display:flex; align-items:center; gap:6px; color:var(--mut); font-size:12px; font-weight:600; }
 .payments-limit input{ width:84px; }
 .wallet-panel .btn:disabled{ opacity:.55; cursor:wait; }
@@ -2833,17 +2839,6 @@ footer.afooter{ max-width:none; margin-left:0; margin-right:0; display:block; }
 @media (max-width:560px){
   .giftbtn span{ display:none; }
   .giftbtn{ padding:7px 10px; }
-  #giftmodal{ align-items:flex-end; padding:0; }
-  .giftmodal-card{ width:100%; max-height:100dvh; border-radius:26px 26px 0 0; padding-bottom:env(safe-area-inset-bottom); }
-  .giftmodal-head{ padding:22px 62px 0; }
-  .giftmodal-x{ top:16px; right:16px; }
-  .giftmodal-body{ padding:0 20px 24px; }
-  .giftmodal-illustration{ height:178px; }
-  .giftmodal-code{ min-height:76px; padding:12px 12px 12px 18px; }
-  .giftmodal-code-text strong{ letter-spacing:.045em; }
-  .giftmodal-description{ font-size:15px; margin-top:19px; }
-  .giftmodal-share-icon{ width:56px; height:56px; }
-  .giftmodal-redeem-form .btn{ padding:9px 12px; }
 }
 @media (max-width:360px){
   .giftmodal-body{ padding-left:14px; padding-right:14px; }
@@ -3304,15 +3299,9 @@ a.cv-item:hover{ border-color:#D5D5DA; background:#fff; }
 .wl-chart-baseline{fill:none;stroke:#DCDDDC;stroke-width:2;stroke-dasharray:.1 5;stroke-linecap:round;vector-effect:non-scaling-stroke;}
 .wl-chart-halo{fill:currentColor;opacity:.2;}
 .wl-chart figcaption{margin-top:10px;color:var(--soft);font-size:11px;}
-.wl-waitlist{display:flex;align-items:center;gap:12px;padding:16px 0;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);}
-.wl-waitlist .wl-copy{flex:1;min-width:0;}.wl-waitlist .wl-copy b{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
-.wl-waitlist .wl-tag{font-size:10px;}.wl-waitlist>.btn,.wl-waitlist>.wl-ok{flex:none;}
-.wl-waitlist>.wl-ok{font-size:12px;}
-.wl-waitlist-icon{flex:none;width:38px;height:38px;display:grid;place-items:center;border-radius:12px;background:#F1F3F6;color:#6D7683;}
-.wset-sec>.wl-waitlist{border:1px solid var(--line);border-radius:18px;padding:16px 20px;background:white;}
 .wl-choose{display:flex;flex-direction:column;align-items:flex-start;gap:14px;padding:16px 0;}
 .wl-choose .wl-lede{margin:0;line-height:1.5;}
-@media(max-width:560px){.wl-waitlist{flex-wrap:wrap;}.wl-waitlist .wl-copy{flex-basis:170px;}.wl-waitlist>.btn,.wl-waitlist>.wl-ok{margin-left:50px;}.wl-chart svg{height:128px;}}
+@media(max-width:560px){.wl-chart svg{height:128px;}}
 .wl-label{font-size:13px;font-weight:600;color:var(--mut);}
 .wl-big{display:flex;align-items:baseline;gap:10px;min-width:0;}
 .wl-big strong{font-size:clamp(40px,9vw,54px);font-weight:750;letter-spacing:-.04em;line-height:1.05;overflow-wrap:anywhere;}
@@ -3326,6 +3315,7 @@ a.cv-item:hover{ border-color:#D5D5DA; background:#fff; }
 .wl-act.on .wl-act-ic{background:var(--ink);color:#fff;}
 .wl-act:focus-visible{outline:none;}.wl-act:focus-visible .wl-act-ic{outline:2px solid var(--ink);outline-offset:3px;}
 .wl-act[disabled]{opacity:.5;cursor:wait;}
+.wl-act[data-action="withdraw"][disabled]{opacity:.4;cursor:not-allowed;}
 .wl-form{display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:18px;background:var(--bg);}
 .wl-form>b{font-size:14.5px;}
 .wl-fields{display:flex;flex-wrap:wrap;gap:10px;}.wl-fields>*{flex:1 1 160px;min-width:0;}
@@ -3409,11 +3399,6 @@ button.wl-row{border:0;background:none;cursor:pointer;}button.wl-row:hover{backg
 .wpay.compact .wpay-copy b{font-size:13.5px;}.wpay.compact .wpay-copy small{font-size:12px;}
 .wpay.compact .wpay-side{font-size:12px;}
 .wpay.compact .wpay-extra{margin:0 12px 12px;}
-.wallet-logins{padding:16px 4px;display:flex;flex-direction:column;gap:10px;min-width:0;}
-.wpay-extra .wallet-logins{padding:14px;}
-.wallet-logins .wl-sec-head h4{font-size:13.5px;font-weight:650;}
-.wallet-logins .wl-hint,.wallet-logins .wl-empty{margin:0;padding:0;}
-.wallet-logins>.wl-link{align-self:flex-start;}
 .wset-row:has(#shoppaylimit){flex-wrap:wrap;}.wset-row #shoppaylimit{width:105px;}
 .wl-note .btn{flex:none;}.wl-note .wl-copy{min-width:0;}
 .wallet-panel .wl-lede{margin:0;}
@@ -3446,6 +3431,8 @@ button.wset-row{border:0;background:none;cursor:pointer;}button.wset-row:hover{b
   .wset-row{flex-wrap:wrap;padding:14px 16px;}.wset-copy{flex-basis:180px;}
   .wl-row{flex-wrap:wrap;}.wl-row .wl-copy{flex-basis:140px;}
   .mail-panel .wl-row{flex-wrap:nowrap;}
+  .wset-row.pm-row{flex-wrap:nowrap;padding:14px 16px;}.pm-safe{flex-direction:column;}
+  .wallet-panel .wl-list.boxed>.wl-row{flex-wrap:nowrap;}.pay-side{flex-direction:column;align-items:flex-end;gap:6px;}
 }
 /* ---------- Mail: chat panel, in the Wallet panel's layout (.wl) ---------- */
 .mail-address{display:flex;align-items:baseline;gap:10px;min-width:0;}
@@ -3512,3 +3499,207 @@ button.wset-row{border:0;background:none;cursor:pointer;}button.wset-row:hover{b
 .wallet-verification-dialog label { flex:1; min-width:160px; }
 
 .goal-work{margin:14px 0;padding:12px;border:1px solid var(--line,#eee);border-radius:12px;font-size:13px}.goal-work summary{cursor:pointer;font-weight:600}.goal-work label{display:block;margin:10px 0}.goal-work .field{display:block;width:100%;margin-top:5px}.goal-work p{line-height:1.5;overflow-wrap:anywhere}.lib-viewer-body details{margin:14px 0}.lib-viewer-body textarea[data-library-edit]{width:100%;min-height:240px;font-family:monospace}.cv-fine:has([data-remember-action]){display:block;padding:12px 20px}
+
+.apple-apps-connection{display:flex;align-items:center;gap:20px;justify-content:space-between;padding:22px;margin:20px 0;border:1px solid var(--line,#e5e5e5);border-radius:18px;background:var(--surface,#fff)}
+.apple-apps-connection h2{font-size:18px;margin:0 0 8px}.apple-apps-connection p{font-size:14px;line-height:1.5;color:var(--mut,#666);margin:0;max-width:540px}
+.native-welcome-mark{display:grid;place-items:center;margin:0 auto 16px;color:var(--acc)}
+.native-welcome-copy{max-width:340px;margin:12px auto 24px;color:var(--mut);font-size:16px;line-height:1.5}
+.apple-connectors{margin-bottom:20px}
+.conn-head .apple-connector-logo{background:transparent;border:0;border-radius:10px;overflow:visible}
+.conn-head .apple-connector-logo img{display:block;width:40px;height:40px;border-radius:10px;object-fit:contain}
+.giftmodal-redeem > summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;font-size:15px;font-weight:700;cursor:pointer;list-style:none}
+.giftmodal-redeem > summary::-webkit-details-marker{display:none}
+.giftmodal-redeem > summary::after{content:'+';font-size:22px;font-weight:400}
+.giftmodal-redeem[open] > summary::after{content:'−'}
+@media(max-width:1100px){
+  .canvas .canvas-head{position:relative;padding-top:54px}
+  .canvas .canvas-head .canvas-close{position:absolute;top:8px;right:12px;z-index:3;width:44px;height:44px;margin:0!important;padding:0!important;border:0!important;background:var(--line2)!important;box-shadow:none}
+}
+@media(max-width:760px){
+  .mobile-nav-toggle{top:8px;left:8px;width:44px;height:44px;border:0;border-radius:12px;background:transparent;box-shadow:none}
+  .mobile-nav-toggle:hover,.mobile-nav-toggle:active{background:transparent;box-shadow:none}
+  .app:not(.nocanvas) .mobile-nav-toggle{visibility:hidden}
+  .page{padding:64px 16px max(24px,env(safe-area-inset-bottom));scrollbar-gutter:auto}
+  .pageinner,.set-sub,.set-inner,.profiletop .info{min-width:0;width:100%}
+  .page h1,.set-top h1,.goals-head h1{font-size:28px;line-height:1.15}
+  .set-top{margin-bottom:16px}
+  .set-top .set-round{top:8px;right:12px;width:44px;height:44px;background:transparent;box-shadow:none}
+  .set-sub-head{gap:10px}
+  .set-sub .psub{font-size:14px;line-height:1.5;margin:12px 0 20px}
+  .set-group,.set-plan{border-radius:18px;margin-bottom:16px}
+  .set-row{min-height:56px;padding:10px 16px;gap:12px}
+  .set-row + .set-row::before{left:16px;right:16px}
+  .set-label{font-size:16px}
+  .set-plan-main{padding:16px}
+  .set-plan-link{width:calc(100% - 32px);margin:0 16px;padding:13px 0;font-size:16px}
+  .set-plan-note,.set-plan-head span{font-size:13px;line-height:1.4}
+  .set-sub .profiletop{flex-direction:row;align-items:flex-start;text-align:left;gap:12px}
+  .set-sub .profiletop .info .field{width:100%;max-width:100%!important}
+  .set-sub .profiletop .sub{overflow-wrap:anywhere;font-size:12px;line-height:1.5}
+  .set-sub .psec{margin-top:22px}
+  .set-sub .kv .row{flex-wrap:wrap;gap:12px}
+  .set-sub .browser-settings-card{padding:16px}
+  .lib-hero{padding:0 48px}
+  .lib-hero-mascot{height:56px}
+  .lib-hero-mascot .mascot{width:56px;height:56px}
+  .lib-hero h1{font-size:20px;margin-top:4px}
+  .lib-hero-status{font-size:13px}
+  .lib-switch{margin-top:16px;padding:4px}
+  .lib-switch button{font-size:15px;padding:10px;min-height:44px}
+  .lib-chip{min-height:44px;font-size:13px;padding:8px 12px}
+  .lib-row{min-height:72px;padding:8px 0;gap:8px}
+  .lib-row-main{gap:12px}
+  .lib-row-copy b{font-size:15px}
+  .lib-row-copy span{font-size:12px}
+  .lib-row .art-icon,.lib-row-file{width:44px;height:44px}
+  .lib-row-file .file-format-icon{width:48px;height:48px}
+  .lib-media{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .lib-viewer-body{padding:16px;overflow-wrap:anywhere}
+  .lib-viewer-body textarea[data-library-edit]{min-height:180px;font-size:16px}
+  .goals-head{padding:0 0 4px}
+  .goals-head p{margin-top:8px;font-size:14px;line-height:1.5}
+  .goals-section{margin-top:24px}
+  .goals-filter{width:100%;margin:4px 0 0}
+  .goals-filter button{flex:1;justify-content:center;min-height:40px}
+  .goal-card{padding:14px 12px;box-shadow:none}
+  .goal-head{gap:10px}
+  .goal-title{overflow-wrap:anywhere}
+  .goal-more{width:44px;height:44px;margin-top:-6px;margin-right:-6px}
+  .goal-menu{top:42px}
+  .goal-menu button,.sub-row{min-height:44px}
+  .sub-row .ap-x{opacity:1;min-width:32px;min-height:32px}
+  .goal-work{padding:10px;font-size:13px}
+  .goal-work summary{min-height:28px}
+  .goals-create{padding:0 12px;border:1px solid var(--line);border-radius:16px;background:#fff}
+  .goals-create > summary{min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px;list-style:none;font-size:16px;font-weight:700;cursor:pointer}
+  .goals-create > summary::-webkit-details-marker{display:none}
+  .goals-create[open] > summary .ic{transform:rotate(45deg)}
+  .goal-create-row{min-height:48px;padding:10px 0}
+  .apps-toolbar{gap:10px;position:relative}
+  .apps-toolbar h1{font-size:28px}
+  .apps-search-wrap{flex:1 1 100%;min-width:0}
+  .apps-filter{flex:1;max-width:calc(100% - 54px)}
+  .apps-filter button{flex:1;justify-content:center;min-height:40px}
+  .conn-head{padding:12px;gap:10px}
+  .conn-meta{min-width:0;flex:1}
+  .conn-meta b{font-size:14px}
+  .conn-meta > span{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .conn-quick.btn.small{min-height:44px;padding:8px 10px;font-size:12px}
+  .conn-head .conn-faces{display:none}
+  .conn-body{padding:0 12px 14px}
+  .conn-perm{gap:12px}
+  .conn-perm > div{min-width:0;overflow-wrap:anywhere}
+  input.field,textarea.field,select.field{font-size:16px}
+}
+.belna-native [data-act="google"],.belna-native [data-act="checkout"],.belna-native [data-act="buycredits"],.belna-native [data-act="portal"],.belna-native [data-act="upgrade"],.belna-native a[href="/pricing"],.belna-native a[href="/pricing.html"]{display:none!important}
+.belna-native .apple-signin{background:#111;color:#fff;border-color:#111;min-height:48px}
+@media(max-width:600px){.apple-apps-connection{align-items:stretch;flex-direction:column}.belna-native input,.belna-native textarea,.belna-native select{font-size:16px}.belna-native .promptbox{padding-bottom:max(12px,env(safe-area-inset-bottom))}}
+
+/* ============ PHONE SHEETS ============
+   Phones show the invite, wallet and file-viewer popups as iOS-style sheets: they rise from the
+   bottom, stop short of the top so the app shows behind them (shrunk back for body-level sheets),
+   carry a grab handle and close with a swipe down. Behaviour lives in wireSheetSwipe / dismissSheet. */
+@keyframes sheetUp{ from{ transform:translateY(100%); } to{ transform:translateY(0); } }
+@keyframes sheetDown{ from{ transform:translateY(var(--sheet-drag,0px)); } to{ transform:translateY(100%); } }
+@keyframes sheetScrimIn{ from{ background-color:transparent; } }
+@keyframes sheetScrimOut{ to{ background-color:transparent; } }
+@keyframes sheetFadeIn{ from{ opacity:0; } }
+@keyframes sheetFadeOut{ to{ opacity:0; } }
+@media (max-width:760px){
+  :root{ --sheet-gap:calc(env(safe-area-inset-top,0px) + 26px); --sheet-ease:cubic-bezier(.32,.72,0,1); }
+  body.sheet-open{ background:#0f0e10; }
+  .app{ transform-origin:50% 0; transition:transform .5s var(--sheet-ease), border-radius .5s var(--sheet-ease); }
+  body.sheet-open .app{ transform:translateY(calc(env(safe-area-inset-top,0px) + 10px)) scale(.93); border-radius:16px; }
+
+  #giftmodal, .wallet-withdraw-overlay, .lib-viewer{
+    display:flex; align-items:flex-end; justify-content:center; padding:var(--sheet-gap) 0 0;
+    background:rgba(15,13,17,.4); backdrop-filter:none; -webkit-backdrop-filter:none;
+    animation:sheetScrimIn .4s ease both;
+  }
+  .lib-viewer{ z-index:120; background:transparent; animation:none; }
+  .lib-viewer-scrim{ background:rgba(15,13,17,.4); animation:sheetFadeIn .4s ease both; }
+  .giftmodal-card, .wallet-withdraw-dialog, .lib-viewer-panel{
+    width:100%; max-width:none; max-height:100%; margin:0; position:relative;
+    border:0; border-radius:28px 28px 0 0; background:#fff;
+    box-shadow:0 -10px 40px -16px rgba(15,13,17,.3);
+    overscroll-behavior:contain;
+    animation:sheetUp .5s var(--sheet-ease) backwards;
+  }
+  .sheet-still, .sheet-still .lib-viewer-scrim, .sheet-still .lib-viewer-panel{ animation:none; }
+  .sheet-out{ pointer-events:none; animation:sheetScrimOut .26s ease forwards; }
+  .lib-viewer.sheet-out{ animation:none; }
+  .sheet-out .lib-viewer-scrim{ animation:sheetFadeOut .26s ease forwards; }
+  .sheet-out > .giftmodal-card, .sheet-out > .wallet-withdraw-dialog, .sheet-out > .lib-viewer-panel{
+    animation:sheetDown .26s cubic-bezier(.4,0,1,1) forwards;
+  }
+  .sheet-dragging > .giftmodal-card, .sheet-dragging > .wallet-withdraw-dialog, .sheet-dragging > .lib-viewer-panel{ animation:none; transition:none; }
+  /* Grab handle */
+  .giftmodal-head::before, .wallet-withdraw-dialog::before, .lib-viewer-panel::before{
+    content:''; display:block; width:38px; height:5px; border-radius:3px; background:#dcd9dc;
+  }
+  .giftmodal-head::before{ position:absolute; top:8px; left:50%; margin-left:-19px; }
+  .wallet-withdraw-dialog::before{ position:sticky; top:0; z-index:2; margin:-14px auto 16px; }
+  .lib-viewer-panel::before{ flex:none; margin:8px auto 2px; }
+
+  /* Invite: a full-height page sheet like the native share sheets. */
+  .giftmodal-card{
+    height:100%; display:flex; flex-direction:column; overflow-y:auto; overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;
+  }
+  .giftmodal-head{ flex:none; padding:26px 64px 8px; }
+  .giftmodal-brand{ display:none; }
+  .giftmodal-head h2{ font-size:20px; line-height:1.25; font-weight:800; letter-spacing:-.025em; margin:2px 0 0; }
+  .giftmodal-x{ top:14px; right:14px; width:40px; height:40px; background:#f4f3f4; }
+  .giftmodal-x:active{ background:#ebe9eb; }
+  .giftmodal-body{ flex:1 0 auto; padding:0 24px; }
+  .giftmodal-loading{ padding:56px 0; }
+  .giftmodal-illustration{ height:clamp(150px,26dvh,220px); margin:4px auto 10px; }
+  .giftmodal-illustration img{ width:auto; height:clamp(150px,26dvh,220px); max-width:100%; }
+  .giftmodal-code{ min-height:78px; padding:12px 14px 12px 22px; border-radius:22px; }
+  .giftmodal-code-text strong{ font-size:23px; letter-spacing:.1em; }
+  .giftmodal-copy{ width:46px; height:46px; border-radius:14px; }
+  .giftmodal-copy:active{ background:#ebe8e8; }
+  .giftmodal-description{ font-size:16px; line-height:1.5; margin-top:24px; padding:0 4px; }
+  .giftmodal-stats{ font-size:12.5px; padding:18px 0 20px; }
+  .giftmodal-redeem{ padding:4px 16px; border-radius:18px; margin-bottom:24px; }
+  .giftmodal-redeem[open]{ padding-bottom:16px; }
+  .giftmodal-redeem-label{ margin-top:12px; }
+  .giftmodal-redeem-form{ flex-wrap:wrap; gap:10px; }
+  .giftmodal-redeem-form .field, .giftmodal-redeem-form .btn{ flex-basis:100%; width:100%; min-height:48px; font-size:16px; border-radius:14px; }
+  /* Share options sit at the foot of the sheet, as in native share sheets. */
+  .giftmodal-share{
+    order:1; position:sticky; bottom:0; z-index:1; margin:auto -24px 0; background:#fff;
+    padding:16px 16px calc(14px + env(safe-area-inset-bottom,0px)); gap:4px;
+  }
+  .giftmodal-share-icon{ width:58px; height:58px; }
+  .giftmodal-share-option{ gap:8px; font-size:12.5px; }
+  .giftmodal-share-option:not(:disabled):active .giftmodal-share-icon{ transform:scale(.94); background:#efecee; }
+
+  /* Wallet popups */
+  .wallet-withdraw-dialog, .wallet-verification-dialog{
+    width:100%; max-height:100%; padding:22px 20px calc(22px + env(safe-area-inset-bottom,0px));
+  }
+  .wallet-withdraw-dialog header{ margin-bottom:20px; }
+  .wallet-withdraw-dialog h3{ font-size:20px; letter-spacing:-.02em; }
+  .wallet-withdraw-dialog header .btn.ghost{
+    flex:none; width:40px; height:40px; padding:0; display:grid; place-items:center;
+    border:0; border-radius:50%; background:#f4f3f4;
+  }
+
+  /* File viewer: a tall sheet with the file filling it. */
+  .lib-viewer-panel{ height:100%; display:flex; flex-direction:column; overflow:hidden; }
+  .lib-viewer-bar{ flex:none; padding:6px 10px 10px 20px; }
+  .lib-viewer-bar .iconbtn{ width:40px; height:40px; }
+  .lib-viewer-body{ flex:1; min-height:0; padding:16px 18px calc(18px + env(safe-area-inset-bottom,0px)); overflow-wrap:anywhere; }
+}
+@media (max-width:760px) and (prefers-reduced-motion: reduce){
+  .app{ transition:none; }
+  #giftmodal, .wallet-withdraw-overlay, .lib-viewer-scrim, .giftmodal-card, .wallet-withdraw-dialog, .lib-viewer-panel{ animation:none !important; }
+}
+@media (max-width:370px){
+  .giftmodal-body{ padding:0 16px; }
+  .giftmodal-share{ margin-left:-16px; margin-right:-16px; padding-left:8px; padding-right:8px; }
+  .giftmodal-share-icon{ width:50px; height:50px; }
+  .giftmodal-share-option{ font-size:11.5px; }
+  .giftmodal-code-text strong{ font-size:20px; letter-spacing:.06em; }
+}

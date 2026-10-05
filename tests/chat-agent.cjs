@@ -107,7 +107,10 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
   assert.equal(linkedReply.models.length,1);
   assert.match(linkedReply.models[0].prompt,/Pages the owner linked, read just now \(untrusted data\):\n.*Bring anything into existence/);
   // A lookup that ends in "I couldn't find it" becomes a task that looks further; an answer does not.
-  for(const [said,task] of [['I couldn’t find a usable forecast for Stockholm tomorrow.',true],['Jag hittar ingen tillförlitlig prognos för i morgon.',true],['Tomorrow looks cloudy with highs of 17°C.',false]]) {
+  // So does a half answer that says the results lack what was asked; a clear absence is an answer.
+  for(const [said,task] of [['I couldn’t find a usable forecast for Stockholm tomorrow.',true],['Jag hittar ingen tillförlitlig prognos för i morgon.',true],['Tomorrow looks cloudy with highs of 17°C.',false],
+    ['Ferries leave in the late afternoon. The results don’t confirm the exact departures, so check the operators’ timetables.',true],['The newest is iPhone 18 Pro. I can’t reliably quote its Swedish price.',true],
+    ['Current results don’t mention any strike on SL this week.',false]]) {
     const created=[];
     const lookup=reply({functionCalls:[{name:'web_search',args:{query:'weather Stockholm tomorrow'}}]},{text:said});
     const events=[];
@@ -116,6 +119,42 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
       .run({userId:'a',chatId:'c',requestId:`dead-${created.length}-${said.length}`,prompt:'What will the weather be tomorrow?',onEvent:e=>events.push(e)});
     assert.equal(created.length,task?1:0,said);
     assert.equal(events.some(e=>e.type==='message' && e.text===said),!task,'a dead end is not sent as the answer');
+  }
+  // A first query that misses may be followed by a second search with other words, but not a third;
+  // still seeking on the final round after lookups, the reply answers from what they found.
+  {
+    const queries=[];const created=[];
+    const lookups=reply({functionCalls:[{name:'web_search',args:{query:'iphone 17 price sweden'}}]},{functionCalls:[{name:'web_search',args:{query:'newest iphone price sweden'}}]},
+      {functionCalls:[{name:'web_search',args:{query:'apple se iphone price'}}]},{text:'The iPhone 18 Pro starts at 13 995 kr at Apple.'});
+    const events=[];
+    await chat(lookups.model,{tasks:{summaries:async()=>[],create:async t=>{created.push(t);return {id:'t1',state:{title:t.title,status:'queued',version:1,events:[]},revision:1};},view:r=>({id:r.id})},
+      tools:{web_search:{run:async a=>{queries.push(a.query);return [{url:'search:x',ok:true,text:'{"results":[{"title":"iPhone 18 Pro","text":"From 13 995 kr"}]}'}];}}}}).coordinator
+      .run({userId:'a',chatId:'c',requestId:'two-searches',prompt:'How much is the newest iPhone in Sweden?',onEvent:e=>events.push(e)});
+    assert.deepEqual(queries,['iphone 17 price sweden','newest iphone price sweden']);
+    assert.equal(created.length,0,'answered from the two searches, not handed to a task');
+    assert.equal(lookups.models.length,4);
+    assert.equal(lookups.models[3].toolChoice,'none');
+    assert.match(lookups.models[3].prompt,/run every lookup this reply allows/);
+    assert.equal(events.filter(e=>e.type==='message').at(-1).text,'The iPhone 18 Pro starts at 13 995 kr at Apple.');
+    // When those results do not answer it, the forced reply says NO_ANSWER and a task looks further.
+    const missed=reply({functionCalls:[{name:'web_search',args:{query:'a'}}]},{functionCalls:[{name:'web_search',args:{query:'b'}}]},{functionCalls:[{name:'web_search',args:{query:'c'}}]},{text:'NO_ANSWER'});
+    const missedTasks=[],missedEvents=[];
+    await chat(missed.model,{tasks:{summaries:async()=>[],create:async t=>{missedTasks.push(t);return {id:'t2',state:{title:t.title,status:'queued',version:1,events:[]},revision:1};},view:r=>({id:r.id})},
+      tools:{web_search:{run:async()=>[{url:'search:x',ok:true,text:'{"results":[{"title":"Laptops","text":"Spec sheet"}]}'}]}}}).coordinator
+      .run({userId:'a',chatId:'c',requestId:'no-answer',prompt:'Best laptop for video editing under 20000 kr?',onEvent:e=>missedEvents.push(e)});
+    assert.equal(missedTasks.length,1);
+    assert.equal(missedEvents.some(e=>e.type==='message' && /NO_ANSWER/.test(e.text)),false);
+  }
+  // A purchase the owner asks to pay with a payment app is not started while payment apps are
+  // off (the model hears why and tells the owner); with them on, it starts.
+  for(const on of [false,true]) {
+    const created=[];
+    const buy=reply({functionCalls:[{name:'delegate_task',args:{title:'Buy the lamp',instructions:'Buy the oak lamp on lampor.se and pay with Swish.'}}]},{text:'Swish is off: turn on payment apps in Settings → Wallet.'});
+    await chat(buy.model,{tasks:{summaries:async()=>[],create:async t=>{created.push(t);return {id:'t1',state:{title:t.title,status:'queued',version:1,events:[]},revision:1};},view:r=>({id:r.id})},
+      tools:{wallet_status:{run:async()=>({paymentSelection:{methods:{payment_apps:on,shop_pay:false,saved_card:false,belna_wallet:false}}})}}}).coordinator
+      .run({userId:'a',chatId:'c',requestId:`swish-${on}`,prompt:'Buy the oak desk lamp on lampor.se and pay with Swish',onEvent:()=>{}});
+    assert.equal(created.length,on?1:0,`payment apps ${on?'on':'off'}`);
+    if(!on) assert.match(buy.models[1].prompt,/Not started: the owner asked to pay with Swish, and payment apps .* are turned off/);
   }
   // An app that cannot be connected here gets no connect card: the model hears so and tells the owner.
   const unavailable=reply({functionCalls:[{name:'connect_app',args:{toolkit:'myspace'}}]},{text:'MySpace cannot be connected here.'});
