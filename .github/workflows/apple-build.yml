@@ -131,8 +131,14 @@ jobs:
             xcodebuild -project native/apple/Belna.xcodeproj -scheme Belna -destination "platform=iOS Simulator,id=$DEVICE" -only-testing:BelnaUITests/BelnaUITests/testReviewAccountScreenshots -resultBundlePath "native/apple/build/AppStore-$KIND.xcresult" CODE_SIGNING_ALLOWED=NO test
             xcrun xcresulttool export attachments --path "native/apple/build/AppStore-$KIND.xcresult" --output-path "native/apple/build/app-store-$KIND"
           done
-      - name: Save native test evidence and Xcode project
+      - name: Sanitize screenshot evidence
+        id: sanitize-evidence
         if: always()
+        env:
+          BELNA_REVIEW_CREDENTIALS: ${{ secrets.BELNA_REVIEW_CREDENTIALS }}
+        run: node native/apple/scripts/sanitize-screenshots.cjs
+      - name: Save native test evidence and Xcode project
+        if: always() && steps.sanitize-evidence.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: Belna-Apple-build-evidence
