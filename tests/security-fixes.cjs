@@ -87,14 +87,16 @@ async function verifyCode(edge, createApp, file) {
         if (secureFails) throw Object.assign(new Error('We couldn’t finish securing your account.'), { status: 503 });
         return true;
       },
+      // A password change signs out every session, so the secured account gets a new one.
+      freshSession: async (_admin, _pub, email) => { calls.push(['fresh', email]); return { session: { access_token: 'fresh-access', refresh_token: 'fresh-refresh' }, user: { id: 'u1', email } }; },
     },
   };
   await withApp(edge, createApp, file, "app.post('/api/auth/verify'", '// ---------- billing', context, async (http) => {
     const ok = await http.send('/api/auth/verify', json({ email: 'a@example.com', token: '123456', password: 'chosen-password' }));
     assert.equal(ok.status, 200);
-    assert.equal((await ok.json()).access_token, 'access');
+    assert.deepEqual(await ok.json(), { access_token: 'fresh-access', refresh_token: 'fresh-refresh', user: { id: 'u1', email: 'a@example.com' } }, 'the session revoked by securing the account is never returned');
     assert.deepEqual(calls[0], ['limits', [['verify:ip', 30, 600], ['verify:email', 10, 900]]]);
-    assert.deepEqual(calls.slice(1).map((c) => c[0]), ['unconfirmed?', 'verify', 'secure']);
+    assert.deepEqual(calls.slice(1).map((c) => c[0]), ['unconfirmed?', 'verify', 'secure', 'fresh']);
     assert.deepEqual(calls[3][2], { wasUnconfirmed: true, password: 'chosen-password' });
     // If the account cannot be secured, no session is handed out.
     secureFails = true;

@@ -107,6 +107,21 @@ async function findUser(email) {
   }
 }
 
+// Email-first sign-in routes a confirmed address to log-in and anything else to
+// sign-up. Unlike findUser, a failed lookup throws so the form can offer both.
+async function accountExists(email) {
+  const address = String(email || '').trim().toLowerCase();
+  if (!address.includes('@')) return false;
+  if (!supabaseUrl() || !secretKey()) throw fail('Account lookup is unavailable.', 'AUTH', 503);
+  const r = await fetch(supabaseUrl() + '/auth/v1/admin/users?per_page=50&filter=' + encodeURIComponent(address), {
+    headers: { apikey: secretKey(), Authorization: 'Bearer ' + secretKey() },
+  });
+  if (!r.ok) throw fail('Account lookup is unavailable.', 'AUTH', 503);
+  const j = await r.json();
+  const user = (j.users || []).find((u) => String(u.email || '').toLowerCase() === address);
+  return !!user?.email_confirmed_at;
+}
+
 // Supabase allows one auth email per address a minute; generateLink does not
 // enforce that, so keep the same limit before minting a new code.
 function sentRecently(user, now = Date.now()) {
@@ -188,6 +203,17 @@ function firstConfirmation(user, { wasUnconfirmed = false, now = Date.now() } = 
   const confirmedAt = Date.parse(user?.email_confirmed_at || user?.confirmed_at || '');
   return wasUnconfirmed || !Number.isFinite(confirmedAt) || now - confirmedAt < FIRST_CONFIRMATION_MS;
 }
+// Supabase signs out every session when a password changes, so a sign-in that just
+// secured the account (secureFirstSignIn returned true) continues with a new one.
+async function freshSession(admin, pub, email) {
+  const link = await admin.auth.admin.generateLink({ type: 'magiclink', email: String(email || '').trim().toLowerCase() });
+  const otp = link.data?.properties?.email_otp;
+  if (link.error || !otp) throw fail('We couldn’t finish signing you in. Please try again.', 'AUTH', 503);
+  const { data, error } = await pub.auth.verifyOtp({ email: String(email || '').trim().toLowerCase(), token: otp, type: 'magiclink' });
+  if (error || !data?.session || !data.user) throw fail('We couldn’t finish signing you in. Please try again.', 'AUTH', 503);
+  return { session: data.session, user: data.user };
+}
+
 async function secureFirstSignIn(admin, user, { wasUnconfirmed = false, password, now } = {}) {
   if (!user?.id || !firstConfirmation(user, { wasUnconfirmed, now })) return false;
   if (!admin) throw fail('Account authentication is unavailable.', 'AUTH', 503);
@@ -199,6 +225,8 @@ async function secureFirstSignIn(admin, user, { wasUnconfirmed = false, password
 
 module.exports = {
   configured,
+  freshSession,
+  accountExists,
   sendAuthCode,
   wasUnconfirmed,
   firstConfirmation,

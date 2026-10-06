@@ -83,15 +83,15 @@ await run("home get started", mobile, async (page) => {
 await run("auth controls", mobile, async (page) => {
   await page.goto(base + "/app");
   await page.locator("#aemail").waitFor();
-  await page.locator('[data-act="auth-mode"]').click();
-  await page.locator('[data-act="pw-mode"]').click();
-  await page.locator("#apass").waitFor({ state: "visible" });
-  if ((await page.locator("#pwgo").innerText()) !== "Create account")
-    throw Error("signup mode lost");
-  await page.locator('[data-act="auth-back"]').last().click();
-  await page.locator("#aemail").waitFor({ state: "visible" });
-  await page.locator('[data-act="otp-send"]').click();
+  await page.locator("#pwgo").click();
   if (!(await page.locator("#amsg").innerText()).trim()) throw Error("empty email has no feedback");
+  await page.locator('#tab-signup').click();
+  if ((await page.locator("#pwgo").innerText()) !== "Create account")
+    throw Error("signup tab not shown");
+  if ((await page.locator("#tab-signup").getAttribute("aria-selected")) !== "true")
+    throw Error("signup tab not selected");
+  await page.locator('#tab-signin').click();
+  if ((await page.locator("#pwgo").innerText()) !== "Log in") throw Error("login tab not shown");
   await page.locator('[data-act="back-home"]').click();
   await page.locator("#lprompt").waitFor();
   if (new URL(page.url()).pathname !== "/") throw Error("back-home kept app URL");

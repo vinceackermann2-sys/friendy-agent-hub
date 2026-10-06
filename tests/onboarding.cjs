@@ -32,6 +32,7 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
         let body = {};
         if (endpoint === '/api/auth/' + mode) body = session;
         if (endpoint === '/api/auth/me') body = {user:session.user};
+        if (endpoint === '/api/auth/lookup') body = {exists:mode === 'signin'};
         if (endpoint === '/api/auth/google/enabled') body = {enabled:true};
         if (endpoint === '/api/agent/tasks') body = {tasks:[]};
         if (endpoint === '/api/sandbox/presence') body = {status:'ready', mode:'account-only', warmed:false, container:false};
@@ -47,13 +48,16 @@ const readState = page => page.evaluate(() => JSON.parse(localStorage.getItem('l
         await page.reload();
       }
       if (mode === 'oauth') {
-        await page.goto(base + '/app?oauth=1#access_token=test-access&refresh_token=test-refresh');
+        // Only the tab that started Google sign-in accepts the returned session.
+        await page.evaluate(() => sessionStorage.setItem('belna.oauthFlow', 'onboarding-flow-0123456789'));
+        await page.goto(base + '/app?oauth=1#access_token=test-access&refresh_token=test-refresh&flow=onboarding-flow-0123456789');
       } else {
+        // A homepage prompt opens on Sign up; otherwise Log in.
+        assert.equal(await page.innerText('.authtabs .on'), mode === 'signup' ? 'Sign up' : 'Log in');
         await page.fill('#aemail', session.user.email);
-        await page.click('[data-act="pw-mode"]');
-        if (mode === 'signup') await page.click('[data-act="auth-mode"]');
         await page.fill('#apass', 'test-password');
         await page.check('#authlegal');
+        assert.equal(await page.innerText('#pwgo'), mode === 'signup' ? 'Create account' : 'Log in');
         await page.click('#pwgo');
       }
       await page.waitForSelector('[data-onboarding-name]');

@@ -238,7 +238,7 @@ for (const name of ['apple-devices','apple-identity','apple-auth','account-delet
     .replace("const { seal, unseal } = require('./apple-devices');", "import { seal, unseal } from './apple-devices.js';")
     .replace("const { appleIdentity } = require('./apple-identity');", "import { appleIdentity } from './apple-identity.js';")
     .replace("const { eraseLibraryStorage } = require('./account-deletion');", "import { eraseLibraryStorage } from './account-deletion.js';")
-    .replace("const { wasUnconfirmed, secureFirstSignIn } = require('./auth-email');", "import { wasUnconfirmed, secureFirstSignIn } from './auth-email.js';")
+    .replace("const { wasUnconfirmed, secureFirstSignIn, freshSession } = require('./auth-email');", "import { wasUnconfirmed, secureFirstSignIn, freshSession } from './auth-email.js';")
     .replace('module.exports = {', 'export {');
   if (/module\.exports|require\(/.test(esm)) throw new Error(`Unconverted Apple module: ${name}`);
   writeFileSync(join(root, `src/lingon-server/${name}.js`), esm, 'utf8');

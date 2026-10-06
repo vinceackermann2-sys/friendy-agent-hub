@@ -101,6 +101,20 @@ window.BelnaApple = (() => {
       const credential = await native.request({method:'signIn'});
       return window.LingonAuth.api('/api/auth/apple', { method: 'POST', body: JSON.stringify({ ...credential, terms_version: termsVersion }) });
     },
+    // Google blocks sign-in inside app web views; builds with webAuth open it in the
+    // system browser sheet. The session returns sealed to this page's verifier.
+    googleSignIn: Array.isArray(native.features) && native.features.includes('webAuth') ? async (termsVersion) => {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const verifier = b64url(bytes);
+      const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+      const start = await fetch('/api/auth/oauth-url?' + new URLSearchParams({ provider: 'google', native: '1', terms_version: termsVersion, challenge }));
+      const { url, error } = await start.json().catch(() => ({}));
+      if (!start.ok || !url) throw new Error(error || 'Google sign-in unavailable');
+      const back = new URL((await native.request({ method: 'webAuth', url })).url);
+      if (back.searchParams.get('error')) throw new Error(back.searchParams.get('error'));
+      return window.LingonAuth.api('/api/auth/native-exchange', { method: 'POST', body: JSON.stringify({ code: back.searchParams.get('code'), verifier }) });
+    } : null,
     async disconnect() {
       if (deviceId && identity) await window.LingonAuth.api('/api/apple/devices/' + deviceId, {method:'DELETE'});
       await native.request({method:'disconnect'}); registered = false; lastHeartbeat = 0;

@@ -26,6 +26,7 @@ final class NativeModel: NSObject, ObservableObject {
     var foreground = true
     private var promptContinuation: CheckedContinuation<Bool, Never>?
     private var signingIn: AppleSignIn?
+    private var webSigningIn: WebSignIn?
     private var completed = [String: [String: Any]]()
     private var executing = Set<String>()
     private var revision = 0
@@ -104,6 +105,18 @@ final class NativeModel: NSObject, ObservableObject {
             defer { signingIn = nil }
             return try await signIn.start()
         }
+        // Google refuses sign-in inside embedded web views, so it runs in the system
+        // browser sheet. Only Google's sign-in page may open, and only belna:// ends it.
+        if method == "webAuth" {
+            guard webSigningIn == nil else { throw DeviceError.message("Sign-in is already open.") }
+            guard let text = body["url"] as? String, let url = URL(string: text), url.scheme == "https",
+                  url.host == "accounts.google.com", url.user == nil, url.port == nil else {
+                throw DeviceError.message("This sign-in page is not supported.")
+            }
+            let session = WebSignIn(); webSigningIn = session
+            defer { webSigningIn = nil }
+            return ["url": try await session.start(url).absoluteString]
+        }
         if method == "status" {
             let accountId = body["accountId"] as? String ?? ""
             guard UUID(uuidString: accountId) != nil else { throw DeviceError.message("Sign in first.") }
@@ -173,5 +186,37 @@ final class AppleSignIn: NSObject, ASAuthorizationControllerDelegate, ASAuthoriz
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) { finish(.failure(error)) }
     private func finish(_ result: Result<[String: String], Error>) {
         continuation?.resume(with: result); continuation = nil; controller = nil
+    }
+}
+
+@MainActor
+final class WebSignIn: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private var continuation: CheckedContinuation<URL, Error>?
+    private var session: ASWebAuthenticationSession?
+    func start(_ url: URL) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            let done: (URL?, Error?) -> Void = { [weak self] callback, error in
+                if let callback, callback.scheme == "belna", callback.host == "auth" { self?.finish(.success(callback)) }
+                else if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin {
+                    self?.finish(.failure(DeviceError.message("Sign-in was cancelled.")))
+                } else { self?.finish(.failure(DeviceError.message("Google sign-in could not finish. Please try again."))) }
+            }
+            let session: ASWebAuthenticationSession
+            if #available(iOS 17.4, macCatalyst 17.4, *) {
+                session = ASWebAuthenticationSession(url: url, callback: .customScheme("belna"), completionHandler: done)
+            } else {
+                session = ASWebAuthenticationSession(url: url, callbackURLScheme: "belna", completionHandler: done)
+            }
+            session.presentationContextProvider = self
+            self.session = session
+            if !session.start() { finish(.failure(DeviceError.message("Google sign-in could not open."))) }
+        }
+    }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow } ?? ASPresentationAnchor()
+    }
+    private func finish(_ result: Result<URL, Error>) {
+        continuation?.resume(with: result); continuation = nil; session = nil
     }
 }

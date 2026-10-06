@@ -50,11 +50,14 @@ async function oauthRoutes(makeApp, edge, helpers) {
       createUser: async () => ({}),
       generateLink: async () => ({ data: { properties: { email_otp: '123456' } } }),
     } } }),
-    pubClient: () => ({ auth: { verifyOtp: async () => ({ data: { session: { access_token: 'session-access', refresh_token: 'session-refresh' }, user: { id: 'owner' } } }) } }),
-    authEmail: { wasUnconfirmed: async () => true, secureFirstSignIn: async (_admin, user, options) => { secured.push([user.id, options.wasUnconfirmed]); return true; } },
+    pubClient: () => ({ auth: { verifyOtp: async () => ({ data: { session: { access_token: 'revoked-access', refresh_token: 'revoked-refresh' }, user: { id: 'owner' } } }) } }),
+    authEmail: { wasUnconfirmed: async () => true, secureFirstSignIn: async (_admin, user, options) => { secured.push([user.id, options.wasUnconfirmed]); return true; },
+      // Securing the account signs out the first session; the route continues with a new one.
+      freshSession: async () => ({ session: { access_token: 'session-access', refresh_token: 'session-refresh' }, user: { id: 'owner' } }) },
   }, { filename: file });
   // Two separate apps stand in for two edge instances that share no memory.
   const startApp = makeApp(), finishApp = makeApp();
+  if (!edge) { startApp.use(express.json()); finishApp.use(express.json()); }
   install(startApp); install(finishApp);
   const start = await transport(startApp, edge), finish = await transport(finishApp, edge);
   const begin = async (next, flow = crypto.randomBytes(24).toString('base64url')) => {
@@ -101,6 +104,38 @@ async function oauthRoutes(makeApp, edge, helpers) {
     helpers.bindOAuthBrowser(shopRes, { kind: 'shop', state: shop.state, secure: true });
     const shopCookie = shopRes.headers.get('Set-Cookie').split(';')[0];
     assert.match((await callback(shop, shopCookie)).headers.get('location'), /^\/\?auth_error=/);
+
+    // Apple app: the browser sheet shares no cookies, so the flow is a signed state bound
+    // to a verifier that only the app page holds.
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    const nativeStart = (value) => start.send('/api/auth/oauth-url?' + new URLSearchParams({ terms_version: 'test-terms', native: '1', challenge: value }));
+    for (const bad of ['', 'short', challenge + 'x']) assert.equal((await nativeStart(bad)).status, 400, 'native sign-in needs a challenge');
+    const nativeRes = await nativeStart(challenge);
+    assert.equal(nativeRes.status, 200);
+    assert.equal(nativeRes.headers.get('set-cookie'), null, 'native flow does not depend on a web view cookie');
+    const nativeState = new URL((await nativeRes.json()).url).searchParams.get('state');
+    assert.match(nativeState, /^n\./);
+    const nativeCallback = (value) => finish.send('/api/auth/google/callback?' + new URLSearchParams({ code: 'code', state: value }));
+    const before = exchanges;
+    const [np, nm] = nativeState.slice(2).split('.');
+    const nativeForged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(np, 'base64url')), challenge: 'A'.repeat(43) })).toString('base64url');
+    for (const bad of ['n.' + nativeForged + '.' + nm, 'n.' + np, 'n.' + np + '.' + nm + '.x']) {
+      assert.match((await nativeCallback(bad)).headers.get('location'), /^belna:\/\/auth\?error=/);
+    }
+    assert.equal(exchanges, before, 'an altered native state never exchanges the code');
+    const nativeDone = (await nativeCallback(nativeState)).headers.get('location');
+    assert.match(nativeDone, /^belna:\/\/auth\?code=[A-Za-z0-9_%-]+$/);
+    assert.ok(!nativeDone.includes('session-access'), 'the session is sealed, not in the callback URL');
+    assert.match((await nativeCallback(nativeState)).headers.get('location'), /^belna:\/\/auth\?error=/, 'native callback cannot be replayed');
+    const sealed = new URL(nativeDone).searchParams.get('code');
+    const exchange = (body, http = start) => http.send('/api/auth/native-exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await exchange({ code: sealed, verifier: crypto.randomBytes(32).toString('base64url') })).status, 400, 'a caught callback is useless without the verifier');
+    assert.equal((await exchange({ code: sealed.slice(0, -2) + 'AA', verifier })).status, 400);
+    const opened = await exchange({ code: sealed, verifier });
+    assert.equal(opened.status, 200);
+    assert.deepEqual(await opened.json(), { access_token: 'session-access', refresh_token: 'session-refresh', user: { id: 'owner' } });
+    assert.equal((await exchange({ code: sealed, verifier })).status, 400, 'a sealed session opens once per instance');
   } finally { await start.close(); await finish.close(); }
 }
 

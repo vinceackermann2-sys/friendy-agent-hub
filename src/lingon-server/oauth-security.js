@@ -82,4 +82,54 @@ function consumeOAuthState(state, exp) {
   return true;
 }
 
-export { safeNext, bindOAuthBrowser, readOAuthBrowser, clearOAuthBrowser, consumeOAuthState };
+// The Apple app signs in with Google in the system browser sheet, which shares no
+// cookies with the app's web view. Its flow is carried in a signed state value and
+// bound to a secret (PKCE-style) that only the app page holds: the session comes
+// back sealed, and only the page with the matching verifier can open it.
+const NATIVE_PREFIX = 'n.';
+const CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+function nativeChallenge(verifier) {
+  return crypto.createHash('sha256').update(String(verifier || '')).digest('base64url');
+}
+function signNativeState(record = {}, ttlSeconds = 600) {
+  if (!CHALLENGE.test(String(record.challenge || ''))) throw new Error('Invalid sign-in flow.');
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const payload = Buffer.from(JSON.stringify({ ...record, kind: 'native', nonce, exp: Date.now() + ttlSeconds * 1000 })).toString('base64url');
+  return NATIVE_PREFIX + payload + '.' + sign(payload);
+}
+const isNativeState = (state) => String(state || '').startsWith(NATIVE_PREFIX);
+function readNativeState(state) {
+  const value = String(state || '');
+  if (!isNativeState(value) || value.length > 2048) return null;
+  const [payload, mac, extra] = value.slice(NATIVE_PREFIX.length).split('.');
+  if (!payload || !mac || extra !== undefined) return null;
+  let expected;
+  try { expected = sign(payload); } catch { return null; }
+  const a = Buffer.from(mac), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  let record;
+  try { record = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { return null; }
+  if (!record || record.kind !== 'native' || !CHALLENGE.test(String(record.challenge || '')) || !(Number(record.exp) > Date.now())) return null;
+  return record;
+}
+const sealKey = () => crypto.createHash('sha256').update('belna-native-session:' + oauthSecret()).digest();
+function sealNativeSession(session, challenge, ttlSeconds = 120) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', sealKey(), iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify({ ...session, challenge, exp: Date.now() + ttlSeconds * 1000 }), 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url');
+}
+function openNativeSession(code, verifier) {
+  try {
+    const raw = Buffer.from(String(code || ''), 'base64url');
+    if (raw.length < 29 || raw.length > 8192) return null;
+    const decipher = crypto.createDecipheriv('aes-256-gcm', sealKey(), raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(12, 28));
+    const record = JSON.parse(Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8'));
+    const a = Buffer.from(nativeChallenge(verifier)), b = Buffer.from(String(record.challenge || ''));
+    if (!(Number(record.exp) > Date.now()) || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    return record;
+  } catch { return null; }
+}
+
+export { safeNext, bindOAuthBrowser, readOAuthBrowser, clearOAuthBrowser, consumeOAuthState, nativeChallenge, signNativeState, isNativeState, readNativeState, sealNativeSession, openNativeSession };

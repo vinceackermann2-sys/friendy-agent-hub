@@ -20,7 +20,7 @@ struct BelnaWebView: UIViewRepresentable {
         let origin = AppConfiguration.origin.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         // JSON serialization, never raw host text interpolated into JavaScript.
         let encoded = String(data: try! JSONSerialization.data(withJSONObject: [origin]), encoding: .utf8)!
-        let source = "if (window === window.top && location.origin === \(encoded)[0]) { Object.defineProperty(window,'BelnaNative',{value:Object.freeze({platform:'\(AppConfiguration.platform)',request:body=>window.webkit.messageHandlers.belna.postMessage(body)})}); }"
+        let source = "if (window === window.top && location.origin === \(encoded)[0]) { Object.defineProperty(window,'BelnaNative',{value:Object.freeze({platform:'\(AppConfiguration.platform)',features:Object.freeze(['webAuth']),request:body=>window.webkit.messageHandlers.belna.postMessage(body)})}); }"
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator; webView.uiDelegate = context.coordinator

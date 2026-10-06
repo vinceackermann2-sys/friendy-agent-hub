@@ -1,6 +1,6 @@
 const { appleIdentity } = require('./apple-identity');
 const { eraseLibraryStorage } = require('./account-deletion');
-const { wasUnconfirmed, secureFirstSignIn } = require('./auth-email');
+const { wasUnconfirmed, secureFirstSignIn, freshSession } = require('./auth-email');
 function createAppleAccountCleanup({ adminClient, tasks, composio, azure }) {
   return async userId => {
     const admin = adminClient();
@@ -44,12 +44,14 @@ function installAppleAuthRoutes(app, { requireAuth, rateLimit, pubClient, adminC
       const {data,error} = await client.auth.signInWithIdToken({provider:'apple',token:tokens.identityToken,nonce:input.nonce});
       if (error || !data?.session || !data.user) return res.status(401).json({error:'Apple sign-in failed. Please try again.'});
       // Apple proved the address; a password set on the unconfirmed account before that is replaced.
-      await secureFirstSignIn(adminClient(),data.user,{wasUnconfirmed:unconfirmed});
-      await identity.save(data.user.id,tokens.refreshToken);
+      let {session,user}=data;
+      // A changed password signs out the Apple session too; continue with a new one.
+      if(await secureFirstSignIn(adminClient(),user,{wasUnconfirmed:unconfirmed}))({session,user}=await freshSession(adminClient(),client,user.email));
+      await identity.save(user.id,tokens.refreshToken);
       const {error:termsError} = await client.auth.updateUser({data:{terms_version:input.terms_version,terms_accepted_at:new Date().toISOString()}});
       if(termsError) throw new Error('Terms could not be saved.');
       res.setHeader('Cache-Control','no-store');
-      return res.json({access_token:data.session.access_token,refresh_token:data.session.refresh_token,user:data.user});
+      return res.json({access_token:session.access_token,refresh_token:session.refresh_token,user});
     } catch { return res.status(503).json({error:'Apple sign-in is unavailable. Check the Apple provider configuration.'}); }
   });
   app.post('/api/auth/delete-account', rateLimit(3,60000), requireAuth(async (req,res) => {

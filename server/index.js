@@ -17,7 +17,7 @@ const { PLANS, PRELANDER_OFFERS, CREDIT_PACKS, TOKEN_PACKS, GIFT_AMOUNTS, costOf
 const store = require('./store');
 const stripeMod = require('./stripe');
 const { pubClient, adminClient, requireAuth } = require('./auth');
-const { safeNext, bindOAuthBrowser, readOAuthBrowser, clearOAuthBrowser, consumeOAuthState } = require('./oauth-security');
+const { safeNext, bindOAuthBrowser, readOAuthBrowser, clearOAuthBrowser, consumeOAuthState, isNativeState, signNativeState, readNativeState, sealNativeSession, openNativeSession } = require('./oauth-security');
 const { requestBodyLimit } = require('./request-limits');
 // Agents-API-shaped harness backed by Microsoft Foundry + extras
 const Runner = require('./agents/runner');
@@ -329,7 +329,12 @@ app.post('/api/auth/signin', rateLimit(15, 60000), async (req, res) => {
     const pub = pubClient();
     if (!pub) return res.status(500).json({ error: 'Auth not configured on server.' });
     const { data, error } = await pub.auth.signInWithPassword({ email: String(email || ''), password: String(password || '') });
-    if (error) return res.status(401).json({ error: error.message });
+    if (error) {
+      if (/invalid login credentials/i.test(error.message || '') && !(await authEmail.accountExists(email))) {
+        return res.status(404).json({ error: 'No Belna account uses this email yet.', new_account: true });
+      }
+      return res.status(401).json({ error: /invalid login credentials/i.test(error.message || '') ? 'Wrong password. Try again or get a one-time code.' : error.message });
+    }
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
     res.status(500).json({ error: 'Signin failed: ' + e.message });
@@ -382,34 +387,42 @@ app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
     const crypto = require('crypto');
     const state = crypto.randomBytes(32).toString('hex');
     const redirectUri = siteOrigin(req) + '/api/auth/google/callback';
+    const googleUrl = (value) => 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'openid email profile',
+      state: value,
+      access_type: 'online',
+      prompt: 'select_account',
+    }).toString();
+    if (req.query.native === '1') {
+      const challenge = String(req.query.challenge || '');
+      if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) return res.status(400).json({ error: 'Update the Belna app and try signing in again.' });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({ url: googleUrl(signNativeState({ redirectUri, termsVersion: TERMS_VERSION, challenge })) });
+    }
     // The page that starts sign-in keeps this value; it accepts the session only when the
     // callback returns the same one, so a link from someone else cannot sign it in.
     const flow = String(req.query.flow || '');
     if (!/^[A-Za-z0-9_-]{22,128}$/.test(flow)) return res.status(400).json({ error: 'Refresh the page and try signing in again.' });
     bindOAuthBrowser(res, { kind: 'oauth', state, secure: redirectUri.startsWith('https:'),
       record: { next: safeNext(req.query.next), redirectUri, termsVersion: TERMS_VERSION, flow } });
-    const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: 'openid email profile',
-      state,
-      access_type: 'online',
-      prompt: 'select_account',
-    }).toString();
-    res.json({ url });
+    res.json({ url: googleUrl(state) });
   } catch (e) {
     res.status(500).json({ error: 'OAuth failed: ' + e.message });
   }
 });
 app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
-  const back = (msg) => res.redirect('/?auth_error=' + encodeURIComponent(msg || 'Sign-in failed'));
+  // The Apple app's browser sheet closes on its belna:// callback and hands the result to the app.
+  const native = isNativeState(req.query.state);
+  const back = (msg) => res.redirect((native ? 'belna://auth?error=' : '/?auth_error=') + encodeURIComponent(msg || 'Sign-in failed'));
   try {
     const { code, state, error } = req.query;
     const flowCookie = { kind: 'oauth', state: String(state || ''), secure: siteOrigin(req).startsWith('https:') };
-    const saved = readOAuthBrowser(req, flowCookie);
+    const saved = native ? readNativeState(state) : readOAuthBrowser(req, flowCookie);
     if (!saved || !consumeOAuthState(flowCookie.state, saved.exp)) return back('Sign-in expired — please try again.');
-    clearOAuthBrowser(res, flowCookie);
+    if (!native) clearOAuthBrowser(res, flowCookie);
     if (error) return back(req.query.error_description || error || 'Sign-in cancelled.');
     if (!code) return back('Sign-in expired — please try again.');
     const clientId = googleEnv('GOOGLE_CLIENT_ID');
@@ -452,14 +465,31 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
     const sess = await pub.auth.verifyOtp({ email, token: otp, type: 'magiclink' });
     if (sess.error || !sess.data.session) return back((sess.error && sess.error.message) || 'Could not complete sign-in.');
     // Google proved the address; a password set on the unconfirmed account before that is replaced.
-    await authEmail.secureFirstSignIn(admin, sess.data.user, { wasUnconfirmed: unconfirmed });
-    const frag = '#access_token=' + encodeURIComponent(sess.data.session.access_token)
-      + '&refresh_token=' + encodeURIComponent(sess.data.session.refresh_token || '')
+    let { session, user } = sess.data;
+    if (await authEmail.secureFirstSignIn(admin, user, { wasUnconfirmed: unconfirmed })) ({ session, user } = await authEmail.freshSession(admin, pub, email));
+    if (native) {
+      const sealed = sealNativeSession({ access_token: session.access_token, refresh_token: session.refresh_token || '',
+        user: { id: user.id, email: user.email } }, saved.challenge);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.redirect('belna://auth?code=' + encodeURIComponent(sealed));
+    }
+    const frag = '#access_token=' + encodeURIComponent(session.access_token)
+      + '&refresh_token=' + encodeURIComponent(session.refresh_token || '')
       + '&flow=' + encodeURIComponent(saved.flow);
     res.redirect(safeNext(saved.next.split('#')[0].split('?')[0]) + frag);
   } catch (e) {
     return back(e.message);
   }
+});
+// The Apple app opens the sealed session with the verifier only its page holds, so a
+// belna:// callback caught by another app is useless without it.
+app.post('/api/auth/native-exchange', rateLimit(15, 60000), async (req, res) => {
+  const { code, verifier } = req.body || {};
+  res.setHeader('Cache-Control', 'no-store');
+  if (!/^[A-Za-z0-9_-]{43,128}$/.test(String(verifier || ''))) return res.status(400).json({ error: 'Sign-in expired — please try again.' });
+  const session = openNativeSession(code, verifier);
+  if (!session || !consumeOAuthState('native-code:' + String(code).slice(0, 64), session.exp)) return res.status(400).json({ error: 'Sign-in expired — please try again.' });
+  res.json({ access_token: session.access_token, refresh_token: session.refresh_token, user: session.user });
 });
 // Email one-time code (passwordless)
 app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
@@ -484,6 +514,18 @@ app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
     res.status(500).json({ error: 'Could not send code: ' + e.message });
   }
 });
+// Email-first sign-in: tells the form whether to show log-in or sign-up for this address.
+app.post('/api/auth/lookup', rateLimit(20, 60000), async (req, res) => {
+  try {
+    const email = normalEmail(req.body?.email);
+    if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 254) return res.status(400).json({ error: 'Enter a valid email.' });
+    if (await durableLimited([['lookup:ip:' + req.ip, 40, 600], ['lookup:email:' + email, 20, 3600]])) return res.status(429).json({ error: TOO_MANY_ATTEMPTS });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ exists: await authEmail.accountExists(email) });
+  } catch (e) {
+    res.status(503).json({ error: 'Could not check this email. Please try again.' });
+  }
+});
 app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
   try {
     const { email, token, password } = req.body || {};
@@ -494,9 +536,11 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
     const { data, error } = await pub.auth.verifyOtp({ email: String(email || ''), token: String(token || '').trim(), type: 'email' });
     if (error || !data.session) return res.status(400).json({ error: (error && error.message) || 'Invalid or expired code.' });
     // The code proves the address; a password set before that proof never survives it.
-    try { await authEmail.secureFirstSignIn(adminClient(), data.user, { wasUnconfirmed: unconfirmed, password }); }
-    catch (e) { return res.status(e.status || 503).json({ error: e.message }); }
-    res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
+    let { session, user } = data;
+    try {
+      if (await authEmail.secureFirstSignIn(adminClient(), user, { wasUnconfirmed: unconfirmed, password })) ({ session, user } = await authEmail.freshSession(adminClient(), pubClient(), user.email));
+    } catch (e) { return res.status(e.status || 503).json({ error: e.message }); }
+    res.json({ access_token: session.access_token, refresh_token: session.refresh_token, user: { id: user.id, email: user.email } });
   } catch (e) {
     res.status(500).json({ error: 'Verify failed: ' + e.message });
   }
