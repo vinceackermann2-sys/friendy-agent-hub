@@ -1,13 +1,13 @@
 Belna 1.0.0 - Guideline 2.1 information (6 October 2026)
 
 1. Physical-device evidence
-The owner is supplying physical iPhone/iPad QA and an original recording of the new TestFlight build, beginning with app launch and showing registration, login, typical tasks and deletion of a disposable account. Recording/device/OS/build details must be attached before resubmission. Simulator tests do not replace physical evidence.
+Attached iPhone demo (4:13): copy_715DEC95-6AF3-4E6B-89D5-C1453B210A1D.mov. It shows password login, a study-plan chat, a generated text file, Pro plan Settings and optional Health permission. The owner confirms build 49.1 and iPhone-only testing. Launch/registration/deletion footage and exact device/iOS details are pending; no physical iPad QA is claimed.
 
 2. Purpose and audience
 Belna is a personal AI productivity agent for individual consumers, including students and professionals. It turns requests into research, drafts, files and tracked tasks across the user's own tools, reducing repetitive work. It is not restricted to a specific employer or organization.
 
 3. Access and main features
-Choose Log in with password using the isolated demo credentials in Sign-In Information. No owner data or external accounts were copied. No sample file or payment is required for basic review. Register with email or Sign in with Apple after Terms/AI consent. Send "Plan a three-day study schedule", then "Create a text file with the plan" and open the artifact/Library item. Attach a harmless text file with +; use the microphone for transcription.
+Choose Log in with password using the isolated demo credentials in Sign-In Information. No owner data or external accounts were copied. Pro demo access is enabled; no payment or sample file is required. Register with email or Sign in with Apple after Terms/AI consent. Send "Plan a three-day study schedule", then "Create a text file with the plan" and open the artifact/Library item. Attach a harmless text file with +; use the microphone for transcription.
 Apple apps is the Apple-logo button at top right, also in Connectors. Calendar, Reminders and Contacts are optional; changes need agent approval and on-device confirmation. Health is read-only fitness/wellness on supported devices; preview each summary before sharing with AI. Keep Belna open for device requests. Delete an account via Apple apps > Account > Delete my Belna account, then confirm. Test deletion on a disposable account, not the persistent demo login.
 Chats, files and AI outputs are private account content, not a public feed or user-to-user chat. There are no other users to block in that workspace. Settings > Report an issue and support@belna.se provide reporting/support. Connected-service content is subject to that service's permissions.
 

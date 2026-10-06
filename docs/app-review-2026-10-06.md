@@ -126,6 +126,41 @@ provider documentation; the owner has not supplied such a document.
 - Processed new build selected, then resubmit with manual release preserved.
 - Approval is Apple's decision and cannot be guaranteed.
 
+## Supplied Recording Audit
+
+The owner supplied `copy_715DEC95-6AF3-4E6B-89D5-C1453B210A1D.mov`
+on 6 October and confirmed physical testing was on iPhone only. File duration
+is 252.934 seconds (4:13), size 60,461,105 bytes, HEVC/AAC, 886 x 1920.
+SHA-256 is `1f9163eef5157ef7ac5b2f677f06685e102306971be42ed98ce32cc4c6852eaf`.
+The supplied copy has re-encoding metadata; do not describe it as an unmodified
+camera original. The model, exact iOS version and installed TestFlight build
+were requested separately. The owner affirmed build 49.1 but did not provide
+the model or iOS version; no physical iPad QA is claimed.
+
+Observed content includes existing reviewer-account password login, agent
+onboarding, a three-day study-plan conversation, generated text-file creation
+and Library preview, Pro plan Settings, reporting/support menu entries, and
+optional Apple Health permission/connection. The final frame shows the generated
+file's content successfully; earlier frames show the file task still running.
+Pro access and login were also verified against production without logging
+credentials.
+
+The clip starts inside Belna, not by launching it. It does not demonstrate
+registration or deletion. These are explicit requirements in Apple's message,
+not optional substitutes for showing a working chat. A supplementary real-device
+clip was requested: Home Screen launch, registration/login with a disposable
+account, and confirmed deletion returning to the signed-out state. Do not delete
+the persistent App Review account used in this clip. Device/OS/build information
+must also be confirmed before describing the evidence as complete.
+
+The video is saved as an attachment on the App Review reply draft and on the
+version's App Review Information. The version attachment is
+`1b3fdab0-c946-45d8-9457-1e48358cdc43`; the API reports delivery `COMPLETE`
+with the original 60,461,105-byte size. The six-part
+Notes and reply draft now accurately describe the received clip and the missing
+evidence, and disclose iPhone-only physical testing. No final reply or
+resubmission has been sent. Other concurrent code edits are left untouched.
+
 ## References
 
 - [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
