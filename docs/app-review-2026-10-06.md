@@ -70,6 +70,9 @@ The owner reports Whop KYB/KYC completion and required user KYC, but no separate
 Belna approval letter or contract document. Whop's published developer terms
 and provider terms are references, not proof of a separate regulatory license.
 Do not invent authorization. Apple decides whether further evidence is needed.
+The owner explicitly chose to keep Wallet in the initial iOS release rather than
+remove transfers/cards. Do not hide those features for review or claim that KYC
+alone proves licensing or Belna-specific provider authorization.
 
 ## Verification and Delivery
 
@@ -91,9 +94,27 @@ Do not invent authorization. Apple decides whether further evidence is needed.
   unnecessary.
 - No open GitHub pull requests remain. No published history was rewritten.
 
-Apple processing, internal TestFlight distribution and selected-build confirmation
-are tracked below once complete. The app remains rejected until the recording
-and physical testing are supplied and the corrected submission is resubmitted.
+- Apple processed build 49.1 as VALID, ID
+  `d6086f20-3a50-43d0-94d5-f1f002300b51`. It is assigned to the existing Belna
+  Device QA group; the API confirms `IN_BETA_TESTING` for internal testers.
+- Build 49.1 is saved on App Store version 1.0.0 with release type `MANUAL`.
+  Saving the replacement build changed the editable version to
+  `PREPARE_FOR_SUBMISSION`; the earlier rejected submission is still unresolved.
+  No final reply or resubmission was sent without physical evidence.
+- Signed IPA SHA-256:
+  `05680d2cf8eaadee25c7958d586ec51dafd71acff50535e08a003b4da46dead8`.
+- GitHub commit `813b007` contains the reviewer packet, privacy correction and
+  the owner's existing alternate launcher configuration. Lovable synchronized
+  that commit and deployment `220e80e2-3963-4ec8-a4dc-06dad042cdc8` published it.
+  Both `https://belna.se/privacy` and the published Lovable privacy page return
+  200 with the 6 October update and Whop disclosure. Production health and
+  reviewer login also return 200 after deployment.
+
+Await the original physical-device recording and test results. Replace the
+pending evidence paragraph in both Notes and the saved reply, include matching
+actual in-use screenshots, attach the recording, then update/resubmit the review.
+Any additional wallet authorization requested by Apple must come from genuine
+provider documentation; the owner has not supplied such a document.
 
 ## Release Gates
 
