@@ -83,8 +83,11 @@ alone proves licensing or Belna-specific provider authorization.
   [GitHub run 37429260802](https://github.com/vinceackermann2-sys/friendy-agent-hub/actions/runs/37429260802)
   passed iPhone/iPad and Mac Catalyst compilation and native bridge tests.
   Xcode 26.6 uploaded the iOS archive successfully at 07:35 UTC.
-- Six-part Review Notes were saved in App Store Connect. The matching 3973-character
-  response is saved as a draft, not sent. Neither text claims completed physical QA.
+- The final 3969-character six-part response was sent to Apple on 6 October
+  at 10:33 AM (Stockholm time) with the supplied recording. The submission page
+  confirms Messages (2), the sent response and its video attachment, with no
+  pending reply draft. Matching Review Notes were saved and verified through
+  the API. Device/build and registration testing are attributed to the owner.
 - Supabase's migration list and dry-run are aligned; no migration remains pending.
   The two security migrations already on `main` are applied remotely.
 - All three edge functions are ACTIVE: `vm-lease-sweeper` v12,
@@ -98,9 +101,10 @@ alone proves licensing or Belna-specific provider authorization.
   `d6086f20-3a50-43d0-94d5-f1f002300b51`. It is assigned to the existing Belna
   Device QA group; the API confirms `IN_BETA_TESTING` for internal testers.
 - Build 49.1 is saved on App Store version 1.0.0 with release type `MANUAL`.
-  Saving the replacement build changed the editable version to
-  `PREPARE_FOR_SUBMISSION`; the earlier rejected submission is still unresolved.
-  No final reply or resubmission was sent without physical evidence.
+  Saving the replacement build initially changed the editable version to
+  `PREPARE_FOR_SUBMISSION` while the earlier submission remained unresolved.
+  After the final update and resubmission, the version and submission both
+  report `WAITING_FOR_REVIEW`. Manual release remains selected.
 - Signed IPA SHA-256:
   `05680d2cf8eaadee25c7958d586ec51dafd71acff50535e08a003b4da46dead8`.
 - GitHub commit `813b007` contains the reviewer packet, privacy correction and
@@ -110,20 +114,23 @@ alone proves licensing or Belna-specific provider authorization.
   200 with the 6 October update and Whop disclosure. Production health and
   reviewer login also return 200 after deployment.
 
-Await the original physical-device recording and test results. Replace the
-pending evidence paragraph in both Notes and the saved reply, include matching
-actual in-use screenshots, attach the recording, then update/resubmit the review.
-Any additional wallet authorization requested by Apple must come from genuine
-provider documentation; the owner has not supplied such a document.
+The supplied physical-device recording is attached to both the sent reply and
+version Review Information. The owner directed submission as-is after the
+recording gaps were explained. Supplementary footage and physical iPad QA
+remain evidence gaps, not completed tests. Any additional wallet authorization
+requested by Apple must come from genuine provider documentation; the owner
+has not supplied such a document.
 
-## Release Gates
+## Review Evidence and Residual Risks
 
-- Physical QA and original recording matching the selected new build.
+- Physical iPhone QA is owner-reported; the supplied recording is attached.
+  Supplementary footage and physical iPad QA remain evidence gaps.
 - Wallet/provider verification evidence and an accurate financial description;
   any additional authorization Apple requests must be supplied, not fabricated.
-- Valid reviewer login; deletion demonstrated on a separate account.
-- Correct Notes and App Review reply with verified attachments/details.
-- Processed new build selected, then resubmit with manual release preserved.
+- Valid reviewer login is preserved. Any supplementary deletion demonstration
+  must use a separate disposable account.
+- Matching Notes and the sent reply have the verified recording attached.
+- Build 49.1 is resubmitted with manual release preserved.
 - Approval is Apple's decision and cannot be guaranteed.
 
 ## Supplied Recording Audit
@@ -133,9 +140,9 @@ on 6 October and confirmed physical testing was on iPhone only. File duration
 is 252.934 seconds (4:13), size 60,461,105 bytes, HEVC/AAC, 886 x 1920.
 SHA-256 is `1f9163eef5157ef7ac5b2f677f06685e102306971be42ed98ce32cc4c6852eaf`.
 The supplied copy has re-encoding metadata; do not describe it as an unmodified
-camera original. The model, exact iOS version and installed TestFlight build
-were requested separately. The owner affirmed build 49.1 but did not provide
-the model or iOS version; no physical iPad QA is claimed.
+camera original. The owner reports iPhone 14 Pro, iOS 26.6.2 and build 49.1;
+no physical iPad QA is claimed. Device and OS details are owner-reported, not
+encoded as independently verifiable model/OS metadata in the video.
 
 Observed content includes existing reviewer-account password login, agent
 onboarding, a three-day study-plan conversation, generated text-file creation
@@ -150,16 +157,46 @@ registration or deletion. These are explicit requirements in Apple's message,
 not optional substitutes for showing a working chat. A supplementary real-device
 clip was requested: Home Screen launch, registration/login with a disposable
 account, and confirmed deletion returning to the signed-out state. Do not delete
-the persistent App Review account used in this clip. Device/OS/build information
-must also be confirmed before describing the evidence as complete.
+the persistent App Review account used in this clip. The owner explicitly does
+not want the demo account deleted; it remains intact. A disposable-account
+demonstration is separate from the persistent Apple reviewer login.
 
-The video is saved as an attachment on the App Review reply draft and on the
+The owner subsequently directed submission with the supplied recording as-is
+after being informed of the missing footage, and reports registering a test
+account. This is owner-reported registration testing, not registration footage
+observed in the clip. The final response describes demonstrated features without
+claiming the recording covers every requested flow. Account-deletion access
+instructions remain because Apple requested them; the demo account is preserved.
+
+The video is saved as an attachment on the sent App Review reply and on the
 version's App Review Information. The version attachment is
 `1b3fdab0-c946-45d8-9457-1e48358cdc43`; the API reports delivery `COMPLETE`
-with the original 60,461,105-byte size. The six-part
-Notes and reply draft now accurately describe the received clip and the missing
-evidence, and disclose iPhone-only physical testing. No final reply or
-resubmission has been sent. Other concurrent code edits are left untouched.
+with the original 60,461,105-byte size. The matching six-part Notes and sent
+reply describe the observed features and owner-reported testing without
+claiming all requested video flows or physical iPad testing were demonstrated.
+Other concurrent code edits are left untouched.
+
+## Final Resubmission Status
+
+App Store Connect's browser control initially became
+unresponsive after the reply and Notes were saved. Refreshing the version page,
+recovering the existing tab, creating a fresh background tab and reconnecting
+browser control did not restore reliable access to the Update Review action.
+Apple's documented review-item API was also attempted, but the configured key
+returned 403 FORBIDDEN_ERROR; no review-item state was changed by that request.
+
+After the owner reopened the page, browser control recovered in tab 3.
+Update Review displayed an unexpected-error banner, but the submission details
+showed the item had actually changed to Ready for Review and enabled Resubmit
+to App Review. The final resubmit action succeeded on 6 October at 10:43 AM
+Stockholm time (`2026-10-06T08:43:10.423Z`). Both the UI and API confirm
+`WAITING_FOR_REVIEW` for submission `fb862201-84cf-495c-aa00-846d0ea0fe83`.
+Build 49.1, manual release, the saved Notes, both attachments and the persistent
+demo account are unchanged. Approval is pending, not guaranteed.
+
+Local proof files are `supabase/.temp/apple-review-reply-sent-20261006.png`
+and `supabase/.temp/apple-resubmitted-20261006.png`. The successful submission
+details page was left open for the owner.
 
 ## References
 

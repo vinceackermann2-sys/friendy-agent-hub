@@ -1,7 +1,7 @@
 Belna 1.0.0 - Guideline 2.1 information (6 October 2026)
 
 1. Physical-device evidence
-Attached iPhone demo (4:13): copy_715DEC95-6AF3-4E6B-89D5-C1453B210A1D.mov. It shows password login, a study-plan chat, a generated text file, Pro plan Settings and optional Health permission. The owner confirms build 49.1 and iPhone-only testing. Launch/registration/deletion footage and exact device/iOS details are pending; no physical iPad QA is claimed.
+Attached physical iPhone demo (4:13): copy_715DEC95-6AF3-4E6B-89D5-C1453B210A1D.mov. Owner reports iPhone 14 Pro, iOS 26.6.2, build 49.1 (6 October 2026), and testing registration with a test account. The clip shows password login, a study-plan chat, a generated text file, Pro plan Settings and optional Health permission. Physical testing is iPhone-only; no physical iPad QA is claimed.
 
 2. Purpose and audience
 Belna is a personal AI productivity agent for individual consumers, including students and professionals. It turns requests into research, drafts, files and tracked tasks across the user's own tools, reducing repetitive work. It is not restricted to a specific employer or organization.
