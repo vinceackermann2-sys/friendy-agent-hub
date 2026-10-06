@@ -1,0 +1,21 @@
+Belna 1.0.0 - Guideline 2.1 information (6 October 2026)
+
+1. Physical-device evidence
+The owner is supplying physical iPhone/iPad QA and an original recording of the new TestFlight build, beginning with app launch and showing registration, login, typical tasks and deletion of a disposable account. Recording/device/OS/build details must be attached before resubmission. Simulator tests do not replace physical evidence.
+
+2. Purpose and audience
+Belna is a personal AI productivity agent for individual consumers, including students and professionals. It turns requests into research, drafts, files and tracked tasks across the user's own tools, reducing repetitive work. It is not restricted to a specific employer or organization.
+
+3. Access and main features
+Choose Log in with password using the isolated demo credentials in Sign-In Information. No owner data or external accounts were copied. No sample file or payment is required for basic review. Register with email or Sign in with Apple after Terms/AI consent. Send "Plan a three-day study schedule", then "Create a text file with the plan" and open the artifact/Library item. Attach a harmless text file with +; use the microphone for transcription.
+Apple apps is the Apple-logo button at top right, also in Connectors. Calendar, Reminders and Contacts are optional; changes need agent approval and on-device confirmation. Health is read-only fitness/wellness on supported devices; preview each summary before sharing with AI. Keep Belna open for device requests. Delete an account via Apple apps > Account > Delete my Belna account, then confirm. Test deletion on a disposable account, not the persistent demo login.
+Chats, files and AI outputs are private account content, not a public feed or user-to-user chat. There are no other users to block in that workspace. Settings > Report an issue and support@belna.se provide reporting/support. Connected-service content is subject to that service's permissions.
+
+4. External services
+Supabase: authentication, database/private files. Microsoft Azure AI Foundry (OpenAI models): responses, transcription/images; Azure: cloud workspaces/browser tasks. Lovable/Cloudflare: hosting. Composio: optional OAuth connections. Firecrawl and public search/source sites (including DuckDuckGo/Wikipedia): research. Resend: email. Apple: sign-in, EventKit, Contacts/HealthKit. Stripe: browser subscription/token checkout. Whop: optional provider-managed wallet, transfers, withdrawals/virtual cards. User-connected services/merchant sites are used for requested tasks.
+
+5. Regions and paid features
+Core AI/chat/tasks use the same service across regions. External providers may restrict availability; Apple scopes depend on device/OS/permission. Free and existing paid accounts work. No StoreKit IAP is implemented. New builds show plan/token checkout and billing-portal links in Safari ONLY when StoreKit reports the US storefront; elsewhere they show plan/usage without purchase links. This is a storefront check, not IP/language. Older 46.1 lacks storefront support and hides these links globally. Physical merchant purchases are separate from digital AI tokens and require approval. Wallet/card eligibility depends on Whop verification and availability.
+
+6. Regulated/protected material
+Health summaries are for personal fitness/wellness, not diagnosis/treatment. Belna has no licensed media catalog; users supply content or authorize their own connected accounts. Financial operations use Whop's provider services. The owner reports completed Whop KYB/KYC, and users must complete provider verification to access wallet/card services. No separate Belna authorization letter or financial license is available; no exemption is claimed. References: whop.com/tos-developer-api and whop.com/tos-rest-of-world/. Verification evidence may be supplied separately without exposing identity documents or API keys.

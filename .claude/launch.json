@@ -17,6 +17,15 @@
         "server/index.js"
       ],
       "port": 8000
+    },
+    {
+      "name": "node-app-alt",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "server/index.js"
+      ],
+      "port": 8010,
+      "autoPort": true
     }
   ]
 }
