@@ -2993,7 +2993,6 @@ async function landingRun(prompt, files = []){
   if (!signedIn()){
     renderAuth();
     toast('Sign up or log in — your message is saved and will be sent in the agent chat.');
-    try { const mm = document.getElementById('amsg'); if (mm) mm.textContent = 'Sign up or log in to send your message to your agent.'; } catch {}
     return;
   }
   ensureOwnerScope();
@@ -3117,7 +3116,8 @@ async function completeOnboarding(c){
   state.onboarded = true; c.onboarding = false; c.busy = false;
   state.pendingPrompt = null;
   state.pendingPromptFiles = [];
-  state.canvasOpen = true; state.canvasTab = 'canvas';
+  // On a phone the agent panel covers the chat; keep a saved request visible as it starts.
+  state.canvasOpen = !(pending && phoneLayout()); state.canvasTab = 'canvas';
   save(); renderApp();
   await Promise.all([
     persistAgentContext().catch(error => toast(error.message || 'Could not save agent setup to your account.')),
