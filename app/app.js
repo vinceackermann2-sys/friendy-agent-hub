@@ -2644,13 +2644,13 @@ function renderPromo(){
         <div class="promo-overflow-card po-5"><span class="po-emoji">🧾</span><div><b>Fakturor</b><small>El · förskola · försäkring</small></div></div>
       </div>
       <div class="promo-calm"><span>Blir det någonsin en lugn stund?</span><span>inte hemma eller jobbet på jobbet i allafall😂</span><span></span></div>
-      <p class="tagline promo-why">Det var därför vi skapade Belna, din egen AI Aupair.</p>
+      <p class="tagline promo-why">Det var därför vi skapade Belna, din egen AI Au pair.</p>
     </header>
     </div>
 
     <section class="asection promo-vs" aria-label="Vi mot dom">
       <div class="promo-section-head">
-        <h2>Vanlig AI-chatt eller egen Aupair?</h2>
+        <h2>Vanlig AI-chatt eller egen Au pair?</h2>
       </div>
       <div class="promo-vs-grid">
         <article class="promo-vs-card promo-vs-old">
@@ -2667,7 +2667,7 @@ function renderPromo(){
           <ul>
             <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Säker</b><small>Krypterat, isolerat, ditt</small></span></li>
             <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Färre trådar</b><small>En agent håller ihop hela veckan</small></span></li>
-            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Egen Aupair</b><small>Handlar, betalar och bokar åt dig</small></span></li>
+            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Egen Au pair</b><small>Handlar, betalar och bokar åt dig</small></span></li>
             <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Svensk</b><small>Byggd i Sverige</small></span></li>
           </ul>
         </article>
@@ -2871,7 +2871,9 @@ function renderLanding(){
         <article class="compare-side compare-belna">
           <div class="compare-copy">
             <span class="compare-kicker">With Belna</span>
-            <h2>You get your own personal Aupair<br><span>that does the work.</span></h2>
+            <h2>You get your own personal&nbsp;
+Au pair
+that does the work.</h2>
           </div>
           <div class="agent-system" aria-hidden="true">
             <span class="orbit-ring orbit-one"></span>
