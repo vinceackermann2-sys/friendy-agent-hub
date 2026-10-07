@@ -2601,7 +2601,7 @@ function landingAgentPassport(){
    Hidden landing page: exact /promo URL only, never linked from main site.
    Copy (Swedish):
    - H1 starts with "Så här får du veckan att gå runt utan att barnen får det sämre."
-   - Sub: "Städa, hämta, lämna, handla, tar det någonsin slut?"
+   - Sub: "Handla, fixa, deala, dona, tar det någonsin slut?"
    - Next: "Man skulle kunna tro att dagen tog slut vid 4, men händer det någonsin?"
    - Overflow visual: handla mat / städa / skola / sport
    - "Blir det någonsin en lugn stund? Hemma, jobbet? Var gick 8 timmars arbetsdagen 😂"
@@ -2634,7 +2634,7 @@ function renderPromo(){
     <div class="belna-stars" aria-hidden="true">${STAR_SKY_SVG}</div>
     <header class="hero ahero promo-hero">
       <h1>Så här får du veckan att gå runt utan att barnen får det sämre.</h1>
-      <p class="tagline"><strong>Städa, hämta, lämna, handla, tar det någonsin slut?</strong></p>
+      <p class="tagline"><strong>Handla, fixa, deala, dona, tar det någonsin slut?</strong></p>
       <p class="tagline">Man skulle kunna tro att dagen tog slut vid 4, men händer det någonsin?</p>
       <div class="promo-overflow" aria-label="Vardagens överflöde: handla mat, städa, skola, sport">
         <div class="promo-overflow-card po-1"><span class="po-emoji">🛒</span><div><b>Handla mat</b><small>ICA · 17:30 · mjölk, ägg, pasta…</small></div></div>
@@ -2643,14 +2643,14 @@ function renderPromo(){
         <div class="promo-overflow-card po-4"><span class="po-emoji">⚽</span><div><b>Sport</b><small>Träning 18:00 · match lördag · gympapåse</small></div></div>
         <div class="promo-overflow-card po-5"><span class="po-emoji">🧾</span><div><b>Fakturor</b><small>El · förskola · försäkring</small></div></div>
       </div>
-      <div class="promo-calm"><span>Blir det någonsin en lugn stund?</span><span>Hemma, jobbet?</span><span>Var gick 8 timmars arbetsdagen? 😂</span></div>
-      <p class="tagline promo-why">Det var därför vi skapade Belna, din egen AI-agent som kan sköta dagssysslorna.</p>
+      <div class="promo-calm"><span>Blir det någonsin en lugn stund?</span><span>inte hemma eller jobbet på jobbet i allafall😂</span><span></span></div>
+      <p class="tagline promo-why">Det var därför vi skapade Belna, din egen AI Aupair.</p>
     </header>
     </div>
 
     <section class="asection promo-vs" aria-label="Vi mot dom">
       <div class="promo-section-head">
-        <h2>Vanlig AI-chatt eller egen agent?</h2>
+        <h2>Vanlig AI-chatt eller egen Aupair?</h2>
       </div>
       <div class="promo-vs-grid">
         <article class="promo-vs-card promo-vs-old">
@@ -2659,7 +2659,7 @@ function renderPromo(){
             <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Säker</b><small>Dina uppgifter tränar andras modeller</small></span></li>
             <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Mer huvudvärk</b><small>Fler trådar – mer att hålla koll på</small></span></li>
             <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Ingen agent</b><small>Kan inte handla, betala eller boka</small></span></li>
-            <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Inte svensk</b><small>Data utomlands, support på engelska</small></span></li>
+            <li><span class="promo-mark cross">${icon('x',15)}</span><span><b>Inte svensk</b><small>Data utomlands </small></span></li>
           </ul>
         </article>
         <article class="promo-vs-card promo-vs-belna">
@@ -2667,8 +2667,8 @@ function renderPromo(){
           <ul>
             <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Säker</b><small>Krypterat, isolerat, ditt</small></span></li>
             <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Färre trådar</b><small>En agent håller ihop hela veckan</small></span></li>
-            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Egen agent</b><small>Handlar, betalar och bokar åt dig</small></span></li>
-            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Svensk</b><small>Byggd i Sverige, på svenska</small></span></li>
+            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Egen Aupair</b><small>Handlar, betalar och bokar åt dig</small></span></li>
+            <li><span class="promo-mark check">${icon('check',15)}</span><span><b>Svensk</b><small>Byggd i Sverige</small></span></li>
           </ul>
         </article>
       </div>
@@ -2676,7 +2676,7 @@ function renderPromo(){
 
     <section class="asection promo-agent" aria-label="Din egen mini-superman">
       <div class="promo-section-head">
-        <p class="promo-superman"><strong>Belna</strong> är den första agenten som kan sköta handlingen, fakturorna och barnens schema — din egen minisuperman 🦸</p>
+        <p class="promo-superman"><strong>Belna</strong> är den första AI:n som kan sköta handlingen, fakturorna och barnens schema — din egen minisuperman 🦸</p>
       </div>
       <div class="promo-phone-row">
         <div class="landing-phone-shell promo-chat-phone">
@@ -2714,7 +2714,7 @@ function renderPromo(){
     <section class="asection promo-own" aria-label="Du äger din AI-agent">
       <div class="secure-agent-layout">
         <div class="secure-agent-copy">
-          <h2>Du äger din AI-agent</h2>
+          <h2>Du äger din Agent</h2>
           <p>Varje agent har sin egna säkra dator, och ser aldrig dina uppgifter utan de blir krypterade. Och du bestämmer själv vad du vill godkänna.</p>
         </div>
         ${landingAgentPassport()}
