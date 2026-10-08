@@ -5,7 +5,6 @@ import {
   usePrivy,
   useLoginWithEmail,
   useCreateWallet,
-  useUser,
   getIdentityToken,
   useSyncJwtBasedAuthState,
   useAuthorizationSignature,
@@ -59,6 +58,8 @@ function JwtSync() {
 }
 function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
   const { ready, authenticated, user, logout } = usePrivy();
+  const latestUser = useRef(user);
+  latestUser.current = user;
   const { sendCode, loginWithCode } = useLoginWithEmail();
   type Verification = {
     owner: string;
@@ -83,8 +84,7 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
       throw Error("Your account changed. Reopen your wallet.");
     return pending;
   };
-  const { createWallet } = useCreateWallet(),
-    { refreshUser } = useUser();
+  const { createWallet } = useCreateWallet();
   const { generateAuthorizationSignature } = useAuthorizationSignature();
   const { addFunds } = useAddFunds(),
     { exportWallet } = useExportWallet();
@@ -156,27 +156,27 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
     operations = {
       setup: async (country: string) => {
         checkOwner();
-        let current = await refreshUser();
-        checkOwner();
-        let wallet: any = current.linkedAccounts.find(
+        let wallet: any = latestUser.current?.linkedAccounts.find(
           (a: any) =>
             a.type === "wallet" && a.walletClientType === "privy" && a.chainType === "ethereum",
         );
         if (!wallet) {
-          await createWallet();
+          const created = await createWallet();
           checkOwner();
-          current = await refreshUser();
-          checkOwner();
-          wallet = current.linkedAccounts.find(
+          wallet = latestUser.current?.linkedAccounts.find(
             (a: any) =>
               a.type === "wallet" && a.walletClientType === "privy" && a.chainType === "ethereum",
-          );
+          ) || created;
         }
         checkOwner();
         if (!wallet?.id)
           throw Error("Your embedded wallet could not be confirmed. Refresh and try again.");
+        // This getter already refreshes both the user and identity token.
+        // Calling refreshUser immediately before it hits the same endpoint
+        // twice and can rate-limit an otherwise successful wallet creation.
         const identityToken = await getIdentityToken();
         checkOwner();
+        if (!identityToken) throw Error("Wallet ownership could not be verified. Reopen your wallet.");
         return window.LingonAuth.api("/api/belna-wallet/setup", {
           method: "POST",
           body: JSON.stringify({
@@ -250,7 +250,6 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
     authMode,
     logout,
     createWallet,
-    refreshUser,
     generateAuthorizationSignature,
     addFunds,
     exportWallet,

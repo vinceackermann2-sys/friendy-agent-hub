@@ -90,6 +90,7 @@ const { chromium } = require('playwright');
         calls = [],
         intents = new Map();
       let created = false,
+        setupRateLimited = true,
         joined = false,
         sequence = 0;
       const wallet = () => ({
@@ -146,6 +147,7 @@ const { chromium } = require('playwright');
         else if (pathname === '/api/shop-pay')
           result = { shopPay: { configured: true, connected: false } };
         else if (pathname === '/api/belna-wallet/setup') {
+          if(setupRateLimited)return route.fulfill({status:429,contentType:'application/json',body:JSON.stringify({error:'Too many requests'})});
           created = true;
           result = snapshot();
         } else if (pathname === '/api/belna-wallet/quote') {
@@ -196,6 +198,12 @@ const { chromium } = require('playwright');
       assert.equal(await panel.getByLabel('Country you live in').inputValue(), 'DK', 'background wallet updates preserve the country');
       fs.mkdirSync(path.resolve('artifacts/privy-wallet'), { recursive: true });
       await panel.screenshot({ path: path.resolve(`artifacts/privy-wallet/country-${width}.png`) });
+      const readsBeforeSetup=calls.filter(c=>c.pathname==='/api/belna-wallet').length;
+      await panel.getByRole('button', { name: 'Create Belna Wallet', exact: true }).click();
+      await panel.getByText('Your wallet connection is temporarily busy. Wait a minute, then try again.',{exact:true}).waitFor();
+      assert.equal(calls.filter(c=>c.pathname==='/api/belna-wallet').length,readsBeforeSetup,'Failed setup does not trigger a read that clears the error');
+      assert.equal(await panel.getByLabel('Country you live in').inputValue(),'DK','Failed setup preserves the selected country');
+      setupRateLimited=false;
       await panel.getByRole('button', { name: 'Create Belna Wallet', exact: true }).click();
       await page.getByText('Your user-owned USDC wallet is ready.', { exact: true }).waitFor();
       assert.deepEqual((await page.evaluate(() => window.privyCalls))[0], {

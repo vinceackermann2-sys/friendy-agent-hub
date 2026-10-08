@@ -15,7 +15,7 @@ const update = (next) => { snapshot={...snapshot,...next}; for(const fn of liste
 const subscribe = (fn) => { listeners.add(fn); return ()=>listeners.delete(fn); };
 const get = ()=>snapshot;
 const account = email => ({id:'did:privy:fixture', linkedAccounts:[{type:'email',address:email}]});
-window.sdkFixture={calls:[], failSend:false, holdVerify:false, release:null, signIn(email){update({authenticated:true,user:account(email)});}};
+window.sdkFixture={calls:[], failSend:false, failIdentity:false, holdVerify:false, release:null, signIn(email){update({authenticated:true,user:account(email)});}};
 const logout = async()=> {window.sdkFixture.calls.push({action:'logout'});update({authenticated:false,user:null});};
 const sendCode = async ({email}) => {window.sdkFixture.calls.push({action:'send',email});window.sdkFixture.email=email;if(window.sdkFixture.failSend)throw Error('fixture');};
 const loginWithCode = async ({code}) => {
@@ -24,8 +24,10 @@ const loginWithCode = async ({code}) => {
   if(code!=='123456')throw Error('fixture invalid code');
   update({authenticated:true,user:account(window.sdkFixture.email)});
 };
-const createWallet = async()=> {window.sdkFixture.calls.push({action:'create'});update({user:{...snapshot.user,linkedAccounts:[...snapshot.user.linkedAccounts,{type:'wallet',walletClientType:'privy',chainType:'ethereum',id:'wallet-fixture',address:'0x'+'a'.repeat(40)}]}});};
-const refreshUser = async()=>snapshot.user;
+const createWallet = async()=> {window.sdkFixture.calls.push({action:'create'});const wallet={type:'wallet',walletClientType:'privy',chainType:'ethereum',id:'wallet-fixture',address:'0x'+'a'.repeat(40)};update({user:{...snapshot.user,linkedAccounts:[...snapshot.user.linkedAccounts,wallet]}});return wallet;};
+// getIdentityToken refreshes this same provider endpoint. A separate refresh
+// within setup is redundant and can trigger the production rate limit.
+const refreshUser = async()=>{throw Error('Too many requests from duplicate identity refresh');};
 const addFunds = async()=>{};
 const exportWallet = async()=>{};
 const generateAuthorizationSignature = async()=>{throw Error('Fixture cannot sign');};
@@ -37,7 +39,7 @@ export const useUser = ()=>({refreshUser});
 export const useAuthorizationSignature = ()=>({generateAuthorizationSignature});
 export const useAddFunds = ()=>({addFunds});
 export const useExportWallet = ()=>({exportWallet});
-export const getIdentityToken = async()=>'fixture-identity';
+export const getIdentityToken = async()=>{window.sdkFixture.calls.push({action:'identity'});if(window.sdkFixture.failIdentity)throw Error('Too many requests');return 'fixture-identity';};
 export const useSyncJwtBasedAuthState = ()=>{};
 `;
 
@@ -161,8 +163,16 @@ export const useSyncJwtBasedAuthState = ()=>{};
         url: "/api/belna-wallet/setup",
         body: { country: "SE", walletId: "wallet-fixture", identityToken: "fixture-identity" },
       });
+      assert.equal(await page.evaluate(() => sdkFixture.calls.filter(c=>c.action==='identity').length), 1, 'New wallet needs only one identity refresh');
+      await page.evaluate(() => {sdkFixture.failIdentity=true;});
+      await page.click("#start");
+      await page.waitForFunction(() => /Too many requests/.test(window.result));
+      assert.equal(await page.evaluate(() => setupCalls.length), 1, 'Failed identity refresh cannot register a wallet');
+      await page.evaluate(() => {sdkFixture.failIdentity=false;});
       await page.click("#start");
       await page.waitForFunction(() => window.result === "ready");
+      assert.equal(await page.evaluate(() => sdkFixture.calls.filter(c=>c.action==='create').length), 1, 'Retry reuses the wallet created before registration');
+      assert.equal(await page.evaluate(() => sdkFixture.calls.filter(c=>c.action==='identity').length), 3, 'Existing wallet and retry each use one identity refresh');
       assert.equal(
         await page.evaluate(() => sdkFixture.calls.filter((c) => c.action === "send").length),
         3,

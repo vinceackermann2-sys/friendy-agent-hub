@@ -8914,8 +8914,8 @@ document.addEventListener('click', async e => {
       else if(action==='quote')belnaTransferQuote=result;
       else if(action==='authorize'){belnaTransferQuote=result;toast(result.status==='succeeded'?'Wallet action completed.':result.status==='failed'||result.status==='rejected'?'Wallet action did not complete.':'Wallet action submitted. Check its status.');}
       else{walletLimitEdit=false;toast(payload.frozen===true?'Agent wallet requests paused.':payload.frozen===false?'Agent wallet requests resumed.':'Daily wallet allowance saved.');}
-    }catch(e){if(owner===scopeBelnaWallet()){if(action==='setup')belnaWalletError=e.message;else walletActionError=e.message;toast(e.message||'Your wallet request could not complete.');}}
-    finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;b.disabled=false;repaintWallet();if(action!=='quote')refreshBelnaWallet(true);}}
+    }catch(e){if(owner===scopeBelnaWallet()){const message=action==='setup' && (e.privyErrorCode==='too_many_requests' || /too many requests|rate.?limit/i.test(e.message||''))?'Your wallet connection is temporarily busy. Wait a minute, then try again.':e.message||'Your wallet request could not complete.';if(action==='setup')belnaWalletError=message;else walletActionError=message;toast(message);}}
+    finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;b.disabled=false;repaintWallet();if(!['quote','setup'].includes(action))refreshBelnaWallet(true);}}
     return;
   }
   if (act === 'payments-stripe-apps'){
