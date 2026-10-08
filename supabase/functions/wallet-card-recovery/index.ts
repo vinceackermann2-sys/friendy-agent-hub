@@ -38,7 +38,7 @@ Deno.serve(async req => {
     stage='queue';
     const { data:events,error }=await db.rpc('claim_belna_wallet_webhook_events',{batch_size:5});
     if(error)throw error;
-    const outcomes=await Promise.allSettled((events||[]).map(async event=>{
+    const outcomes=await Promise.allSettled((events||[]).map(async (event:any)=>{
       await wallet.reconcilePurchaseCard(event.account_id,event.card_id);
       const {error:markError}=await db.from('belna_wallet_webhook_events')
         .update({processed_at:new Date().toISOString(),locked_until:null})
@@ -56,7 +56,7 @@ Deno.serve(async req => {
       unresolvedConnections:connections.unresolved,eventsChecked:outcomes.length,failedEvents },
       {status:healthy ? 200 : 503});
   } catch (error) {
-    await recordHealth(false,error?.providerStatus).catch(()=>{});
+    await recordHealth(false,(error as {providerStatus?:number})?.providerStatus).catch(()=>{});
     return new Response('Wallet recovery needs attention',{status:503});
   }
 });
