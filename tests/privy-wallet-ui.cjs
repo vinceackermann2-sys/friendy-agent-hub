@@ -104,6 +104,7 @@ const { chromium } = require('playwright');
         dailyTransferLimitUsd: 50,
         paused: false,
         withdrawalsAvailable: true,
+        bankWithdrawalsAvailable: false,
       });
       const snapshot = () => ({
         wallet: wallet(),
@@ -215,6 +216,15 @@ const { chromium } = require('playwright');
       await panel.getByRole('button', { name: 'Add money', exact: true }).waitFor();
       await panel.locator('.wl-balance').getByText('$125.00', { exact: true }).waitFor();
       assert.equal(await panel.getByRole('radio').count(), 0);
+      const actionButtons = panel.locator('.wl-acts button');
+      assert.deepEqual(await actionButtons.allTextContents(), ['Add money', 'Send', 'Withdraw', 'Earn']);
+      const actionBounds = await actionButtons.evaluateAll((buttons) => buttons.map((button) => {
+        const bounds = button.getBoundingClientRect();
+        return { x: bounds.x, y: bounds.y, width: bounds.width };
+      }));
+      assert.ok(actionBounds.every((bounds) => Math.abs(bounds.y - actionBounds[0].y) < 1), 'all four circles share one horizontal row');
+      assert.ok(actionBounds.every((bounds) => bounds.x >= 0 && bounds.x + bounds.width <= width + 1), 'action row fits desktop and phone');
+      assert.equal(await panel.getByRole('region', { name: 'Earn balance and options' }).count(), 0, 'Earn details live in its own view');
       await panel.getByRole('button', { name: 'Add money', exact: true }).click();
       await page
         .getByText('Check your wallet balance after your funding arrives.', { exact: true })
@@ -224,6 +234,12 @@ const { chromium } = require('playwright');
       let dialog = page.getByRole('dialog', { name: 'Send USDC', exact: true });
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
       assert.equal(sequence, 0, 'invalid drafts do not reach the server');
+      assert.equal(await dialog.getByLabel('Belna email', { exact: true }).getAttribute('type'), 'email');
+      assert.equal(await dialog.getByLabel('Belna email', { exact: true }).getAttribute('placeholder'), 'name@example.com');
+      await dialog.getByLabel('Belna email', { exact: true }).fill(destination);
+      await dialog.locator('#belna-wallet-send-amount').fill('5');
+      await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
+      assert.equal(sequence, 0, 'Send rejects direct wallet addresses');
       await dialog.locator('#belna-wallet-recipient').fill('friend@example.test');
       await dialog.locator('#belna-wallet-send-amount').fill('5');
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
@@ -254,16 +270,26 @@ const { chromium } = require('playwright');
       await dialog.screenshot({ path: path.resolve(`artifacts/privy-wallet/send-${width}.png`) });
       await dialog.getByRole('button', { name: 'Close wallet action' }).click();
       await dialog.waitFor({ state: 'detached' });
-      await panel.locator('[data-action="withdraw"]').click();
-      dialog = page.getByRole('dialog', { name: 'Withdraw USDC', exact: true });
-      await dialog.getByText(/Direct bank withdrawals are not enabled/).waitFor();
-      await dialog.locator('#belna-wallet-recipient').fill(destination);
+      await panel.locator('[data-action="bank_withdraw"]').click();
+      dialog = page.getByRole('dialog', { name: 'Withdraw to bank', exact: true });
+      await dialog.getByText('Bank withdrawals are not available yet.', { exact: true }).waitFor();
+      assert.equal(await dialog.locator('input').count(), 0, 'bank cash-out does not ask for a crypto address or bank details without a payout connection');
+      assert.equal(await dialog.getByRole('button', { name: 'Review request', exact: true }).count(), 0);
+      await dialog.screenshot({ path: path.resolve(`artifacts/privy-wallet/bank-${width}.png`) });
+      await dialog.getByRole('button', { name: 'Close wallet action' }).click();
+      await panel.getByRole('button', { name: 'Send', exact: true }).click();
+      dialog = page.getByRole('dialog', { name: 'Send USDC', exact: true });
+      await dialog.getByLabel('Belna email', { exact: true }).fill('friend@example.test');
       await dialog.locator('#belna-wallet-send-amount').fill('2');
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
       await dialog.getByRole('button', { name: 'Cancel request', exact: true }).click();
       await dialog.getByRole('button', { name: 'Review request', exact: true }).waitFor();
       await dialog.getByRole('button', { name: 'Close wallet action' }).click();
-      await panel.locator('[data-action="earn_deposit"]').click();
+      await panel.getByRole('button', { name: 'Earn', exact: true }).click();
+      dialog = page.getByRole('dialog', { name: 'Earn', exact: true });
+      await dialog.getByText(/4.13% variable APY/).waitFor();
+      await dialog.screenshot({ path: path.resolve(`artifacts/privy-wallet/earn-${width}.png`) });
+      await dialog.getByRole('button', { name: 'Deposit', exact: true }).click();
       dialog = page.getByRole('dialog', { name: 'Deposit into Earn', exact: true });
       await dialog.locator('#belna-wallet-send-amount').fill('3');
       await dialog.locator('#wallet-earn-risk').check();
@@ -283,7 +309,7 @@ const { chromium } = require('playwright');
         ),
       );
       await dialog.getByRole('button', { name: 'Close wallet action' }).click();
-      await panel.getByText(/4.13% variable APY/).waitFor();
+      await panel.getByRole('button', { name: 'Earn', exact: true }).waitFor();
       await page
         .locator('#canvas')
         .screenshot({ path: path.resolve(`artifacts/privy-wallet/panel-${width}.png`) });
@@ -308,7 +334,7 @@ const { chromium } = require('playwright');
       await context.close();
     }
     console.log(
-      'Privy wallet UI: desktop/mobile setup, funding, exact transfer review, quote invalidation, Earn risks, cancel, card interest and signout passed',
+      'Privy wallet UI: desktop/mobile horizontal actions, email-only Send, bank availability, Earn view and risks, setup, funding, quote invalidation, cancel, card interest and signout passed',
     );
   } finally {
     await browser.close();

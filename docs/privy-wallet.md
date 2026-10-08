@@ -117,10 +117,23 @@ fiat onramps and crypto deposits. Provider country, identity checks, limits, fee
 and method availability govern the actual options. Direct receipts are shown from
 the provider's USDC transaction history; balances are read from the USDC contract.
 
-Withdrawal currently means an owner-authorized USDC transfer to a Base-compatible
-wallet or exchange. It is not a bank payout. A licensed on/offramp provider and its
-production onboarding are needed before direct bank withdrawals can be enabled.
-Do not advertise those as live. Do not automatically forward KYC information.
+The wallet action row is Add money, Send, Withdraw and Earn. Send accepts a Belna
+email address; the owner still reviews the resolved destination before signing.
+Earn opens its own balance and options view instead of a separate panel section.
+
+Withdraw now opens a bank cash-out view. Bank withdrawals remain unavailable:
+Privy's bank transfer method was off in the production dashboard on 2026-10-08.
+Privy's fiat payout flow supports Base USDC but requires a Bridge API key,
+server-side flows, a verified wallet entity and a registered payout bank account.
+The app does not yet implement bank registration or payout execution. Complete
+provider production onboarding and implement owner-authorized payouts before
+enabling bank withdrawals. Do not automatically forward KYC information.
+Existing USDC withdrawal requests retain their exact transaction review and are
+explicitly identified as wallet transfers, not bank payouts.
+
+Bank payout references: [configuration](https://docs.privy.io/financial-flows/payouts/configuration),
+[setup](https://docs.privy.io/financial-flows/transfers/fiat-payouts/setup),
+[execute a payout](https://docs.privy.io/financial-flows/transfers/fiat-payouts/execute-payout).
 
 Earn integration supports owner-authorized deposits and withdrawals through the
 Privy Earn API. It remains disabled until a reviewed vault ID is configured and

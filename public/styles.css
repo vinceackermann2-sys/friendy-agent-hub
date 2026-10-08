@@ -3518,7 +3518,7 @@ button.wl-row{border:0;background:none;cursor:pointer;}button.wl-row:hover{backg
 .wpay-extra.wl-list>.wl-row{padding:12px 14px;}
 .wpay.compact{border-radius:16px;}
 .wl-acts.limited{grid-template-columns:repeat(3,minmax(0,1fr));}
-.wallet-panel .wl-acts{grid-template-columns:repeat(3,minmax(0,1fr));}
+.wallet-panel .wl-acts{grid-template-columns:repeat(4,minmax(0,1fr));}
 .wallet-panel .wl-acts.limited{grid-template-columns:repeat(2,minmax(0,1fr));}
 .wpay.compact .wpay-main{gap:10px;padding:12px 0 12px 14px;}
 .wpay.compact .wpay-line{gap:8px;padding-right:12px;}
