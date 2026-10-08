@@ -1155,6 +1155,7 @@ function shopPayErr(e) {
     : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
+require('./privy-wallet-routes').installPrivyWalletRoutes({app,wallet:belnaWallet,requireAuth,rateLimit});
 function belnaWalletErr(e) {
   return e.code === 'BAD_INPUT' ? 400 : e.code === 'NOT_SET_UP' ? 503 : e.code === 'VERIFY' || e.code === 'REVIEW' ? 409 : 502;
 }
@@ -1195,8 +1196,7 @@ app.post('/api/belna-wallet/card-waitlist',rateLimit(10,60000),requireAuth(async
   res.setHeader('Cache-Control','no-store');
   try{res.json(await belnaWallet.joinCardWaitlist(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
 }));
-// Each load reads the wallet from Whop several times on the key all owners share, so it is
-// limited like the other wallet routes: one account cannot use up that key's quota.
+// Rate-limit wallet reads against the shared provider and Base RPC quotas.
 app.get('/api/belna-wallet', rateLimit(30, 60000), requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
@@ -1219,7 +1219,7 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
         : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
-        : await belnaWallet.confirmTransfer(req.user.id, req.body || {});
+        : await belnaWallet.confirmTransfer(req.user.id, req.body || {},req.headers['privy-id-token']);
       res.json(result);
     } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message, ...(action === 'send' && e.transferNotStarted === true ? {transferNotStarted:true} : {}) }); }
   }));
@@ -1659,7 +1659,7 @@ server.on('upgrade', async (req, socket, head) => {
     try { socket.destroy(); } catch {}
   }
 });
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, process.env.BELNA_BIND_ADDRESS || '0.0.0.0', () => {
   console.log(`Lingon real backend on http://localhost:${PORT}`);
   console.log(`- Foundry: ${isConfigured() ? 'configured (' + MODEL_DEFAULT + ', reasoning ' + REASONING_EFFORT + ')' : 'MISSING — set AZURE_FOUNDRY_PROJECT_ENDPOINT and AZURE_FOUNDRY_API_KEY in .env'}`);
   console.log(`- Supabase: ${store.supaConfigured() ? 'configured' : 'local JSON fallback (server/data.json)'}`);

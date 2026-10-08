@@ -21,8 +21,8 @@
     "test:usage": "node tests/token-wallet.cjs && node tests/token-wallet-sql.cjs && node tests/usage-accounting.cjs && node tests/billing-cache.cjs && node tests/billing-presentation.cjs && node tests/managed-tasks.cjs && node tests/usage-meter-ui.cjs",
     "test:questions": "node tests/chat-agent.cjs && node tests/visual-cards.cjs && node tests/question-context-ui.cjs",
     "test:ui": "node scripts/ui-audit.mjs && node scripts/ui-interactions.mjs && node tests/browser-settings-ui.cjs && node tests/vault-settings-ui.cjs && node tests/connectors-ui.cjs && node tests/credential-request-ui.cjs && node tests/automations-ui.cjs && node tests/sidebar-history-ui.cjs",
-    "test:wallet": "node tests/connected-wallet.cjs && node tests/personal-wallet.cjs && node tests/personal-wallet-sql.cjs && node tests/belna-wallet.cjs && node tests/belna-wallet-sql.cjs && node tests/wallet-transfer-rejections.cjs && node tests/wallet-purchases.cjs && node tests/wallet-recovery-health.cjs && node scripts/bundle-wallet-recovery.mjs && node tests/wallet-recovery-worker.cjs && node tests/whop-webhook.cjs && node tests/wallet-webhook-queue.cjs && node tests/shipping-addresses.cjs && node tests/wallet-preferences.cjs && node tests/wallet-insights.cjs",
-    "test:wallet-ui": "node tests/wallet-payments-ui.cjs && node tests/wallet-ui.cjs && node tests/wallet-choice-ui.cjs && node tests/wallet-setup-ui.cjs && node tests/personal-wallet-ui.cjs && node tests/wallet-money-ui.cjs && node tests/wallet-embeds-ui.cjs",
+    "test:wallet": "node tests/privy-wallet.cjs && node tests/privy-wallet-sql.cjs && node tests/privy-wallet-review.cjs && node tests/connected-wallet.cjs && node tests/personal-wallet.cjs && node tests/personal-wallet-sql.cjs && node tests/belna-wallet.cjs && node tests/belna-wallet-sql.cjs && node tests/wallet-transfer-rejections.cjs && node tests/wallet-purchases.cjs && node tests/wallet-recovery-health.cjs && node scripts/bundle-wallet-recovery.mjs && node tests/wallet-recovery-worker.cjs && node tests/whop-webhook.cjs && node tests/wallet-webhook-queue.cjs && node tests/shipping-addresses.cjs && node tests/wallet-preferences.cjs && node tests/wallet-insights.cjs",
+    "test:wallet-ui": "node tests/privy-wallet-login-ui.cjs && node tests/privy-wallet-ui.cjs",
     "eval:checkout": "node tests/checkout-e2e.eval.cjs",
     "test:checkout": "node tests/private-checkout.cjs && node tests/browser-purchase.cjs && node tests/shop-pay-security.cjs",
     "test:mail-ui": "node tests/mail-ui.cjs",
@@ -36,11 +36,16 @@
     "format": "prettier --write .",
     "test:devday": "node tests/devday-improvements.cjs && node tests/devday-sql.cjs",
     "test:devday-ui": "node tests/devday-ui.cjs",
-    "test:apple": "node tests/apple-devices.cjs && node tests/apple-identity.cjs && node tests/apple-auth.cjs && node tests/account-erasure.cjs && node tests/apple-screenshot-evidence.cjs && node tests/apple-native-ui.cjs && node tests/agent-permissions.cjs"
+    "test:apple": "node tests/apple-devices.cjs && node tests/apple-identity.cjs && node tests/apple-auth.cjs && node tests/account-erasure.cjs && node tests/apple-screenshot-evidence.cjs && node tests/apple-native-ui.cjs && node tests/agent-permissions.cjs",
+    "test:privy-wallet": "node tests/privy-wallet.cjs && node tests/privy-wallet-sql.cjs && node tests/privy-wallet-review.cjs && node tests/privy-wallet-login-ui.cjs && node tests/privy-wallet-ui.cjs && node tests/privy-wallet-configure.cjs",
+    "preview:wallet": "node --watch --watch-path=.env.wallet.local scripts/preview-wallet.cjs"
   },
   "overrides": {
     "rolldown": "1.2.1",
-    "undici": "7.29.1"
+    "undici": "7.29.1",
+    "shell-quote": "1.11.0",
+    "source-map-js": "1.2.2",
+    "ws": "^8.21.3"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -105,7 +110,10 @@
     "vaul": "^1.1.2",
     "vite-tsconfig-paths": "^6.0.2",
     "ws": "^8.21.3",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@privy-io/react-auth": "^3.48.0",
+    "jose": "^6.2.12",
+    "viem": "^2.56.5"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
@@ -127,6 +135,7 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
     "vite": "8.1.5",
-    "wrangler": "^4.136.3"
+    "wrangler": "^4.136.3",
+    "esbuild": "^0.28.2"
   }
 }

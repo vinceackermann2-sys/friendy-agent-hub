@@ -1997,10 +1997,12 @@ const { createPersonalStore } = require('./personal-store');
 const personalStore = createPersonalStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 const getTokenWallet = tokenWallet.tokenWallet;
 const belnaWalletStore = createBelnaWalletStore({ supa, ensureProfile });
+const privyWalletStore = require('./privy-wallet-store').createPrivyWalletStore({supa,ensureProfile});
 const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureProfile, listChatMessages });
 const { dropConnectorsForSecret, ...customConnectorStore } = createCustomConnectorStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
 module.exports = {
+  ...privyWalletStore,
   ...belnaWalletStore,
   getAgentContext, saveAgentContext, syncAgentContext, defaultAgentDocuments,
   listMemories, memoryStats, searchMemories, getMemory, addMemory, updateMemory, delMemory,

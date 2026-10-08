@@ -16,7 +16,7 @@ const {createPurchaseFlow}=require('../server/agents/purchase');
    listExistingPurchases:async u=>(await db.query('select * from belna_existing_purchases where user_id=$1',[u])).rows,
   };
   const wallet=createBelnaWallet({store,env:{}});
-  await assert.rejects(wallet.savePreferences('u2',{activeMethod:'belna_wallet'}),/Connect your/);
+  await assert.rejects(wallet.savePreferences('u2',{activeMethod:'belna_wallet'}),/Wallet cards are coming soon/);
   await assert.rejects(wallet.savePreferences('u1',{activeMethod:'existing_card'}),/Connect Shop Pay/);
   // Every own method is off until the owner turns it on; Shop Pay needs its account first.
   await assert.rejects(wallet.savePreferences('u1',{methods:{shop_pay:true}}),/Connect Shop Pay/);
@@ -36,13 +36,13 @@ const {createPurchaseFlow}=require('../server/agents/purchase');
   const detail=await flow.approvalDetail(args,ctx),approved=JSON.parse(detail);
   await wallet.recordExistingPurchase('u1',approved);await wallet.recordExistingPurchase('u1',approved);
   assert.equal((await wallet.existingHistory('u1')).history.length,1);assert.equal((await wallet.existingHistory('u2')).history.length,0);
-  // Choosing Belna Wallet does not touch the owner's own methods, and they never spend the balance.
-  await wallet.savePreferences('u1',{activeMethod:'belna_wallet'});await flow.beforeSubmit(args,{...ctx,approvedDetail:detail});
+  // The USDC wallet cannot be selected as a card; own methods never spend it.
+  await assert.rejects(wallet.savePreferences('u1',{activeMethod:'belna_wallet'}),/Wallet cards are coming soon/);await flow.beforeSubmit(args,{...ctx,approvedDetail:detail});
   assert.equal(owned.balance,125);
   await wallet.savePreferences('u1',{methods:{saved_card:false}});await assert.rejects(flow.beforeSubmit(args,{...ctx,approvedDetail:detail}),/turned off/);
   // Switches change one method at a time.
   await wallet.savePreferences('u1',{methods:{payment_apps:true}});await wallet.savePreferences('u1',{methods:{saved_card:true}});
-  const m=(await wallet.preferences('u1')).methods;assert.equal(m.payment_apps,true);assert.equal(m.saved_card,true);assert.equal(m.belna_wallet,true);
+  const m=(await wallet.preferences('u1')).methods;assert.equal(m.payment_apps,true);assert.equal(m.saved_card,true);assert.equal(m.belna_wallet,false);
   assert.deepEqual((await db.query("select enabled_methods from belna_wallet_preferences where user_id='u1'")).rows[0].enabled_methods,['payment_apps']);
   // An earlier "existing payments" choice keeps Shop Pay on until the owner sets the switches.
   await db.exec("insert into profiles values('u3');insert into belna_wallet_preferences(user_id,active_method) values('u3','existing_card')");

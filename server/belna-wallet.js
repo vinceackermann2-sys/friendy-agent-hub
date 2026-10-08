@@ -2,6 +2,7 @@
 // Owner/model APIs never return card credentials. The isolated purchase service
 // can use them transiently; they are never persisted or given to the model.
 const { createWalletPurchases } = require('./wallet-purchases');
+const { createPrivyWallet } = require('./privy-wallet');
 function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), env = process.env, secureCheckout, randomId = () => crypto.randomUUID() }) {
   env = {...env};
   let configuration;
@@ -509,6 +510,10 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     reconcilePurchases:async()=>{await loadConfiguration();return purchases.reconcile();},reconcilePurchaseCard:purchases.reconcileCard,reconcileConnectionCards };
 }
 function createBelnaWallet(options){
+  return createPrivyWallet({...options,shared:createBusinessWallet(options)});
+}
+// Retained only for historical Whop recovery; new wallets use Privy.
+function createLegacyBelnaWallet(options){
   const connectedStore={...options.store,
     getBelnaWallet:async userId=>{const row=await options.store.getBelnaWallet(userId);return row?.wallet_kind==='personal'?null:row;},
     ...(options.store.listPendingWalletConnections?{listPendingWalletConnections:async environment=>(await options.store.listPendingWalletConnections(environment)).filter(row=>/^biz_/.test(row.account_id))}:{}),
@@ -525,4 +530,4 @@ function createBelnaWallet(options){
     snapshot:async userId=>{const result=await wallet.snapshot(userId);const previous=await options.store.getBelnaWallet(userId);if(previous?.wallet_kind==='personal')result.wallet.previousPersonalWallet=true;return result;},
     reconcilePurchaseCard:async(ownerId,cardId)=>{if(ownerId?.startsWith('user_'))return;return wallet.reconcilePurchaseCard(ownerId,cardId);}};
 }
-module.exports = { createBelnaWallet, createBusinessWallet };
+module.exports = { createBelnaWallet, createBusinessWallet, createLegacyBelnaWallet };

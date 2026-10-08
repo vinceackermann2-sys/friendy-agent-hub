@@ -3434,6 +3434,7 @@ a.cv-item:hover{ border-color:#D5D5DA; background:#fff; }
 .wl-big span{font-size:14px;font-weight:650;color:var(--mut);}
 .wl-pending{font-size:13.5px;color:#55575D;}
 .wl-tag{align-self:flex-start;display:inline-block;margin-top:6px;padding:3px 9px;border-radius:999px;background:var(--line2);color:#55575D;font-size:11.5px;font-weight:650;letter-spacing:0;text-transform:none;}
+.wl-wallet-address{overflow-wrap:anywhere;font-variant-numeric:tabular-nums;}
 .wl-acts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding-bottom:22px;border-bottom:1px solid var(--line2);}
 .wl-act{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0;padding:4px 0;border:0;background:none;color:var(--ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer;}
 .wl-act-ic{width:52px;height:52px;border-radius:50%;background:#F1F1F3;display:grid;place-items:center;transition:background .15s,color .15s,transform .15s;}

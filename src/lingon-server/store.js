@@ -15,6 +15,7 @@ import { createPersonalStore } from './personal-store.js';
 import { createClientStateStore } from './client-state.js';
 import { createCustomConnectorStore } from './custom-connector-store.js';
 import { createBelnaWalletStore } from './belna-wallet-store.js';
+import { createPrivyWalletStore } from './privy-wallet-store.js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
@@ -1694,7 +1695,9 @@ const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureP
 const { list: listClientState, save: saveClientState, removeChat: deleteClientChat } = clientState;
 const { listCustomConnectors, addCustomConnector, updateCustomConnector, deleteCustomConnector, dropConnectorsForSecret } = createCustomConnectorStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
+const {getPrivyWallet,claimPrivyWallet,updatePrivyWallet,createPrivyIntent,getPrivyIntent,listPrivyIntents,beginPrivyIntent,updatePrivyIntent,markPrivyIntentAwaitingOwner,cancelPrivyIntent,findPrivyRecipient,getPrivyAccountUser,recordPrivyBalance,getPrivyWalletConfiguration}=createPrivyWalletStore({supa,ensureProfile});
 export {
+  getPrivyWallet,claimPrivyWallet,updatePrivyWallet,createPrivyIntent,getPrivyIntent,listPrivyIntents,beginPrivyIntent,updatePrivyIntent,markPrivyIntentAwaitingOwner,cancelPrivyIntent,findPrivyRecipient,getPrivyAccountUser,recordPrivyBalance,getPrivyWalletConfiguration,
   getConnectedWalletConfiguration,claimConnectedBelnaWallet,
   listPermissionGrants,createPermissionGrant,revokePermissionGrant,
   getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest,

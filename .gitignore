@@ -25,3 +25,8 @@ native/apple/**/*.mobileprovision
 native/apple/Belna.xcodeproj/
 *.xcuserstate
 xcuserdata/
+
+# Private local wallet configuration and generated SDK bundle.
+.env.wallet.local
+app/privy-wallet.js
+public/lingon/privy-wallet.js

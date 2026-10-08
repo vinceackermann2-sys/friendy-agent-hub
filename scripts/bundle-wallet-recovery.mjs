@@ -7,7 +7,7 @@ import {resolve,dirname} from 'node:path';
 const root=resolve(import.meta.dirname,'..');
 const modules=['wallet-purchases','whop-user-auth','personal-wallet','belna-wallet','belna-wallet-store'].map(name=>
   readFileSync(resolve(root,'src/lingon-server',name+'.js'),'utf8')
-    .replace(/^import .* from '\.\/(wallet-purchases|whop-user-auth|personal-wallet)\.js';\r?\n/gm,'')
+    .replace(/^import .* from '\.\/(privy-wallet|wallet-purchases|whop-user-auth|personal-wallet)\.js';\r?\n/gm,'')
     .replace(/^export \{[^\n]+\};\r?\n?/gm,''));
 const worker=readFileSync(resolve(root,'supabase/functions/wallet-card-recovery/index.ts'),'utf8')
   .replace(/^import .* from '\.\.\/\.\.\/\.\.\/src\/lingon-server\/[^']+';\r?\n/gm,'');

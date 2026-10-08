@@ -34,6 +34,7 @@ import * as authEmail from './auth-email.js';
 import { durableLimited, normalEmail } from './durable-limit.js';
 import * as shoppay from './shoppay.js';
 import { createBelnaWallet } from './belna-wallet.js';
+import { installPrivyWalletRoutes } from './privy-wallet-routes.js';
 import { createPrivateCheckoutClient } from './private-checkout-client.js';
 import { exportCheckout } from './agents/azure-vm.js';
 const privateCheckout = createPrivateCheckoutClient({exportCheckout});
@@ -1096,6 +1097,7 @@ function shopPayErr(e) {
     : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
+installPrivyWalletRoutes({app,wallet:belnaWallet,requireAuth,rateLimit});
 function belnaWalletErr(e) {
   return e.code === 'BAD_INPUT' ? 400 : e.code === 'NOT_SET_UP' ? 503 : e.code === 'VERIFY' || e.code === 'REVIEW' ? 409 : 502;
 }
@@ -1160,7 +1162,7 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
         : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
-        : await belnaWallet.confirmTransfer(req.user.id, req.body || {});
+        : await belnaWallet.confirmTransfer(req.user.id, req.body || {},req.headers['privy-id-token']);
       res.json(result);
     } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message, ...(action === 'send' && e.transferNotStarted === true ? {transferNotStarted:true} : {}) }); }
   }));
