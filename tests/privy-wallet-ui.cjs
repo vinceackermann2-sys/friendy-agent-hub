@@ -190,6 +190,7 @@ const { chromium } = require('playwright');
         errors = [];
       page.on('pageerror', (e) => errors.push(e.message));
       page.setDefaultTimeout(7000);
+      await context.route('https://bridge.xyz/**',route=>route.fulfill({contentType:'text/html',body:'<h1>Fixture bank terms</h1>'}));
       const panel = page.locator('.wallet-panel'),
         ensurePanel = async () => {
           if (!(await panel.isVisible()))
@@ -248,6 +249,8 @@ const { chromium } = require('playwright');
       assert.ok((await page.evaluate(() => window.privyCalls)).some((c) => c.action === 'fund'));
       await panel.getByRole('button', { name: 'Send', exact: true }).click();
       let dialog = page.getByRole('dialog', { name: 'Send USD', exact: true });
+      assert.equal(await dialog.locator('.wallet-dialog-brand .belna-mark').count(),1);
+      assert.equal(await dialog.evaluate(el=>getComputedStyle(el).borderRadius),'24px','Money dialogs match the funding card on desktop and mobile');
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
       assert.equal(sequence, 0, 'invalid drafts do not reach the server');
       assert.equal(await dialog.getByLabel('Belna email', { exact: true }).getAttribute('type'), 'email');
@@ -337,8 +340,16 @@ const { chromium } = require('playwright');
       await dialog.getByText('Approve sharing your wallet identity and email with Bridge first.',{exact:true}).waitFor();
       assert.equal(calls.filter(c=>c.pathname==='/api/belna-wallet/bank/verify').length,0);
       await dialog.locator('#wallet-bank-verify-consent').check();
+      const popupPromise=page.waitForEvent('popup');
       await dialog.getByRole('button',{name:'Start verification',exact:true}).click();
-      await dialog.getByRole('link',{name:'Review Bridge terms',exact:true}).waitFor();
+      const verificationPopup=await popupPromise;
+      await verificationPopup.waitForURL('https://bridge.xyz/terms/fixture');
+      await dialog.getByRole('link',{name:'Review bank terms',exact:true}).waitFor();
+      await dialog.getByText('Step 1 of 2 · Review bank terms',{exact:true}).waitFor();
+      await dialog.getByRole('button',{name:'Check status',exact:true}).click();
+      await dialog.getByRole('button',{name:'Check status',exact:true}).waitFor({state:'visible'});
+      await dialog.getByRole('link',{name:'Review bank terms',exact:true}).waitFor();
+      await verificationPopup.close();
       bankReady=true;
       await dialog.getByRole('button',{name:'Check status',exact:true}).click();
       await dialog.getByLabel('Account holder name',{exact:true}).fill('Fixture Alice');

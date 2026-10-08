@@ -3619,6 +3619,52 @@ button.wset-row{border:0;background:none;cursor:pointer;}button.wset-row:hover{b
 #wallet-withdraw-element .wallet-card-funding-frame{height:600px;opacity:1;}
 #wallet-withdraw-element>.wl-hint{margin:12px 0;line-height:1.6;}.wallet-action-back{margin-top:12px;}
 .wallet-money-dialog .wl-form{padding:0;background:transparent;border-radius:0}.wallet-money-dialog .wl-hint{margin:0}.wallet-money-dialog button:disabled{opacity:.55;cursor:wait}
+/* One Belna identity and palette for our money sheets and the provider modal.
+   Provider checkout, legal text and owner confirmations remain intact. */
+body{
+  --privy-color-background:#fff;--privy-color-background-2:#f6f6f7;--privy-color-background-3:#efeff1;
+  --privy-color-foreground:#17181a;--privy-color-foreground-2:#55575d;--privy-color-foreground-3:#6e7076;
+  --privy-color-accent:#17181a;--privy-color-accent-light:#ececf0;--privy-color-accent-lightest:#f6f6f7;
+  --privy-color-foreground-accent:#fff;--privy-border-radius-sm:10px;--privy-border-radius-md:12px;--privy-border-radius-lg:24px;
+}
+.wallet-money-overlay{background:rgba(246,246,247,.4);backdrop-filter:blur(5px);}
+.wallet-money-dialog{position:relative;width:min(100%,420px);background:#fff;color:var(--ink);border-radius:24px;padding:28px 24px;box-shadow:0 16px 48px rgba(23,24,26,.16);}
+.wallet-dialog-brand{display:flex;align-items:center;justify-content:center;gap:7px;height:24px;margin:0 30px 24px;color:#17181a;font-family:inherit;}
+.wallet-dialog-brand b{font-size:22px;font-weight:800;letter-spacing:-.055em;line-height:1;}
+.wallet-dialog-brand span{font-size:12px;color:#6e7076;border-left:1px solid #e7e7ea;padding-left:7px;}
+.wallet-money-dialog header{display:block;text-align:center;margin-bottom:24px;}
+.wallet-money-dialog header>div{padding:0 4px;}
+.wallet-money-dialog header h3{font-size:20px;margin-bottom:8px;}
+.wallet-money-dialog header p{font-size:14px;color:var(--mut);line-height:1.5;}
+.wallet-money-overlay .wallet-money-dialog header [data-sheet-close]{position:absolute;right:16px;top:16px;width:28px;height:28px;padding:0;border:0;background:#f6f6f7;}
+.wallet-money-dialog .wl-fields{flex-direction:column;gap:16px;}
+.wallet-money-dialog .wl-fields>*{flex:auto;}
+.wallet-money-dialog .wl-field{font-size:13px;}
+.wallet-money-dialog .field{min-height:48px;border-radius:12px;}
+.wallet-money-dialog .wset-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.wallet-money-dialog .wl-form>.wset-actions>*{flex:1;}
+.wallet-money-dialog .btn{border-radius:12px;min-height:44px;white-space:normal;}
+.wallet-money-dialog .wl-check{align-items:flex-start;line-height:1.5;margin:16px 0;}
+.wallet-money-dialog .wl-check input{margin-top:3px;flex:none;}
+.wallet-money-dialog .wl-hint{font-size:12px;line-height:1.6;color:var(--mut);}
+.wallet-money-dialog .wl-sec{display:flex;flex-direction:column;gap:14px;margin:0;}
+.wallet-money-dialog .wl-sec>.wl-list{margin:0;}
+.wallet-money-dialog .wl-row{padding:14px 12px;flex-wrap:wrap;}
+.wallet-money-dialog .wl-row>.wset-actions{width:100%;margin:8px 0 0;}
+.wallet-money-dialog .wl-row>.wset-actions>*{flex:1;}
+.wallet-verification-step{display:flex;flex-direction:column;gap:12px;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:16px;}
+.wallet-verification-step b{font-size:14px;}.wallet-verification-step p{margin:0;}
+#privy-dialog{font-family:inherit;}
+body.belna-wallet-funding #privy-dialog [id^="headlessui-dialog-panel-"]{position:relative;width:min(420px,calc(100vw - 24px))!important;max-width:420px!important;padding-top:56px;background:#fff;border-radius:24px;}
+body.belna-wallet-funding #privy-modal-content{position:relative;width:100%!important;max-width:100%!important;max-height:calc(100dvh - 100px);}
+.wallet-funding-brand{position:absolute;top:20px;left:40px;right:40px;margin:0;pointer-events:none;}
+@media(max-width:760px){
+  body.sheet-open:has(.wallet-money-overlay){background:var(--bg);}
+  body.sheet-open:has(.wallet-money-overlay) .app{transform:none;border-radius:0;}
+  .wallet-withdraw-overlay.wallet-money-overlay{align-items:center;padding:12px;background:rgba(246,246,247,.4);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);animation:none;}
+  .wallet-money-overlay .wallet-money-dialog{border-radius:24px;max-height:calc(100dvh - 24px);padding:28px 20px;width:min(420px,100%);margin:0;animation:pop .15s ease;}
+  .wallet-money-overlay .wallet-money-dialog::before{display:none;}
+}
 @media(max-width:600px){.wallet-withdraw-overlay{padding:12px}.wallet-withdraw-dialog{padding:20px;border-radius:16px}}
 .wallet-verification-dialog { width:min(1000px,calc(100vw - 24px)); }
 .wallet-verification-dialog img { width:100%; height:auto; display:block; cursor:pointer; }

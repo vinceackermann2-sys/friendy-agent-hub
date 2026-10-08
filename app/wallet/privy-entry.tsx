@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import {
   PrivyProvider,
   usePrivy,
@@ -33,6 +34,35 @@ let authFailure: string | undefined;
 let productionAppId = "";
 let authenticate: (() => Promise<void>) | undefined;
 const waiters = new Set<() => void>();
+function BelnaMark() {
+  return <svg className="belna-mark" width="24" height="15.45" viewBox="0 0 200 128.72" fill="#4A7FD4" aria-hidden="true">
+    <polygon points="100 0 126.9 68.556872 100 95.44588 73.1 68.556872" />
+    <polygon points="0 99.992568 68.56 73.11296 95.46 99.992568 68.56 126.892176" />
+    <polygon points="200 99.992568 131.44 73.11296 104.54 99.992568 131.44 126.892176" />
+    <polygon points="100 104.546384 124.18 128.72 75.82 128.72" />
+  </svg>;
+}
+function FundingBrand({ active }: { active: boolean }) {
+  const [target, setTarget] = useState<Element | null>(null);
+  useEffect(() => {
+    if (!active) { setTarget(null); return; }
+    const update = () => {
+      const dialog = document.getElementById("privy-dialog");
+      if (dialog) dialog.setAttribute("aria-label", "Add money");
+      const content = document.getElementById("privy-modal-content");
+      setTarget(content?.closest('[id^="headlessui-dialog-panel-"]') || content?.parentElement || null);
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, { childList: true, subtree: true });
+    update();
+    return () => observer.disconnect();
+  }, [active]);
+  return active && target ? createPortal(
+    <div className="wallet-dialog-brand wallet-funding-brand" aria-label="Belna Wallet">
+      <BelnaMark /><b>belna</b><span>Wallet</span>
+    </div>, target,
+  ) : null;
+}
 function JwtSync() {
   useSyncJwtBasedAuthState({
     subscribe: (notify) => {
@@ -70,6 +100,7 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
   };
   const verification = useRef<Verification | undefined>(undefined);
   const [verificationEmail, setVerificationEmail] = useState<string | undefined>();
+  const [funding, setFunding] = useState(false);
   const finishVerification = (error?: Error) => {
     const pending = verification.current;
     verification.current = undefined;
@@ -186,20 +217,32 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
           }),
         });
       },
-      fund: async () => {
+      fund: async (expected?: { walletId: string; address: string }) => {
         checkOwner();
-        const { wallet } = await window.LingonAuth.api("/api/belna-wallet");
-        checkOwner();
-        const result = await depositFunds({
-          destination: {
-            wallet: wallet.walletId,
-            chain: "eip155:8453",
-            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-          },
-          fiat: { source: { assets: ["eur", "usd"], defaultAsset: "eur" }, environment: "production", defaultAmount: "25" },
-        });
-        checkOwner();
-        return result;
+        // Resolve the destination from this authenticated owner's SDK wallets,
+        // rather than waiting for another full balance/Earn/activity snapshot.
+        const wallet: any = latestUser.current?.linkedAccounts.find((a: any) =>
+          a.type === "wallet" && a.walletClientType === "privy" && a.chainType === "ethereum" &&
+          (!expected || (a.id === expected.walletId && a.address?.toLowerCase() === expected.address?.toLowerCase())),
+        );
+        if (!wallet?.id) throw Error("Your wallet destination could not be verified. Reopen your wallet.");
+        setFunding(true);
+        document.body.classList.add("belna-wallet-funding");
+        try {
+          const result = await depositFunds({
+            destination: {
+              wallet: wallet.id,
+              chain: "eip155:8453",
+              asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            },
+            fiat: { source: { assets: ["eur", "usd"], defaultAsset: "eur" }, environment: "production", defaultAmount: "25" },
+          });
+          checkOwner();
+          return result;
+        } finally {
+          setFunding(false);
+          document.body.classList.remove("belna-wallet-funding");
+        }
       },
       bank: async (action: "verify" | "register", input: any = {}) => {
         checkOwner();
@@ -261,7 +304,7 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
     depositFunds,
     exportWallet,
   ]);
-  return verificationEmail ? (
+  return <><FundingBrand active={funding} />{verificationEmail ? (
     <WalletEmailVerification
       email={verificationEmail}
       onCancel={() => finishVerification(Error("Wallet email verification was cancelled."))}
@@ -277,24 +320,17 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
         finishVerification();
       }}
     />
-  ) : null;
+  ) : null}</>;
 }
-async function initialize() {
-  const owner = window.LingonAuth.get()?.user?.id;
-  if (!owner) throw Error("Sign in to your Belna account first.");
-  authFailure = undefined;
-  const checkOwner = () => {
-    if (window.LingonAuth.get()?.user?.id !== owner)
-      throw Error("Your account changed. Reopen your wallet.");
-  };
+async function mountProvider(suppliedConfig?: WalletConfig) {
   if (!initializing)
     initializing = (async () => {
-      const response = await fetch(
+      const response = suppliedConfig ? null : await fetch(
         (window.LingonConfig?.apiBase || "") + "/api/belna-wallet/config",
         { cache: "no-store" },
       );
-      const config: WalletConfig = await response.json();
-      if (!response.ok || !config.configured || !config.appId)
+      const config: WalletConfig = suppliedConfig || await response!.json();
+      if ((response && !response.ok) || !config.configured || !config.appId)
         throw Error("The production wallet connection is not configured yet.");
       productionAppId = config.appId;
       const host = document.createElement("div");
@@ -309,7 +345,7 @@ async function initialize() {
             config={{
               appearance: {
                 theme: "light",
-                accentColor: "#bb2439",
+                accentColor: "#17181a",
                 showWalletLoginFirst: false,
                 logo: <span>Belna Wallet</span>,
               },
@@ -328,6 +364,16 @@ async function initialize() {
       throw e;
     });
   await initializing;
+}
+async function initialize() {
+  const owner = window.LingonAuth.get()?.user?.id;
+  if (!owner) throw Error("Sign in to your Belna account first.");
+  authFailure = undefined;
+  const checkOwner = () => {
+    if (window.LingonAuth.get()?.user?.id !== owner)
+      throw Error("Your account changed. Reopen your wallet.");
+  };
+  await mountProvider();
   checkOwner();
   if (operations) return;
   const wait = async (predicate: () => boolean, timeout: number) =>
@@ -353,13 +399,16 @@ async function initialize() {
   checkOwner();
 }
 window.BelnaPrivy = {
+  warm: async (config?: WalletConfig) => {
+    if (window.LingonAuth.get()?.user?.id) await mountProvider(config);
+  },
   setup: async (country: string) => {
     await initialize();
     return operations.setup(country);
   },
-  fund: async () => {
+  fund: async (expected?: { walletId: string; address: string }) => {
     await initialize();
-    return operations.fund();
+    return operations.fund(expected);
   },
   authorize: async (id: string, risk = false) => {
     await initialize();

@@ -28,7 +28,15 @@ const createWallet = async()=> {window.sdkFixture.calls.push({action:'create'});
 // getIdentityToken refreshes this same provider endpoint. A separate refresh
 // within setup is redundant and can trigger the production rate limit.
 const refreshUser = async()=>{throw Error('Too many requests from duplicate identity refresh');};
-const addFunds = async(options)=>{window.sdkFixture.funding=options;return {method:'fiat',status:'confirmed'};};
+const addFunds = async(options)=>{
+  window.sdkFixture.funding=options;
+  if(window.sdkFixture.holdFunding)await new Promise(resolve=>{
+    const dialog=document.createElement('div');dialog.id='privy-dialog';dialog.setAttribute('role','dialog');
+    dialog.innerHTML='<div id="privy-modal-content"><h3>Pay with</h3></div>';document.body.append(dialog);
+    window.sdkFixture.finishFunding=()=>{dialog.remove();resolve();};
+  });
+  return {method:'fiat',status:'confirmed'};
+};
 const exportWallet = async()=>{};
 const generateAuthorizationSignature = async()=>{throw Error('Fixture cannot sign');};
 export const PrivyProvider = ({children})=><>{children}<a id="protected-by-privy" href="https://privy.io">Vendor watermark fixture</a></>;
@@ -97,6 +105,9 @@ export const useSyncJwtBasedAuthState = ()=>{};
       page.on("pageerror", (e) => errors.push(e.message));
       const url = "http://127.0.0.1:" + server.address().port;
       await page.goto(url);
+      await page.evaluate(()=>window.BelnaPrivy.warm());
+      assert.equal(await page.getByRole('dialog').count(),0,'SDK warming does not open login');
+      assert.equal(await page.evaluate(()=>sdkFixture.calls.length),0,'SDK warming does not send email, create wallets or sign');
       await page.click("#start");
       const dialog = page.getByRole("dialog");
       await dialog.waitFor();
@@ -170,6 +181,16 @@ export const useSyncJwtBasedAuthState = ()=>{};
       assert.equal(funding.fiat.environment,'production');
       assert.equal(funding.destination.wallet,'wallet-fixture');assert.equal(funding.destination.chain,'eip155:8453');
       assert.equal('crypto' in funding,false,'unsupported crypto and SEK funding options are not offered');
+      assert.equal(await page.evaluate(()=>document.body.classList.contains('belna-wallet-funding')),false,'Funding cleanup restores the app');
+      const wrongDestination=await page.evaluate(()=>window.BelnaPrivy.fund({walletId:'wallet-other',address:'0x'+'b'.repeat(40)}).then(()=>null,e=>e.message));
+      assert.match(wrongDestination,/destination could not be verified/,'Funding cannot target another wallet');
+      await page.evaluate(()=>{sdkFixture.holdFunding=true;window.pendingFunding=window.BelnaPrivy.fund();});
+      const fundingDialog=page.getByRole('dialog',{name:'Add money',exact:true});
+      await fundingDialog.locator('.wallet-funding-brand').waitFor();
+      assert.equal(await fundingDialog.locator('.belna-mark').count(),1,'Funding picker includes the Belna logo');
+      assert.match(await fundingDialog.innerText(),/belna.*Wallet/s);
+      await page.evaluate(async()=>{sdkFixture.finishFunding();await window.pendingFunding;sdkFixture.holdFunding=false;});
+      assert.equal(await fundingDialog.count(),0,'Closing funding removes its branding and dialog');
       await page.evaluate(() => {sdkFixture.failIdentity=true;});
       await page.click("#start");
       await page.waitForFunction(() => /Too many requests/.test(window.result));

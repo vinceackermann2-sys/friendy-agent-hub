@@ -193,12 +193,14 @@ function createPrivyWallet({
       throw fail('A different wallet is already connected.', 'VERIFY');
     return snapshot(user.id);
   }
-  async function owned(userId) {
-    await load();
-    const row = await store.getPrivyWallet(userId);
+  function checkedRow(userId, row) {
     if (!row || row.user_id !== userId || !row.wallet_id || !/^0x[a-f0-9]{40}$/.test(row.address))
       throw fail('Create your Belna Wallet first.', 'NOT_SET_UP');
     return row;
+  }
+  async function owned(userId) {
+    await load();
+    return checkedRow(userId, await store.getPrivyWallet(userId));
   }
   async function verifyWalletOwner(row, did) {
     const wallet = await request('/v1/wallets/' + encodeURIComponent(row.wallet_id));
@@ -238,14 +240,14 @@ function createPrivyWallet({
         retryCount: 1,
       }),
     });
-    if ((await client.getChainId()) !== BASE_CHAIN)
-      throw fail('The wallet network could not be verified.', 'PROVIDER');
-    const raw = await client.readContract({
+    const [chainId, raw] = await Promise.all([client.getChainId(), client.readContract({
       address: BASE_USDC,
       abi: parseAbi(['function balanceOf(address) view returns (uint256)']),
       functionName: 'balanceOf',
       args: [row.address],
-    });
+    })]);
+    if (chainId !== BASE_CHAIN)
+      throw fail('The wallet network could not be verified.', 'PROVIDER');
     return Number(raw) / 1e6;
   }
   function view(i) {
@@ -274,7 +276,7 @@ function createPrivyWallet({
         : null,
     };
   }
-  async function earn(userId) {
+  async function earn(userId, walletRow) {
     const c = await config();
     if (!c.earnAvailable)
       return {
@@ -283,7 +285,7 @@ function createPrivyWallet({
         apy: null,
         position: null,
       };
-    const row = await owned(userId),
+    const row = walletRow ? checkedRow(userId, walletRow) : await owned(userId),
       vault = await request(
         '/v1/earn/ethereum/vaults/' + encodeURIComponent(setting('PRIVY_EARN_VAULT_ID')),
       );
@@ -362,8 +364,8 @@ function createPrivyWallet({
   }
   async function bankStatus(userId) {
     const row = await bankOwner(userId);
-    const verification = await bankVerification(row);
-    const result = await request(bankPath(row) + '/external_fiat_accounts?provider=bridge&environment=production');
+    const [verification, result] = await Promise.all([bankVerification(row),
+      request(bankPath(row) + '/external_fiat_accounts?provider=bridge&environment=production')]);
     if (!Array.isArray(result.external_fiat_accounts)) throw fail('Your linked banks could not be loaded.', 'PROVIDER');
     return { available: true, currency: 'EUR', rail: 'SEPA', verification,
       accounts: result.external_fiat_accounts.filter(a => validBankAccount(a, row)).map(bankAccountView) };
@@ -387,10 +389,17 @@ function createPrivyWallet({
       return { step: 'terms', url: hostedBankLink(tos.link) };
     }
     const kyc = await request(bankPath(row) + '/kyc/links', { method: 'POST', body: {
-      provider: 'bridge', environment: 'production', endorsements: ['sepa'], redirect_uri: 'https://belna.se/app',
+      provider: 'bridge', environment: 'production', endorsements: ['sepa'], redirect_uri: bankReturnUrl(),
     } });
     if (kyc.provider !== 'bridge' || kyc.environment !== 'production') throw fail('Your bank verification could not be verified.', 'PROVIDER');
     return { step: 'identity', url: hostedBankLink(kyc.kyc?.link) };
+  }
+  function bankReturnUrl() {
+    try {
+      const origin = new URL(setting('SITE_URL')).origin;
+      if (['https://belna.se', 'http://localhost:8000'].includes(origin)) return origin + '/app';
+    } catch {}
+    return 'https://belna.se/app';
   }
   async function verifiedBankAccount(userId, id) {
     if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(id)) throw fail('Choose your linked bank account.');
@@ -498,9 +507,10 @@ function createPrivyWallet({
   }
   async function snapshot(userId) {
     const c = await config();
-    const row = c.configured ? await store.getPrivyWallet(userId) : null;
-    const legacy =
-      store.getBelnaWallet && store.supaConfigured() ? await store.getBelnaWallet(userId) : null;
+    const [row, legacy] = await Promise.all([
+      c.configured ? store.getPrivyWallet(userId) : null,
+      store.getBelnaWallet && store.supaConfigured() ? store.getBelnaWallet(userId) : null,
+    ]);
     if (!row)
       return {
         wallet: {
@@ -515,36 +525,39 @@ function createPrivyWallet({
         transactions: [],
         intents: [],
       };
-    await owned(userId);
-    const amount = await balance(row);
-    if (!Number.isFinite(amount) || amount < 0)
-      throw fail('Your USDC balance could not be loaded.', 'PROVIDER');
-    const saved = await store.listPrivyIntents(userId),
-      intents = [];
-    for (let start = 0; start < saved.length; start += 5) {
-      const group = await Promise.allSettled(
-        saved.slice(start, start + 5).map((i) => reconcile(userId, i)),
-      );
-      group.forEach((r, n) => intents.push(r.status === 'fulfilled' ? r.value : saved[start + n]));
-    }
-    let history = [],
-      balanceHistoryError;
-    try {
-      history = await store.recordPrivyBalance(userId, amount);
-    } catch {
+    checkedRow(userId, row);
+    // Only independent reads run together. Every transfer still rechecks live
+    // balances, verification and ownership before its exact request is signed.
+    const amountTask = balance(row).then(amount => {
+      if (!Number.isFinite(amount) || amount < 0) throw fail('Your USD balance could not be loaded.', 'PROVIDER');
+      return amount;
+    });
+    const intentsTask = store.listPrivyIntents(userId).then(async saved => {
+      const intents = [];
+      for (let start = 0; start < saved.length; start += 5) {
+        const group = await Promise.allSettled(saved.slice(start, start + 5).map(i => reconcile(userId, i)));
+        group.forEach((r, n) => intents.push(r.status === 'fulfilled' ? r.value : saved[start + n]));
+      }
+      return intents;
+    });
+    let balanceHistoryError, activityError;
+    const historyTask = amountTask.then(amount => store.recordPrivyBalance(userId, amount)).catch(() => {
       balanceHistoryError = 'Balance history is temporarily unavailable.';
-    }
-    let earnView;
-    try {
-      earnView = await earn(userId);
-    } catch {
-      earnView = {
+      return [];
+    });
+    const earnTask = earn(userId, row).catch(() => ({
         available: false,
         reason: 'Earn information could not be verified. Refresh to try again.',
         apy: null,
         position: null,
-      };
-    }
+    }));
+    const activityTask = transactions(row).catch(() => {
+      activityError = 'Onchain activity is temporarily unavailable. Recorded requests remain below.';
+      return [];
+    });
+    const [amount, intents, history, earnView, onchain] = await Promise.all([
+      amountTask, intentsTask, historyTask, earnTask, activityTask,
+    ]);
     const tracked = intents
       .filter((i) => !['quoted', 'awaiting_owner', 'canceled'].includes(i.status))
       .map((i) => ({
@@ -560,14 +573,6 @@ function createPrivyWallet({
                 ? 'Earn withdrawal'
                 : 'Sent money',
       }));
-    let onchain = [],
-      activityError;
-    try {
-      onchain = await transactions(row);
-    } catch {
-      activityError =
-        'Onchain activity is temporarily unavailable. Recorded requests remain below.';
-    }
     const knownHashes = new Set(tracked.map((i) => i.transactionHash).filter(Boolean));
     return {
       wallet: {

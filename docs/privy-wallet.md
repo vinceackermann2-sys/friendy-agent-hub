@@ -154,7 +154,21 @@ use provider fixtures and do not perform financial transactions.
 
 `node scripts/sync-lingon.mjs` builds the lazy browser SDK and generates the ESM
 provider/store/routes for Lovable. Both Express and the edge API use the same
-implementation. The SDK loads only when the owner opens a Privy operation.
+implementation. The SDK warms when an existing owner opens Wallet, without
+sending an email code or opening authentication. Add money resolves its
+destination from the authenticated owner's SDK wallet, avoiding a second full
+snapshot. Independent balance, Earn, intent and activity reads overlap;
+balances and ownership are still verified live before every transfer. No
+balance or signing decision is cached to improve loading speed.
+
+Belna's funding picker and money dialogs share the Belna wordmark, neutral
+palette, rounded card, fields and buttons. Funding branding is added inside
+the provider modal without replacing its method selection, checkout, terms or
+owner confirmations. Hosted payment and identity providers retain their own
+legal identity. The bank verification button opens the returned hosted link
+in a new tab, with a visible fallback if popups are blocked. Checking status
+keeps an unfinished link available. Local hosted KYC returns to the approved
+localhost preview; other environments return to Belna's production app.
 
 Validation on October 8, 2026: production build, wallet/regression suite, Privy
 provider + SQL + client review + desktop/mobile UI suite, TypeScript SDK entry,

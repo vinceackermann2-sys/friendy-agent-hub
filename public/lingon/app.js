@@ -6371,6 +6371,7 @@ function refreshReturningWallet(){
   if(!signedIn() || !walletVisible())return;
   walletSetupRefreshUntil=Date.now()+120000;
   refreshBelnaWallet(true);refreshShopPay(true);
+  if(walletAction==='bank_withdraw')refreshWalletBank();
 }
 function scheduleWalletSetupRefresh(){
   clearTimeout(walletSetupRefreshTimer);
@@ -6417,8 +6418,8 @@ async function openWalletWithdrawal(kind='withdraw'){
   if(kind!=='deposit')return;
   const owner=scopeBelnaWallet();if(!owner||belnaWalletBusy)return;
   belnaWalletBusy=true;repaintWallet();
-  try{const sdk=await loadPrivyWallet();await sdk.fund();if(owner===scopeBelnaWallet())toast('Check your wallet balance after your funding arrives.');}
-  catch(e){if(owner===scopeBelnaWallet())toast(e.message||'Funding could not open.');}
+  try{const sdk=await loadPrivyWallet();const w=belnaWalletCache?.wallet;await sdk.fund(w?{walletId:w.walletId,address:w.address}:undefined);if(owner===scopeBelnaWallet())toast('Check your wallet balance after your funding arrives.');}
+  catch(e){if(owner===scopeBelnaWallet()&&!/cancelled|canceled|closed/i.test(e.message||''))toast(e.message||'Funding could not open.');}
   finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;refreshBelnaWallet(true);}}
 }
 async function openWalletCardSetup(){joinWalletCardWaitlist();}
@@ -6468,7 +6469,14 @@ function refreshBelnaWallet(force = false){
   belnaWalletLoading = true; belnaWalletError = '';
   repaintWallet();
   return completePersonalWalletReturn().then(()=>window.LingonAuth.api('/api/belna-wallet')).then(j => {
-    if (owner === scopeBelnaWallet()) belnaWalletCache = j;
+    if (owner === scopeBelnaWallet()) {
+      belnaWalletCache = j;
+      // Mount the secure SDK while the owner reads the wallet. This never sends
+      // an email code, opens a login form or authorizes a wallet operation.
+      if(j.wallet?.status==='ready'&&walletVisible())loadPrivyWallet().then(sdk=>{
+        if(owner===scopeBelnaWallet())return sdk.warm?.(j.wallet);
+      }).catch(()=>{});
+    }
   }).catch(e => {
     if (owner === scopeBelnaWallet()) belnaWalletError = e.message || 'Could not load your wallet. Refresh to try again.';
   }).finally(() => {
@@ -6699,7 +6707,7 @@ function openWalletMoneyAction(kind,intent=null){
   const previous=document.activeElement;walletAction=kind;walletActionError='';belnaTransferQuote=intent;
   const title=kind==='send'?'Send USD':kind==='bank_withdraw'?'Withdraw to bank':kind==='withdraw'?'Withdraw USD':kind==='earn'?'Earn':kind==='earn_deposit'?'Deposit into Earn':'Withdraw from Earn';
   const description=kind==='earn'?'Your Earn balance and options.':kind==='bank_withdraw'?'Withdraw money to your bank account.':'Review the exact request before authorizing it with your wallet.';
-  const overlay=el(`<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-money-dialog wl" role="dialog" aria-modal="true" aria-labelledby="wallet-money-title"><header><div><h3 id="wallet-money-title">${title}</h3><p>${description}</p></div><button type="button" class="btn ghost small" data-sheet-close aria-label="Close wallet action">${icon('x',18)}</button></header><div id="wallet-money-content"></div></section></div>`);
+  const overlay=el(`<div class="wallet-withdraw-overlay wallet-money-overlay"><section class="wallet-withdraw-dialog wallet-money-dialog wl" role="dialog" aria-modal="true" aria-labelledby="wallet-money-title"><div class="wallet-dialog-brand" aria-label="Belna Wallet">${Mascot.logo(24)}<b>belna</b><span>Wallet</span></div><header><div><h3 id="wallet-money-title">${title}</h3><p>${description}</p></div><button type="button" class="btn ghost small" data-sheet-close aria-label="Close wallet action">${icon('x',18)}</button></header><div id="wallet-money-content"></div></section></div>`);
   let closed=false,identityTimer;
   const close=()=>{if(closed)return;closed=true;clearInterval(identityTimer);dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletMoneyClose===close){walletMoneyClose=null;walletMoneyRoot=null;walletAction=null;walletActionError='';}restoreWalletFocus(previous);};
   const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),a[href]')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
@@ -6714,7 +6722,10 @@ function openWalletMoneyAction(kind,intent=null){
 async function refreshWalletBank(){
   const owner=scopeBelnaWallet();if(!owner||walletBankLoading)return;
   walletBankLoading=true;walletActionError='';repaintWallet();
-  try{const result=await window.LingonAuth.api('/api/belna-wallet/bank');if(owner===scopeBelnaWallet()){walletBankState=result;walletBankLink=null;}}
+  try{const result=await window.LingonAuth.api('/api/belna-wallet/bank');if(owner===scopeBelnaWallet()){
+    walletBankState=result;
+    if(result.verification?.ready || (walletBankLink?.step==='terms'&&result.verification?.termsAccepted))walletBankLink=null;
+  }}
   catch(e){if(owner===scopeBelnaWallet())walletActionError=e.message||'Bank withdrawals could not load. Try again.';}
   finally{if(owner===scopeBelnaWallet()){walletBankLoading=false;repaintWallet();}}
 }
@@ -6737,7 +6748,7 @@ function walletBankWithdrawalContent(){
   if(walletBankLoading&&!bank)return '<p role="status">Checking your bank connection…</p>';
   if(!belnaWalletCache?.wallet?.bankWithdrawalsAvailable)return `<p>Bank withdrawals are not enabled yet.</p>${error}`;
   if(!bank)return `${error}<button type="button" class="btn small" data-act="wallet-bank-refresh"${busy}>Try again</button>`;
-  if(!bank.verification.ready)return `<section class="wl-sec" aria-label="Bank withdrawals"><div class="wl-list boxed">${walletRow({ic:'shieldcheck',title:'Verify your identity',sub:bank.verification.status==='not_started'?'A one-time check with Bridge is required for bank withdrawals.':'Verification: '+walletStatusLabel(bank.verification.status)})}</div><p class="wl-hint">Withdraw in EUR to an IBAN that accepts SEPA transfers. Bridge handles the identity check; your agent cannot complete it for you.</p><label class="wl-check"><input type="checkbox" id="wallet-bank-verify-consent"> I agree to share my wallet identity and email with Bridge to start verification.</label><div class="wset-actions"><button type="button" class="btn small" data-act="wallet-bank-verify"${busy}>${bank.verification.termsAccepted?'Continue verification':'Start verification'}</button><button type="button" class="btn ghost small" data-act="wallet-bank-refresh"${busy}>Check status</button></div>${walletBankLink?`<p><a class="btn small" href="${esc(walletBankLink.url)}" target="_blank" rel="noopener noreferrer">${walletBankLink.step==='terms'?'Review Bridge terms':'Verify identity with Bridge'}</a></p><p class="wl-hint">After completing this step, return here and check status. Then continue verification if requested.</p>`:''}${error}</section>`;
+  if(!bank.verification.ready)return `<section class="wl-sec" aria-label="Bank withdrawals"><div class="wl-list boxed">${walletRow({ic:'shieldcheck',title:'Verify your identity',sub:bank.verification.status==='not_started'?'A one-time check is required for bank withdrawals.':'Verification: '+walletStatusLabel(bank.verification.status)})}</div><p class="wl-hint">Bridge, our bank payout provider, verifies your identity before you can withdraw. First review its terms, then complete the identity check. You do this yourself; your agent cannot access your documents.</p>${walletBankLink?`<div class="wallet-verification-step" role="status"><b>${walletBankLink.step==='terms'?'Step 1 of 2 · Review bank terms':'Step 2 of 2 · Verify your identity'}</b><p>Your secure verification opens in a new tab. If it did not open, use the button below.</p><a class="btn small" href="${esc(walletBankLink.url)}" target="_blank" rel="noopener noreferrer">${walletBankLink.step==='terms'?'Review bank terms':'Open identity verification'}</a><p>When you finish, return here and check status${walletBankLink.step==='terms'?', then continue to the identity check':''}.</p></div>`:`<label class="wl-check"><input type="checkbox" id="wallet-bank-verify-consent"> I agree to share my wallet identity and email with Bridge to start verification.</label><button type="button" class="btn small wallet-bank-start" data-act="wallet-bank-verify"${busy}>${belnaWalletBusy?'Opening secure verification…':bank.verification.termsAccepted?'Continue verification':'Start verification'}</button>`}<button type="button" class="btn ghost small wallet-bank-check" data-act="wallet-bank-refresh"${busy}>Check status</button><p class="wl-hint">Withdrawals are paid in EUR to your own bank account through SEPA.</p>${error}</section>`;
   return `<form class="wl-form" aria-label="Link your bank"><p>Link your own bank account to receive EUR withdrawals.</p><div class="wl-fields"><label class="wl-field">Account holder name<input class="field" id="wallet-bank-name" autocomplete="name" required maxlength="200"></label><label class="wl-field">IBAN<input class="field" id="wallet-bank-iban" autocomplete="off" required maxlength="42" placeholder="SE…"></label><label class="wl-field">BIC / SWIFT code<input class="field" id="wallet-bank-bic" autocomplete="off" required maxlength="11"></label></div><label class="wl-check"><input type="checkbox" id="wallet-bank-consent" required> This is my bank account, it accepts EUR SEPA transfers, and I approve sending these details to Bridge.</label><button type="button" class="btn small" data-act="wallet-bank-register"${busy}>Link bank account</button><p class="wl-hint">Your bank details go to Bridge. Belna stores the bank reference and masked account label. Your bank may charge to convert EUR to SEK.</p>${error}</form>`;
 }
 function walletEarnContent(){
@@ -8898,11 +8909,19 @@ document.addEventListener('click', async e => {
     if(register&&!b.closest('form')?.reportValidity())return;
     if(!$(register?'#wallet-bank-consent':'#wallet-bank-verify-consent')?.checked){walletActionError=register?'Approve sharing your own bank details with Bridge first.':'Approve sharing your wallet identity and email with Bridge first.';repaintWallet();return;}
     const input=register?{consent:true,accountOwnerName:$('#wallet-bank-name')?.value,iban:$('#wallet-bank-iban')?.value,bic:$('#wallet-bank-bic')?.value}:{consent:true};
+    // Open from the click itself so browsers do not block the hosted flow after
+    // the async SDK and provider checks. Keep a visible fallback if blocked.
+    let verificationWindow;
+    if(!register)try{
+      verificationWindow=window.open('about:blank','_blank');
+      if(verificationWindow){verificationWindow.opener=null;verificationWindow.document.title='Opening bank verification';verificationWindow.document.body.textContent='Opening your secure bank verification…';}
+    }catch{}
     belnaWalletBusy=true;walletActionError='';repaintWallet();
-    try{const result=await (await loadPrivyWallet()).bank(register?'register':'verify',input);if(owner!==scopeBelnaWallet())return;
+    try{const result=await (await loadPrivyWallet()).bank(register?'register':'verify',input);if(owner!==scopeBelnaWallet()||walletAction!=='bank_withdraw'){verificationWindow?.close();return;}
       if(register){walletBankState=result;walletBankLink=null;toast('Bank linked. Review an amount to withdraw.');}
-      else if(result.url)walletBankLink=result;else await refreshWalletBank();
-    }catch(e){if(owner===scopeBelnaWallet())walletActionError=e.message||'Your bank connection could not complete. Check status before trying again.';}
+      else if(result.url){walletBankLink=result;if(verificationWindow&&!verificationWindow.closed)verificationWindow.location.replace(result.url);}
+      else{verificationWindow?.close();await refreshWalletBank();}
+    }catch(e){verificationWindow?.close();if(owner===scopeBelnaWallet())walletActionError=e.message||'Your bank connection could not complete. Check status before trying again.';}
     finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}}return;
   }
   if(act==='wallet-intent'){const i=(belnaWalletCache?.intents||[]).find(i=>i.quoteId===b.dataset.id);if(i)openWalletMoneyAction(i.kind,i);return;}

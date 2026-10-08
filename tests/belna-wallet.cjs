@@ -166,7 +166,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   const {approvalCard}=require('../server/agents/cards');
   const sendCard=approvalCard('wallet_send',{recipient:'b@example.com',amount:5},detail,tools.wallet_send,'call');
   assert.equal(sendCard.title,'Send $5.00 to b@example.com');assert.deepEqual([sendCard.view.kind,sendCard.view.amount,sendCard.view.to],['money','$5.00','b@example.com']);
-  assert.equal(approvalCard('wallet_set_limit',{},await tools.wallet_set_limit.approvalDetail({dailyLimitUsd:40})).title,'Set your daily wallet allowance to $40.00');
+  assert.equal(approvalCard('wallet_set_limit',{},await tools.wallet_set_limit.approvalDetail({dailyLimitUsd:40})).title,'Set your 24-hour transfer limit to $40.00');
   // Pausing only lowers risk and runs without a card; resuming needs the owner's exact approval.
   const cardChanges=[],pauseTools=createWalletTools({updateCard:async(userId,change)=>{cardChanges.push([userId,change]);return {ok:true};}});
   assert.equal(await pauseTools.wallet_pause.needsApproval({paused:true}),false);

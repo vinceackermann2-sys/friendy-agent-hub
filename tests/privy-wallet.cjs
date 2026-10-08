@@ -10,7 +10,9 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     timeout = false,
     actionStatus = 'pending',
     additionalSigners = [],
-    quorumUsers = ['did:privy:alice'], bankReady = false, bankAccountOwner = 'did:privy:alice', bankAccounts = [], bankChainSubmitted = false;
+    quorumUsers = ['did:privy:alice'], bankReady = false, bankTermsAccepted = false,
+    bankIdentityLink = 'https://bridge.withpersona.com/verify?fixture=true',
+    bankAccountOwner = 'did:privy:alice', bankAccounts = [], bankChainSubmitted = false;
   const address = '0x' + '1'.repeat(40),
     other = '0x' + '2'.repeat(40);
   const payload = {
@@ -107,7 +109,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
         authorization_keys: [],
         authorization_threshold: 1,
       };
-    else if (url.endsWith('/kyc')) data = {kyc_statuses:[{provider:'bridge',environment:'production',status:bankReady?'active':'not_started',tos:{status:bankReady?'approved':'pending'},kyc:{status:bankReady?'active':'not_started'},endorsements:bankReady?[{name:'sepa',status:'approved'}]:[],capabilities:{payout_fiat:bankReady?'active':'pending'}}]};
+    else if (url.endsWith('/kyc')) data = {kyc_statuses:[{provider:'bridge',environment:'production',status:bankReady?'active':'not_started',tos:{status:bankReady||bankTermsAccepted?'approved':'pending'},kyc:{status:bankReady?'active':'not_started'},endorsements:bankReady?[{name:'sepa',status:'approved'}]:[],capabilities:{payout_fiat:bankReady?'active':'pending'}}]};
     else if (url.includes('/external_fiat_accounts?')) data = {external_fiat_accounts:bankAccounts};
     else if (url.endsWith('/external_fiat_accounts/bank_alice')) data = {external_fiat_account:{id:'bank_alice',user_id:bankAccountOwner,provider:'bridge',environment:'production',currency:'eur',account_type:'iban',bank_name:'Fixture bank',last_4:'3000'}};
     else if (url.endsWith('/external_fiat_accounts') && init.method==='POST') {
@@ -116,6 +118,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
       data={external_fiat_account:bankAccounts[0]};
     }
     else if (url.endsWith('/kyc/tos')) data={provider:'bridge',environment:'production',status:'pending',link:'https://bridge.xyz/terms/fixture'};
+    else if (url.endsWith('/kyc/links')) data={provider:'bridge',environment:'production',kyc:{status:'not_started',link:bankIdentityLink}};
     else if (url.endsWith('/v1/earn/ethereum/vaults/vault-reviewed'))
       data = {
         id: 'vault-reviewed',
@@ -340,6 +343,16 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
   await assert.rejects(wallet.bankVerify('alice',{consent:true},undefined),/identity/);
   await assert.rejects(wallet.bankVerify('alice',{consent:false},'identity-alice'),/Confirm/);
   assert.equal((await wallet.bankVerify('alice',{consent:true},'identity-alice')).step,'terms');
+  bankTermsAccepted=true;
+  const localWallet=createPrivyWallet({store,env:{...env,SITE_URL:'http://localhost:8000'},fetchImpl,verifyIdentity:async()=>payload});
+  const verification=await localWallet.bankVerify('alice',{consent:true},'identity-alice');
+  assert.equal(verification.step,'identity');
+  assert.equal(new URL(verification.url).hostname,'bridge.withpersona.com');
+  assert.equal(JSON.parse(calls.at(-1).body).redirect_uri,'http://localhost:8000/app');
+  assert.deepEqual(JSON.parse(calls.at(-1).body).endorsements,['sepa']);
+  bankIdentityLink='https://bridge.xyz.attacker.test/verify';
+  await assert.rejects(localWallet.bankVerify('alice',{consent:true},'identity-alice'),/link could not be verified/);
+  bankIdentityLink='https://bridge.withpersona.com/verify?fixture=true';
   bankReady=true;
   const registration={consent:true,iban:'DE89370400440532013000',bic:'COBADEFFXXX',accountOwnerName:'Fixture Alice'};
   await assert.rejects(wallet.bankRegister('alice',{...registration,iban:'DE00370400440532013000'},'identity-alice'),/check digits/);
