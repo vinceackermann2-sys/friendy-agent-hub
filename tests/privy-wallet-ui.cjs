@@ -115,7 +115,7 @@ const { chromium } = require('playwright');
         wallet: wallet(),
         earn: {
           available: true,
-          name: 'Reviewed fixture vault',
+          name: 'Aave USDC Vault',
           apy: 4.13,
           position: { available: 5, earned: 1 }, yieldFeePercent:10,
         },
@@ -216,12 +216,18 @@ const { chromium } = require('playwright');
       assert.equal(await panel.getByLabel('Country you live in').inputValue(),'DK','Failed setup preserves the selected country');
       setupRateLimited=false;
       await panel.getByRole('button', { name: 'Create Belna Wallet', exact: true }).click();
-      await page.getByText('Your user-owned USDC wallet is ready.', { exact: true }).waitFor();
+      await page.getByText('Your Belna Wallet is ready.', { exact: true }).waitFor();
       assert.deepEqual((await page.evaluate(() => window.privyCalls))[0], {
         action: 'setup',
         country: 'DK',
       });
       assert.equal(calls.find((c) => c.pathname === '/api/belna-wallet/setup').body.country, 'DK', 'selected country reaches wallet registration');
+      await page.getByText('USD balance',{exact:true}).waitFor();
+      assert.equal(await page.getByText('Receive USDC on Base',{exact:true}).count(),0);
+      await page.getByRole('switch',{name:'Pause wallet transfers',exact:true}).waitFor();
+      await page.getByText('24-hour transfer limit',{exact:true}).waitFor();
+      assert.ok((await page.locator('#wallet-settings-content').innerText()).includes('deposit into Earn in any 24 hours'));
+      await page.locator('#wallet-settings-content').screenshot({path:path.resolve('artifacts/privy-wallet/settings-'+width+'.png')});
       await page.locator('[data-act="wallet-open-panel"]:visible').click();
       await panel.getByRole('button', { name: 'Add money', exact: true }).waitFor();
       await panel.locator('.wl-balance').getByText('$125.00', { exact: true }).waitFor();
@@ -241,7 +247,7 @@ const { chromium } = require('playwright');
         .waitFor();
       assert.ok((await page.evaluate(() => window.privyCalls)).some((c) => c.action === 'fund'));
       await panel.getByRole('button', { name: 'Send', exact: true }).click();
-      let dialog = page.getByRole('dialog', { name: 'Send USDC', exact: true });
+      let dialog = page.getByRole('dialog', { name: 'Send USD', exact: true });
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
       assert.equal(sequence, 0, 'invalid drafts do not reach the server');
       assert.equal(await dialog.getByLabel('Belna email', { exact: true }).getAttribute('type'), 'email');
@@ -253,7 +259,7 @@ const { chromium } = require('playwright');
       await dialog.locator('#belna-wallet-recipient').fill('friend@example.test');
       await dialog.locator('#belna-wallet-send-amount').fill('5');
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
-      await dialog.getByRole('button', { name: 'Authorize $5.00 USDC', exact: true }).waitFor();
+      await dialog.getByRole('button', { name: 'Authorize $5.00 USD', exact: true }).waitFor();
       assert.equal(
         (await page.evaluate(() => window.privyCalls)).filter((c) => c.action === 'authorize')
           .length,
@@ -264,13 +270,13 @@ const { chromium } = require('playwright');
       await dialog.locator('#belna-wallet-send-amount').fill('6');
       await dialog.getByRole('button', { name: 'Review request', exact: true }).waitFor();
       assert.equal(
-        await dialog.getByRole('button', { name: 'Authorize $5.00 USDC', exact: true }).count(),
+        await dialog.getByRole('button', { name: 'Authorize $5.00 USD', exact: true }).count(),
         0,
         'editing invalidates the quote',
       );
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
-      await dialog.getByRole('button', { name: 'Authorize $6.00 USDC', exact: true }).click();
-      await dialog.getByText(/USDC.*Completed/).waitFor();
+      await dialog.getByRole('button', { name: 'Authorize $6.00 USD', exact: true }).click();
+      await dialog.getByText(/USD.*Completed/).waitFor();
       assert.equal(
         calls.filter((c) => c.pathname === '/api/belna-wallet/authorize').length,
         1,
@@ -288,7 +294,7 @@ const { chromium } = require('playwright');
       await dialog.screenshot({ path: path.resolve(`artifacts/privy-wallet/bank-${width}.png`) });
       await dialog.getByRole('button', { name: 'Close wallet action' }).click();
       await panel.getByRole('button', { name: 'Send', exact: true }).click();
-      dialog = page.getByRole('dialog', { name: 'Send USDC', exact: true });
+      dialog = page.getByRole('dialog', { name: 'Send USD', exact: true });
       await dialog.getByLabel('Belna email', { exact: true }).fill('friend@example.test');
       await dialog.locator('#belna-wallet-send-amount').fill('2');
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
@@ -298,6 +304,7 @@ const { chromium } = require('playwright');
       await panel.getByRole('button', { name: 'Earn', exact: true }).click();
       dialog = page.getByRole('dialog', { name: 'Earn', exact: true });
       await dialog.getByText(/4.13% variable APY/).waitFor();
+      assert.ok(!/USDC|Aave|Reviewed fixture vault/i.test(await dialog.innerText()));
       await dialog.screenshot({ path: path.resolve(`artifacts/privy-wallet/earn-${width}.png`) });
       await dialog.getByRole('button', { name: 'Deposit', exact: true }).click();
       dialog = page.getByRole('dialog', { name: 'Deposit into Earn', exact: true });
@@ -305,14 +312,14 @@ const { chromium } = require('playwright');
       await dialog.locator('#wallet-earn-risk').check();
       await dialog.getByRole('button', { name: 'Review request', exact: true }).click();
       await dialog.locator('#wallet-earn-risk').uncheck();
-      await dialog.getByRole('button', { name: 'Authorize $3.00 USDC', exact: true }).click();
+      await dialog.getByRole('button', { name: 'Authorize $3.00 USD', exact: true }).click();
       await dialog
         .getByText('Review and accept the Earn risks before authorizing.', { exact: true })
         .waitFor();
       assert.equal(calls.filter((c) => c.pathname === '/api/belna-wallet/authorize').length, 1);
       await dialog.locator('#wallet-earn-risk').check();
-      await dialog.getByRole('button', { name: 'Authorize $3.00 USDC', exact: true }).click();
-      await dialog.getByText(/USDC.*Completed/).waitFor();
+      await dialog.getByRole('button', { name: 'Authorize $3.00 USD', exact: true }).click();
+      await dialog.getByText(/USD.*Completed/).waitFor();
       assert.ok(
         calls.some(
           (c) => c.pathname === '/api/belna-wallet/authorize' && c.body.riskAccepted === true,
@@ -344,14 +351,14 @@ const { chromium } = require('playwright');
       await dialog.locator('#belna-wallet-send-amount').fill('2');
       const authorizations=calls.filter(c=>c.pathname==='/api/belna-wallet/authorize').length;
       await dialog.getByRole('button',{name:'Review request',exact:true}).click();
-      await dialog.getByRole('button',{name:'Authorize $2.00 USDC',exact:true}).waitFor();
+      await dialog.getByRole('button',{name:'Authorize $2.00 USD',exact:true}).waitFor();
       assert.equal(calls.filter(c=>c.pathname==='/api/belna-wallet/authorize').length,authorizations);
       assert.ok((await dialog.innerText()).includes('EUR'));
-      await dialog.getByRole('button',{name:'Authorize $2.00 USDC',exact:true}).click();
+      await dialog.getByRole('button',{name:'Authorize $2.00 USD',exact:true}).click();
       await dialog.getByRole('button',{name:'Check this request',exact:true}).waitFor();
       await dialog.screenshot({path:path.resolve(`artifacts/privy-wallet/bank-linked-${width}.png`)});
       await dialog.getByRole('button',{name:'Check this request',exact:true}).click();
-      await dialog.getByText(/USDC.*Completed/).waitFor();
+      await dialog.getByText(/USD.*Completed/).waitFor();
       await dialog.getByRole('button',{name:'Close wallet action',exact:true}).click();
       await page
         .locator('#canvas')
@@ -366,7 +373,7 @@ const { chromium } = require('playwright');
         window.LingonAuth.set(null);
       });
       await page
-        .getByRole('dialog', { name: 'Send USDC', exact: true })
+        .getByRole('dialog', { name: 'Send USD', exact: true })
         .waitFor({ state: 'detached' });
       assert.equal(
         await page.locator('#belna-wallet-recipient').count(),

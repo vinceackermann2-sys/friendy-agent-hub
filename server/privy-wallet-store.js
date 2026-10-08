@@ -64,10 +64,10 @@ function createPrivyWalletStore({ supa, ensureProfile }) {
     const result = await db().rpc('begin_privy_wallet_intent', { p_user_id: userId, p_id: id });
     const messages = {
       'daily wallet allowance exceeded':
-        'Your daily wallet allowance has been reached. Check Wallet settings.',
+        'Your 24-hour transfer limit has been reached. Check Wallet settings.',
       'check pending wallet action first':
         'Check your pending wallet action before starting another.',
-      'wallet requests paused': 'Wallet requests are paused. Resume them in Wallet settings.',
+      'wallet requests paused': 'Wallet transfers are paused. Resume them in Wallet settings.',
       'intent expired': 'This request expired or was canceled. Review a new request.',
     };
     if (result.error?.code === 'P0001' && messages[result.error.message])

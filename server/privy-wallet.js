@@ -613,7 +613,7 @@ function createPrivyWallet({
   }
   async function transferQuote(userId, input = {}) {
     const row = await owned(userId);
-    if (row.paused) throw fail('Agent wallet requests are paused.');
+    if (row.paused) throw fail('Wallet transfers are paused. Resume them in Wallet settings.');
     const value = amount(input.amount),
       kind = input.kind || 'send';
     if (!['send', 'withdraw', 'bank_withdraw', 'earn_deposit', 'earn_withdraw'].includes(kind))
@@ -653,7 +653,7 @@ function createPrivyWallet({
         throw fail('Your available Earn balance is too low.');
     }
     if (kind !== 'earn_withdraw' && Number(value) > (await balance(row)))
-      throw fail('Your available USDC balance is too low.');
+      throw fail('Your available USD balance is too low.');
     const quote = await store.createPrivyIntent(userId, {
       id: randomId(),
       wallet_id: row.wallet_id,
@@ -704,7 +704,7 @@ function createPrivyWallet({
         'This uncertain request needs provider reconciliation. Contact support before sending again.',
         'REVIEW',
       );
-    if (row.paused && i.status !== 'processing') throw fail('Agent wallet requests are paused.');
+    if (row.paused && i.status !== 'processing') throw fail('Wallet transfers are paused. Resume them in Wallet settings.');
     await verifyWalletOwner(row, proof.did);
     if (i.kind.startsWith('earn_') && riskAccepted !== true)
       throw fail('Review and accept the Earn risks first.');
@@ -805,7 +805,7 @@ function createPrivyWallet({
     }
     if (Object.hasOwn(input, 'dailyLimitUsd')) {
       const v = amount(input.dailyLimitUsd);
-      if (Number(v) > 50) throw fail('The daily wallet request allowance is at most $50.');
+      if (Number(v) > 50) throw fail('The 24-hour transfer limit is at most $50.');
       fields.daily_limit_usd = v;
     }
     if (!Object.keys(fields).length) throw fail('Choose a wallet control.');

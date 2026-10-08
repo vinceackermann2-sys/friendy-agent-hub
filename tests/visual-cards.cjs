@@ -24,6 +24,13 @@ const clone=x=>x==null?x:structuredClone(x);
   const order=approvalCard('shop_purchase',{merchant:'allsports.example',checkoutId:'c1'},quote);
   assert.equal(order.view.kind,'purchase');assert.equal(order.view.total,'$59.99');assert.equal(order.view.items[0].title,'Girls Champ Matte Helmet');
   assert.equal(order.detail,quote,'the approved quote detail is preserved for the purchase check');
+  const bank=approvalCard('wallet_withdraw',{},JSON.stringify({amount:5,currency:'USD',recipient:'Bank ····1234 · EUR'}));
+  assert.match(bank.title,/withdrawal.*Bank.*1234/);
+  assert.match(bank.title,/5/);
+  assert.equal(bank.view.action,'bank_withdraw');
+  const earn=approvalCard('wallet_earn',{},JSON.stringify({kind:'earn_deposit',amount:5,currency:'USD',recipient:'Aave USDC Vault',risk:'Yield varies.'}));
+  assert.equal(earn.view.to,'Earn');
+  assert.doesNotMatch(JSON.stringify({title:earn.title,view:earn.view}),/USDC|Aave/);
   const secret=approvalCard('vault_request',{name:'GitHub password'},'',TOOLS.vault_request);
   assert.equal(secret.type,'secret','credential requests keep the secure vault card');
 
