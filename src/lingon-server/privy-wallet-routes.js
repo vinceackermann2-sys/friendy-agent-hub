@@ -29,6 +29,17 @@ function installPrivyWalletRoutes({ app, wallet, requireAuth, rateLimit }) {
       }
     }),
   );
+  app.get('/api/belna-wallet/bank', rateLimit(20, 60000), requireAuth(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try { res.json(await wallet.bankStatus(req.user.id)); }
+    catch (e) { res.status(status(e)).json({ error: e.message }); }
+  }));
+  for (const action of ['verify', 'register']) app.post('/api/belna-wallet/bank/' + action,
+    rateLimit(5, 60000), requireAuth(async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try { res.json(await (action === 'verify' ? wallet.bankVerify : wallet.bankRegister)(req.user.id, req.body || {}, req.headers['privy-id-token'])); }
+      catch (e) { res.status(status(e)).json({ error: e.message }); }
+    }));
   for (const action of ['prepare', 'authorize', 'cancel'])
     app.post(
       '/api/belna-wallet/' + action,

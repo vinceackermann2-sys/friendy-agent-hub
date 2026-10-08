@@ -288,6 +288,7 @@ function approvalView(name, args = {}, detail) {
     }
     // Money the owner approves: the exact amount and recipient from the approved detail, never raw JSON.
     case 'wallet_send': return { kind: 'money', action: 'send', amount: money(parsed.amount, parsed.currency), to: str(parsed.recipient, 200), note: str(parsed.fees, 200) };
+    case 'wallet_withdraw': return {kind:'money',action:'bank_withdraw',amount:money(parsed.amount,parsed.currency),to:str(parsed.recipient,200),note:'EUR bank payout after conversion and fees. Owner must authorize in Wallet.'};
     case 'wallet_earn': return { kind:'money', action:parsed.kind==='earn_withdraw'?'earn_withdraw':'earn_deposit',amount:money(parsed.amount,parsed.currency),to:str(parsed.recipient,200),note:str(parsed.risk,400) };
     case 'wallet_set_limit': return { kind: 'money', action: 'limit', amount: money(parsed.dailyLimitUsd, parsed.currency) };
     case 'wallet_pause': return { kind: 'money', action: parsed.paused === false ? 'resume' : 'pause' };

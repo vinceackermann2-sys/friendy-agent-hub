@@ -27,6 +27,8 @@ function createPrivyWallet({
           'PRIVY_AUTH_MODE',
           'PRIVY_EARN_VAULT_ID',
           'PRIVY_EARN_ENABLED',
+          'PRIVY_EARN_FEE_PERCENT',
+          'PRIVY_BANK_WITHDRAWALS_ENABLED',
           'PRIVY_BASE_RPC_URL',
         ])
           if (typeof saved?.[k] === 'string') env[k] = saved[k].trim();
@@ -55,7 +57,7 @@ function createPrivyWallet({
       decimals: 6,
       ownerAuthorizationRequired: true,
       agentSigningEnabled: false,
-      bankWithdrawalsAvailable: false,
+      bankWithdrawalsAvailable: configured() && setting('PRIVY_BANK_WITHDRAWALS_ENABLED') === 'true',
       earnAvailable:
         configured() &&
         setting('PRIVY_EARN_ENABLED') === 'true' &&
@@ -258,6 +260,10 @@ function createPrivyWallet({
       chainId: BASE_CHAIN,
       chain: 'Base',
       vaultId: i.vault_id || null,
+      fiatAccountId: i.fiat_account_id || null,
+      bankCurrency: i.kind === 'bank_withdraw' ? 'EUR' : null,
+      paymentRail: i.kind === 'bank_withdraw' ? 'sepa' : null,
+      providerReviewRequired: i.provider_review_required === true,
       status: i.status,
       at: i.created_at,
       expiresAt: i.expires_at,
@@ -284,7 +290,7 @@ function createPrivyWallet({
     if (
       vault.id !== setting('PRIVY_EARN_VAULT_ID') ||
       vault.caip2 !== 'eip155:8453' ||
-      vault.asset?.address?.toLowerCase() !== BASE_USDC.toLowerCase()
+      vault.asset?.address?.toLowerCase() !== BASE_USDC.toLowerCase() || vault.asset?.decimals !== 6
     )
       throw fail('Earn must use the configured USDC vault on Base.', 'PROVIDER');
     const p = await request(
@@ -301,16 +307,123 @@ function createPrivyWallet({
       deposited: number(p.total_deposited),
       withdrawn: number(p.total_withdrawn),
     };
+    position.earned = Object.values(position).every(Number.isFinite)
+      ? position.available - (position.deposited - position.withdrawn) : null;
     return {
       available: true,
       vaultId: vault.id,
       name: vault.name,
       provider: vault.provider,
       apy: Number.isFinite(vault.user_apy) ? vault.user_apy / 100 : null,
+      yieldFeePercent: /^\d+(\.\d+)?$/.test(setting('PRIVY_EARN_FEE_PERCENT')) && Number(setting('PRIVY_EARN_FEE_PERCENT')) <= 100
+        ? Number(setting('PRIVY_EARN_FEE_PERCENT')) : null,
       liquidityUsd: vault.available_liquidity_usd ?? null,
       position,
       risk: 'Yield is variable. Smart-contract losses and withdrawal delays are possible. This is not a bank deposit.',
     };
+  }
+  const bankCountries = {
+    AT:'AUT', BE:'BEL', BG:'BGR', HR:'HRV', CY:'CYP', CZ:'CZE', DK:'DNK',
+    EE:'EST', FI:'FIN', FR:'FRA', DE:'DEU', GR:'GRC', HU:'HUN', IS:'ISL',
+    IE:'IRL', IT:'ITA', LV:'LVA', LI:'LIE', LT:'LTU', LU:'LUX', MT:'MLT',
+    NL:'NLD', NO:'NOR', PL:'POL', PT:'PRT', RO:'ROU', SK:'SVK', SI:'SVN',
+    ES:'ESP', SE:'SWE', CH:'CHE', GB:'GBR', AD:'AND',
+  };
+  const bankPath = (row) => '/v1/users/' + encodeURIComponent(row.privy_user_id);
+  async function bankOwner(userId, token) {
+    const c = await config();
+    if (!c.bankWithdrawalsAvailable) throw fail('Bank withdrawals are not enabled yet.', 'NOT_SET_UP');
+    const row = await owned(userId);
+    if (!bankCountries[row.country]) throw fail('EUR bank withdrawals are currently available for supported European countries.');
+    if (token !== undefined) {
+      const proof = await identity(userId, token);
+      if (proof.did !== row.privy_user_id) throw fail('Your wallet owner could not be verified.', 'VERIFY');
+      await verifyWalletOwner(row, proof.did);
+    }
+    return row;
+  }
+  function bankAccountView(a) {
+    return { id: a.id, currency: 'EUR', last4: a.last_4 || null,
+      label: (a.bank_name || 'Bank account') + (a.last_4 ? ' ····' + a.last_4 : '') + ' · EUR' };
+  }
+  function validBankAccount(a, row) {
+    return !!a && typeof a.id === 'string' && a.user_id === row.privy_user_id &&
+      a.provider === 'bridge' && a.environment === 'production' && a.currency === 'eur' && a.account_type === 'iban';
+  }
+  async function bankVerification(row) {
+    const result = await request(bankPath(row) + '/kyc');
+    if (!Array.isArray(result.kyc_statuses)) throw fail('Your bank verification could not be checked.', 'PROVIDER');
+    const s = result.kyc_statuses.find(s => s.provider === 'bridge' && s.environment === 'production');
+    const ready = s?.status === 'active' && s.tos?.status === 'approved' &&
+      ['active', 'approved'].includes(s.kyc?.status) && s.capabilities?.payout_fiat === 'active' &&
+      s.endorsements?.some(e => e.name === 'sepa' && e.status === 'approved');
+    return { ready: !!ready, status: ready ? 'approved' : s?.kyc?.status || s?.status || 'not_started',
+      termsAccepted: s?.tos?.status === 'approved' };
+  }
+  async function bankStatus(userId) {
+    const row = await bankOwner(userId);
+    const verification = await bankVerification(row);
+    const result = await request(bankPath(row) + '/external_fiat_accounts?provider=bridge&environment=production');
+    if (!Array.isArray(result.external_fiat_accounts)) throw fail('Your linked banks could not be loaded.', 'PROVIDER');
+    return { available: true, currency: 'EUR', rail: 'SEPA', verification,
+      accounts: result.external_fiat_accounts.filter(a => validBankAccount(a, row)).map(bankAccountView) };
+  }
+  function hostedBankLink(link) {
+    try {
+      const u = new URL(link);
+      if (u.protocol === 'https:' && !u.username && !u.password &&
+        (u.hostname === 'bridge.xyz' || u.hostname.endsWith('.bridge.xyz') || u.hostname === 'bridge.withpersona.com')) return u.href;
+    } catch {}
+    throw fail('The bank verification link could not be verified.', 'PROVIDER');
+  }
+  async function bankVerify(userId, input, token) {
+    if (input?.consent !== true) throw fail('Confirm that Bridge may use your wallet identity and email for bank verification.');
+    if (!token) throw fail('Confirm your wallet identity first.', 'VERIFY');
+    const row = await bankOwner(userId, token), state = await bankVerification(row);
+    if (state.ready) return { completed: true };
+    if (!state.termsAccepted) {
+      const tos = await request(bankPath(row) + '/kyc/tos', { method: 'POST', body: { provider: 'bridge', environment: 'production' } });
+      if (tos.provider !== 'bridge' || tos.environment !== 'production') throw fail('Your bank terms could not be verified.', 'PROVIDER');
+      return { step: 'terms', url: hostedBankLink(tos.link) };
+    }
+    const kyc = await request(bankPath(row) + '/kyc/links', { method: 'POST', body: {
+      provider: 'bridge', environment: 'production', endorsements: ['sepa'], redirect_uri: 'https://belna.se/app',
+    } });
+    if (kyc.provider !== 'bridge' || kyc.environment !== 'production') throw fail('Your bank verification could not be verified.', 'PROVIDER');
+    return { step: 'identity', url: hostedBankLink(kyc.kyc?.link) };
+  }
+  async function verifiedBankAccount(userId, id) {
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(id)) throw fail('Choose your linked bank account.');
+    const row = await bankOwner(userId);
+    if (!(await bankVerification(row)).ready) throw fail('Complete your identity verification for EUR bank withdrawals first.');
+    const result = await request(bankPath(row) + '/external_fiat_accounts/' + encodeURIComponent(id));
+    const a = result.external_fiat_account;
+    if (!validBankAccount(a, row) || a.id !== id) throw fail('This bank account does not belong to your verified wallet.', 'VERIFY');
+    return a;
+  }
+  async function bankRegister(userId, input, token) {
+    if (!token) throw fail('Confirm your wallet identity first.', 'VERIFY');
+    if (input?.consent !== true) throw fail('Confirm this is your own bank account and approve sharing these bank details with Bridge.');
+    const row = await bankOwner(userId, token);
+    if (!(await bankVerification(row)).ready) throw fail('Complete your identity verification for EUR bank withdrawals first.');
+    const iban = String(input.iban || '').replace(/\s/g, '').toUpperCase();
+    const bic = String(input.bic || '').trim().toUpperCase();
+    const name = String(input.accountOwnerName || '').trim();
+    if (!bankCountries[iban.slice(0,2)] || !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) throw fail('Enter a valid European IBAN that can receive EUR transfers.');
+    let mod = 0;
+    for (const c of iban.slice(4) + iban.slice(0,4)) {
+      const digits = /[A-Z]/.test(c) ? String(c.charCodeAt(0)-55) : c;
+      for (const digit of digits) mod = (mod*10 + Number(digit)) % 97;
+    }
+    if (mod !== 1) throw fail('Check your IBAN. Its check digits do not match.');
+    if (!/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(bic)) throw fail('Enter your bank’s 8 or 11 character BIC / SWIFT code.');
+    if (name.length < 2 || name.length > 200 || /[\x00-\x1f]/.test(name)) throw fail('Enter the full account holder name shown by your bank.');
+    const result = await request(bankPath(row) + '/external_fiat_accounts', { method: 'POST', body: {
+      provider: 'bridge', environment: 'production', currency: 'eur', account_owner_name: name,
+      account: { type: 'iban', account_number: iban, bic, country: bankCountries[iban.slice(0,2)] },
+    } });
+    if (!validBankAccount(result.external_fiat_account, row)) throw fail('Your linked bank could not be verified. Refresh before trying again.', 'PROVIDER');
+    return bankStatus(userId);
   }
   async function reconcile(userId, intent) {
     if (intent.provider_action_id && intent.status === 'processing') {
@@ -330,8 +443,12 @@ function createPrivyWallet({
       const hash = action.steps
         ?.filter((s) => s.type === 'evm_transaction')
         .at(-1)?.transaction_hash;
+      // A failed bank leg after crypto submission needs provider reconciliation.
+      // Keep its reservation and never create a second payout automatically.
+      const bankReview = intent.kind === 'bank_withdraw' && action.status === 'failed' && !!hash;
       intent = await store.updatePrivyIntent(userId, intent.id, {
-        status: action.status === 'pending' ? 'processing' : action.status,
+        status: action.status === 'pending' || bankReview ? 'processing' : action.status,
+        ...(intent.kind === 'bank_withdraw' ? { provider_review_required: bankReview } : {}),
         ...(/^0x[a-fA-F0-9]{64}$/.test(hash || '') ? { transaction_hash: hash.toLowerCase() } : {}),
       });
     }
@@ -435,8 +552,8 @@ function createPrivyWallet({
         direction: i.kind === 'earn_withdraw' ? 'incoming' : 'outgoing',
         transactionHash: i.transaction_hash || null,
         title:
-          i.kind === 'withdraw'
-            ? 'Withdrawal'
+          i.kind === 'withdraw' || i.kind === 'bank_withdraw'
+            ? (i.kind === 'bank_withdraw' ? 'Withdrawal to bank' : 'Withdrawal')
             : i.kind === 'earn_deposit'
               ? 'Earn deposit'
               : i.kind === 'earn_withdraw'
@@ -499,11 +616,11 @@ function createPrivyWallet({
     if (row.paused) throw fail('Agent wallet requests are paused.');
     const value = amount(input.amount),
       kind = input.kind || 'send';
-    if (!['send', 'withdraw', 'earn_deposit', 'earn_withdraw'].includes(kind))
+    if (!['send', 'withdraw', 'bank_withdraw', 'earn_deposit', 'earn_withdraw'].includes(kind))
       throw fail('Choose a valid wallet action.');
     let recipient = String(input.recipient || '').trim(),
       destination = null,
-      vaultId = null;
+      vaultId = null, fiatAccountId = null;
     if (kind === 'send' || kind === 'withdraw') {
       if (/^0x[a-fA-F0-9]{40}$/.test(recipient)) {
         destination = recipient.toLowerCase();
@@ -523,11 +640,17 @@ function createPrivyWallet({
         /^0x0{40}$/.test(destination)
       )
         throw fail('Choose a valid recipient other than your wallet or the token contract.');
+    } else if (kind === 'bank_withdraw') {
+      const account = await verifiedBankAccount(userId, input.fiatAccountId);
+      fiatAccountId = account.id;
+      recipient = bankAccountView(account).label;
     } else {
       const e = await earn(userId);
       if (!e.available) throw fail(e.reason, 'NOT_SET_UP');
       vaultId = e.vaultId;
       recipient = e.name;
+      if (kind === 'earn_withdraw' && (e.position?.available == null || Number(value) > e.position.available))
+        throw fail('Your available Earn balance is too low.');
     }
     if (kind !== 'earn_withdraw' && Number(value) > (await balance(row)))
       throw fail('Your available USDC balance is too low.');
@@ -538,6 +661,7 @@ function createPrivyWallet({
       recipient,
       destination_address: destination,
       vault_id: vaultId,
+      fiat_account_id: fiatAccountId,
       amount: value,
       status: 'quoted',
       expires_at: new Date(now() + 10 * 60000).toISOString(),
@@ -588,6 +712,12 @@ function createPrivyWallet({
       const e = await earn(userId);
       if (!e.available || e.vaultId !== i.vault_id)
         throw fail('The approved Earn vault changed. Review a new request.');
+      if (i.kind === 'earn_withdraw' && (e.position?.available == null || Number(i.amount) > e.position.available))
+        throw fail('Your available Earn balance is too low.');
+    }
+    if (i.kind === 'bank_withdraw') {
+      const account = await verifiedBankAccount(userId, i.fiat_account_id);
+      if (bankAccountView(account).label !== i.recipient) throw fail('Your bank account changed. Review a new request.');
     }
     const expiry = String(now() + 5 * 60000),
       path =
@@ -597,13 +727,15 @@ function createPrivyWallet({
           ? '/earn/ethereum/deposit'
           : i.kind === 'earn_withdraw'
             ? '/earn/ethereum/withdraw'
-            : '/transfer');
+            : i.kind === 'bank_withdraw' ? '/payout/fiat' : '/transfer');
     const exactAmount = amount(i.amount);
     const body = i.kind.startsWith('earn_')
       ? { vault_id: i.vault_id, amount: exactAmount }
       : {
           source: { asset: 'usdc', chain: 'base', amount: exactAmount },
-          destination: { address: i.destination_address, chain: 'base', asset: 'usdc' },
+          destination: i.kind === 'bank_withdraw'
+            ? { fiat_account_id: i.fiat_account_id, payment_rail: 'sepa' }
+            : { address: i.destination_address, chain: 'base', asset: 'usdc' },
         };
     return {
       intent: view(i),
@@ -647,7 +779,7 @@ function createPrivyWallet({
         ? 'earn_deposit'
         : i.kind === 'earn_withdraw'
           ? 'earn_withdraw'
-          : 'transfer';
+          : i.kind === 'bank_withdraw' ? 'payout' : 'transfer';
     if (
       typeof action.id !== 'string' ||
       action.wallet_id !== i.wallet_id ||
@@ -655,10 +787,12 @@ function createPrivyWallet({
       !['pending', 'succeeded', 'failed', 'rejected'].includes(action.status)
     )
       throw fail('Wallet status is uncertain. Check this same request.', 'PROVIDER');
+    const bankReview = i.kind === 'bank_withdraw' && action.status === 'failed' && action.steps?.some(s => s.type === 'evm_transaction' && s.transaction_hash);
     return view(
       await store.updatePrivyIntent(userId, i.id, {
         provider_action_id: action.id,
-        status: action.status === 'pending' ? 'processing' : action.status,
+        status: action.status === 'pending' || bankReview ? 'processing' : action.status,
+        ...(bankReview ? { provider_review_required: true } : {}),
       }),
     );
   }
@@ -705,6 +839,9 @@ function createPrivyWallet({
     confirmTransfer,
     cancel,
     earn,
+    bankStatus,
+    bankVerify,
+    bankRegister,
     updateCard,
     deposit: async (userId) => {
       const row = await owned(userId);

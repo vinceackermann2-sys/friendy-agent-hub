@@ -28,7 +28,7 @@ const createWallet = async()=> {window.sdkFixture.calls.push({action:'create'});
 // getIdentityToken refreshes this same provider endpoint. A separate refresh
 // within setup is redundant and can trigger the production rate limit.
 const refreshUser = async()=>{throw Error('Too many requests from duplicate identity refresh');};
-const addFunds = async()=>{};
+const addFunds = async(options)=>{window.sdkFixture.funding=options;return {method:'fiat',status:'confirmed'};};
 const exportWallet = async()=>{};
 const generateAuthorizationSignature = async()=>{throw Error('Fixture cannot sign');};
 export const PrivyProvider = ({children})=><>{children}<a id="protected-by-privy" href="https://privy.io">Vendor watermark fixture</a></>;
@@ -37,7 +37,7 @@ export const useLoginWithEmail = ()=>({sendCode,loginWithCode});
 export const useCreateWallet = ()=>({createWallet});
 export const useUser = ()=>({refreshUser});
 export const useAuthorizationSignature = ()=>({generateAuthorizationSignature});
-export const useAddFunds = ()=>({addFunds});
+export const useDepositFunds = ()=>({depositFunds:addFunds});
 export const useExportWallet = ()=>({exportWallet});
 export const getIdentityToken = async()=>{window.sdkFixture.calls.push({action:'identity'});if(window.sdkFixture.failIdentity)throw Error('Too many requests');return 'fixture-identity';};
 export const useSyncJwtBasedAuthState = ()=>{};
@@ -72,7 +72,7 @@ export const useSyncJwtBasedAuthState = ()=>{};
   const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="background:#f4eeeb;font-family:sans-serif"><button id="start">Open wallet</button><script>
     let session={user:{id:'alice',email:'alice@example.test'}};
     window.LingonConfig={apiBase:''};window.setupCalls=[];window.result=null;
-    window.LingonAuth={get:()=>session,api:async(url,opts)=>{window.setupCalls.push({url,body:JSON.parse(opts.body)});return {status:'ready'};}};
+    window.LingonAuth={get:()=>session,api:async(url,opts)=>{if(!opts)return {wallet:{walletId:'wallet-fixture',address:'0x'+'a'.repeat(40)}};window.setupCalls.push({url,body:JSON.parse(opts.body)});return {status:'ready'};}};
     window.switchOwner=(id,email)=>{session={user:{id,email}};window.dispatchEvent(new Event('belna-auth-changed'));};
     document.getElementById('start').onclick=()=>{window.result='pending';window.BelnaPrivy.setup('SE').then(()=>{window.result='ready'},e=>{window.result=e.message});};
   </script><script src="/wallet.js"></script></body></html>`;
@@ -164,6 +164,12 @@ export const useSyncJwtBasedAuthState = ()=>{};
         body: { country: "SE", walletId: "wallet-fixture", identityToken: "fixture-identity" },
       });
       assert.equal(await page.evaluate(() => sdkFixture.calls.filter(c=>c.action==='identity').length), 1, 'New wallet needs only one identity refresh');
+      await page.evaluate(()=>window.BelnaPrivy.fund());
+      const funding=await page.evaluate(()=>sdkFixture.funding);
+      assert.deepEqual(funding.fiat.source.assets,['eur','usd']);
+      assert.equal(funding.fiat.environment,'production');
+      assert.equal(funding.destination.wallet,'wallet-fixture');assert.equal(funding.destination.chain,'eip155:8453');
+      assert.equal('crypto' in funding,false,'unsupported crypto and SEK funding options are not offered');
       await page.evaluate(() => {sdkFixture.failIdentity=true;});
       await page.click("#start");
       await page.waitForFunction(() => /Too many requests/.test(window.result));

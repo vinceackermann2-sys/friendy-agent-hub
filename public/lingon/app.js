@@ -4808,7 +4808,7 @@ function cvApprovalBody(c, cd){
     case 'search': return v.query ? `<div class="cv-callout">${icon('websearch',16)}<span>“${esc(v.query)}”</span></div>` : `<div class="cv-chips">${cvChips(v.urls)}</div>`;
     case 'web_action': return `<div class="cv-callout">${icon(v.surface === 'computer' ? 'laptop' : 'globe',16)}<span>${esc(humanizeSlug(v.action || 'action'))}${v.text ? ` · ${esc(v.text)}` : ''}</span></div>`;
     case 'automation': return `<div class="cv-kvs">${cvRow('Name', esc(v.name))}${cvRow('When', esc(v.when))}</div>${v.prompt ? cvClamp(`<div class="cv-bubble">${esc(v.prompt)}</div>`, '', cvLong(v.prompt)) : ''}`;
-    case 'money': return `<div class="cv-kvs">${cvRow('Amount', esc(v.amount || ''))}${cvRow('To', esc(v.to || ''))}${cvRow('For', esc(v.title || ''))}</div><p class="cv-fine">${esc(v.action === 'send' || v.action?.startsWith('earn_') ? (v.note || 'Network and provider fees may apply.')+' Approval creates a request. Review and authorize it in Wallet before money moves.' : v.action === 'resume' ? 'New wallet requests can be prepared again. Every transfer needs your authorization.' : v.action === 'pause' ? 'Stops new app requests. Submitted transactions cannot be canceled.' : 'Every transfer still needs your authorization.')}</p>`;
+    case 'money': return `<div class="cv-kvs">${cvRow('Amount', esc(v.amount || ''))}${cvRow('To', esc(v.to || ''))}${cvRow('For', esc(v.title || ''))}</div><p class="cv-fine">${esc(v.action === 'send' || v.action === 'bank_withdraw' || v.action?.startsWith('earn_') ? (v.note || 'Network and provider fees may apply.')+' Approval creates a request. Review and authorize it in Wallet before money moves.' : v.action === 'resume' ? 'New wallet requests can be prepared again. Every transfer needs your authorization.' : v.action === 'pause' ? 'Stops new app requests. Submitted transactions cannot be canceled.' : 'Every transfer still needs your authorization.')}</p>`;
     default: return `<pre class="cv-pre">${esc(cd.detail || '')}</pre>`;
   }
 }
@@ -6357,6 +6357,7 @@ let walletCardWaitlist=null,walletCardWaitlistLoading=false,walletCardWaitlistBu
 let walletAddresses=null, walletAddressesLoading=false, walletAddressEdit=null, walletAddressError='';
 let belnaWalletOwner = null, belnaWalletCache = null, belnaWalletLoading = false, belnaWalletError = '', belnaWalletBusy = false, belnaTransferQuote = null, walletActionError = '';
 let belnaWalletCheckedAt = 0;
+let walletBankState=null,walletBankLoading=false,walletBankLink=null;
 let walletWithdrawalClose=null, walletCardSetupClose=null, walletElementsLoading=null, walletVerificationClose=null, walletMoneyClose=null, walletMoneyRoot=null, walletLimitEdit=false;
 let walletSetupRefreshTimer=null, walletSetupRefreshUntil=0;
 let personalWalletReturnRunning=null;
@@ -6434,7 +6435,7 @@ function scopeBelnaWallet(){
     walletCardWaitlist=null;walletCardWaitlistLoading=false;walletCardWaitlistBusy=false;walletCardWaitlistError='';
     walletAddresses=null; walletAddressesLoading=false; walletAddressEdit=null; walletAddressError='';
     belnaWalletOwner = owner; belnaWalletCache = null; belnaWalletLoading = false; belnaWalletError = ''; belnaWalletBusy = false; belnaTransferQuote=null;
-    belnaWalletCheckedAt = 0;
+    belnaWalletCheckedAt = 0;walletBankState=null;walletBankLoading=false;walletBankLink=null;
   }
   return owner;
 }
@@ -6595,7 +6596,7 @@ function walletBelnaGroup(){
     <button type="button" class="wset-row wset-link" data-act="wallet-open-panel"><span class="wset-copy"><b>USDC balance</b><small>Base network · user-owned wallet</small></span><span class="wset-value">${esc(walletMoney(w.balance?.available))}</span>${icon('chevr',16)}</button>
     <div class="wset-row"><span class="wset-copy"><b>Receive USDC on Base</b><small class="wl-wallet-address">${esc(w.address||'')}</small></span><button type="button" class="btn ghost small" data-act="wallet-copy-address">Copy</button></div>
     ${limitRow}<div class="wset-row"><span class="wset-copy"><b>Pause agent wallet requests</b><small>Stops new requests through Belna. Your wallet stays under your control.</small></span>${walletSwitch(!!w.paused,'belna-wallet-freeze','Pause agent wallet requests',`data-frozen="${!w.paused}"`)}</div>
-    <div class="wset-row"><span class="wset-copy"><b>Wallet recovery</b><small>Privy shows the export privately to you. Keep your recovery information safe.</small></span><button type="button" class="btn ghost small" data-act="wallet-export">Export wallet</button></div>
+    <div class="wset-row"><span class="wset-copy"><b>Wallet recovery</b><small>View your recovery information privately. Keep it safe and never share it.</small></span><button type="button" class="btn ghost small" data-act="wallet-export">Export wallet</button></div>
     <div class="wset-row"><span class="wset-copy"><b>${WALLET_CARD_TITLE}</b><small>${walletCardWaitlistSub()}</small></span>${walletCardWaitlistAction()}</div>
   </div></section>`;
 }
@@ -6670,7 +6671,7 @@ function walletOwnSpend(){
 }
 function walletActivityContent(){
   const c = belnaWalletCache || {};
-  const requests=(c.intents||[]).map(i=>walletRow({ic:'shieldcheck',title:i.kind==='earn_deposit'?'Earn deposit request':i.kind==='earn_withdraw'?'Earn withdrawal request':i.kind==='withdraw'?'Withdrawal request':'Send to '+i.recipient,sub:esc(walletMoney(i.amount)+' USDC · '+walletStatusLabel(i.status)),right:`<button type="button" class="btn small" data-act="wallet-intent" data-id="${esc(i.quoteId)}">${i.status==='processing'?'Check':'Review'}</button>`})).join('');
+  const requests=(c.intents||[]).map(i=>walletRow({ic:'shieldcheck',title:i.kind==='earn_deposit'?'Earn deposit request':i.kind==='earn_withdraw'?'Earn withdrawal request':i.kind==='bank_withdraw'?'Bank withdrawal request':i.kind==='withdraw'?'Withdrawal request':'Send to '+i.recipient,sub:esc(walletMoney(i.amount)+' USDC · '+walletStatusLabel(i.status)),right:`<button type="button" class="btn small" data-act="wallet-intent" data-id="${esc(i.quoteId)}">${i.status==='processing'?'Check':'Review'}</button>`})).join('');
   const verifications = (c.purchases || []).filter(p => p.status === 'submitted' && !p.cardCanceled && Date.parse(p.expiresAt) > Date.now())
     .map(p => walletRow({ ic:'shieldcheck', tone:'warn', cls:'attn', title:'Verify your payment at ' + (p.merchant || 'the store'), sub:'Your bank asks you to confirm this purchase.', right:`<button type="button" class="btn small" data-act="wallet-verify-payment" data-id="${esc(p.purchaseId)}">Verify</button>` })).join('');
   const belna = c.activity?.length ? c.activity : [...(c.transfers || []).map(x => ({ title:'Sent to ' + x.recipient, amount:x.amount, status:x.status, at:x.at })), ...(c.purchases || []).map(x => ({ title:x.merchant, amount:x.amount, status:x.status, at:x.at })), ...(c.transactions || [])];
@@ -6701,33 +6702,48 @@ function openWalletMoneyAction(kind,intent=null){
   const overlay=el(`<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-money-dialog wl" role="dialog" aria-modal="true" aria-labelledby="wallet-money-title"><header><div><h3 id="wallet-money-title">${title}</h3><p>${description}</p></div><button type="button" class="btn ghost small" data-sheet-close aria-label="Close wallet action">${icon('x',18)}</button></header><div id="wallet-money-content"></div></section></div>`);
   let closed=false,identityTimer;
   const close=()=>{if(closed)return;closed=true;clearInterval(identityTimer);dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletMoneyClose===close){walletMoneyClose=null;walletMoneyRoot=null;walletAction=null;walletActionError='';}restoreWalletFocus(previous);};
-  const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button:not(:disabled),input:not(:disabled),a[href]')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
+  const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),a[href]')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
   walletMoneyClose=close;walletMoneyRoot=overlay.querySelector('#wallet-money-content');walletMoneyRoot.innerHTML=walletActionContent();
   overlay.querySelector('header button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};
-  overlay.addEventListener('submit',e=>{e.preventDefault();overlay.querySelector('[data-act="belna-wallet-quote"]')?.click();});
-  overlay.addEventListener('input',e=>{if(e.target.id==='wallet-earn-risk')return;if(belnaTransferQuote && ['quoted','awaiting_owner'].includes(belnaTransferQuote.status)){belnaTransferQuote=null;walletActionError='';repaintWallet();}});
+  overlay.addEventListener('submit',e=>{e.preventDefault();overlay.querySelector('[data-act="wallet-bank-register"], [data-act="belna-wallet-quote"]')?.click();});
+  overlay.addEventListener('input',e=>{if(['wallet-earn-risk','wallet-bank-consent','wallet-bank-verify-consent'].includes(e.target.id))return;if(belnaTransferQuote && ['quoted','awaiting_owner'].includes(belnaTransferQuote.status)){belnaTransferQuote=null;walletActionError='';repaintWallet();}});
   document.addEventListener('keydown',onKey);document.body.append(overlay);(overlay.querySelector('input')||overlay.querySelector('header button'))?.focus();
   identityTimer=setInterval(()=>{if(owner!==billingIdentity())close();},1000);
+  if(kind==='bank_withdraw')refreshWalletBank();
+}
+async function refreshWalletBank(){
+  const owner=scopeBelnaWallet();if(!owner||walletBankLoading)return;
+  walletBankLoading=true;walletActionError='';repaintWallet();
+  try{const result=await window.LingonAuth.api('/api/belna-wallet/bank');if(owner===scopeBelnaWallet()){walletBankState=result;walletBankLink=null;}}
+  catch(e){if(owner===scopeBelnaWallet())walletActionError=e.message||'Bank withdrawals could not load. Try again.';}
+  finally{if(owner===scopeBelnaWallet()){walletBankLoading=false;repaintWallet();}}
 }
 function walletActionContent(){
   if(walletAction==='earn')return walletEarnContent();
-  if(walletAction==='bank_withdraw')return walletBankWithdrawalContent();
+  const bank=walletAction==='bank_withdraw';
+  if(bank&&!belnaTransferQuote&&(!walletBankState?.verification?.ready||!walletBankState?.accounts?.length))return walletBankWithdrawalContent();
   const quote=belnaTransferQuote,busy=belnaWalletBusy?' disabled':'',pending=['processing','awaiting_confirmation'].includes(quote?.status),finished=quote&&['succeeded','failed','rejected','canceled'].includes(quote.status),earn=walletAction?.startsWith('earn_');
-  const recipient=earn?'':`<label class="wl-field">${walletAction==='withdraw'?'Base wallet address':'Belna email'}<input class="field" id="belna-wallet-recipient" type="${walletAction==='withdraw'?'text':'email'}" required maxlength="254" placeholder="${walletAction==='withdraw'?'0x…':'name@example.com'}" value="${esc(quote?.recipient||'')}"${busy||pending||finished?' disabled':''}></label>`;
+  const recipient=earn?'':bank?`<label class="wl-field">Your bank account<select class="field" id="belna-wallet-bank" aria-label="Your bank account" required${busy||pending||finished||quote?' disabled':''}>${quote?`<option value="${esc(quote.fiatAccountId)}">${esc(quote.recipient)}</option>`:(walletBankState.accounts||[]).map(a=>`<option value="${esc(a.id)}">${esc(a.label)}</option>`).join('')}</select></label>`:`<label class="wl-field">${walletAction==='withdraw'?'Base wallet address':'Belna email'}<input class="field" id="belna-wallet-recipient" type="${walletAction==='withdraw'?'text':'email'}" required maxlength="254" placeholder="${walletAction==='withdraw'?'0x…':'name@example.com'}" value="${esc(quote?.recipient||'')}"${busy||pending||finished?' disabled':''}></label>`;
   return `<form class="wl-form"><div class="wl-fields">${recipient}<label class="wl-field">Amount (USDC)<input class="field" id="belna-wallet-send-amount" type="number" required min="0.01" max="2000" step="0.01" value="${esc(quote?.amount??'')}"${busy||pending||finished?' disabled':''}></label></div>
     ${earn?'<label class="wl-check"><input type="checkbox" id="wallet-earn-risk" required> I understand yield varies, funds may lose value, and withdrawals may be delayed.</label>':''}
     <span class="wset-actions">${finished?'':pending?`<button type="button" class="btn small" data-act="belna-wallet-transfer-check" data-id="${esc(quote.quoteId)}"${busy}>Check this request</button>`:quote?`<button type="button" class="btn small" data-act="belna-wallet-send"${busy}>Authorize ${esc(walletMoney(quote.amount))} USDC</button><button type="button" class="btn ghost small" data-act="wallet-intent-cancel" data-id="${esc(quote.quoteId)}"${busy}>Cancel request</button>`:`<button type="button" class="btn small" data-act="belna-wallet-quote"${busy}>Review request</button>`}</span>
     ${quote?`<p class="wl-hint" role="status">${esc(walletMoney(quote.amount)+' USDC · '+quote.recipient+' · Base · '+walletStatusLabel(quote.status))}</p><p class="wl-hint">${esc(quote.fees)}${quote.address?' Destination: '+esc(quote.address):''}</p>`:''}
-    <p class="wl-hint">${earn?'Earn uses the reviewed USDC vault on Base. Your balance is not a bank deposit and yield is not guaranteed.':walletAction==='withdraw'?'This existing request transfers USDC on Base to the reviewed wallet address. It is not a bank payout. Transfers are irreversible.':'Send USDC to another Belna wallet using their email address. Transfers are irreversible.'}</p>
+    <p class="wl-hint">${bank?'Your USDC is converted to EUR and sent to your bank by SEPA. The amount received depends on conversion and provider fees. Your bank may charge to convert EUR to SEK. Bank delivery can take several business days.':earn?'Earn uses Aave USDC on Base. Yield is variable, and funds may lose value. Withdrawals return USDC to your wallet.':walletAction==='withdraw'?'This existing request transfers USDC on Base to the reviewed wallet address. It is not a bank payout. Transfers are irreversible.':'Send USDC to another Belna wallet using their email address. Transfers are irreversible.'}</p>
+    ${quote?.providerReviewRequired?'<p class="wl-error" role="alert">The bank payout needs provider review after a crypto transfer. Contact support before withdrawing again.</p>':''}
     ${pending?'<p class="wl-hint">The result is not final. Check this same request before starting another.</p>':''}${walletActionError?`<p class="wl-error" role="alert">${esc(walletActionError)}</p>`:''}</form>`;
 }
 function walletBankWithdrawalContent(){
-  return `<section class="wl-sec" aria-label="Bank withdrawals"><div class="wl-list boxed">${walletRow({ic:'bank',title:'Withdraw to your bank',sub:'Bank withdrawals are not available yet.',right:'<span class="wl-tag">Not enabled</span>'})}</div><p class="wl-hint">Bank payouts must be connected before you can cash out. Identity verification is required when linking a bank account.</p></section>`;
+  const bank=walletBankState,busy=belnaWalletBusy||walletBankLoading?' disabled':'',error=walletActionError?`<p class="wl-error" role="alert">${esc(walletActionError)}</p>`:'';
+  if(walletBankLoading&&!bank)return '<p role="status">Checking your bank connection…</p>';
+  if(!belnaWalletCache?.wallet?.bankWithdrawalsAvailable)return `<p>Bank withdrawals are not enabled yet.</p>${error}`;
+  if(!bank)return `${error}<button type="button" class="btn small" data-act="wallet-bank-refresh"${busy}>Try again</button>`;
+  if(!bank.verification.ready)return `<section class="wl-sec" aria-label="Bank withdrawals"><div class="wl-list boxed">${walletRow({ic:'shieldcheck',title:'Verify your identity',sub:bank.verification.status==='not_started'?'A one-time check with Bridge is required for bank withdrawals.':'Verification: '+walletStatusLabel(bank.verification.status)})}</div><p class="wl-hint">Withdraw in EUR to an IBAN that accepts SEPA transfers. Bridge handles the identity check; your agent cannot complete it for you.</p><label class="wl-check"><input type="checkbox" id="wallet-bank-verify-consent"> I agree to share my wallet identity and email with Bridge to start verification.</label><div class="wset-actions"><button type="button" class="btn small" data-act="wallet-bank-verify"${busy}>${bank.verification.termsAccepted?'Continue verification':'Start verification'}</button><button type="button" class="btn ghost small" data-act="wallet-bank-refresh"${busy}>Check status</button></div>${walletBankLink?`<p><a class="btn small" href="${esc(walletBankLink.url)}" target="_blank" rel="noopener noreferrer">${walletBankLink.step==='terms'?'Review Bridge terms':'Verify identity with Bridge'}</a></p><p class="wl-hint">After completing this step, return here and check status. Then continue verification if requested.</p>`:''}${error}</section>`;
+  return `<form class="wl-form" aria-label="Link your bank"><p>Link your own bank account to receive EUR withdrawals.</p><div class="wl-fields"><label class="wl-field">Account holder name<input class="field" id="wallet-bank-name" autocomplete="name" required maxlength="200"></label><label class="wl-field">IBAN<input class="field" id="wallet-bank-iban" autocomplete="off" required maxlength="42" placeholder="SE…"></label><label class="wl-field">BIC / SWIFT code<input class="field" id="wallet-bank-bic" autocomplete="off" required maxlength="11"></label></div><label class="wl-check"><input type="checkbox" id="wallet-bank-consent" required> This is my bank account, it accepts EUR SEPA transfers, and I approve sending these details to Bridge.</label><button type="button" class="btn small" data-act="wallet-bank-register"${busy}>Link bank account</button><p class="wl-hint">Your bank details go to Bridge. Belna stores the bank reference and masked account label. Your bank may charge to convert EUR to SEK.</p>${error}</form>`;
 }
 function walletEarnContent(){
   const e=belnaWalletCache?.earn;
   const sub=e?.available?`${e.position?.available==null?'':walletMoney(e.position.available)+' USDC in Earn · '}${e.name||'USDC vault'}${e.apy==null?'':' · '+e.apy.toFixed(2)+'% variable APY'}`:(e?.reason||'Awaiting a reviewed vault configuration.');
-  return `<section class="wl-sec" aria-label="Earn balance and options"><div class="wl-list boxed">${walletRow({ic:'chart',title:'Earn on your USDC',sub:esc(sub),right:e?.available?'<span class="wset-actions"><button type="button" class="btn ghost small" data-act="wallet-money-action" data-action="earn_deposit">Deposit</button><button type="button" class="btn ghost small" data-act="wallet-money-action" data-action="earn_withdraw">Withdraw</button></span>':'<span class="wl-tag">Not enabled</span>'})}</div><p class="wl-hint">Variable yield. Smart-contract risk and withdrawal delays. You approve each deposit.</p></section>`;
+  return `<section class="wl-sec" aria-label="Earn balance and options"><div class="wl-list boxed">${walletRow({ic:'chart',title:'Earn on your USDC',sub:esc(sub),right:e?.available?`<span class="wset-actions"><button type="button" class="btn ghost small" data-act="wallet-money-action" data-action="earn_deposit">Deposit</button><button type="button" class="btn ghost small" data-act="wallet-money-action" data-action="earn_withdraw"${!(e.position?.available>0)?' disabled':''}>Withdraw</button></span>`:'<span class="wl-tag">Not enabled</span>'})}</div>${e?.available?`<p class="wl-hint">${e.position?.earned==null?'':esc('Yield earned: '+walletMoney(e.position.earned))+' · '}The displayed APY is after Belna’s yield fee${e.yieldFeePercent==null?'':esc(' ('+e.yieldFeePercent+'% of generated yield)')}. APY is the estimated annual rate and can change.</p>`:''}<p class="wl-hint">Variable yield. Funds may lose value and withdrawals may be delayed. You approve each deposit.</p></section>`;
 }
 function walletSetupContent(w){return '';}
 function walletTabContent(){
@@ -8875,6 +8891,20 @@ document.addEventListener('click', async e => {
   if(act==='belna-wallet-deposit'){openWalletWithdrawal('deposit');return;}
   if(act==='wallet-verify-money'){openWalletWithdrawal('verify');return;}
   if(act==='wallet-money-action'){openWalletMoneyAction(b.dataset.action);return;}
+  if(act==='wallet-bank-refresh'){refreshWalletBank();return;}
+  if(act==='wallet-bank-verify'||act==='wallet-bank-register'){
+    const owner=scopeBelnaWallet();if(!owner||belnaWalletBusy)return;
+    const register=act==='wallet-bank-register';
+    if(register&&!b.closest('form')?.reportValidity())return;
+    if(!$(register?'#wallet-bank-consent':'#wallet-bank-verify-consent')?.checked){walletActionError=register?'Approve sharing your own bank details with Bridge first.':'Approve sharing your wallet identity and email with Bridge first.';repaintWallet();return;}
+    const input=register?{consent:true,accountOwnerName:$('#wallet-bank-name')?.value,iban:$('#wallet-bank-iban')?.value,bic:$('#wallet-bank-bic')?.value}:{consent:true};
+    belnaWalletBusy=true;walletActionError='';repaintWallet();
+    try{const result=await (await loadPrivyWallet()).bank(register?'register':'verify',input);if(owner!==scopeBelnaWallet())return;
+      if(register){walletBankState=result;walletBankLink=null;toast('Bank linked. Review an amount to withdraw.');}
+      else if(result.url)walletBankLink=result;else await refreshWalletBank();
+    }catch(e){if(owner===scopeBelnaWallet())walletActionError=e.message||'Your bank connection could not complete. Check status before trying again.';}
+    finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}}return;
+  }
   if(act==='wallet-intent'){const i=(belnaWalletCache?.intents||[]).find(i=>i.quoteId===b.dataset.id);if(i)openWalletMoneyAction(i.kind,i);return;}
   if(act==='wallet-copy-address'){try{await navigator.clipboard.writeText(belnaWalletCache.wallet.address);toast('Wallet address copied.');}catch{toast('Copy the wallet address shown in settings.');}return;}
   if(act==='wallet-export'){try{const sdk=await loadPrivyWallet();await sdk.export();}catch(e){toast(e.message);}return;}
@@ -8905,9 +8935,9 @@ document.addEventListener('click', async e => {
     if(act==='belna-wallet-setup'){const country=$('#belna-wallet-country');if(!country?.reportValidity())return;action='setup';payload.country=country.value;}
     else if(act==='belna-wallet-limit'){action='controls';payload={dailyLimitUsd:Number($('#belna-wallet-limit')?.value)};}
     else if(act==='belna-wallet-freeze'){action='controls';payload={frozen:b.dataset.frozen==='true'};}
-    else if(act==='belna-wallet-quote'){if(!b.closest('form')?.reportValidity())return;action='quote';payload={kind:walletAction||'send',recipient:($('#belna-wallet-recipient')?.value||'').trim(),amount:Number($('#belna-wallet-send-amount')?.value)};belnaTransferQuote=null;}
+    else if(act==='belna-wallet-quote'){if(!b.closest('form')?.reportValidity())return;action='quote';payload={kind:walletAction||'send',recipient:($('#belna-wallet-recipient')?.value||'').trim(),fiatAccountId:$('#belna-wallet-bank')?.value,amount:Number($('#belna-wallet-send-amount')?.value)};belnaTransferQuote=null;}
     else if(['belna-wallet-send','belna-wallet-transfer-check'].includes(act)&&belnaTransferQuote){
-      if(act==='belna-wallet-send' && (belnaTransferQuote.amount!==Number($('#belna-wallet-send-amount')?.value)||!walletAction?.startsWith('earn_')&&belnaTransferQuote.recipient!==($('#belna-wallet-recipient')?.value||'').trim().toLowerCase())){belnaTransferQuote=null;walletActionError='The details changed. Review this request again.';repaintWallet();return;}
+      if(act==='belna-wallet-send' && (belnaTransferQuote.amount!==Number($('#belna-wallet-send-amount')?.value)||(walletAction==='bank_withdraw'?belnaTransferQuote.fiatAccountId!==$('#belna-wallet-bank')?.value:!walletAction?.startsWith('earn_')&&belnaTransferQuote.recipient!==($('#belna-wallet-recipient')?.value||'').trim().toLowerCase()))){belnaTransferQuote=null;walletActionError='The details changed. Review this request again.';repaintWallet();return;}
       if(walletAction?.startsWith('earn_')&&!$('#wallet-earn-risk')?.checked){walletActionError='Review and accept the Earn risks before authorizing.';repaintWallet();return;}
       action='authorize';payload={quoteId:belnaTransferQuote.quoteId,riskAccepted:$('#wallet-earn-risk')?.checked===true};
     }else return;

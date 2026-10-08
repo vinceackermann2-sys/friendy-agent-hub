@@ -80,6 +80,10 @@ const { chromium } = require('playwright');
               body: JSON.stringify({ quoteId, riskAccepted }),
             });
           },
+          bank: async (action,input) => {
+            window.privyCalls.push({action:'bank-'+action});
+            return window.LingonAuth.api('/api/belna-wallet/bank/'+action,{method:'POST',body:JSON.stringify(input)});
+          },
           export: async () => {
             window.privyCalls.push({ action: 'export' });
           },
@@ -92,7 +96,8 @@ const { chromium } = require('playwright');
       let created = false,
         setupRateLimited = true,
         joined = false,
-        sequence = 0;
+        sequence = 0, bankEnabled=false, bankReady=false, bankLinked=false, bankSubmitted=false;
+      const bank = () => ({available:true,verification:{ready:bankReady,status:bankReady?'approved':'not_started',termsAccepted:false},accounts:bankLinked?[{id:'bank_alice',label:'Fixture bank ····3000 · EUR',last4:'3000',currency:'EUR'}]:[]});
       const wallet = () => ({
         configured: true,
         provider: 'privy',
@@ -104,7 +109,7 @@ const { chromium } = require('playwright');
         dailyTransferLimitUsd: 50,
         paused: false,
         withdrawalsAvailable: true,
-        bankWithdrawalsAvailable: false,
+        bankWithdrawalsAvailable: bankEnabled,
       });
       const snapshot = () => ({
         wallet: wallet(),
@@ -112,7 +117,7 @@ const { chromium } = require('playwright');
           available: true,
           name: 'Reviewed fixture vault',
           apy: 4.13,
-          position: { available: 5 },
+          position: { available: 5, earned: 1 }, yieldFeePercent:10,
         },
         intents: [...intents.values()].filter((i) =>
           ['quoted', 'awaiting_owner', 'processing'].includes(i.status),
@@ -135,6 +140,9 @@ const { chromium } = require('playwright');
         calls.push({ pathname, method: req.method(), body });
         let result = {};
         if (pathname === '/api/belna-wallet') result = snapshot();
+        else if(pathname==='/api/belna-wallet/bank')result=bank();
+        else if(pathname==='/api/belna-wallet/bank/verify'){assert.equal(body.consent,true);result={step:'terms',url:'https://bridge.xyz/terms/fixture'};}
+        else if(pathname==='/api/belna-wallet/bank/register'){assert.equal(body.consent,true);assert.equal(body.iban,'DE89370400440532013000');bankLinked=true;result=bank();}
         else if (pathname === '/api/wallet-preferences')
           result = {
             activeMethod: null,
@@ -155,7 +163,8 @@ const { chromium } = require('playwright');
           result = {
             quoteId: 'intent-' + ++sequence,
             kind: body.kind,
-            recipient: body.recipient || 'Reviewed fixture vault',
+            recipient: body.kind==='bank_withdraw'?'Fixture bank ····3000 · EUR':body.recipient || 'Reviewed fixture vault',
+            fiatAccountId:body.fiatAccountId||null,
             address: body.kind.startsWith('earn_') ? null : destination,
             amount: body.amount,
             status: 'quoted',
@@ -167,7 +176,8 @@ const { chromium } = require('playwright');
           };
           intents.set(result.quoteId, result);
         } else if (pathname === '/api/belna-wallet/authorize') {
-          result = { ...intents.get(body.quoteId), status: 'succeeded' };
+          result = { ...intents.get(body.quoteId), status: intents.get(body.quoteId)?.kind==='bank_withdraw'&&!bankSubmitted?'processing':'succeeded' };
+          if(result.kind==='bank_withdraw')bankSubmitted=true;
           intents.set(result.quoteId, result);
         } else if (pathname === '/api/belna-wallet/cancel') {
           result = { ...intents.get(body.quoteId), status: 'canceled' };
@@ -272,7 +282,7 @@ const { chromium } = require('playwright');
       await dialog.waitFor({ state: 'detached' });
       await panel.locator('[data-action="bank_withdraw"]').click();
       dialog = page.getByRole('dialog', { name: 'Withdraw to bank', exact: true });
-      await dialog.getByText('Bank withdrawals are not available yet.', { exact: true }).waitFor();
+      await dialog.getByText('Bank withdrawals are not enabled yet.', { exact: true }).waitFor();
       assert.equal(await dialog.locator('input').count(), 0, 'bank cash-out does not ask for a crypto address or bank details without a payout connection');
       assert.equal(await dialog.getByRole('button', { name: 'Review request', exact: true }).count(), 0);
       await dialog.screenshot({ path: path.resolve(`artifacts/privy-wallet/bank-${width}.png`) });
@@ -310,6 +320,39 @@ const { chromium } = require('playwright');
       );
       await dialog.getByRole('button', { name: 'Close wallet action' }).click();
       await panel.getByRole('button', { name: 'Earn', exact: true }).waitFor();
+      bankEnabled=true;
+      await panel.getByRole('button',{name:'Wallet settings',exact:true}).click();
+      await page.locator('[data-act="wallet-open-panel"]:visible').click();
+      await panel.locator('[data-action="bank_withdraw"]').click();
+      dialog=page.getByRole('dialog',{name:'Withdraw to bank',exact:true});
+      await dialog.getByText('Verify your identity',{exact:true}).waitFor();
+      await dialog.getByRole('button',{name:'Start verification',exact:true}).click();
+      await dialog.getByText('Approve sharing your wallet identity and email with Bridge first.',{exact:true}).waitFor();
+      assert.equal(calls.filter(c=>c.pathname==='/api/belna-wallet/bank/verify').length,0);
+      await dialog.locator('#wallet-bank-verify-consent').check();
+      await dialog.getByRole('button',{name:'Start verification',exact:true}).click();
+      await dialog.getByRole('link',{name:'Review Bridge terms',exact:true}).waitFor();
+      bankReady=true;
+      await dialog.getByRole('button',{name:'Check status',exact:true}).click();
+      await dialog.getByLabel('Account holder name',{exact:true}).fill('Fixture Alice');
+      await dialog.getByLabel('IBAN',{exact:true}).fill('DE89370400440532013000');
+      await dialog.getByLabel('BIC / SWIFT code',{exact:true}).fill('COBADEFFXXX');
+      await dialog.locator('#wallet-bank-consent').check();
+      await dialog.getByRole('button',{name:'Link bank account',exact:true}).click();
+      await dialog.getByLabel('Your bank account',{exact:true}).waitFor();
+      assert.equal(await dialog.locator('#wallet-bank-iban').count(),0,'full bank details clear after linking');
+      await dialog.locator('#belna-wallet-send-amount').fill('2');
+      const authorizations=calls.filter(c=>c.pathname==='/api/belna-wallet/authorize').length;
+      await dialog.getByRole('button',{name:'Review request',exact:true}).click();
+      await dialog.getByRole('button',{name:'Authorize $2.00 USDC',exact:true}).waitFor();
+      assert.equal(calls.filter(c=>c.pathname==='/api/belna-wallet/authorize').length,authorizations);
+      assert.ok((await dialog.innerText()).includes('EUR'));
+      await dialog.getByRole('button',{name:'Authorize $2.00 USDC',exact:true}).click();
+      await dialog.getByRole('button',{name:'Check this request',exact:true}).waitFor();
+      await dialog.screenshot({path:path.resolve(`artifacts/privy-wallet/bank-linked-${width}.png`)});
+      await dialog.getByRole('button',{name:'Check this request',exact:true}).click();
+      await dialog.getByText(/USDC.*Completed/).waitFor();
+      await dialog.getByRole('button',{name:'Close wallet action',exact:true}).click();
       await page
         .locator('#canvas')
         .screenshot({ path: path.resolve(`artifacts/privy-wallet/panel-${width}.png`) });

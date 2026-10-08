@@ -58,6 +58,17 @@ function createWalletTools(wallet) {
       approvalDetail:async(args,ctx)=>{if(!['deposit','withdraw'].includes(args.action))throw new Error('Choose deposit or withdraw.');return JSON.stringify(await wallet.transferQuote(ctx.userId,{kind:'earn_'+args.action,amount:args.amount}));},
       run:(args,ctx)=>{let approved;try{approved=JSON.parse(ctx.approvedDetail);}catch{}if(!['deposit','withdraw'].includes(args.action)||approved?.kind!=='earn_'+args.action||approved.amount!==args.amount)throw new Error('Approve this exact Earn request first.');return wallet.send(ctx.userId,{quoteId:approved.quoteId,approvedDetail:ctx.approvedDetail});},
     },
+    wallet_bank_accounts: {
+      name:'wallet_bank_accounts',type:'function',approval:false,
+      description:'Read EUR bank withdrawal verification status and masked linked bank account references. Never request or collect IBANs or identity documents. The owner completes verification and links their bank in Wallet.',
+      run:(_,ctx)=>wallet.bankStatus(ctx.userId),
+    },
+    wallet_withdraw: {
+      name:'wallet_withdraw',type:'function',approval:true,
+      description:'Prepare an owner-requested USDC withdrawal to an already verified, linked bank account. Read wallet_bank_accounts for the exact fiatAccountId. Bank receives EUR by SEPA after conversion and provider fees. Chat approval creates an awaiting_owner request; only the owner can authorize the payout in Wallet. Never collect bank details or claim a pending payout has settled.',
+      approvalDetail:async(args,ctx)=>JSON.stringify(await wallet.transferQuote(ctx.userId,{kind:'bank_withdraw',fiatAccountId:args.fiatAccountId,amount:args.amount})),
+      run:(args,ctx)=>{let approved;try{approved=JSON.parse(ctx.approvedDetail);}catch{}if(approved?.kind!=='bank_withdraw'||approved.amount!==args.amount||approved.fiatAccountId!==args.fiatAccountId)throw new Error('Approve this exact bank withdrawal first.');return wallet.send(ctx.userId,{quoteId:approved.quoteId,approvedDetail:ctx.approvedDetail});},
+    },
   };
 }
 module.exports = { createWalletTools };

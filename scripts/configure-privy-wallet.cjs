@@ -19,6 +19,19 @@ async function configureWallet({ env = process.env, fetchImpl = fetch, makeClien
   await response.body?.cancel();
   if (!response.ok) throw Error('Privy did not accept this app secret. Nothing was saved.');
 
+  const earnEnabled = env.PRIVY_EARN_ENABLED;
+  const vaultId = String(env.PRIVY_EARN_VAULT_ID || '').trim();
+  if (earnEnabled === 'true') {
+    if (!/^[a-zA-Z0-9_-]+$/.test(vaultId)) throw Error('Choose a verified Earn vault. Nothing was saved.');
+    const check = await fetchImpl('https://api.privy.io/v1/earn/ethereum/vaults/' + encodeURIComponent(vaultId), {
+      headers: { 'privy-app-id': appId, Authorization: 'Basic ' + Buffer.from(appId + ':' + appSecret).toString('base64') },
+      redirect: 'error', signal: AbortSignal.timeout(20000),
+    });
+    const vault = await check.json();
+    if (!check.ok || vault.id !== vaultId || vault.provider !== 'aave' || vault.caip2 !== 'eip155:8453' || vault.asset?.decimals !== 6 || vault.asset?.address?.toLowerCase() !== '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913')
+      throw Error('The Aave USDC vault could not be verified. Nothing was saved.');
+  }
+
   const db = makeClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const saved = await db.rpc('get_server_secret', { p_name: 'privy_wallet_config' });
   if (saved.error) throw Error('Could not read the private wallet configuration.');
@@ -28,6 +41,14 @@ async function configureWallet({ env = process.env, fetchImpl = fetch, makeClien
     if (!config || typeof config !== 'object' || Array.isArray(config)) throw Error('The stored wallet configuration needs review.');
   }
   Object.assign(config, { PRIVY_APP_ID: appId, PRIVY_APP_SECRET: appSecret, PRIVY_AUTH_MODE: 'email' });
+  if (earnEnabled === 'true') Object.assign(config, { PRIVY_EARN_ENABLED: 'true', PRIVY_EARN_VAULT_ID: vaultId });
+  if (earnEnabled === 'true' && env.PRIVY_EARN_FEE_PERCENT !== undefined) {
+    const fee = String(env.PRIVY_EARN_FEE_PERCENT);
+    if (!/^\d+(\.\d+)?$/.test(fee) || Number(fee) > 100) throw Error('The Earn fee needs review. Nothing was saved.');
+    config.PRIVY_EARN_FEE_PERCENT = fee;
+  }
+  if (earnEnabled === 'false') config.PRIVY_EARN_ENABLED = 'false';
+  if (['true', 'false'].includes(env.PRIVY_BANK_WITHDRAWALS_ENABLED)) config.PRIVY_BANK_WITHDRAWALS_ENABLED = env.PRIVY_BANK_WITHDRAWALS_ENABLED;
   if (!Object.hasOwn(config, 'PRIVY_EARN_ENABLED')) config.PRIVY_EARN_ENABLED = 'false';
   const result = await db.rpc('put_server_secret', { p_name: 'privy_wallet_config', p_secret: JSON.stringify(config) });
   if (result.error) throw Error('Could not save the private wallet configuration.');

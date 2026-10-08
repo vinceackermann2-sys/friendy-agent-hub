@@ -42,12 +42,12 @@ export function assertReviewedRequest(
     expiry > now + 6 * 60000
   )
     reject();
-  const earn = ['earn_deposit', 'earn_withdraw'].includes(intent.kind),
+  const earn = ['earn_deposit', 'earn_withdraw'].includes(intent.kind), bank = intent.kind === 'bank_withdraw',
     action = earn
       ? 'earn/ethereum/' + (intent.kind === 'earn_deposit' ? 'deposit' : 'withdraw')
-      : 'transfer';
+      : bank ? 'payout/fiat' : 'transfer';
   if (
-    !['send', 'withdraw', 'earn_deposit', 'earn_withdraw'].includes(intent.kind) ||
+    !['send', 'withdraw', 'bank_withdraw', 'earn_deposit', 'earn_withdraw'].includes(intent.kind) ||
     typeof request.url !== 'string' ||
     !new RegExp('^https://api\\.privy\\.io/v1/wallets/[^/?#]+/' + action + '$').test(request.url)
   )
@@ -63,6 +63,12 @@ export function assertReviewedRequest(
   if (earn) {
     if (!keys(body, ['vault_id', 'amount']) || !intent.vaultId || body.vault_id !== intent.vaultId)
       reject();
+  } else if (bank) {
+    if (!keys(body, ['source', 'destination']) || !keys(body.source, ['asset', 'chain', 'amount']) ||
+      body.source.asset !== 'usdc' || body.source.chain !== 'base' ||
+      !keys(body.destination, ['fiat_account_id', 'payment_rail']) ||
+      !intent.fiatAccountId || body.destination.fiat_account_id !== intent.fiatAccountId ||
+      intent.bankCurrency !== 'EUR' || intent.paymentRail !== 'sepa' || body.destination.payment_rail !== 'sepa') reject();
   } else if (
     !keys(body, ['source', 'destination']) ||
     !keys(body.source, ['asset', 'chain', 'amount']) ||

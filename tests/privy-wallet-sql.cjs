@@ -10,6 +10,7 @@ const { PGlite } = require('@electric-sql/pglite');
     await db.exec(
       fs.readFileSync('supabase/migrations/20261008140306_privy_user_wallets.sql', 'utf8'),
     );
+    await db.exec(fs.readFileSync('supabase/migrations/20261008203000_privy_bank_withdrawals.sql', 'utf8'));
     const a = '10000000-0000-4000-8000-000000000001',
       b = '10000000-0000-4000-8000-000000000002';
     await db.query('insert into auth.users values ($1),($2)', [a, b]);
@@ -69,6 +70,10 @@ const { PGlite } = require('@electric-sql/pglite');
       [ids[0]],
     );
     await assert.rejects(begin(a, ids[1]), /allowance exceeded/);
+    const bankId='30000000-0000-4000-8000-000000000001';
+    await db.query("insert into belna_privy_wallet_intents(id,user_id,wallet_id,kind,recipient,fiat_account_id,amount,status,expires_at) values($1,$2,'wa','bank_withdraw','Bank ····3000 · EUR','bank_alice',25,'quoted',now()+interval '10 minutes')",[bankId,a]);
+    await assert.rejects(begin(a,bankId),/allowance exceeded/,'bank payouts share the rolling owner limit');
+    await assert.rejects(db.query("update belna_privy_wallet_intents set fiat_account_id=null where id=$1",[bankId]),/constraint/);
     await db.query('update belna_privy_wallets set paused=true where user_id=$1', [a]);
     await assert.rejects(begin(a, ids[2]), /paused/);
     await db.query('update belna_privy_wallets set paused=false where user_id=$1', [a]);

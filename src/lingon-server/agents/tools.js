@@ -1083,6 +1083,7 @@ function pickTools(task) {
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
   if (/earn|yield|avkastning/.test(t)) names.add('wallet_earn');
+  if (/withdraw|bank|cash out|uttag/.test(t)) { names.add('wallet_bank_accounts'); names.add('wallet_withdraw'); }
   return [...names].map((n) => TOOLS[n]).filter((tool) => tool && tool.available !== false);
 }
 

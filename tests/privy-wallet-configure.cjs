@@ -25,5 +25,12 @@ const env = { PRIVY_APP_ID: 'fixture-app', PRIVY_APP_SECRET: 'private-fixture', 
   assert.equal(writes, 1, 'invalid provider credentials cannot overwrite Vault');
   await assert.rejects(configureWallet({ env: { ...env, PRIVY_APP_SECRET: '****masked' }, makeClient, fetchImpl }), /real Privy app secret/);
   assert.equal(writes, 1);
+  const earnEnv={...env,PRIVY_EARN_ENABLED:'true',PRIVY_EARN_VAULT_ID:'vault-verified',PRIVY_EARN_FEE_PERCENT:'10',PRIVY_BANK_WITHDRAWALS_ENABLED:'true'};
+  const verifiedFetch=async(url,options)=>url.includes('/earn/')?new Response(JSON.stringify({id:'vault-verified',provider:'aave',caip2:'eip155:8453',asset:{address:'0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',decimals:6}}),{status:200}):fetchImpl(url,options);
+  await configureWallet({env:earnEnv,makeClient,fetchImpl:verifiedFetch});
+  assert.equal(writes,2);assert.equal(JSON.parse(stored).PRIVY_EARN_ENABLED,'true');assert.equal(JSON.parse(stored).PRIVY_EARN_FEE_PERCENT,'10');
+  assert.equal(JSON.parse(stored).PRIVY_BANK_WITHDRAWALS_ENABLED,'true');
+  await assert.rejects(configureWallet({env:earnEnv,makeClient,fetchImpl:async(url,opts)=>url.includes('/earn/')?new Response(JSON.stringify({id:'vault-verified',provider:'aave',caip2:'eip155:1',asset:{}})):fetchImpl(url,opts)}),/Nothing was saved/);
+  assert.equal(writes,2,'a mismatched vault cannot be enabled');
   console.log('Wallet configuration: private service-only storage, credential validation, masked-key rejection and readback passed');
 })().catch(() => { console.error('Wallet configuration regression failed.'); process.exitCode = 1; });

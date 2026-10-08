@@ -8,7 +8,7 @@ import {
   getIdentityToken,
   useSyncJwtBasedAuthState,
   useAuthorizationSignature,
-  useAddFunds,
+  useDepositFunds,
   useExportWallet,
 } from "@privy-io/react-auth";
 import { base } from "viem/chains";
@@ -86,7 +86,7 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
   };
   const { createWallet } = useCreateWallet();
   const { generateAuthorizationSignature } = useAuthorizationSignature();
-  const { addFunds } = useAddFunds(),
+  const { depositFunds } = useDepositFunds(),
     { exportWallet } = useExportWallet();
   const [epoch, setEpoch] = useState(0);
   useEffect(() => {
@@ -190,14 +190,21 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
         checkOwner();
         const { wallet } = await window.LingonAuth.api("/api/belna-wallet");
         checkOwner();
-        const result = await addFunds({
+        const result = await depositFunds({
           destination: {
-            address: wallet.address,
+            wallet: wallet.walletId,
             chain: "eip155:8453",
             asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
           },
-          fiat: { source: { assets: ["eur", "sek", "usd"], defaultAsset: "eur" } },
-          crypto: {},
+          fiat: { source: { assets: ["eur", "usd"], defaultAsset: "eur" }, environment: "production", defaultAmount: "25" },
+        });
+        checkOwner();
+        return result;
+      },
+      bank: async (action: "verify" | "register", input: any = {}) => {
+        checkOwner();
+        const result = await window.LingonAuth.api("/api/belna-wallet/bank/" + action, {
+          method: "POST", headers: await headers(), body: JSON.stringify(input),
         });
         checkOwner();
         return result;
@@ -251,7 +258,7 @@ function Bridge({ authMode }: { authMode: "email" | "jwt" }) {
     logout,
     createWallet,
     generateAuthorizationSignature,
-    addFunds,
+    depositFunds,
     exportWallet,
   ]);
   return verificationEmail ? (
@@ -357,6 +364,10 @@ window.BelnaPrivy = {
   authorize: async (id: string, risk = false) => {
     await initialize();
     return operations.authorize(id, risk);
+  },
+  bank: async (action: "verify" | "register", input: any = {}) => {
+    await initialize();
+    return operations.bank(action, input);
   },
   export: async () => {
     await initialize();

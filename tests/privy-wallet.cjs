@@ -10,7 +10,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     timeout = false,
     actionStatus = 'pending',
     additionalSigners = [],
-    quorumUsers = ['did:privy:alice'];
+    quorumUsers = ['did:privy:alice'], bankReady = false, bankAccountOwner = 'did:privy:alice', bankAccounts = [], bankChainSubmitted = false;
   const address = '0x' + '1'.repeat(40),
     other = '0x' + '2'.repeat(40);
   const payload = {
@@ -85,6 +85,8 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     PRIVY_AUTH_MODE: 'jwt',
     PRIVY_EARN_ENABLED: 'true',
     PRIVY_EARN_VAULT_ID: 'vault-reviewed',
+    PRIVY_EARN_FEE_PERCENT: '10',
+    PRIVY_BANK_WITHDRAWALS_ENABLED: 'true',
   };
   const fetchImpl = async (url, init) => {
     assert.equal(new URL(url).hostname, 'api.privy.io');
@@ -105,11 +107,20 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
         authorization_keys: [],
         authorization_threshold: 1,
       };
+    else if (url.endsWith('/kyc')) data = {kyc_statuses:[{provider:'bridge',environment:'production',status:bankReady?'active':'not_started',tos:{status:bankReady?'approved':'pending'},kyc:{status:bankReady?'active':'not_started'},endorsements:bankReady?[{name:'sepa',status:'approved'}]:[],capabilities:{payout_fiat:bankReady?'active':'pending'}}]};
+    else if (url.includes('/external_fiat_accounts?')) data = {external_fiat_accounts:bankAccounts};
+    else if (url.endsWith('/external_fiat_accounts/bank_alice')) data = {external_fiat_account:{id:'bank_alice',user_id:bankAccountOwner,provider:'bridge',environment:'production',currency:'eur',account_type:'iban',bank_name:'Fixture bank',last_4:'3000'}};
+    else if (url.endsWith('/external_fiat_accounts') && init.method==='POST') {
+      assert.equal(JSON.parse(init.body).account.country,'DEU');
+      bankAccounts=[{id:'bank_alice',user_id:bankAccountOwner,provider:'bridge',environment:'production',currency:'eur',account_type:'iban',bank_name:'Fixture bank',last_4:'3000'}];
+      data={external_fiat_account:bankAccounts[0]};
+    }
+    else if (url.endsWith('/kyc/tos')) data={provider:'bridge',environment:'production',status:'pending',link:'https://bridge.xyz/terms/fixture'};
     else if (url.endsWith('/v1/earn/ethereum/vaults/vault-reviewed'))
       data = {
         id: 'vault-reviewed',
         caip2: 'eip155:8453',
-        asset: { address: BASE_USDC },
+        asset: { address: BASE_USDC, decimals: 6 },
         name: 'Reviewed USDC',
         user_apy: 413,
         provider: 'aave',
@@ -155,7 +166,8 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
         ],
       };
     else if (url.includes('/actions/'))
-      data = { id: 'action-1', wallet_id: 'wallet_alice', type: 'transfer', status: actionStatus };
+      data = { id: 'action-1', wallet_id: 'wallet_alice', type: 'transfer', status: actionStatus,
+        ...(bankChainSubmitted ? {steps:[{type:'evm_transaction',transaction_hash:'0x'+'f'.repeat(64)}]} : {}) };
     else {
       if (timeout) throw Error('transport failure with sensitive data');
       assert.equal(init.method, 'POST');
@@ -164,7 +176,7 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
         ? 'earn_deposit'
         : url.endsWith('/withdraw')
           ? 'earn_withdraw'
-          : 'transfer';
+          : url.endsWith('/payout/fiat') ? 'payout' : 'transfer';
       data = { id: 'action-' + sequence, wallet_id: 'wallet_alice', type, status: actionStatus };
     }
     return { ok: true, json: async () => data };
@@ -320,6 +332,44 @@ const { createWalletTools } = require('../server/agents/wallet-tools');
     'identity-alice',
   );
   assert.deepEqual(ep.request.body, { vault_id: 'vault-reviewed', amount: '1.00' });
+  assert.equal((await wallet.earn('alice')).position.earned,1);
+  assert.equal((await wallet.earn('alice')).yieldFeePercent,10);
+  await assert.rejects(wallet.transferQuote('alice',{kind:'earn_withdraw',amount:6}),/Earn balance/);
+  assert.equal((await wallet.bankStatus('alice')).verification.ready,false);
+  await assert.rejects(wallet.transferQuote('alice',{kind:'bank_withdraw',fiatAccountId:'bank_alice',amount:1}),/verification/);
+  await assert.rejects(wallet.bankVerify('alice',{consent:true},undefined),/identity/);
+  await assert.rejects(wallet.bankVerify('alice',{consent:false},'identity-alice'),/Confirm/);
+  assert.equal((await wallet.bankVerify('alice',{consent:true},'identity-alice')).step,'terms');
+  bankReady=true;
+  const registration={consent:true,iban:'DE89370400440532013000',bic:'COBADEFFXXX',accountOwnerName:'Fixture Alice'};
+  await assert.rejects(wallet.bankRegister('alice',{...registration,iban:'DE00370400440532013000'},'identity-alice'),/check digits/);
+  const linked=await wallet.bankRegister('alice',registration,'identity-alice');
+  assert.equal(linked.accounts[0].last4,'3000');assert.equal(JSON.stringify(linked).includes(registration.iban),false);
+  bankAccountOwner='did:privy:bob';
+  await assert.rejects(wallet.transferQuote('alice',{kind:'bank_withdraw',fiatAccountId:'bank_alice',amount:1}),/does not belong/);
+  bankAccountOwner='did:privy:alice';
+  const bankArgs={fiatAccountId:'bank_alice',amount:1};
+  const bankDetail=await tools.wallet_withdraw.approvalDetail(bankArgs,{userId:'alice'});
+  const beforeBankAgent=calls.filter(c=>c.method==='POST').length;
+  assert.equal((await tools.wallet_withdraw.run(bankArgs,{userId:'alice',approvedDetail:bankDetail})).status,'awaiting_owner');
+  assert.equal(calls.filter(c=>c.method==='POST').length,beforeBankAgent,'agent bank approval cannot sign or move money');
+  await assert.rejects(async()=>tools.wallet_withdraw.run({...bankArgs,fiatAccountId:'bank_bob'},{userId:'alice',approvedDetail:bankDetail}),/exact bank withdrawal/);
+  const bankQuote=await wallet.transferQuote('alice',{kind:'bank_withdraw',fiatAccountId:'bank_alice',amount:1});
+  const bp=await wallet.prepare('alice',{quoteId:bankQuote.quoteId,confirm:true},'identity-alice');
+  assert.equal(bp.request.url.endsWith('/payout/fiat'),true);
+  assert.deepEqual(bp.request.body.destination,{fiat_account_id:'bank_alice',payment_rail:'sepa'});
+  bankReady=false;
+  await assert.rejects(wallet.prepare('alice',{quoteId:bankQuote.quoteId,confirm:true},'identity-alice'),/verification/);
+  bankReady=true;actionStatus='pending';
+  assert.equal((await wallet.confirmTransfer('alice',{quoteId:bankQuote.quoteId,signature:'owner-signature-only-for-request',expiry:bp.request.headers['privy-request-expiry']},'identity-alice')).status,'processing');
+  const bankWrites=calls.filter(c=>c.method==='POST').length;
+  actionStatus='failed';bankChainSubmitted=true;
+  const reviewBank=await wallet.prepare('alice',{quoteId:bankQuote.quoteId,confirm:true},'identity-alice');
+  assert.equal(reviewBank.intent.status,'processing');assert.equal(reviewBank.intent.providerReviewRequired,true);
+  assert.equal(reviewBank.request,undefined);assert.equal(calls.filter(c=>c.method==='POST').length,bankWrites,'failed bank leg after crypto is never reissued');
+  bankChainSubmitted=false;
+  actionStatus='succeeded';
+  assert.equal((await wallet.prepare('alice',{quoteId:bankQuote.quoteId,confirm:true},'identity-alice')).intent.providerReviewRequired,false);
   const old = await wallet.transferQuote('alice', { recipient: other, amount: 1 });
   intents.get(old.quoteId).status = 'processing';
   intents.get(old.quoteId).started_at = new Date(clock - 24 * 3600000).toISOString();

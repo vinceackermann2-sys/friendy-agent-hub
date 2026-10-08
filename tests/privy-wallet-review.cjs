@@ -60,6 +60,13 @@ const { build } = require('esbuild');
       body: { vault_id: 'reviewed-vault', amount: '10.00' },
     };
   review(er, earn, intent.quoteId, 'production-app', now);
+  const bank = { ...intent, kind: 'bank_withdraw', fiatAccountId: 'bank_alice', bankCurrency: 'EUR', paymentRail: 'sepa' };
+  const br = { ...request, url: 'https://api.privy.io/v1/wallets/wallet_alice/payout/fiat',
+    body: { source: request.body.source, destination: { fiat_account_id: 'bank_alice', payment_rail: 'sepa' } } };
+  review(br, bank, intent.quoteId, 'production-app', now);
+  for (const change of [r=>r.body.destination.fiat_account_id='bank_bob',r=>r.body.destination.payment_rail='ach',r=>r.body.destination.address=intent.address,r=>r.body.developer_fee='1']) {
+    const r=structuredClone(br);change(r);assert.throws(()=>review(r, bank, intent.quoteId, 'production-app', now));
+  }
   assert.throws(() =>
     review(
       { ...er, body: { ...er.body, vault_id: 'unreviewed-vault' } },
