@@ -83,16 +83,18 @@ final class BelnaUITests: XCTestCase {
 
         // Load the actual published origin through WKWebView. This deliberately
         // leaves sign-in and device permissions untouched; no account data is sent.
-        let appleSignIn = app.webViews.buttons["Continue with Apple"]
+        let appleSignIn = app.webViews.buttons["Sign in with Apple"]
         let loaded = appleSignIn.waitForExistence(timeout: 60)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Published Belna in iPhone WebView"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         XCTAssertTrue(loaded, "Published login must load and discover the native Apple bridge")
-        XCTAssertTrue(app.webViews.buttons["Login with one-time code"].waitForExistence(timeout: 10))
-        // Google's OAuth sign-in is intentionally hidden in the embedded app.
-        XCTAssertFalse(app.webViews.buttons["Continue with Google"].exists)
+        XCTAssertTrue(app.webViews.buttons["Email me a one-time code instead"].waitForExistence(timeout: 10))
+        // Native Google sign-in opens the system authentication session.
+        XCTAssertTrue(app.webViews.buttons["Log in with Google"].exists)
+        XCTAssertTrue(app.webViews.textFields["name@example.com"].exists)
+        XCTAssertTrue(app.webViews.secureTextFields["Your password"].exists)
         XCTAssertFalse(app.staticTexts["Couldn’t open Belna"].exists)
         // No native bar or Apple apps button above the web app; signed out, Apple apps has no entry point.
         XCTAssertFalse(app.navigationBars.firstMatch.exists)
