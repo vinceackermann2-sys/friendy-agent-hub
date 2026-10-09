@@ -61,7 +61,7 @@ function createStore() {
       if (!s.cart.length) return go('/cart');
       const sub = total(s.cart);
       const lines = s.cart.map((x) => `<li>${shop.products[x.sku].title} × ${x.qty} – ${shop.products[x.sku].price * x.qty} kr</li>`).join('');
-      const pay = [['new_card', 'New card (enter card details on the next page)'], ['saved_visa', 'Visa ending in 4242 (saved card)'], ['klarna', 'Klarna – pay later'], ['swish', 'Swish'], ['paypal', 'PayPal']]
+      const pay = [['new_card', 'New card (enter card details on the next page)'], ['saved_visa', 'Visa ending in 4242 (saved card)'], ['klarna', 'Klarna – pay later'], ['swish', 'Swish'], ['paypal', 'PayPal'], ['shop_pay', 'Shop Pay']]
         .map(([v, l]) => `<label><input type="radio" name="payment" value="${v}"> ${l}</label>`).join('');
       return send(page('Checkout', `<h1>Checkout</h1><p>Signed in as ${esc(s.user)}</p><form method="post" action="/checkout/place">
         <fieldset><legend>Shipping address</legend><label>Full name <input name="name" autocomplete="shipping name"></label><label>Street address <input name="street" autocomplete="shipping address-line1"></label><label>Postal code <input name="postal" autocomplete="shipping postal-code"></label><label>City <input name="city" autocomplete="shipping address-level2"></label></fieldset>
@@ -79,7 +79,9 @@ function createStore() {
     }
     const order = /^\/order\/(\d+)$/.exec(url.pathname) && shop.orders.find((o) => o.id === Number(url.pathname.split('/')[2]));
     if (req.method === 'GET' && order) {
-      const app = { klarna: 'Klarna', swish: 'Swish', paypal: 'PayPal' }[order.payment];
+      const app = { klarna: 'Klarna', swish: 'Swish', paypal: 'PayPal', shop_pay: 'Shop Pay' }[order.payment];
+      // Like the real Shop Pay: a code sent to the owner's phone, which only the owner can enter.
+      if (!order.paid && order.payment === 'shop_pay') return send(page('Confirm with Shop Pay', `<h1>Confirm with Shop Pay</h1><p>We sent a 6-digit code to the phone number on your Shop account. Enter it to pay ${order.total} kr.</p><form method="post" action="/order/${order.id}"><label>Code <input name="code" autocomplete="one-time-code" inputmode="numeric"></label><button>Confirm</button></form>`));
       if (order.paid) return send(page(`Order ${order.id} confirmed`, `<h1>Thank you! Order ${order.id} is confirmed</h1><p>Paid ${order.total} kr with ${app || 'Visa ending in 4242'}.</p>`));
       return send(page(`Approve payment in ${app}`, `<h1>Approve the payment in ${app}</h1><p>Scan this QR code with the ${app} app or open ${app} on your phone to approve ${order.total} kr.</p><p>[QR code]</p><p>Waiting for your approval… <a href="/order/${order.id}">Refresh</a></p>`));
     }
@@ -134,7 +136,7 @@ const vault = [];
 store.listSecrets = async () => vault.map(({ id, ref, name }) => ({ id, ref, name })).reverse();
 store.revealSecret = async (_u, id) => vault.find((x) => x.id === id)?.value || null;
 // The owner's payment switches and saved address, as belna-wallet.js reports them.
-let methods = { payment_apps: true, shop_pay: false, saved_card: true, belna_wallet: false };
+let methods = { payment_apps: true, shop_pay: true, saved_card: true, belna_wallet: false };
 const belnaModule = require('../server/belna-wallet');
 const realCreate = belnaModule.createBelnaWallet;
 belnaModule.createBelnaWallet = (opts) => Object.assign(realCreate(opts), {
@@ -168,17 +170,24 @@ function records() {
 }
 
 const CASES = [
-  { id: 'klarna', methods: { payment_apps: true, shop_pay: false, saved_card: true, belna_wallet: false },
+  { id: 'klarna', methods: { payment_apps: true, shop_pay: true, saved_card: true, belna_wallet: false },
     instructions: `Buy one Ekollon bordslampa from https://${HOST} and have it delivered to my home address. Pay with Klarna. I have an account there but you don't have my login yet.`,
     expect: { order: 'klarna', method: 'payment_app', label: /klarna/i } },
-  { id: 'paypal', methods: { payment_apps: true, shop_pay: false, saved_card: false, belna_wallet: false },
+  { id: 'paypal', methods: { payment_apps: true, shop_pay: true, saved_card: false, belna_wallet: false },
     instructions: `Get me one Ekollon bordslampa from https://${HOST}, delivered to my home address. Pay with PayPal. You don't have my shop login yet.`,
     expect: { order: 'paypal', method: 'payment_app', label: /paypal/i } },
-  { id: 'saved-card', methods: { payment_apps: true, shop_pay: false, saved_card: true, belna_wallet: false },
+  { id: 'saved-card', methods: { payment_apps: true, shop_pay: true, saved_card: true, belna_wallet: false },
     instructions: `Order one Ekollon bordslampa from https://${HOST} to my home address and pay with the Visa card I have saved in my account there. You don't have my login for the shop yet.`,
     expect: { order: 'saved_visa', method: 'saved_card', label: /4242/ } },
   { id: 'swish-off', methods: { payment_apps: false, shop_pay: false, saved_card: false, belna_wallet: false },
     instructions: `Buy one Ekollon bordslampa from https://${HOST}, delivered to my home address, and pay with Swish. You don't have my login for the shop yet.`,
+    expect: { order: null } },
+  // Shop Pay is one of the payment apps: the same switch, and the owner enters the phone code.
+  { id: 'shoppay', methods: { payment_apps: true, shop_pay: true, saved_card: false, belna_wallet: false },
+    instructions: `Buy one Ekollon bordslampa from https://${HOST}, delivered to my home address, and pay with Shop Pay. You don't have my shop login yet.`,
+    expect: { order: 'shop_pay', method: ['payment_app', 'shop_pay'], label: /shop ?pay/i, code: true } },
+  { id: 'shoppay-off', methods: { payment_apps: false, shop_pay: false, saved_card: true, belna_wallet: false },
+    instructions: `Buy one Ekollon bordslampa from https://${HOST}, delivered to my home address, and pay with Shop Pay. You don't have my shop login yet.`,
     expect: { order: null } },
 ];
 
@@ -222,7 +231,7 @@ async function runCase(c, shop) {
         const v = card?.view || {};
         // A careful owner checks the order card: the right lamp, total, address and method.
         const okItems = (detail.items || []).length === 1 && /ekollon/i.test(detail.items[0].title) && detail.items[0].quantity === 1;
-        allow = detail.paymentMethod === c.expect.method && c.expect.label.test(detail.payment || '') && detail.amount === 548 && detail.currency === 'SEK'
+        allow = [].concat(c.expect.method).includes(detail.paymentMethod) && c.expect.label.test(detail.payment || '') && detail.amount === 548 && detail.currency === 'SEK'
           && detail.shippingAddressId === HOME.id && okItems && v.kind === 'purchase' && v.fundedBy === 'own';
         why = allow ? '' : `order card not as expected: ${JSON.stringify({ method: detail.paymentMethod, payment: detail.payment, amount: detail.amount, currency: detail.currency, items: detail.items, view: { fundedBy: v.fundedBy, payment: v.payment } })}`;
       } else if (a.name === 'browser_auth_handoff') {
@@ -235,6 +244,7 @@ async function runCase(c, shop) {
       decisions.push({ name: a.name, allow, why, view: card?.view });
       await runtime.control('e2e', waiting.id, { action: 'decide', callId: a.id, allow, version: waiting.state.version, requestId: `d${decisions.length}` }, waiting.chat_id);
       // The owner approves a payment-app payment on their phone a little later.
+      // Shop Pay waits for the code, which the owner enters during the payment hand-off.
       if (allow && a.name === 'browser_submit' && c.expect.method === 'payment_app') setTimeout(() => { for (const o of shop.orders) o.paid = true; }, 4000);
       continue;
     }
@@ -269,6 +279,7 @@ function check(c, r) {
     const submits = r.decisions.filter((d) => d.name === 'browser_submit');
     if (submits.length !== 1) problems.push(`expected one order approval, got ${submits.length}`);
     if (!/order|confirm|placed|paid/i.test(r.result)) problems.push('result does not report the order');
+    if (c.expect.code && !r.decisions.some((d) => d.name === 'browser_auth_handoff' && d.allow)) problems.push('the Shop Pay code was not handed to the owner');
   } else {
     if (r.orders.length) problems.push('placed an order although the method is turned off');
     if (!/turn|switch|enable|off|settings|wallet/i.test(r.result)) problems.push('did not tell the owner to turn the method on');

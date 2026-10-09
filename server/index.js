@@ -61,8 +61,8 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
   let event;
   try {
     event = s.webhooks.constructEvent(req.body, sig, secret);
-  } catch (e) {
-    return res.status(400).json({ error: 'Bad signature: ' + e.message });
+  } catch {
+    return res.status(400).json({ error: 'Bad Stripe signature.' });
   }
   try {
     if (await store.stripeEventSeen(event.id)) return res.json({ ok: true, dup: true });
@@ -71,7 +71,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     res.json({ ok: true });
   } catch (e) {
     console.warn('[stripe] webhook handler failed:', e.message);
-    res.status(500).json({ error: 'Handler failed: ' + e.message });
+    res.status(500).json({ error: 'Stripe webhook handler failed.' });
   }
 });
 app.post('/api/mail/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -319,7 +319,8 @@ app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message });
-    res.status(500).json({ error: 'Signup failed: ' + e.message });
+    console.error('[auth] signup failed:', e && e.message);
+    res.status(500).json({ error: 'Sign-up failed. Please try again.' });
   }
 });
 app.post('/api/auth/signin', rateLimit(15, 60000), async (req, res) => {
@@ -337,7 +338,8 @@ app.post('/api/auth/signin', rateLimit(15, 60000), async (req, res) => {
     }
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
-    res.status(500).json({ error: 'Signin failed: ' + e.message });
+    console.error('[auth] signin failed:', e && e.message);
+    res.status(500).json({ error: 'Sign-in failed. Please try again.' });
   }
 });
 app.post('/api/auth/refresh', rateLimit(15, 60000), async (req, res) => {
@@ -349,7 +351,8 @@ app.post('/api/auth/refresh', rateLimit(15, 60000), async (req, res) => {
     if (error) return res.status(401).json({ error: error.message });
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
-    res.status(500).json({ error: 'Refresh failed: ' + e.message });
+    console.error('[auth] refresh failed:', e && e.message);
+    res.status(500).json({ error: 'Your session could not be refreshed. Please sign in again.' });
   }
 });
 app.get('/api/auth/me', async (req, res) => {
@@ -410,7 +413,8 @@ app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
       record: { next: safeNext(req.query.next), redirectUri, termsVersion: TERMS_VERSION, flow } });
     res.json({ url: googleUrl(state) });
   } catch (e) {
-    res.status(500).json({ error: 'OAuth failed: ' + e.message });
+    console.error('[auth] oauth failed:', e && e.message);
+    res.status(500).json({ error: 'Google sign-in could not start. Please try again.' });
   }
 });
 app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
@@ -478,7 +482,8 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
       + '&flow=' + encodeURIComponent(saved.flow);
     res.redirect(safeNext(saved.next.split('#')[0].split('?')[0]) + frag);
   } catch (e) {
-    return back(e.message);
+    console.error('[auth] google callback failed:', e && e.message);
+    return back('Sign-in failed. Please try again.');
   }
 });
 // The Apple app opens the sealed session with the verifier only its page holds, so a
@@ -511,7 +516,8 @@ app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message });
-    res.status(500).json({ error: 'Could not send code: ' + e.message });
+    console.error('[auth] could not send code:', e && e.message);
+    res.status(500).json({ error: 'Could not send the code. Please try again.' });
   }
 });
 // Email-first sign-in: tells the form whether to show log-in or sign-up for this address.
@@ -542,7 +548,8 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
     } catch (e) { return res.status(e.status || 503).json({ error: e.message }); }
     res.json({ access_token: session.access_token, refresh_token: session.refresh_token, user: { id: user.id, email: user.email } });
   } catch (e) {
-    res.status(500).json({ error: 'Verify failed: ' + e.message });
+    console.error('[auth] verify failed:', e && e.message);
+    res.status(500).json({ error: 'Could not verify the code. Please try again.' });
   }
 });
 
@@ -600,7 +607,7 @@ app.get('/api/billing', requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   res.json(await billingFor(req.user.id));
 }));
-app.post('/api/billing/redeem', requireAuth(async (req, res) => {
+app.post('/api/billing/redeem', rateLimit(10, 60000), requireAuth(async (req, res) => {
   const r = await store.redeemGift(req.user.id, (req.body || {}).code);
   if (!r.ok) return res.status(400).json({ error: r.error });
   res.json({ ok: true, amount: r.amount, credits: r.credits, tokens: r.tokens, billing: await billingFor(req.user.id) });
@@ -617,7 +624,7 @@ app.get('/api/referrals/mine', requireAuth(async (req, res) => {
     res.json({ ok: true, code: stats.code, link: referralLink(req, stats.code), invited: stats.invited, earnedTokens: stats.earnedTokens, rewardEachTokens: stats.rewardEachTokens, maxRedemptions: 1 });
   } catch { res.status(503).json({ error: 'Referral service is unavailable.' }); }
 }));
-app.post('/api/referrals/redeem', requireAuth(async (req, res) => {
+app.post('/api/referrals/redeem', rateLimit(10, 60000), requireAuth(async (req, res) => {
   try {
     const r = await store.redeemReferral(req.user.id, (req.body || {}).code);
     if (!r.ok) return res.status(400).json({ error: r.error });
@@ -759,24 +766,32 @@ async function handleStripeEvent(s, event) {
   }
   if (t === 'customer.subscription.updated' || t === 'customer.subscription.created') {
     const customerId = typeof obj.customer === 'string' ? obj.customer : null;
-    const uid = customerId && await store.findUserByStripeCustomer(customerId);
+    const uid = (customerId && await store.findUserByStripeCustomer(customerId)) || obj.metadata?.user_id;
     if (!uid) return;
-    const priceId = obj.items && obj.items.data && obj.items.data[0] && obj.items.data[0].price && obj.items.data[0].price.id;
-    const plan = stripeMod.planForPrice(priceId);
+    const item = obj.items && obj.items.data && obj.items.data[0];
+    const priceId = item && item.price && item.price.id;
+    const plan = stripeMod.planForPrice(priceId) || (PLANS[obj.metadata?.plan] ? obj.metadata.plan : null);
     const prev = await store.getSubscription(uid);
     if (prev.stripe_subscription_id && prev.stripe_subscription_id !== obj.id) return;
-    const status = obj.cancel_at_period_end ? 'canceling' : (obj.status === 'active' || obj.status === 'trialing' ? 'active' : prev.status || 'active');
+    // Stripe's own status, as the edge handler stores it: a failed renewal (past_due,
+    // unpaid) is not paid. Keeping the previous "active" kept the paid tier while
+    // Stripe moved the period end forward.
+    // "Canceling" keeps the paid tier to the period end, so only a paid subscription gets it:
+    // one canceled while past_due stays past_due.
+    const status = obj.cancel_at_period_end && ['active','trialing'].includes(obj.status) ? 'canceling' : (obj.status || prev.status || 'active');
+    // Current Stripe API versions put the period end on the subscription item.
+    const periodEnd = (item && item.current_period_end) || obj.current_period_end;
     await store.setSubscription(uid, plan || prev.plan || 'free', status, {
       stripe_customer_id: customerId || prev.stripe_customer_id,
       stripe_subscription_id: obj.id,
-      current_period_end: obj.current_period_end ? new Date(obj.current_period_end * 1000).toISOString() : (prev.current_period_end || null),
+      current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : (prev.current_period_end || null),
       gift_issued: prev.gift_issued,
     });
     return;
   }
   if (t === 'customer.subscription.deleted') {
     const customerId = typeof obj.customer === 'string' ? obj.customer : null;
-    const uid = customerId && await store.findUserByStripeCustomer(customerId);
+    const uid = (customerId && await store.findUserByStripeCustomer(customerId)) || obj.metadata?.user_id;
     if (!uid) return;
     const prev = await store.getSubscription(uid);
     if (prev.stripe_subscription_id && prev.stripe_subscription_id !== obj.id) return;
@@ -1155,6 +1170,7 @@ function shopPayErr(e) {
     : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
+require('./privy-wallet-routes').installPrivyWalletRoutes({app,wallet:belnaWallet,requireAuth,rateLimit});
 function belnaWalletErr(e) {
   return e.code === 'BAD_INPUT' ? 400 : e.code === 'NOT_SET_UP' ? 503 : e.code === 'VERIFY' || e.code === 'REVIEW' ? 409 : 502;
 }
@@ -1195,8 +1211,7 @@ app.post('/api/belna-wallet/card-waitlist',rateLimit(10,60000),requireAuth(async
   res.setHeader('Cache-Control','no-store');
   try{res.json(await belnaWallet.joinCardWaitlist(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
 }));
-// Each load reads the wallet from Whop several times on the key all owners share, so it is
-// limited like the other wallet routes: one account cannot use up that key's quota.
+// Rate-limit wallet reads against the shared provider and Base RPC quotas.
 app.get('/api/belna-wallet', rateLimit(30, 60000), requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
@@ -1219,7 +1234,7 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
         : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
-        : await belnaWallet.confirmTransfer(req.user.id, req.body || {});
+        : await belnaWallet.confirmTransfer(req.user.id, req.body || {},req.headers['privy-id-token']);
       res.json(result);
     } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message, ...(action === 'send' && e.transferNotStarted === true ? {transferNotStarted:true} : {}) }); }
   }));
@@ -1277,13 +1292,13 @@ app.get('/api/mail', requireAuth(async (req, res) => {
     res.json(await mail.snapshot(req.user.id, {
       folder: req.query.folder || 'inbox',
       q: req.query.q || '',
-      ensureName: req.query.name || '',
     }));
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
 app.post('/api/mail/ensure', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try {
-    const box = await mail.ensureMailbox(req.user.id, (req.body || {}).agentName || req.body?.name);
+    // The address follows the saved agent name, not a name the request carries.
+    const box = await mail.ensureMailbox(req.user.id);
     res.json(await mail.snapshot(req.user.id, { mailbox: box }));
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
@@ -1339,9 +1354,13 @@ app.get('/api/agent-context', requireAuth(async (req, res) => {
 app.put('/api/agent-context', rateLimit(20, 60000), requireAuth(async (req, res) => {
   try {
     const body = req.body || {};
-    res.json(await store.saveAgentContext(req.user.id, {
+    const saved = await store.saveAgentContext(req.user.id, {
       agent: body.agent, documents: body.documents, revision: body.revision,
-    }));
+    });
+    // The mail address is the agent's name, so a rename moves it (alva@ → bo@).
+    await mail.ensureMailbox(req.user.id, saved.agent?.name)
+      .catch((e) => console.warn('[mail] mailbox not renamed:', e.message));
+    res.json(saved);
   } catch (e) {
     res.status(e.code === 'CONFLICT' ? 409 : e.code === 'PERSISTENCE' ? 503 : 400).json({ error:e.message });
   }
@@ -1503,7 +1522,7 @@ app.get('/api/secrets', requireAuth(async (req, res) => {
   try { res.json({ secrets: await store.listSecrets(req.user.id), encrypted: store.secretsEncrypted() }); }
   catch (e) { vaultFailure(res, e); }
 }));
-app.post('/api/secrets', requireAuth(async (req, res) => {
+app.post('/api/secrets', rateLimit(30, 60000), requireAuth(async (req, res) => {
   const { name, value } = req.body || {};
   // Collapse whitespace so an agent vault_request finds the name it asked for.
   const label = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -1512,7 +1531,7 @@ app.post('/api/secrets', requireAuth(async (req, res) => {
   try { res.json({ secret: await store.addSecret(req.user.id, label, value) }); }
   catch (e) { vaultFailure(res, e); }
 }));
-app.post('/api/secrets/:id/reveal', requireAuth(async (req, res) => {
+app.post('/api/secrets/:id/reveal', rateLimit(20, 60000), requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const v = await store.revealSecret(req.user.id, req.params.id);
@@ -1520,7 +1539,7 @@ app.post('/api/secrets/:id/reveal', requireAuth(async (req, res) => {
     res.json({ value: v });
   } catch (e) { vaultFailure(res, e); }
 }));
-app.delete('/api/secrets/:id', requireAuth(async (req, res) => {
+app.delete('/api/secrets/:id', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try { await store.delSecret(req.user.id, req.params.id); res.json({ ok: true }); }
   catch (e) { vaultFailure(res, e); }
 }));
@@ -1585,7 +1604,8 @@ app.use((error, req, res, next) => {
 });
 const { WebSocketServer } = require('ws');
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+// Relay frames are capped at 2 MB (live.js MAX_FRAME_BYTES); the library default is 100 MB.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 server.on('upgrade', async (req, socket, head) => {
   try {
     const u = new URL(req.url, 'http://x');
@@ -1659,7 +1679,7 @@ server.on('upgrade', async (req, socket, head) => {
     try { socket.destroy(); } catch {}
   }
 });
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, process.env.BELNA_BIND_ADDRESS || '0.0.0.0', () => {
   console.log(`Lingon real backend on http://localhost:${PORT}`);
   console.log(`- Foundry: ${isConfigured() ? 'configured (' + MODEL_DEFAULT + ', reasoning ' + REASONING_EFFORT + ')' : 'MISSING — set AZURE_FOUNDRY_PROJECT_ENDPOINT and AZURE_FOUNDRY_API_KEY in .env'}`);
   console.log(`- Supabase: ${store.supaConfigured() ? 'configured' : 'local JSON fallback (server/data.json)'}`);

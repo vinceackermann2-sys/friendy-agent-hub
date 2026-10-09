@@ -2,6 +2,7 @@
 // Owner/model APIs never return card credentials. The isolated purchase service
 // can use them transiently; they are never persisted or given to the model.
 const { createWalletPurchases } = require('./wallet-purchases');
+const { createPrivyWallet } = require('./privy-wallet');
 function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), env = process.env, secureCheckout, randomId = () => crypto.randomUUID() }) {
   env = {...env};
   let configuration;
@@ -137,8 +138,14 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
       : application ? 'review'
       : row.application_status === 'connection_refused' ? 'card_unavailable'
       : verification.status === 'approved' ? 'card_required' : 'verification_required';
-    const transactions = row.card_id ? await request('/card_transactions?account_id=' + encodeURIComponent(row.account_id) + '&card_id=' + encodeURIComponent(row.card_id) + '&first=5') : { data:[] };
-    const feed=await request('/financial_activity?account_id='+encodeURIComponent(row.account_id)+'&include_resource=false&exclude_internal_movements=true');
+    // Ownership and card reconciliation above must finish first. These reads
+    // are independent and should not add serial round trips to opening Wallet.
+    const [transactions, feed, walletPurchases, walletTransfers] = await Promise.all([
+      row.card_id ? request('/card_transactions?account_id=' + encodeURIComponent(row.account_id) + '&card_id=' + encodeURIComponent(row.card_id) + '&first=5') : { data:[] },
+      request('/financial_activity?account_id='+encodeURIComponent(row.account_id)+'&include_resource=false&exclude_internal_movements=true'),
+      store.listWalletPurchases ? store.listWalletPurchases(userId) : [],
+      store.listBelnaWalletTransfers(userId),
+    ]);
     const activity=(feed.data || []).filter(x=>String(x.currency?.code).toLowerCase()==='usd' && x.usd_amount!=null && Number.isFinite(Number(x.usd_amount))).slice(0,20).map(x=>{
       const type=String(x.line_type||'');
       const title=/refund/.test(type)?'Refund':/fee/.test(type)?'Payment fee':/card_spend/.test(type)?'Purchase':/deposit|topup|bank_transfer|treasury_payin/.test(type)?'Deposit':/transfer.*outgoing/.test(type)?'Sent money':/transfer.*incoming/.test(type)?'Received money':/withdrawal/.test(type)?'Withdrawal':/payment_gross|earning|reward|cashback/.test(type)?'Payment received':'Balance activity';
@@ -155,8 +162,8 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
       paused:row.card_status==='frozen', country:/^[A-Z]{2}$/.test(row.country || '') ? row.country : null,
       // A secure merchant payment bridge must be integrated before agent card spending is enabled.
       agentCardPayments:status === 'ready' && row.card_status !== 'frozen' && await checkoutAvailable() },
-      purchases:store.listWalletPurchases ? (await store.listWalletPurchases(userId)).map(purchases.view) : [],
-      transfers:(await store.listBelnaWalletTransfers(userId)).map(x => ({ quoteId:x.id, recipient:x.recipient_email, amount:Number(x.amount), currency:'USD', status:x.status, at:x.created_at })),
+      purchases:walletPurchases.map(purchases.view),
+      transfers:walletTransfers.map(x => ({ quoteId:x.id, recipient:x.recipient_email, amount:Number(x.amount), currency:'USD', status:x.status, at:x.created_at })),
       transactions:(transactions.data || []).slice(0,5).map(x => ({ title:String(x.merchant_name || 'Card payment'), amount:Number.isFinite(Number(x.usd_amount)) ? Number(x.usd_amount) : null, currency:'USD', status:String(x.status || 'pending'), at:x.created_at || null })) };
   }
   async function setup(user, { country, dailyLimitUsd=50 } = {}) {
@@ -450,14 +457,16 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if(!/^[a-zA-Z0-9_-]{16,100}$/.test(id||''))throw fail('That address is invalid.');
     return {addresses:(await store.deleteShippingAddress(userId,id)).map(addressView)};
   }
-  // methods says which ways a purchase may pay now. The owner's own methods (Swish, Klarna,
-  // Shop Pay, a card saved in a store) are each off until the owner turns them on, and none
-  // spends the Belna Wallet balance; belna_wallet is the wallet's own card. Before the list
-  // existed, choosing "existing payments" meant Shop Pay, so that choice keeps Shop Pay on.
+  // methods says which ways a purchase may pay now. The owner's own methods (payment apps such
+  // as Swish, Klarna and Shop Pay, and a card saved in a store) are each off until the owner
+  // turns them on, and none spends the Belna Wallet balance; belna_wallet is the wallet's own
+  // card. Shop Pay is one of the payment apps, so shop_pay always follows that switch; an
+  // earlier separate Shop Pay choice is not carried over, so nothing turns on by itself.
   const prefView=p=>{
-    const list=Array.isArray(p?.enabled_methods) ? p.enabled_methods : p?.active_method==='existing_card' ? ['shop_pay'] : [];
-    const methods={payment_apps:list.includes('payment_apps'),shop_pay:list.includes('shop_pay'),saved_card:p?.merchant_enabled===true,belna_wallet:p?.active_method==='belna_wallet'};
-    const own=methods.payment_apps || methods.shop_pay || methods.saved_card;
+    const list=Array.isArray(p?.enabled_methods) ? p.enabled_methods : [];
+    const apps=list.includes('payment_apps');
+    const methods={payment_apps:apps,shop_pay:apps,saved_card:p?.merchant_enabled===true,belna_wallet:p?.active_method==='belna_wallet'};
+    const own=methods.payment_apps || methods.saved_card;
     return {activeMethod:p?.active_method || null,merchantEnabled:methods.saved_card,selectionSaved:!!p,methods,
       spendingMethod:methods.belna_wallet ? 'belna_wallet' : own ? 'existing_card' : null};
   };
@@ -486,17 +495,18 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     if(Object.hasOwn(input,'methods')){
       const m=input.methods;
       if(!m || typeof m!=='object' || Array.isArray(m) || Object.entries(m).some(([k,v])=>!OWN_METHODS.includes(k) || typeof v!=='boolean'))throw fail('Choose a valid payment method.');
-      if(m.shop_pay && !(await store.getShopPayAccount(userId))?.encryptedShopToken)throw fail('Connect Shop Pay first.');
-      const on=new Set(Object.entries(prefView(current).methods).filter(([k,v])=>v && k!=='saved_card' && k!=='belna_wallet').map(([k])=>k));
+      const on=new Set(prefView(current).methods.payment_apps ? ['payment_apps'] : []);
       for(const [k,v] of Object.entries(m)){if(k==='saved_card')fields.merchant_enabled=v;else if(v)on.add(k);else on.delete(k);}
       fields.enabled_methods=[...on];
     }
     try{return prefView(await store.saveWalletPreferences(userId,fields));}
     catch(e){if(/enabled_methods/.test(String(e?.message)))throw fail('Payment methods can’t be saved until the latest update is installed.','NOT_SET_UP');throw e;}
   }
-  const OWN_METHODS=['payment_apps','shop_pay','saved_card'];
+  // Shop Pay has no switch of its own: it is one of the payment apps.
+  const OWN_METHODS=['payment_apps','saved_card'];
+  // Every own-method order the owner approved goes in Activity, payment apps included.
   async function recordExistingPurchase(userId,approved){
-    if(!['shop_pay','saved_card'].includes(approved?.paymentMethod))throw fail('Approve this purchase first.');
+    if(!['payment_app','shop_pay','saved_card'].includes(approved?.paymentMethod))throw fail('Approve this purchase first.');
     if(durable())await store.recordExistingPurchase(userId,approved);
   }
   async function existingHistory(userId){return {history:durable() ? (await store.listExistingPurchases(userId)).map(x=>({title:x.merchant,amount:Number(x.amount),currency:x.currency,status:x.status,at:x.created_at})) : []};}
@@ -509,6 +519,10 @@ function createBusinessWallet({ store, fetchImpl = (...args) => fetch(...args), 
     reconcilePurchases:async()=>{await loadConfiguration();return purchases.reconcile();},reconcilePurchaseCard:purchases.reconcileCard,reconcileConnectionCards };
 }
 function createBelnaWallet(options){
+  return createPrivyWallet({...options,shared:createBusinessWallet(options)});
+}
+// Retained only for historical Whop recovery; new wallets use Privy.
+function createLegacyBelnaWallet(options){
   const connectedStore={...options.store,
     getBelnaWallet:async userId=>{const row=await options.store.getBelnaWallet(userId);return row?.wallet_kind==='personal'?null:row;},
     ...(options.store.listPendingWalletConnections?{listPendingWalletConnections:async environment=>(await options.store.listPendingWalletConnections(environment)).filter(row=>/^biz_/.test(row.account_id))}:{}),
@@ -525,4 +539,4 @@ function createBelnaWallet(options){
     snapshot:async userId=>{const result=await wallet.snapshot(userId);const previous=await options.store.getBelnaWallet(userId);if(previous?.wallet_kind==='personal')result.wallet.previousPersonalWallet=true;return result;},
     reconcilePurchaseCard:async(ownerId,cardId)=>{if(ownerId?.startsWith('user_'))return;return wallet.reconcilePurchaseCard(ownerId,cardId);}};
 }
-module.exports = { createBelnaWallet, createBusinessWallet };
+module.exports = { createBelnaWallet, createBusinessWallet, createLegacyBelnaWallet };

@@ -124,7 +124,23 @@ async function main() {
     else try { fs.unlinkSync(dataFile); } catch {}
   }
 
-  console.log('composio security: ok');
+  // The edge copy is what production serves: the owner's switch must hold there too,
+  // including when the tool is sent with a connection of a different app.
+  const { pathToFileURL } = require('node:url');
+  const edgeStore = await import(pathToFileURL(path.join(__dirname, '../src/lingon-server/store.js')).href);
+  const edge = await import(pathToFileURL(path.join(__dirname, '../src/lingon-server/composio.js')).href);
+  await edgeStore.setConnectorPermissions('user-a', 'gmail', ['GMAIL_SEND_EMAIL']);
+  await assert.rejects(
+    () => edge.executeTool('user-a', { tool: 'GMAIL_SEND_EMAIL', connectedAccountId: 'ca_owner' }),
+    /turned off/,
+  );
+  await assert.rejects(
+    () => edge.executeTool('user-a', { tool: 'GMAIL_SEND_EMAIL', connectedAccountId: 'ca_github_owner' }),
+    /cannot run this tool/,
+  );
+  assert.equal(calls.some((call) => call.url.includes('/tools/execute/')), false, 'no blocked tool may reach Composio');
+
+  console.log('composio security: ok (Node + edge)');
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

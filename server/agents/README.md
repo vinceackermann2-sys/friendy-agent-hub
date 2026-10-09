@@ -181,6 +181,78 @@ overhead. A delegated task adds coordination/storage work, so total savings
 depend on the workload. Live Foundry/Azure p50/p95 latency, token spending and
 answer quality still need measurement before publishing a speed or cost claim.
 
+## Streaming cards and answers
+
+The chat draws a `present` or `learn` card while the model writes its arguments:
+`foundry.js` reports each function call's arguments as they stream (`onCallDelta`),
+`cards.partialJson` reads the part written so far, and the coordinator sends
+`card_delta` events (at most every 90 ms) before the finished `card` with the
+same id. The chat's copies of those two tools take a `reply` field; when it is
+filled and the response made no lookup alongside, the card and its reply finish
+the turn in one model call, where a second text-only call used to write the
+reply. A card or reply the turn does not keep is taken back (`message_retract`).
+A streamed call ends where its JSON arguments close: text after the close (the
+model's reasoning once leaked into a card's arguments for 4000 tokens) is cut and
+the complete call kept. Card arguments may run to 6000 characters (a long quiz with explanations, a
+comparison with links); other chat calls stay capped at 3000. Lookups asked for in one response (two searches, wallet and
+Shop Pay) run at once and are handled in order.
+
+The chat answers while it looks things up. The chat's copy of `web_search` takes
+an optional `answer_start`: the part of the answer that does not depend on the
+results (what something is, how to get there), never a price, date, hours or
+weather. The model does not write text beside a call (a prompt rule asking it to
+changed 0 of 12 lookup answers), so the field is how it answers early. The field
+shows sentence by sentence while the call is written (`shownStart` leaves out a
+sentence that talks about the lookup in the first person, such as "…, so I'll
+check the latest round" or "Jag tar fram prognosen"; a semicolon waits for the
+clause after it; what shows only grows; the last sentence shows when the call
+ends), and the search starts as soon as the keys written before the field are
+complete, so writing it does not delay the search. A start that says
+something (`answerStart`: at least 60 characters, not a preamble or a dead end)
+stays on screen (`begun`), the app shows its dots below it while the search
+runs, and the next round is told what is on screen and continues it. Taking a
+later round back (`takeBack`) returns the message to that start instead of
+removing it; a card reply or a question keeps it as its own message above, and
+the saved history holds the whole answer. Text written beside a search, when
+the model does write it, is kept the same way.
+
+`present` also shows `timeline` (steps with `when` and `group`), `compare` (two
+to four options with pros, cons, aspect rows and a `pick`) and `calculator`
+(inputs with defaults, outputs as formulas). `cards.calcCompile` checks the
+formulas with a small grammar (no eval); outputs that do not parse are dropped
+and an empty calculator is not shown, so the model hears what to fix.
+
+More kinds: `places` (stops with address and rating; the app opens one stop or
+the whole route in Maps), and for the chat only `recipe` (numeric amounts the
+owner scales with a servings stepper), `forecast` (days with sky icons; not shown
+without temperatures) and `draft` (editable, Copy, Open in Mail; an email the
+model writes out as text with a subject line converts to one). Any card can
+carry 2-4 `facts` chips, dashboards a `donut` chart, and a table row starting
+"Total" is styled as one. Items without a photo can name one with
+`image_query`: `cards.lookupImage` asks the Wikipedia API (500 px thumbnail and
+the article link), only for an article whose title shares a word with the
+query. Lookups start while the card streams and the finished card waits at
+most 1.5 s; a worker's `present` carries its photos to the card on a hidden
+property, not to the model. Three or more photographed list or product items
+show as a carousel. An answer from a web lookup lists the pages it read (one per
+site, at most four) as source links under the message.
+
+`learn` also explains: `explain` (a walkthrough the owner steps through, each step
+with a point to keep and an optional photo), `diagram` (a flow, cycle or hub of
+3-8 parts; tapping one shows its detail), `match` (pairs, shown in a fixed
+shuffle) and `order` (a sequence the owner taps in order). Scoring happens in the
+app. A calculator can carry a `graph` of one output as one input runs over a
+range. Tool descriptions stay under the 1000 characters foundry.js sends (a test
+checks); per-kind detail lives in the parameter descriptions.
+
+A chat task's final answer streams while the worker writes it: each task gets
+an unguessable `answerTopic`, and `task-runtime` broadcasts the answer over
+Supabase Realtime (the live view's broadcast) once it is past a preamble and no
+tool call has started. The hidden `<task_coverage>` record never streams. A
+response that turns to tools, or an answer not delivered that round, is taken
+back; the saved `task_answer` has the same id and replaces what streamed. The
+app never saves a streaming card or answer.
+
 ## Shared objectives and worker communication
 
 Also apply `20260919180000_chat_task_teams.sql` before deploying this version.

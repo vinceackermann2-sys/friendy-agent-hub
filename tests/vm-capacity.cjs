@@ -50,11 +50,17 @@ global.fetch = async (input, options = {}) => {
     assert.equal(calls.filter((c) => c.method === 'DELETE' && c.url.includes('/virtualMachines/')).length, 2, 'each failed VM is removed before the next size');
     assert.deepEqual(calls.filter((c) => c.method === 'DELETE' && c.url.includes('/disks/')).map((c) => c.url.split('/disks/')[1].split('?')[0]), ['os-Standard_B2als_v2', 'os-Standard_B2as_v2'], 'the OS disk of each failed VM is removed too');
 
-    // A stopped VM whose size is full now: resized to the next size with room, then started.
+    // The next new VM goes straight to the size that just had room, without failing again.
+    vm = null; calls = [];
+    assert.equal((await azure.ensureVm('capacity-user-2', { create:true })).vmSize, 'Standard_B2s_v2');
+    assert.deepEqual(calls.filter((c) => c.method === 'PUT' && c.size).map((c) => c.size), ['Standard_B2s_v2']);
+
+    // A stopped VM whose size is full now: resized to a size with room (the one that last
+    // had room first), then started.
     vm = { size:'Standard_B2als_v2' }; full = new Set(['Standard_B2als_v2']); calls = [];
     await azure.startVm('capacity-user');
-    assert.equal(vm.size, 'Standard_B2as_v2');
-    assert.deepEqual(calls.filter((c) => c.method === 'PATCH').map((c) => c.size), ['Standard_B2as_v2']);
+    assert.equal(vm.size, 'Standard_B2s_v2');
+    assert.deepEqual(calls.filter((c) => c.method === 'PATCH').map((c) => c.size), ['Standard_B2s_v2']);
 
     // Any other failure is not a capacity problem and is not retried on another size.
     vm = { size:'Standard_B2als_v2' }; full = new Set(); calls = [];
@@ -64,5 +70,5 @@ global.fetch = async (input, options = {}) => {
     assert.equal(calls.filter((c) => c.method === 'PATCH').length, 0);
     global.fetch = before;
   } finally { console.warn = quiet; }
-  console.log('vm capacity: a new VM falls back to the next size, a stopped VM is resized to start, other failures stay failures: ok');
+  console.log('vm capacity: a new VM falls back to the next size, the size that last had room goes first, a stopped VM is resized to start, other failures stay failures: ok');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -19,14 +19,14 @@ const belnaWallet = createBelnaWallet({ store,secureCheckout:privateCheckout.fac
 import { normalizeSubAgent, nextRunAt } from './triggers.js';
 import * as composio from '../composio.js';
 import * as connectors from '../connectors.js';
-import { APPLE_TOOLS } from './apple-tools.js';
+import { APPLE_TOOLS, appleNote } from './apple-tools.js';
 import { appleDevices } from '../apple-devices.js';
 import * as mail from '../mail.js';
 import * as shoppay from '../shoppay.js';
 import { execInSandbox, isAzureConfigured } from './azure-vm.js';
 import { generateImage } from '../foundry.js';
 import { PLANS } from '../plans.js';
-import { questionArgs, presentArgs, learnArgs, learnSummary, connectArgs } from './cards.js';
+import { questionArgs, presentArgs, presentSummary, cardImages, learnArgs, learnSummary, connectArgs } from './cards.js';
 import { PERSONAL_TOOLS, pickPersonalTools, withLibraryAutosave } from './personal-tools.js';
 import { forbiddenPaymentSecret, cardNumberIn, loginFieldProblem } from './payment-safety.js';
 import { createPurchaseFlow, withPhoneApproval } from './purchase.js';
@@ -83,6 +83,9 @@ async function liveChannel(ctx, kind = 'live') {
 // The task's live channel, known before a step runs, so the live view can open while it works.
 const liveIdFor = async (ctx) => { const live = await liveChannel({ ...ctx }); return live ? `rt:${live.topic}` : null; };
 const desktopLiveIdFor = async (ctx) => { const live = await liveChannel({ ...ctx }, 'desktop'); return live ? `rt:${live.topic}` : null; };
+// The VM's shell agent listens on one channel per owner, whatever the session (see shellAgent
+// in azure-vm.js), so it keeps working across tasks while the VM runs.
+const shellChannel = (ctx) => liveChannel({ userId: ctx.userId, sessionId: 'shell-agent' }, 'shell');
 const liveRealtimeConfig = () => (liveRealtimeUrl() && liveKey() ? { url: liveRealtimeUrl(), key: liveKey() } : null);
 
 // Lowercase and fold to ASCII (sök→sok, ø→o, æ→ae, ß→ss) so keyword stems stay ASCII.
@@ -568,7 +571,7 @@ const TOOLS = {
         limits: Object.fromEntries(Object.entries(APP_LIMITS).filter(([toolkit]) => offered.has(toolkit))),
         ...(custom.length ? { custom } : {}),
         appleDevices: apple,
-        appleNote: 'Apple Calendar, Reminders, Contacts and read-only wellness summaries use apple_devices / apple_execute in the native Belna app. Open the app and connect each scope under Apple apps. Notes, Mail and Messages have no general Apple connector here.',
+        appleNote: appleNote(apple),
         note: note || undefined,
       };
     },
@@ -640,7 +643,7 @@ const TOOLS = {
     name: 'shell', type: 'code', approval: false,
     description: 'Run a bash command in the user worker container inside the private Azure VM. Only the task workspace is mounted and files persist through the VM workspace backup.',
     run: async ({ command }, ctx) => {
-      const out = await execInSandbox(ctx.userId, 'shell', { command }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      const out = await execInSandbox(ctx.userId, 'shell', { command, live: await shellChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('term', `shell: exit on ${out.vmName}`));
       return out;
     },
@@ -760,7 +763,7 @@ const TOOLS = {
     name: 'code_run', type: 'code', approval: false,
     description: 'Execute js/python/bash ONLY inside the hardened worker container inside the user Azure VM. Disabled without Azure.',
     run: async (args, ctx) => {
-      const out = await execInSandbox(ctx.userId, 'code_run', args, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
+      const out = await execInSandbox(ctx.userId, 'code_run', { ...args, live: await shellChannel(ctx) }, { alreadyRunning: ctx.vmReady === true, taskId: ctx.taskId });
       ctx.trace(entry('code', `code_run: ${out.language} on ${out.vmName}`));
       return out;
     },
@@ -819,22 +822,38 @@ const TOOLS = {
   },
   present: {
     name: 'present', type: 'function', approval: false,
-    description: 'Show a visual card in chat: a list, gallery of images, dashboard (metrics and a chart), table, or checklist of steps.',
+    description: 'Show a visual card in chat: a list, gallery of images, dashboard (metrics and a chart), table, checklist of steps, timeline, side-by-side comparison or places to visit.',
     run: async (args, ctx) => {
       const card = presentArgs(args);
+      const summary = presentSummary(card);
       ctx.trace(entry('board', `present: ${card.kind} ${card.title}`));
-      return { shown: true, kind: card.kind, title: card.title, note: 'The owner now sees this card in the chat. Do not show it again; continue the work or give your final answer.' };
+      // A card with nothing to show (a calculator whose formulas do not read) is not shown; the note says what to fix.
+      if (!summary.shown) return summary;
+      const out = { ...summary, note: 'The owner now sees this card in the chat. Do not show it again; continue the work or give your final answer.' };
+      // Photos the items name go to the card, not to the model's next prompt.
+      const images = await cardImages(card).catch(() => ({}));
+      if (Object.keys(images).length) Object.defineProperty(out, 'images', { value: images, enumerable: false });
+      return out;
     },
   },
   learn: {
     name: 'learn', type: 'function', approval: false,
-    description: 'Show an interactive learning card in chat: a quiz, flashcards, practice problems with hints and a checked answer, or a graph of functions.',
+    description: 'Show an interactive learning card in chat: a quiz, flashcards, practice problems with hints and a checked answer, a graph of functions, a step-by-step explainer, a diagram, or a matching or ordering exercise.',
     run: async (args, ctx) => {
       const card = learnArgs(args);
-      const out = learnSummary(card);
+      const summary = learnSummary(card);
       ctx.trace(entry('board', `learn: ${card.kind} ${card.title}`));
-      return out.shown ? { ...out, note: 'The owner now sees this card in the chat and works through it there. Do not show it again or reveal its answers; continue the work or give your final answer.' }
-        : { ...out, note: `Nothing to show: every ${card.kind === 'plot' ? 'function was unreadable (use x, numbers, + - * / ^ and sin, cos, sqrt, abs, ln, log, exp)' : 'item was incomplete (a quiz question needs options and an answer matching one of them)'}. Fix the arguments and call learn again.` };
+      if (!summary.shown) {
+        const fix = card.kind === 'plot' ? 'every function was unreadable (use x, numbers, + - * / ^ and sin, cos, sqrt, abs, ln, log, exp)'
+          : { diagram: 'a diagram needs at least two nodes, each with a label', match: 'a match needs at least two pairs, each with a term and a different match', order: 'an order exercise needs at least three items in sequence', explain: 'an explanation needs at least two steps, each with its text' }[card.kind]
+          || 'every item was incomplete (a quiz question needs options and an answer matching one of them)';
+        return { ...summary, note: `Nothing to show: ${fix}. Fix the arguments and call learn again.` };
+      }
+      const out = { ...summary, note: 'The owner now sees this card in the chat and works through it there. Do not show it again or reveal its answers; continue the work or give your final answer.' };
+      // An explainer's step photos go to the card, not to the model's next prompt.
+      const images = card.kind === 'explain' ? await cardImages(card).catch(() => ({})) : {};
+      if (Object.keys(images).length) Object.defineProperty(out, 'images', { value: images, enumerable: false });
+      return out;
     },
   },
   connect_app: {
@@ -943,7 +962,8 @@ const TOOLS = {
     approvalDetail: async ({ merchant, checkoutId }, { userId }) => JSON.stringify(await shoppay.purchaseQuote(userId, { merchant, checkoutId })),
     run: async ({ merchant, checkoutId }, ctx) => {
       const selection=await belnaWallet.preferences(ctx.userId);
-      if(!selection.methods?.shop_pay)throw new Error('Shop Pay is turned off. Ask the owner to turn it on in Settings → Wallet before purchasing.');
+      // Shop Pay is one of the payment apps: their one switch decides, not the Shop account link.
+      if(!selection.methods?.payment_apps)throw new Error('Payment apps (Shop Pay is one of them) are turned off. Ask the owner to turn them on in Settings → Wallet before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
@@ -961,8 +981,8 @@ const TOOLS = {
   mail_status: {
     name: 'mail_status', type: 'function', approval: false,
     description: 'Read this agent’s own mailbox address, unread count, and whether sending is ready. Never invent the address.',
-    run: async ({ agent_name }, ctx) => {
-      const snap = await mail.agentStatus(ctx.userId, agent_name);
+    run: async (_args, ctx) => {
+      const snap = await mail.agentStatus(ctx.userId);
       ctx.trace(entry('mail', `mail_status: ${snap.address || 'missing'}`));
       return snap;
     },
@@ -997,8 +1017,8 @@ const TOOLS = {
   mail_send: {
     name: 'mail_send', type: 'function', approval: true,
     description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body. Write it the way a person would: plain text, warm and to the point, a natural greeting and a short sign-off like “Best,”. No markdown, headings, templates or “this is an automated message”. Do not type your name, address or a signature; the app adds them under the message.',
-    run: async ({ to, subject, body, in_reply_to, agent_name }, ctx) => {
-      const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, agentName: agent_name, confirm: true });
+    run: async ({ to, subject, body, in_reply_to }, ctx) => {
+      const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, confirm: true });
       ctx.trace(entry('mail', `mail_send: ${out.subject} → ${(out.to || []).join(', ')}`));
       return { id: out.id, to: out.to, subject: out.subject, from: out.from };
     },
@@ -1060,7 +1080,8 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.learn.test(t)) names.add('learn');
   if (TOOL_KEYWORDS.image.test(t)) names.add('image_generate');
   if (TOOL_KEYWORDS.browser.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('browser_submit'); names.add('computer_screenshot'); }
-  if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
+  // A file the owner asks for is saved straight to the Library; shell and code_run start a computer.
+  if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); names.add('library_save'); }
   if (TOOL_KEYWORDS.computer.test(t)) {
     for (const name of ['browser_open','browser_action','browser_submit','shell','code_run','canvas_show','library_list','library_read','library_save']) names.add(name);
     // The computer's own apps are a file manager, a text editor and a browser (no spreadsheet).
@@ -1081,7 +1102,9 @@ function pickTools(task) {
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
-  if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
+  if (TOOL_KEYWORDS.wallet.test(t) || /belna|\bearn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
+  if (/\bearn|\byield|avkastning/.test(t)) names.add('wallet_earn');
+  if (/withdraw|\bbank(?:s|en|er|ing|konto)?\b|cash out|uttag/.test(t)) { names.add('wallet_bank_accounts'); names.add('wallet_withdraw'); }
   return [...names].map((n) => TOOLS[n]).filter((tool) => tool && tool.available !== false);
 }
 

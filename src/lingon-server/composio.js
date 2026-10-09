@@ -59,6 +59,7 @@ async function webhookSecret() {
     method: 'POST',
     headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ p_name: 'composio_webhook_secret' }),
+    signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) return '';
   const value = String(await response.json().catch(() => '') || '').trim();
@@ -101,6 +102,8 @@ async function cfetch(path, { method = 'GET', body } = {}) {
       'Content-Type': 'application/json',
     },
     body: body ? JSON.stringify(body) : undefined,
+    // A stalled upstream otherwise holds a task step or automation tick for minutes.
+    signal: AbortSignal.timeout(120000),
   });
   const text = await r.text();
   let json = null;
@@ -345,9 +348,18 @@ async function appsForUser(belnaUserId) {
     if (!accountsByToolkit.has(c.toolkit)) accountsByToolkit.set(c.toolkit, []);
     accountsByToolkit.get(c.toolkit).push(c);
   }
+  // Cold metadata used to cost one network round trip per connector. Fetch
+  // small batches concurrently, preserving config order and provider capacity.
+  const metadata = new Map();
+  const slugs = [...new Set(configs.map(cfg => cfg.toolkit))];
+  for (let i = 0; i < slugs.length; i += 6) {
+    await Promise.all(slugs.slice(i, i + 6).map(async slug => {
+      metadata.set(slug, await toolkitMeta(slug));
+    }));
+  }
   const apps = [];
   for (const cfg of configs) {
-    const meta = await toolkitMeta(cfg.toolkit);
+    const meta = metadata.get(cfg.toolkit);
     const accounts = accountsByToolkit.get(cfg.toolkit) || [];
     const conn = accounts[0] || null;
     apps.push({
@@ -599,6 +611,7 @@ async function executeTool(belnaUserId, { tool, toolSlug, args, arguments: args2
   const slug = String(tool || toolSlug || '').toUpperCase().trim();
   if (!/^[A-Z0-9_]+$/.test(slug)) throw Object.assign(new Error('Pick a valid tool.'), { code: 'BAD_INPUT' });
   let ConnectedAccountId = connectedAccountId || undefined;
+  let connectedToolkit = '';
   if (ConnectedAccountId) {
     // Never let a user borrow another account: the connection must belong to
     // their own Composio user id.
@@ -612,8 +625,16 @@ async function executeTool(belnaUserId, { tool, toolSlug, args, arguments: args2
     if (String(acct.status || '').toUpperCase() !== 'ACTIVE') {
       throw Object.assign(new Error('That connection is no longer active. Reconnect it under Apps.'), { code: 'BAD_INPUT' });
     }
+    connectedToolkit = String((acct.toolkit && acct.toolkit.slug) || '').toLowerCase();
   }
-  const toolkitSlug = await inferToolkitForTool(slug, ConnectedAccountId);
+  // The owner's on/off switches are keyed by the tool's own connector, so it comes from
+  // Composio's tool record — never from the connection passed in or the slug's prefix.
+  const toolMeta = await getTool(slug);
+  const toolkitSlug = String((toolMeta && toolMeta.toolkit && toolMeta.toolkit.slug) || '').toLowerCase();
+  if (!toolkitSlug) throw Object.assign(new Error('Could not determine the connector for this tool.'), { code: 'BAD_INPUT' });
+  if (ConnectedAccountId && connectedToolkit !== toolkitSlug) {
+    throw Object.assign(new Error('That connection cannot run this tool.'), { code: 'BAD_INPUT' });
+  }
   const disabled = await store.getConnectorPermissions(belnaUserId, toolkitSlug);
   if (disabled.includes(slug)) {
     throw Object.assign(new Error('That permission is turned off for this connector.'), { code: 'PERMISSION_OFF' });
@@ -685,22 +706,6 @@ async function triggerOptionsForUser(belnaUserId) {
   } catch {
     return { schedules, apps: [] };
   }
-}
-
-async function inferToolkitForTool(slug, connectedAccountId) {
-  if (connectedAccountId) {
-    const acct = await getConnectedAccount(connectedAccountId).catch(() => null);
-    const tk = String((acct && acct.toolkit && acct.toolkit.slug) || '').toLowerCase();
-    if (tk) return tk;
-  }
-  const configs = await listAuthConfigs().catch(() => []);
-  const s = String(slug || '').toLowerCase();
-  const slugs = configs.map((c) => c.toolkit).filter(Boolean).sort((a, b) => b.length - a.length);
-  for (const t of slugs) {
-    const prefix = String(t).replace(/-/g, '');
-    if (s === prefix || s.startsWith(prefix + '_')) return t;
-  }
-  return s.split('_')[0] || '';
 }
 
 async function ensureAppTrigger(belnaUserId, toolkit, slug, connectedAccountId) {

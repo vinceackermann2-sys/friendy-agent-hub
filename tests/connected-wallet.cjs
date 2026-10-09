@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {createBelnaWallet}=require('../server/belna-wallet');
+const {createLegacyBelnaWallet:createBelnaWallet}=require('../server/belna-wallet');
 const fs=require('node:fs');
 const {PGlite}=require('@electric-sql/pglite');
 (async()=>{

@@ -180,40 +180,67 @@ function publicMessage(row, { full } = {}) {
   return out;
 }
 
-async function allocateLocalPart(userId, agentName) {
+// Names the app shows before the owner picks one. They never become an address.
+const PLACEHOLDER_NAMES = new Set(['agent', 'your agent', 'your au pair', 'lingon']);
+function isPlaceholderName(name) { return PLACEHOLDER_NAMES.has(String(name || '').trim().toLowerCase()); }
+
+// The address is the agent's name: Alva gets alva@mail.belna.se. A name another owner
+// already has gets a short suffix (alva-3f2a, then alva-2 …), never a different word.
+function localPartCandidates(userId, agentName) {
   const base = slugifyName(agentName);
   const first = isReserved(base) ? base + '-' + shortUserTag(userId) : base;
   const candidates = [first, first + '-' + shortUserTag(userId)];
   for (let i = 2; i <= 20; i++) candidates.push(first + '-' + i);
-  for (const part of candidates) {
-    if (isReserved(part)) continue;
-    const taken = await store.mailLocalPartTaken(part, userId);
-    if (!taken) return part;
+  return candidates.filter((part) => !isReserved(part));
+}
+
+async function allocateLocalPart(userId, agentName) {
+  for (const part of localPartCandidates(userId, agentName)) {
+    if (await store.mailLocalPartTaken(part, userId)) continue;
+    // An address another agent had before a rename stays theirs, so its mail cannot
+    // reach a new owner.
+    const pastOwner = await store.mailAddressPastOwner(addressFor(part));
+    if (!pastOwner || pastOwner === userId) return part;
   }
   return 'agent-' + shortUserTag(userId) + crypto.randomBytes(2).toString('hex');
 }
+// The address given when every form of the name is taken (agent-<tag><random>).
+const ownFallback = (userId, part) => new RegExp('^agent-' + shortUserTag(userId) + '[0-9a-f]{4}$').test(part);
 
-async function ensureMailbox(userId, agentName) {
-  const name = String(agentName || '').trim().slice(0, 40) || 'Agent';
+// The mailbox follows the agent's saved name. Only that name is used, never one a
+// request or the model passes, so a stale device or a tool call cannot rename it.
+async function ensureMailbox(userId, savedName) {
+  if (savedName == null) savedName = (await store.getAgentContext(userId)).agent?.name;
+  // The name is the From display name: no line breaks, quotes or angle brackets, which
+  // would change the address header.
+  const clean = String(savedName || '').replace(/[\r\n"<>\\]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const name = clean && !isPlaceholderName(clean) ? clean : '';
   const existing = await store.getMailboxByUser(userId);
   if (existing) {
-    if (name && existing.displayName !== name) {
-      return store.upsertMailbox(userId, { displayName: name });
+    const patch = {};
+    if (name && existing.displayName !== name) patch.displayName = name;
+    const current = String(existing.localPart || existing.address || '').split('@')[0].toLowerCase();
+    if (name && !localPartCandidates(userId, name).includes(current)) {
+      const part = await allocateLocalPart(userId, name);
+      // Still no free form of the name: the fallback already held stays, rather than a new
+      // random address on every read.
+      if (!(ownFallback(userId, part) && ownFallback(userId, current))) {
+        patch.localPart = part;
+        patch.address = addressFor(part);
+      }
     }
-    return existing;
+    return Object.keys(patch).length ? store.upsertMailbox(userId, patch) : existing;
   }
-  const localPart = await allocateLocalPart(userId, name);
+  const localPart = await allocateLocalPart(userId, name || 'Agent');
   return store.upsertMailbox(userId, {
     localPart,
     address: addressFor(localPart),
-    displayName: name,
+    displayName: name || 'Agent',
   });
 }
 
-async function snapshot(userId, { folder = 'inbox', q = '', ensureName, limit, mailbox } = {}) {
-  let box = mailbox;
-  if (!box) box = ensureName != null ? await ensureMailbox(userId, ensureName) : await store.getMailboxByUser(userId);
-  if (!box) box = await ensureMailbox(userId, 'Agent');
+async function snapshot(userId, { folder = 'inbox', q = '', limit, mailbox } = {}) {
+  const box = mailbox || await ensureMailbox(userId);
   const [messages, drafts, unread] = await Promise.all([
     store.listMailMessages(userId, { folder, q, limit: limit || 40 }),
     store.listMailDrafts(userId),
@@ -320,7 +347,7 @@ async function send(userId, input) {
     throw e;
   }
   const to = parseRecipients(input.to);
-  const subject = String(input.subject || '').trim().slice(0, 200);
+  const subject = String(input.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
   const bodyText = String(input.body || input.bodyText || '').trim().slice(0, MAX_BODY);
   if (!subject) {
     const e = new Error('Subject is required.');
@@ -333,7 +360,8 @@ async function send(userId, input) {
     throw e;
   }
   const attachments = parseAttachments(input.attachments);
-  const box = await ensureMailbox(userId, input.agentName || 'Agent');
+  const context = await store.getAgentContext(userId);
+  const box = await ensureMailbox(userId, context.agent?.name);
   // Reserve this message before counting, so parallel sends cannot all pass the daily
   // limit; the reservation stays out of every folder until the provider accepts it.
   const reserved = await store.insertMailMessage(userId, {
@@ -357,11 +385,11 @@ async function send(userId, input) {
     throw e;
   }
   const from = (box.displayName ? box.displayName + ' ' : '') + '<' + box.address + '>';
-  const context = await store.getAgentContext(userId);
   const headers = {};
   if (input.inReplyTo) {
-    headers['In-Reply-To'] = String(input.inReplyTo);
-    headers.References = String(input.references || input.inReplyTo);
+    const oneLine = (value) => String(value).replace(/[\r\n]+/g, ' ').trim().slice(0, 998);
+    headers['In-Reply-To'] = oneLine(input.inReplyTo);
+    headers.References = oneLine(input.references || input.inReplyTo);
   }
   let sent;
   try {
@@ -383,7 +411,9 @@ async function send(userId, input) {
     throw error;
   }
   const accepted = { folder: 'sent', resendId: sent && sent.id ? sent.id : null, messageId: sent && sent.id ? sent.id : null };
-  await store.updateMailMessage(userId, reserved.id, accepted);
+  // The provider already accepted it. Failing here would invite a retry that sends it twice.
+  await store.updateMailMessage(userId, reserved.id, accepted)
+    .catch((error) => console.warn('[mail] sent message not moved to Sent:', error.message));
   const row = { ...reserved, ...accepted };
   if (input.draftId) await store.deleteMailDraft(userId, input.draftId).catch(() => {});
   return publicMessage(row, { full: true });
@@ -403,8 +433,7 @@ async function sendPersonalCheckIn(userId, { subAgentId, runId, subject, body })
   if (!client) throw new Error('Personal check-ins need a verified account email.');
   const {data, error} = await client.auth.admin.getUserById(userId);
   if (error || !data?.user?.email || !data.user.email_confirmed_at) throw new Error('Personal check-ins need a verified account email.');
-  const context = await store.getAgentContext(userId);
-  return send(userId, {to:data.user.email, subject, body, agentName:context.agent.name, confirm:true,
+  return send(userId, {to:data.user.email, subject, body, confirm:true,
     personalCheckIn:true, idempotencyKey:`personal-check-in/${run.id}`});
 }
 
@@ -459,6 +488,11 @@ async function ingestWebhook(raw, headers) {
   let box = null;
   for (const addr of recipients) {
     box = await store.getMailboxByAddress(addr);
+    // Mail to the address an agent had before a rename still reaches it.
+    if (!box && addr.endsWith('@' + mailDomain())) {
+      const pastOwner = await store.mailAddressPastOwner(addr);
+      if (pastOwner) box = await store.getMailboxByUser(pastOwner);
+    }
     if (box) break;
   }
   if (!box) return { ok: true, unmatched: recipients };
@@ -488,8 +522,8 @@ async function ingestWebhook(raw, headers) {
   return { ok: true, address: box.address };
 }
 
-async function agentStatus(userId, agentName) {
-  const box = await ensureMailbox(userId, agentName || 'Agent');
+async function agentStatus(userId) {
+  const box = await ensureMailbox(userId);
   const unread = await store.countUnreadMail(userId);
   return {
     address: box.address,

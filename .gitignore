@@ -1,6 +1,8 @@
 node_modules/
 .env
+.env.wallet.local
 server/data.json
+server/data.json.*
 server/data/
 *.log
 shots/*.png
@@ -25,3 +27,6 @@ native/apple/**/*.mobileprovision
 native/apple/Belna.xcodeproj/
 *.xcuserstate
 xcuserdata/
+# Generated Privy SDK bundle, rebuilt by sync-lingon.
+app/privy-wallet.js
+public/lingon/privy-wallet.js

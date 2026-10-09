@@ -41,6 +41,9 @@ global.fetch = async (input, init = {}) => {
   const method = init.method || 'GET';
   const headers = Object.fromEntries(Object.entries(init.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
   calls.push({ url: url.href, method, headers, body: init.body });
+  // Some public APIs (including GitHub) reject unidentified server requests.
+  if (url.host === 'identified.example.com') return headers['user-agent']
+    ? json({ repository: 'nodejs/node' }) : new Response('User-Agent required', { status: 403 });
   // Streamable HTTP MCP server; answers tools/call as an SSE stream.
   if (url.host === 'mcp.example.com') {
     if (headers.authorization !== `Bearer ${TOKEN}`) return new Response('no', { status: 401 });
@@ -108,6 +111,10 @@ async function main() {
   const { TOOLS: AGENT_TOOLS, pickTools } = require('../server/agents/tools');
   const { approvalCard } = require('../server/agents/cards');
   const ctx = { userId: 'user-a', trace: () => {} };
+
+  const identified = await connectors.create('user-a', { kind: 'api', name: 'Identified API', url: 'https://identified.example.com', auth: { type: 'none' }, testPath: '/repo' });
+  assert.equal((await AGENT_TOOLS.connector_call.run({ connector: identified.connector.id, method: 'GET', path: '/repo' }, ctx)).data.repository, 'nodejs/node');
+  await connectors.remove('user-a', identified.connector.id);
 
   // Input checks: https, public, and a key unless there is no authentication.
   assert.throws(() => connectors.cleanInput({ kind: 'mcp', name: 'x', url: 'http://mcp.example.com/mcp', auth: { type: 'none' } }), /must start with https/);

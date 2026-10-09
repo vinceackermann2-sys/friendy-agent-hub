@@ -15,12 +15,18 @@ function privateIPv4(host) {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (!m) return false;
   const [a, b] = [Number(m[1]), Number(m[2])];
+  const c = Number(m[3]);
+  // The same ranges as the Node runtime's list (server/agents/sandbox.js), including the
+  // documentation and benchmarking networks.
   return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224 || host === '168.63.129.16';
+    || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224 || host === '168.63.129.16'
+    || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && (b === 18 || b === 19)) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113);
 }
 function privateIPv6(host) {
   const h = host.toLowerCase();
-  return h === '::' || h === '::1' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h) || h.startsWith('::ffff:');
+  return h === '::' || h === '::1' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h) || h.startsWith('::ffff:')
+    // NAT64 (reaches IPv4 addresses, private ones included), multicast and documentation.
+    || h.startsWith('64:ff9b:') || /^ff[0-9a-f]{2}:/.test(h) || /^2001:0?db8:/.test(h);
 }
 function publicUrlProblem(value) {
   let u;

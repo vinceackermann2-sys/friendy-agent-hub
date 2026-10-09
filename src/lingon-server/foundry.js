@@ -83,29 +83,44 @@ function requireConfig() {
   return { apiKey, project, openai };
 }
 
-function timeoutSignal(signal, timeoutMs, maxMs = timeoutMs) {
+// stallMs, when given, is a shorter limit that holds only until the response starts writing
+// output: a call that goes quiet before its first word is stuck, not thinking (one chat turn
+// waited the full three minutes for nothing), and is ended so it can be sent again.
+function timeoutSignal(signal, timeoutMs, maxMs = timeoutMs, stallMs = 0) {
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) abort();
   else signal?.addEventListener?.('abort', abort, { once: true });
   const deadline = Date.now() + maxMs;
   let timer = setTimeout(abort, timeoutMs);
-  return {
+  let stall = null;
+  const out = {
     signal: controller.signal,
+    stalled: false,
     // Restart the inactivity timer without extending past the overall deadline.
     touch() {
       clearTimeout(timer);
       timer = setTimeout(abort, Math.max(0, Math.min(timeoutMs, deadline - Date.now())));
+      if (stall) { clearTimeout(stall); stall = setTimeout(stop, stallMs); }
     },
+    // The response is writing output: from here only the inactivity timer applies.
+    started() { clearTimeout(stall); stall = null; },
     cleanup() {
       clearTimeout(timer);
+      clearTimeout(stall);
       signal?.removeEventListener?.('abort', abort);
     },
   };
+  function stop() { out.stalled = true; abort(); }
+  if (stallMs > 0) stall = setTimeout(stop, stallMs);
+  return out;
 }
 
 function transient(error, signal) {
-  if (signal?.aborted || error?.streamed || error?.name === 'AbortError') return false;
+  if (signal?.aborted || error?.streamed) return false;
+  // Stuck before writing anything: sending it again costs nothing the owner has seen.
+  if (error?.code === 'FOUNDRY_STALL') return true;
+  if (error?.name === 'AbortError') return false;
   if (error?.code === 'FOUNDRY_HTTP') return RETRYABLE_STATUS.has(error.status);
   return error?.name === 'TypeError'; // fetch network failure before a response
 }
@@ -281,6 +296,26 @@ function responseBody({ prompt, system, history, model, json, tools, attachments
   return body;
 }
 
+// Where a streamed call's JSON arguments close, read incrementally from `from` (the state is
+// kept on the call between deltas). -1 while the object is still open.
+const scanState = new WeakMap();
+function argumentsEnd(call, from) {
+  const st = scanState.get(call) || { depth: 0, inString: false, escaped: false, end: -1 };
+  scanState.set(call, st);
+  const s = call.arguments;
+  for (let i = from; i < s.length && st.end < 0; i++) {
+    const ch = s[i];
+    if (st.inString) {
+      if (st.escaped) st.escaped = false;
+      else if (ch === '\\') st.escaped = true;
+      else if (ch === '"') st.inString = false;
+    } else if (ch === '"') st.inString = true;
+    else if (ch === '{' || ch === '[') st.depth++;
+    else if ((ch === '}' || ch === ']') && --st.depth === 0) st.end = i + 1;
+  }
+  return st.end;
+}
+
 function functionCall(item) {
   let args = {};
   try { args = item?.arguments ? JSON.parse(item.arguments) : {}; }
@@ -357,7 +392,7 @@ function addUsage(a, b) {
 async function attemptResponse(options, modelName) {
   const config = requireConfig();
   const effort = options.reasoningEffort || REASONING_EFFORT;
-  const timed = timeoutSignal(options.signal, ['high', 'xhigh'].includes(effort) ? DEEP_TIMEOUT_MS : RESPONSE_TIMEOUT_MS, STREAM_MAX_MS);
+  const timed = timeoutSignal(options.signal, ['high', 'xhigh'].includes(effort) ? DEEP_TIMEOUT_MS : RESPONSE_TIMEOUT_MS, STREAM_MAX_MS, Number(options.stallMs) || 0);
   const body = responseBody({ ...options, model: modelName, stream: true });
   let accepted = false;
   let completed = null;
@@ -384,7 +419,9 @@ async function attemptResponse(options, modelName) {
     let buffer = '';
     // A function call whose arguments outgrow maxArgumentChars is looping; the stream
     // stops there and the call is returned with its partial arguments.
-    const argumentLimit = Number(options.maxArgumentChars) || 0;
+    // A number, or a function of the call's name for tools whose arguments run longer.
+    const limitFor = typeof options.maxArgumentChars === 'function' ? (name) => Number(options.maxArgumentChars(name)) || 0 : () => Number(options.maxArgumentChars) || 0;
+    const argumentLimit = !!options.maxArgumentChars;
     const callArguments = new Map();
     let runawayCall = null;
     // A response that starts more function calls than the caller will run is flooding
@@ -392,11 +429,17 @@ async function attemptResponse(options, modelName) {
     const callLimit = Number(options.maxFunctionCalls) || 0;
     let callsStarted = 0, tooManyCalls = false;
     const stopped = () => runawayCall || tooManyCalls;
+    // A caller that draws a card while its arguments are written (onCallDelta) hears about every
+    // call as it starts and each time its arguments grow; index counts function calls in order.
+    const onCall = typeof options.onCallDelta === 'function' ? options.onCallDelta : null;
+    const trackCalls = !!(argumentLimit || onCall);
+    const tell = (call) => { if (onCall) try { onCall({ index: call.index, name: call.name, arguments: call.arguments }); } catch {} };
     const consume = (frame) => {
       const payload = String(frame).split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
       if (!payload || payload === '[DONE]') return;
       let event;
       try { event = JSON.parse(payload); } catch { return; }
+      if ((event.type === 'response.output_text.delta' && event.delta) || (event.type === 'response.output_item.added' && event.item?.type !== 'reasoning')) timed.started();
       if (event.type === 'response.output_text.delta' && event.delta) {
         streamedText += event.delta;
         const visible = visibleText(streamedText);
@@ -407,13 +450,29 @@ async function attemptResponse(options, modelName) {
         }
       } else if (event.type === 'response.output_item.done' && event.item) {
         doneItems.push(event.item);
-      } else if ((argumentLimit || callLimit) && event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
+      } else if ((trackCalls || callLimit) && event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
         callsStarted++;
         if (callLimit && callsStarted > callLimit) { tooManyCalls = true; return; }
-        if (argumentLimit) callArguments.set(event.item.id, { type: 'function_call', name: event.item.name, call_id: event.item.call_id, arguments: '' });
-      } else if (argumentLimit && event.type === 'response.function_call_arguments.delta') {
+        if (trackCalls) {
+          const call = { type: 'function_call', name: event.item.name, call_id: event.item.call_id, arguments: '' };
+          Object.defineProperty(call, 'index', { value: callsStarted - 1, enumerable: false });
+          callArguments.set(event.item.id, call);
+          tell(call);
+        }
+      } else if (trackCalls && event.type === 'response.function_call_arguments.delta') {
         const call = callArguments.get(event.item_id);
-        if (call) { call.arguments += event.delta || ''; if (call.arguments.length > argumentLimit) runawayCall = call; }
+        if (call) {
+          const from = call.arguments.length;
+          call.arguments += event.delta || '';
+          // A call's arguments are one JSON object. Text after it closes is the model rambling
+          // on (its reasoning once leaked into a card's arguments for 4000 tokens): the call ends
+          // where the object closed, complete, and the stream stops there.
+          const end = argumentsEnd(call, from);
+          if (end > 0 && /\S/.test(call.arguments.slice(end))) { call.arguments = call.arguments.slice(0, end); runawayCall = call; return; }
+          const limit = argumentLimit ? limitFor(call.name) : 0;
+          if (limit && call.arguments.length > limit) runawayCall = call;
+          else tell(call);
+        }
       } else if ((event.type === 'response.completed' || event.type === 'response.incomplete') && event.response) {
         // An incomplete response still carries its output and billable usage.
         completed = event.response;
@@ -449,7 +508,10 @@ async function attemptResponse(options, modelName) {
       try { options.onDelta?.(out.text, out.text); } catch {}
     }
     return out;
-  } catch (error) {
+  } catch (caught) {
+    let error = caught;
+    // Ended for going quiet before any output (not by the caller): a stall the retry sends again.
+    if (timed.stalled && !options.signal?.aborted) error = Object.assign(new Error('The model stopped responding before it wrote anything.'), { code: 'FOUNDRY_STALL', status: 504 });
     if (error && typeof error === 'object') {
       // Text already reached the client; a retry would duplicate it.
       if (streamedText) { error.streamed = true; error.partialText = visibleText(streamedText); }
@@ -474,10 +536,14 @@ async function runWithFallback(options, { tools = false } = {}) {
   const pinned = options.model && options.model !== MODEL_DEFAULT;
   const canFallBack = !pinned && MODEL_FALLBACK && MODEL_FALLBACK !== first;
   // Transient failures retry once; a quota error moves straight to a distinct fallback.
+  // A call sent again after a stall waits as long as it takes: when the service is slow for
+  // everyone, a second short limit would only fail the turn.
+  let stalled = false;
   const once = async (model) => {
     try {
-      return await run({ ...options, allowEmptyText: tools }, model);
+      return await run({ ...options, allowEmptyText: tools, stallMs: stalled ? 0 : options.stallMs }, model);
     } catch (error) {
+      if (error?.code === 'FOUNDRY_STALL') stalled = true;
       if (!promptCache.enabled || error.status !== 400 || !/prompt_cache/i.test(error.message)) throw error;
       promptCache.enabled = false;
       console.warn('[foundry] deployment rejected prompt cache options; continuing without them');
@@ -516,12 +582,20 @@ async function callFoundryWithTools(options) {
 }
 
 function prepareAudio({ audio, mime }) {
-  const raw = String(audio || '').replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
+  const source = String(audio || '').trim();
+  // MediaRecorder includes codec parameters in its MIME type. FileReader keeps
+  // those parameters in the data URL; strip the whole header before decoding.
+  const header = /^data:([^;,]+)(?:;[^,]*)?;base64,/i.exec(source);
+  const raw = (header ? source.slice(header[0].length) : source).replace(/\s/g, '');
   if (!raw) throw Object.assign(new Error('Recording was empty.'), { code: 'BAD_INPUT' });
-  const bytes = Math.floor(raw.length * 3 / 4);
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(raw) || raw.length % 4 === 1
+      || (raw.includes('=') && raw.length % 4 !== 0)) {
+    throw Object.assign(new Error('Invalid recording data.'), { code: 'BAD_INPUT' });
+  }
+  const bytes = Math.floor(raw.length * 3 / 4) - (raw.endsWith('==') ? 2 : raw.endsWith('=') ? 1 : 0);
   if (bytes < 200) throw Object.assign(new Error('Recording was empty.'), { code: 'BAD_INPUT' });
   if (bytes > MAX_AUDIO_BYTES) throw Object.assign(new Error('Recording is too long. Keep it under a minute.'), { code: 'BAD_INPUT' });
-  const mimeType = String(mime || 'audio/webm').split(';')[0].trim().toLowerCase();
+  const mimeType = String(mime || header?.[1] || 'audio/webm').split(';')[0].trim().toLowerCase();
   if (!AUDIO_MIME.test(mimeType)) throw Object.assign(new Error('Unsupported audio format.'), { code: 'BAD_INPUT' });
   return { data: raw, mimeType: mimeType === 'video/webm' ? 'audio/webm' : mimeType };
 }

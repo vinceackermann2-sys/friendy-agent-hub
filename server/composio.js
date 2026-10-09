@@ -61,6 +61,7 @@ async function webhookSecret() {
     method: 'POST',
     headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ p_name: 'composio_webhook_secret' }),
+    signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) return '';
   const value = String(await response.json().catch(() => '') || '').trim();
@@ -103,6 +104,8 @@ async function cfetch(path, { method = 'GET', body } = {}) {
       'Content-Type': 'application/json',
     },
     body: body ? JSON.stringify(body) : undefined,
+    // A stalled upstream otherwise holds a task step or automation tick for minutes.
+    signal: AbortSignal.timeout(120000),
   });
   const text = await r.text();
   let json = null;
@@ -321,9 +324,18 @@ async function appsForUser(belnaUserId) {
     if (!accountsByToolkit.has(c.toolkit)) accountsByToolkit.set(c.toolkit, []);
     accountsByToolkit.get(c.toolkit).push(c);
   }
+  // Cold metadata used to cost one network round trip per connector. Fetch
+  // small batches concurrently, preserving config order and provider capacity.
+  const metadata = new Map();
+  const slugs = [...new Set(configs.map(cfg => cfg.toolkit))];
+  for (let i = 0; i < slugs.length; i += 6) {
+    await Promise.all(slugs.slice(i, i + 6).map(async slug => {
+      metadata.set(slug, await toolkitMeta(slug));
+    }));
+  }
   const apps = [];
   for (const cfg of configs) {
-    const meta = await toolkitMeta(cfg.toolkit);
+    const meta = metadata.get(cfg.toolkit);
     const accounts = accountsByToolkit.get(cfg.toolkit) || [];
     const conn = accounts[0] || null;
     apps.push({

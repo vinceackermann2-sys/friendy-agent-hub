@@ -184,7 +184,14 @@ final class DeviceServices {
             try contacts.execute(request); return ["id": item.identifier, "saved": action != "contacts.delete", "deleted": action == "contacts.delete"]
         case "health.summary":
             guard args["purpose"] as? String == "wellness" else { throw DeviceError.message("Health summaries are only for your own fitness and wellness.") }
-            return try await healthSummary(days: min(7,max(1,args["days"] as? Int ?? 1)))
+            // A start (local midnight for "today") replaces the rolling window of days.
+            var from: Date? = nil
+            if args["start"] != nil {
+                let start = try dateArg(args, "start")
+                guard start < Date(), Date().timeIntervalSince(start) <= 7 * 86400 else { throw DeviceError.message("Health summaries cover at most the last 7 days.") }
+                from = start
+            }
+            return try await healthSummary(days: min(7,max(1,args["days"] as? Int ?? 1)), from: from)
         default: throw DeviceError.message("Unsupported action.")
         }
     }
@@ -204,8 +211,8 @@ final class DeviceServices {
             health.execute(query)
         }
     }
-    private func healthSummary(days: Int) async throws -> [String: Any] {
-        let end = Date(), start = Calendar.current.date(byAdding: .day, value: -days, to: end)!
+    private func healthSummary(days: Int, from: Date? = nil) async throws -> [String: Any] {
+        let end = Date(), start = from ?? Calendar.current.date(byAdding: .day, value: -days, to: end)!
         var result: [String: Any] = ["start": iso(start), "end": iso(end), "purpose": "wellness", "note": "An unavailable metric can mean no records or no read permission. This is a wellness summary, not medical advice."]
         for (name,id,unit) in [("steps",HKQuantityTypeIdentifier.stepCount,HKUnit.count()), ("distanceMeters",.distanceWalkingRunning,.meter()), ("exerciseMinutes",.appleExerciseTime,.minute())] {
             // Denial or missing records must never turn into a fabricated zero.

@@ -11,7 +11,7 @@ const { entry } = require('./tracing');
 const { validatePage } = require('./page-validation');
 const composio = require('../composio');
 const connectors = require('../connectors');
-const { APPLE_TOOLS } = require('./apple-tools');
+const { APPLE_TOOLS, appleNote } = require('./apple-tools');
 const { appleDevices } = require('../apple-devices');
 const store = require('../store');
 const { createWalletTools } = require('./wallet-tools');
@@ -23,7 +23,7 @@ const live = require('./live');
 const pc = require('./pc');
 const { generateImage } = require('../foundry');
 const { PLANS } = require('../plans');
-const { questionArgs, presentArgs, learnArgs, learnSummary, connectArgs } = require('./cards');
+const { questionArgs, presentArgs, presentSummary, cardImages, learnArgs, learnSummary, connectArgs } = require('./cards');
 const { forbiddenPaymentSecret, cardNumberIn, loginFieldProblem } = require('./payment-safety');
 const { createPurchaseFlow, withPhoneApproval } = require('./purchase');
 const purchaseFlow = createPurchaseFlow({ live, wallet:belnaWallet });
@@ -550,7 +550,7 @@ const TOOLS = {
         limits: Object.fromEntries(Object.entries(APP_LIMITS).filter(([toolkit]) => offered.has(toolkit))),
         ...(custom.length ? { custom } : {}),
         appleDevices: apple,
-        appleNote: 'Apple Calendar, Reminders, Contacts and read-only wellness summaries use apple_devices / apple_execute in the native Belna app. Open the app and connect each scope under Apple apps. Notes, Mail and Messages have no general Apple connector here.',
+        appleNote: appleNote(apple),
         note: note || undefined,
       };
     },
@@ -803,22 +803,38 @@ const TOOLS = {
   },
   present: {
     name: 'present', type: 'function', approval: false,
-    description: 'Show a visual card in chat: a list, gallery of images, dashboard (metrics and a chart), table, or checklist of steps.',
+    description: 'Show a visual card in chat: a list, gallery of images, dashboard (metrics and a chart), table, checklist of steps, timeline, side-by-side comparison or places to visit.',
     run: async (args, ctx) => {
       const card = presentArgs(args);
+      const summary = presentSummary(card);
       ctx.trace(entry('board', `present: ${card.kind} ${card.title}`));
-      return { shown: true, kind: card.kind, title: card.title, note: 'The owner now sees this card in the chat. Do not show it again; continue the work or give your final answer.' };
+      // A card with nothing to show (a calculator whose formulas do not read) is not shown; the note says what to fix.
+      if (!summary.shown) return summary;
+      const out = { ...summary, note: 'The owner now sees this card in the chat. Do not show it again; continue the work or give your final answer.' };
+      // Photos the items name go to the card, not to the model's next prompt.
+      const images = await cardImages(card).catch(() => ({}));
+      if (Object.keys(images).length) Object.defineProperty(out, 'images', { value: images, enumerable: false });
+      return out;
     },
   },
   learn: {
     name: 'learn', type: 'function', approval: false,
-    description: 'Show an interactive learning card in chat: a quiz, flashcards, practice problems with hints and a checked answer, or a graph of functions.',
+    description: 'Show an interactive learning card in chat: a quiz, flashcards, practice problems with hints and a checked answer, a graph of functions, a step-by-step explainer, a diagram, or a matching or ordering exercise.',
     run: async (args, ctx) => {
       const card = learnArgs(args);
-      const out = learnSummary(card);
+      const summary = learnSummary(card);
       ctx.trace(entry('board', `learn: ${card.kind} ${card.title}`));
-      return out.shown ? { ...out, note: 'The owner now sees this card in the chat and works through it there. Do not show it again or reveal its answers; continue the work or give your final answer.' }
-        : { ...out, note: `Nothing to show: every ${card.kind === 'plot' ? 'function was unreadable (use x, numbers, + - * / ^ and sin, cos, sqrt, abs, ln, log, exp)' : 'item was incomplete (a quiz question needs options and an answer matching one of them)'}. Fix the arguments and call learn again.` };
+      if (!summary.shown) {
+        const fix = card.kind === 'plot' ? 'every function was unreadable (use x, numbers, + - * / ^ and sin, cos, sqrt, abs, ln, log, exp)'
+          : { diagram: 'a diagram needs at least two nodes, each with a label', match: 'a match needs at least two pairs, each with a term and a different match', order: 'an order exercise needs at least three items in sequence', explain: 'an explanation needs at least two steps, each with its text' }[card.kind]
+          || 'every item was incomplete (a quiz question needs options and an answer matching one of them)';
+        return { ...summary, note: `Nothing to show: ${fix}. Fix the arguments and call learn again.` };
+      }
+      const out = { ...summary, note: 'The owner now sees this card in the chat and works through it there. Do not show it again or reveal its answers; continue the work or give your final answer.' };
+      // An explainer's step photos go to the card, not to the model's next prompt.
+      const images = card.kind === 'explain' ? await cardImages(card).catch(() => ({})) : {};
+      if (Object.keys(images).length) Object.defineProperty(out, 'images', { value: images, enumerable: false });
+      return out;
     },
   },
   connect_app: {
@@ -937,7 +953,8 @@ const TOOLS = {
     run: async ({ merchant, checkoutId }, ctx) => {
       const shoppay = require('../shoppay');
       const selection=await belnaWallet.preferences(ctx.userId);
-      if(!selection.methods?.shop_pay)throw new Error('Shop Pay is turned off. Ask the owner to turn it on in Settings → Wallet before purchasing.');
+      // Shop Pay is one of the payment apps: their one switch decides, not the Shop account link.
+      if(!selection.methods?.payment_apps)throw new Error('Payment apps (Shop Pay is one of them) are turned off. Ask the owner to turn them on in Settings → Wallet before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));
       return out;
@@ -956,9 +973,9 @@ const TOOLS = {
   mail_status: {
     name: 'mail_status', type: 'function', approval: false,
     description: 'Read this agent’s own mailbox address, unread count, and whether sending is ready. Never invent the address.',
-    run: async ({ agent_name }, ctx) => {
+    run: async (_args, ctx) => {
       const mail = require('../mail');
-      const snap = await mail.agentStatus(ctx.userId, agent_name);
+      const snap = await mail.agentStatus(ctx.userId);
       ctx.trace(entry('mail', `mail_status: ${snap.address || 'missing'}`));
       return snap;
     },
@@ -996,9 +1013,9 @@ const TOOLS = {
   mail_send: {
     name: 'mail_send', type: 'function', approval: true,
     description: 'Send email to any valid address from this agent’s own mailbox (name@mail.belna.se). REQUIRES owner approval of exact to/subject/body. Write it the way a person would: plain text, warm and to the point, a natural greeting and a short sign-off like “Best,”. No markdown, headings, templates or “this is an automated message”. Do not type your name, address or a signature; the app adds them under the message.',
-    run: async ({ to, subject, body, in_reply_to, agent_name }, ctx) => {
+    run: async ({ to, subject, body, in_reply_to }, ctx) => {
       const mail = require('../mail');
-      const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, agentName: agent_name, confirm: true });
+      const out = await mail.send(ctx.userId, { to, subject, body, inReplyTo: in_reply_to, confirm: true });
       ctx.trace(entry('mail', `mail_send: ${out.subject} → ${(out.to || []).join(', ')}`));
       return { id: out.id, to: out.to, subject: out.subject, from: out.from };
     },
@@ -1061,7 +1078,8 @@ function pickTools(task) {
   if (TOOL_KEYWORDS.learn.test(t)) names.add('learn');
   if (TOOL_KEYWORDS.image.test(t)) names.add('image_generate');
   if (TOOL_KEYWORDS.browser.test(t)) { names.add('browser_open'); names.add('browser_action'); names.add('browser_submit'); names.add('computer_screenshot'); }
-  if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); }
+  // A file the owner asks for is saved straight to the Library; shell and code_run start a computer.
+  if (TOOL_KEYWORDS.code.test(t)) { names.add('shell'); names.add('code_run'); names.add('canvas_show'); names.add('library_save'); }
   if (TOOL_KEYWORDS.computer.test(t)) {
     for (const name of ['browser_open','browser_action','browser_submit','shell','code_run','canvas_show','library_list','library_read','library_save']) names.add(name);
   }
@@ -1080,7 +1098,9 @@ function pickTools(task) {
   const shopRequest = TOOL_KEYWORDS.shop.test(t);
   if (shopRequest) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
   if (!shopRequest && TOOL_KEYWORDS.wallet.test(t)) { names.add('shop_status'); names.add('shop_search'); names.add('shop_product'); names.add('shop_checkout'); names.add('shop_purchase'); names.add('shop_order'); }
-  if (TOOL_KEYWORDS.wallet.test(t) || /belna|earn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
+  if (TOOL_KEYWORDS.wallet.test(t) || /belna|\bearn|income|receive money|freez|unfreez|pause|frys|pausa|sperr|gele|bloque|congel/.test(t)) { names.add('wallet_status'); names.add('wallet_send'); names.add('wallet_set_limit'); names.add('wallet_pause'); }
+  if (/\bearn|\byield|avkastning/.test(t)) names.add('wallet_earn');
+  if (/withdraw|\bbank(?:s|en|er|ing|konto)?\b|cash out|uttag/.test(t)) { names.add('wallet_bank_accounts'); names.add('wallet_withdraw'); }
   return [...names].map((n) => TOOLS[n]).filter((tool) => tool && tool.available !== false);
 }
 

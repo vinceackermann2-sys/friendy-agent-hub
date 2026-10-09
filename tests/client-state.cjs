@@ -90,7 +90,8 @@ async function browserChecks() {
     await pageA.route('**/api/**',route);
     await pageA.goto(base+'/app');
     await pageA.waitForSelector('#app');
-    await pageA.waitForFunction(() => JSON.parse(localStorage.getItem('lingon.v1')).memory.length === 1);
+    // Saves are batched a moment after a change; the seeded state has no memory list until then.
+    await pageA.waitForFunction(() => JSON.parse(localStorage.getItem('lingon.v1')).memory?.length === 1);
     await pageA.waitForFunction(() => document.querySelector('#thread')?.textContent?.includes('Remember cinnamon tea'));
     for (let i=0; i<100 && !records.has('alice:chat:first-chat'); i++) await new Promise(resolve => setTimeout(resolve,25));
     assert.ok(records.has('alice:chat:first-chat'),'local chats are uploaded to the account');
@@ -146,6 +147,8 @@ async function browserChecks() {
       'deleted chat stays deleted after refresh');
     await pageD.reload();
     await pageD.waitForSelector('#app');
+    // A device that had the chat shows its saved copy at once; the account's deletion follows.
+    await pageD.waitForFunction(id => !JSON.parse(localStorage.getItem('lingon.v1')).chats.some(chat => chat.id === id),newChatId).catch(() => {});
     assert.equal((await pageD.evaluate(() => JSON.parse(localStorage.getItem('lingon.v1')))).chats.some(chat => chat.id === newChatId),false,
       'a second device does not restore a deleted chat');
 

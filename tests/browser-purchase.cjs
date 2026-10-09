@@ -24,8 +24,8 @@ const { forbiddenPaymentSecret } = require('../server/agents/payment-safety');
   const withPayment = (payment) => ({...args,purchase:{...args.purchase,payment}});
   const shopPay = await flow.approvalDetail(withPayment({method:'shop_pay',label:'Shop Pay'}),{userId:'owner',sessionId:'task'});
   assert.equal(approvalCard('browser_submit',withPayment({method:'shop_pay',label:'Shop Pay'}),shopPay,{},'call').view.payment,'Shop Pay');
-  await assert.rejects(flow.approvalDetail(withPayment(undefined),{userId:'owner',sessionId:'task'}),/payment app the owner approves .*Shop Pay, or a card already saved/);
-  await assert.rejects(flow.approvalDetail(withPayment({method:'new_card',label:'Visa ending in 4242'}),{userId:'owner',sessionId:'task'}),/payment app the owner approves .*Shop Pay, or a card already saved/);
+  await assert.rejects(flow.approvalDetail(withPayment(undefined),{userId:'owner',sessionId:'task'}),/payment app the owner approves .*Shop Pay.* or a card already saved/);
+  await assert.rejects(flow.approvalDetail(withPayment({method:'new_card',label:'Visa ending in 4242'}),{userId:'owner',sessionId:'task'}),/payment app the owner approves .*Shop Pay.* or a card already saved/);
   await assert.rejects(flow.approvalDetail(withPayment({method:'saved_card',label:'Visa 4242 4242 4242 4242'}),{userId:'owner',sessionId:'task'}),/full card number/);
   await assert.rejects(flow.approvalDetail(withPayment({method:'saved_card',label:'Mastercard ending in 5555'}),{userId:'owner',sessionId:'task'}),/checkout page first/);
   assert.equal(shown.view.total,'SEK 230.00');
@@ -65,6 +65,30 @@ const { forbiddenPaymentSecret } = require('../server/agents/payment-safety');
   methods = { ...methods, payment_apps:false };
   await assert.rejects(offFlow.approvalDetail(swish,{userId:'owner',sessionId:'task'}),/Payment apps is turned off/);
   await assert.rejects(offFlow.beforeSubmit(swish,{userId:'owner',sessionId:'task',approvedDetail:swishDetail}),/Payment apps is turned off/,'turning payment apps off after approval stops the click');
+  // Shop Pay is one of the payment apps: the same switch, as either method name.
+  methods = { ...methods, payment_apps:true };
+  const shopPayPage = { ...swishPage, text:swishPage.text.replace('Payment: Swish','Payment: Shop Pay'), elements:['[6] radio "Shop Pay" @500,600','[7] button "Pay now" @500,700'] };
+  const shopFlow = createPurchaseFlow({ live:{ forTool:async()=>shopPayPage, content:async()=>shopPayPage }, wallet:{ preferences:async()=>({ methods }) } });
+  for (const method of ['shop_pay','payment_app']) await shopFlow.approvalDetail(withPayment({method,label:'Shop Pay'}),{userId:'owner',sessionId:'task'});
+  methods = { ...methods, payment_apps:false, shop_pay:true };
+  await assert.rejects(shopFlow.approvalDetail(withPayment({method:'shop_pay',label:'Shop Pay'}),{userId:'owner',sessionId:'task'}),/Payment apps \(Shop Pay is one of them\) is turned off/,'Shop Pay follows the payment apps switch');
+  await assert.rejects(shopFlow.approvalDetail(withPayment({method:'payment_app',label:'Shop Pay'}),{userId:'owner',sessionId:'task'}),/Payment apps is turned off/);
+  methods = { ...methods, payment_apps:true, shop_pay:false };
+  // Enter in a checkout field can submit the order form; a click by position on a page with a
+  // buy-at-once button has no label to check. Both are refused; typing without Enter is fine.
+  await assert.rejects(shopFlow.beforeAction({type:'type',ref:6,text:'ada@example.com',submit:true},{userId:'owner',sessionId:'task'}),/Pressing Enter here may place the order/);
+  await shopFlow.beforeAction({type:'type',ref:6,text:'ada@example.com'},{userId:'owner',sessionId:'task'});
+  const productPage = { url:'https://store.example/dp/lamp', text:'Lamp 199 SEK. In stock.', elements:['[2] searchbox "Search" @300,40','[3] button "Add to Cart" @900,400','[4] button "Buy Now" @900,460','[5] link "Reviews" @200,800'] };
+  const productFlow = createPurchaseFlow({ live:{ forTool:async()=>productPage, content:async()=>productPage } });
+  await assert.rejects(productFlow.beforeAction({type:'click',x:900,y:460},{userId:'owner',sessionId:'task'}),/click by ref/);
+  await assert.rejects(productFlow.beforeAction({type:'click',ref:4},{userId:'owner',sessionId:'task'}),/browser_submit/);
+  await assert.rejects(productFlow.beforeAction({type:'type',ref:2,text:'lamp',submit:true},{userId:'owner',sessionId:'task'}),/Pressing Enter/);
+  await productFlow.beforeAction({type:'click',ref:3},{userId:'owner',sessionId:'task'});
+  await productFlow.beforeAction({type:'click',ref:5},{userId:'owner',sessionId:'task'});
+  const listPage = { url:'https://store.example/search?q=lamp', text:'Results for lamp.', elements:['[2] searchbox "Search" @300,40','[3] link "Lamp" @300,300','[4] link "Cart" @1200,40'] };
+  const listFlow = createPurchaseFlow({ live:{ forTool:async()=>listPage, content:async()=>listPage } });
+  await listFlow.beforeAction({type:'click',x:300,y:300},{userId:'owner',sessionId:'task'});
+  await listFlow.beforeAction({type:'type',ref:2,text:'desk lamp',submit:true},{userId:'owner',sessionId:'task'});
   const placed = withPhoneApproval(swish,{url:swishPage.url});
   assert.equal(placed.payment.status,'awaiting_owner');
   assert.match(placed.payment.note,/never place this order again/i);
@@ -95,5 +119,5 @@ const { forbiddenPaymentSecret } = require('../server/agents/payment-safety');
     const payDone=await TOOLS.browser_auth_handoff.run({}, {userId:'owner',sessionId:'task',trace:()=>{},approvedDetail:payDetail});
     assert.match(payDone.note,/payment step/);
   } finally {Object.assign(runtimeLive,saved);}
-  console.log('browser purchase: payment apps the owner approves (Klarna, Swish, PayPal…), Shop Pay or merchant-saved card, exact approval, stale checkout and direct-click guards: ok');
+  console.log('browser purchase: payment apps the owner approves (Klarna, Swish, Shop Pay, PayPal…) on one switch, merchant-saved card, Enter and position-click guards, exact approval, stale checkout and direct-click guards: ok');
 })().catch((e)=>{console.error(e);process.exitCode=1;});

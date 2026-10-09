@@ -16,12 +16,14 @@ Microsoft Foundry calls stay on the Lingon server (the API key is never copied t
 
 - **Start** only when an agent actually needs shell, code, browser, or computer work. Opening the app and ordinary chat make a zero-compute status request.
 - Shell and code run in a short-lived hardened Podman container inside the VM. The container has no network, no capabilities, a read-only root, resource limits, and only the task workspace mounted.
-- Agent, background-task, and browser leases are renewed while active. After the last lease, the VM stays warm for `AZURE_VM_IDLE_MINUTES` (5 by default), then the sweeper snapshots state and deallocates it.
+- Steps reach the VM two ways. An Azure Run Command takes about 11 s even for `echo`, so after the first command on a boot (which also starts it) a root shell agent on the VM takes shell and code steps over the owner's own Realtime channel in about 0.6 s. It runs only scripts signed with a per-owner key derived from the server secret, never twice, in a clean environment; results go to a private blob. A step nobody takes within 2.5 s falls back to a Run Command. Steps that carry the restore check (a storage link) always use Run Command.
+- A VM that only stopped and started kept its disk, so its restore check rides along with its first command instead of costing one of its own (12-15 s). A backup restores an unrestored disk before saving it.
+- Agent, background-task, and browser leases are renewed while active. After the last lease, the VM stays warm for `AZURE_VM_IDLE_MINUTES` (10 by default; a user who comes back within it skips a cold start), then the sweeper snapshots state and deallocates it.
 - Deallocation keeps the OS disk. The workspace and browser profile are also copied to private Blob storage and restored after VM replacement. Memory, secrets, chats, and documents remain in account storage.
 
 ## Cost (pay-as-you-go, Sweden Central, Linux B2als v2)
 
-The [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices) currently lists the Sweden Central Linux `Standard_B2als_v2` consumption meter at **$0.0389/hour**. Lingon meters VM runtime at a conservative **$0.06/hour** to cover compute and a storage allowance, then deducts 20 credits per metered dollar. That is **1.2 credits/hour** while running, including the five-minute idle grace. Set `AZURE_VM_BILLING_USD_PER_HOUR` for any other VM size or region.
+The [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices) currently lists the Sweden Central Linux `Standard_B2als_v2` consumption meter at **$0.0389/hour**. Lingon meters VM runtime at a conservative **$0.06/hour** to cover compute and a storage allowance, then deducts 20 credits per metered dollar. That is **1.2 credits/hour** while running, including the ten-minute idle grace. Set `AZURE_VM_BILLING_USD_PER_HOUR` for any other VM size or region.
 
 The worker container runs inside that VM and does not create a second Container
 Apps compute meter. Stopped VMs can still incur managed-disk, Blob, image, and
@@ -45,7 +47,7 @@ AZURE_SUBSCRIPTION_ID=
 AZURE_RESOURCE_GROUP=
 AZURE_LOCATION=swedencentral
 AZURE_VM_SIZE=Standard_B2als_v2
-AZURE_VM_IDLE_MINUTES=5
+AZURE_VM_IDLE_MINUTES=10
 AZURE_VM_BILLING_USD_PER_HOUR=0.06
 AZURE_AUTO_PROVISION=true
 # Optional; otherwise a deterministic Belna-only name is generated.

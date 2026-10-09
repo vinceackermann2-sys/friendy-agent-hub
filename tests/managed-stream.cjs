@@ -7,6 +7,7 @@ const events = [];
 const requests = [];
 let holdNext = true;
 let holdAfterAnswer = false;
+let scripted = null;
 const window = {
   Engine: {},
   LingonAuth: {
@@ -18,6 +19,13 @@ const window = {
         return new Promise((resolve, reject) => {
           options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name:'AbortError' })), { once:true });
         });
+      }
+      if (scripted) {
+        const frames = scripted; scripted = null;
+        return { ok:true, body:{ getReader: () => ({
+          read: async () => frames.length ? { value:Buffer.from(`data: ${JSON.stringify(frames.shift())}\n\n`), done:false } : { done:true },
+          releaseLock: () => {},
+        }) } };
       }
       if (holdAfterAnswer) {
         holdAfterAnswer = false;
@@ -90,5 +98,32 @@ const rt = {
   assert.equal(window.Engine.isRunning(rt.chat.id), false, 'the composer is free as soon as the answer arrives');
   const followup = window.Engine.run(rt, 'followup');
   await Promise.all([answered, followup]);
+
+  // A started task brings its own working dots, so the reply's typing dots go at once,
+  // not when the confirmation arrives: two sets of dots never show together.
+  const order = [];
+  const plain = { typing: rt.typing, managedEvent: rt.managedEvent };
+  rt.typing = () => { order.push('dots'); return { abort:() => order.push('dots gone') }; };
+  rt.managedTask = () => order.push('task');
+  rt.managedEvent = (event) => { if (event.type === 'message') order.push('message'); };
+  scripted = [{ type:'task', task:{ id:'t1', status:'queued', events:[] } }, { type:'message', id:'a1', phase:'final_answer', text:'Lisbon it is.' }, { type:'done', status:'completed' }];
+  await window.Engine.run(rt, 'hotels');
+  assert.deepEqual(order, ['dots', 'dots gone', 'task', 'message']);
+  // A card being drawn replaces the dots. Finished with its reply already streaming, no dots
+  // come back; finished before its reply (written by a second call), the dots wait below it.
+  const card = { type:'present', kind:'list', title:'Lisbon' };
+  for (const [frames, expected] of [
+    [[{ type:'card_delta', id:'c1', card }, { type:'message_delta', id:'r1', delta:'Start in Alfama.' }, { type:'card', id:'c1', card }, { type:'message', id:'r1', phase:'final_answer', text:'Start in Alfama.' }, { type:'done', status:'completed' }],
+      ['dots', 'dots gone', 'card_delta', 'message_delta', 'card', 'message']],
+    [[{ type:'card_delta', id:'c2', card }, { type:'card', id:'c2', card }, { type:'message_delta', id:'a2', delta:'Alfama first.' }, { type:'message', id:'a2', phase:'final_answer', text:'Alfama first.' }, { type:'done', status:'completed' }],
+      ['dots', 'dots gone', 'card_delta', 'card', 'dots', 'dots gone', 'message_delta', 'message']],
+  ]) {
+    order.length = 0;
+    rt.managedEvent = (event) => { if (event.type !== 'done' && event.type !== 'session') order.push(event.type); };
+    scripted = frames;
+    await window.Engine.run(rt, 'lisbon');
+    assert.deepEqual(order, expected);
+  }
+  Object.assign(rt, plain);
   console.log('managed stream cancellation: ok');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -14,18 +14,38 @@ function chat(model,extra={},factory=createCoordinator) {
     protect:(_,s)=>s,rank:x=>x,finishMemory:async()=>[],...extra};
   return {coordinator:factory(d),saved,d};
 }
-const reply=(...steps)=>{const models=[];return {models,model:async opts=>{models.push(clone({...opts,onDelta:undefined,signal:undefined}));const step=steps.shift();return typeof step==='function'?step(opts):step || {text:'Done.'};}};};
+const reply=(...steps)=>{const models=[];return {models,model:async opts=>{models.push(clone({...opts,onDelta:undefined,onCallDelta:undefined,maxArgumentChars:undefined,signal:undefined}));const step=steps.shift();return typeof step==='function'?step(opts):step || {text:'Done.'};}};};
 
 (async()=>{
+  const edgeCoordinator=(await import('../src/lingon-server/agents/conversation.js')).createCoordinator;
+  // Explicit Apple app actions must reach a worker even if the chat model would
+  // refuse because apple_execute is intentionally absent from its own tools.
+  const applePrompts = [
+    'Read Apple Calendar on my connected iPhone for today.',
+    'Show my Apple Reminders.',
+    'Search Apple Contacts for Ada.',
+    'Read my Apple Health step count for today. Do not save it to memory.',
+    'Can you add a reminder on my iPhone?',
+    'Visa mina kontakter på min iPhone.',
+  ];
+  for (const factory of [createCoordinator, edgeCoordinator]) for (const prompt of applePrompts) {
+    const created = [];
+    const tested = chat(async () => { throw new Error('Native Apple work should not depend on a coordinator refusal.'); }, {
+      acknowledge: async () => 'Checking your Apple app.',
+      tasks: { summaries: async () => [], create: async input => { created.push(input); return { id: 'apple-task', state: { status: 'queued' } }; }, view: row => ({ id: row.id }) },
+    }, factory);
+    await tested.coordinator.run({ userId: 'a', chatId: 'apple', requestId: 'native', prompt, onEvent: () => {} });
+    assert.equal(created.length, 1);
+    assert.equal(created[0].instructions, prompt, 'keep all owner constraints for the native worker');
+  }
   // A selected option remains tied to its full question across turns and task handoff
   // in both API runtimes.
-  const edgeCoordinator=(await import('../src/lingon-server/agents/conversation.js')).createCoordinator;
   for(const factory of [createCoordinator,edgeCoordinator]) {
   const questionTurns=[],questionModels=[],questionTasks=[],questionEvents=[];
   const questionStore={listMemories:async()=>[],listChatMessages:async()=>clone(questionTurns),
     saveTurn:async(u,c,role,text,options={})=>questionTurns.push({role,text,metadata:options.metadata || {}})};
   const questionChat=chat(async opts=>{
-    questionModels.push(clone({...opts,onDelta:undefined,signal:undefined}));
+    questionModels.push(clone({...opts,onDelta:undefined,onCallDelta:undefined,maxArgumentChars:undefined,signal:undefined}));
     return questionModels.length===1?{functionCalls:[{name:'ask_user',args:{question:'How should I check Messenger?',context:'The connector only supports Facebook Pages.',options:[{label:'Use browser',description:'Open Messenger so you can sign in yourself.'},{label:'Pages',description:'Check connected business Pages.'}]}}]}
       :{functionCalls:[{name:'delegate_task',args:{title:'Check Messenger',instructions:'Open Messenger in the browser and check all new messages after the owner signs in.'}}]};
   },{store:questionStore,schemas:[schemaFor('ask_user')],acknowledge:async()=>'Checking your messages.',
@@ -144,6 +164,33 @@ const reply=(...steps)=>{const models=[];return {models,model:async opts=>{model
       .run({userId:'a',chatId:'c',requestId:'no-answer',prompt:'Best laptop for video editing under 20000 kr?',onEvent:e=>missedEvents.push(e)});
     assert.equal(missedTasks.length,1);
     assert.equal(missedEvents.some(e=>e.type==='message' && /NO_ANSWER/.test(e.text)),false);
+    // The task inherits the search results, but not the instruction to reply NO_ANSWER: a worker
+    // that saw it as the latest message replied with that word.
+    assert.equal(missedTasks[0].history.some(m=>/NO_ANSWER|run every lookup/.test(m.text)),false);
+    assert.ok(missedTasks[0].history.some(m=>/web_search result/.test(m.text)),'the results still reach the task');
+    // Streamed, the word never reaches the owner, however the model dresses it up.
+    for(const said of ['NO_ANSWER','**NO_ANSWER**','NO ANSWER.','\nNO_ANSWER\n']) {
+      const pieces=said.match(/.{1,3}/gs);
+      const streamedNo=reply({functionCalls:[{name:'web_search',args:{query:'a'}}]},{functionCalls:[{name:'web_search',args:{query:'b'}}]},{functionCalls:[{name:'web_search',args:{query:'c'}}]},
+        opts=>{for(const p of pieces)opts.onDelta(p);return {text:said};});
+      const evs=[],made=[];
+      await chat(streamedNo.model,{tasks:{summaries:async()=>[],create:async t=>{made.push(t);return {id:'t3',state:{title:t.title,status:'queued',version:1,events:[]},revision:1};},view:r=>({id:r.id})},
+        tools:{web_search:{run:async()=>[{url:'search:x',ok:true,text:'{"results":[{"title":"Laptops","text":"Spec sheet"}]}'}]}}}).coordinator
+        .run({userId:'a',chatId:'c',requestId:'no-answer-stream',prompt:'Best laptop for video editing under 20000 kr?',onEvent:e=>evs.push(e)});
+      assert.equal(made.length,1,JSON.stringify(said));
+      assert.equal(evs.some(e=>/NO.ANSWER/.test(e.text || e.delta || '')),false,JSON.stringify(said));
+      assert.equal(evs.some(e=>e.type==='message_delta'),false,'nothing was streamed to take back');
+    }
+    // After a lookup, an opening "couldn't find" is held back too; a real answer streams.
+    for(const [said,streams] of [['I couldn’t find a forecast for tomorrow. Try SMHI.',false],['Tomorrow looks cloudy, 17°C. Light wind.',true]]) {
+      const evs=[];
+      const r=reply({functionCalls:[{name:'web_search',args:{query:'weather'}}]},opts=>{for(const p of said.match(/.{1,4}/gs))opts.onDelta(p);return {text:said};});
+      await chat(r.model,{tasks:{summaries:async()=>[],create:async t=>({id:'t4',state:{title:t.title,status:'queued',version:1,events:[]},revision:1}),view:x=>({id:x.id})},
+        tools:{web_search:{run:async()=>[{url:'search:x',ok:true,text:'{"results":[{"title":"Weather","text":"Current conditions"}]}'}]}}}).coordinator
+        .run({userId:'a',chatId:'c',requestId:'held',prompt:'What will the weather be tomorrow?',onEvent:e=>evs.push(e)});
+      assert.equal(evs.some(e=>e.type==='message_delta'),streams,said);
+      if(streams) assert.equal(evs.filter(e=>e.type==='message_delta').map(e=>e.delta).join(''),said,'held text is sent in full once it opens');
+    }
   }
   // A purchase the owner asks to pay with a payment app is not started while payment apps are
   // off (the model hears why and tells the owner); with them on, it starts.

@@ -4,29 +4,8 @@ import { useEffect, useRef, useState } from "react";
 declare global {
   interface Window {
     LingonAppRuntime?: { mount: (root: HTMLElement) => Promise<void> };
+    __lingonBoot?: Promise<void>;
   }
-}
-
-const scriptLoads = new Map<string, Promise<void>>();
-
-function loadScript(src: string) {
-  const pending = scriptLoads.get(src);
-  if (pending) return pending;
-  const request = new Promise<void>((resolve, reject) => {
-    const el = document.createElement("script");
-    el.src = src;
-    el.async = false;
-    el.dataset["lingon"] = src;
-    el.onload = () => resolve();
-    el.onerror = () => {
-      el.remove();
-      scriptLoads.delete(src);
-      reject(new Error(`Failed to load ${src}`));
-    };
-    document.body.appendChild(el);
-  });
-  scriptLoads.set(src, request);
-  return request;
 }
 
 const SCRIPTS = [
@@ -39,6 +18,35 @@ const SCRIPTS = [
   "/lingon/engine.managed.js",
   "/lingon/app.js",
 ];
+
+// All app scripts are added at once and run in order (async=false), so they download in
+// parallel instead of one after another.
+function loadScripts() {
+  return Promise.all(
+    SCRIPTS.map(
+      (src) =>
+        new Promise<void>((resolve, reject) => {
+          const el = document.createElement("script");
+          el.src = src;
+          el.async = false;
+          el.dataset["lingon"] = src;
+          el.onload = () => resolve();
+          el.onerror = () => reject(new Error(`Failed to load ${src}`));
+          document.head.appendChild(el);
+        }),
+    ),
+  ).then(() => undefined);
+}
+
+// Runs from the page head on a full page load: the app scripts start while React itself is
+// still loading, and the app begins loading the account. It draws only when LingonApp
+// hands it the host after hydration (LingonDeferMount), so React's markup is untouched.
+// An async module never pauses HTML parsing (a classic inline script after the
+// stylesheets would wait for them, fonts included). After a client-side navigation this
+// script does not run and LingonApp loads the scripts itself.
+export const lingonBootScript = `if(!window.__lingonBoot){window.LingonDeferMount=true;window.__lingonBoot=Promise.all(${JSON.stringify(SCRIPTS)}.map(src=>new Promise((ok,fail)=>{const e=document.createElement("script");e.src=src;e.async=false;e.dataset.lingon=src;e.onload=()=>ok();e.onerror=()=>fail(new Error("Failed to load "+src));document.head.appendChild(e)}))).then(()=>{})}`;
+
+export const lingonHeadScripts = [{ type: "module", async: true, children: lingonBootScript }];
 
 export const lingonHeadLinks: Array<
   React.DetailedHTMLProps<React.LinkHTMLAttributes<HTMLLinkElement>, HTMLLinkElement>
@@ -120,10 +128,8 @@ export function LingonApp({ page = "home" }: { page?: "home" | "app" }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      for (const src of SCRIPTS) {
-        if (cancelled) return;
-        await loadScript(src);
-      }
+      window.__lingonBoot ??= loadScripts();
+      await window.__lingonBoot;
       if (cancelled || !host.current) return;
       if (!window.LingonAppRuntime) throw new Error("App did not initialize");
       await window.LingonAppRuntime.mount(host.current);

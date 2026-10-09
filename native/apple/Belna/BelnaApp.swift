@@ -26,46 +26,41 @@ struct BelnaApp: App {
 struct RootView: View {
     @EnvironmentObject private var model: NativeModel
     var body: some View {
-        NavigationStack {
-            Group {
-                if !model.aiConsent {
-                    ConsentView()
-                } else {
-                    ZStack {
-                        BelnaWebView(model: model)
-                        if model.loading { ProgressView("Opening Belna…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18)) }
-                        if let error = model.loadError {
-                            ContentUnavailableView {
-                                Label("Couldn’t open Belna", systemImage: "wifi.exclamationmark")
-                            } description: { Text(error) } actions: {
-                                Button("Try again") { model.reload() }.buttonStyle(.borderedProminent)
-                            }.background(Color(.systemBackground))
-                        }
+        // No native bar above the web app: it has its own header. Apple apps opens from
+        // Settings → Profiles and from the Apple cards in Connectors (BelnaApple.settings).
+        Group {
+            if !model.aiConsent {
+                ConsentView()
+            } else {
+                ZStack {
+                    BelnaWebView(model: model)
+                    if model.loading { ProgressView("Opening Belna…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18)) }
+                    if let error = model.loadError {
+                        ContentUnavailableView {
+                            Label("Couldn’t open Belna", systemImage: "wifi.exclamationmark")
+                        } description: { Text(error) } actions: {
+                            Button("Try again") { model.reload() }.buttonStyle(.borderedProminent)
+                        }.background(Color(.systemBackground))
                     }
                 }
+                // The web app is light only, so dark mode would leave a black strip with
+                // white status bar text above its white header.
+                .preferredColorScheme(.light)
             }
-            .navigationTitle("Belna")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { model.showSettings = true } label: { Image(systemName: "apple.logo") }
-                        .accessibilityLabel("Apple apps and privacy")
-                }
-            }
-            .sheet(isPresented: $model.showSettings) { AppleAppsView() }
-            .sheet(item: $model.prompt, onDismiss: { model.cancelPrompt() }) { prompt in
-                NavigationStack {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text(prompt.title).font(.title2.bold())
-                            Text(prompt.detail).font(.body)
-                            if prompt.health { Text("Only share this result for your own fitness and wellness. It will be sent to Belna’s server and Microsoft Azure AI to answer your request, and may appear in your saved chat. It is never used for advertising.").font(.callout) }
-                            Button(prompt.health ? "Share this summary" : "Allow this change") { model.resolvePrompt(true) }.buttonStyle(.borderedProminent)
-                            Button("Cancel", role: .cancel) { model.resolvePrompt(false) }.buttonStyle(.bordered)
-                        }.padding(24)
-                    }.navigationTitle("Review request").navigationBarTitleDisplayMode(.inline)
-                }.interactiveDismissDisabled(false)
-            }
+        }
+        .sheet(isPresented: $model.showSettings) { AppleAppsView() }
+        .sheet(item: $model.prompt, onDismiss: { model.cancelPrompt() }) { prompt in
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Text(prompt.title).font(.title2.bold())
+                        Text(prompt.detail).font(.body)
+                        if prompt.health { Text("Only share this result for your own fitness and wellness. It will be sent to Belna’s server and Microsoft Azure AI to answer your request, and may appear in your saved chat. It is never used for advertising.").font(.callout) }
+                        Button(prompt.health ? "Share this summary" : "Allow this change") { model.resolvePrompt(true) }.buttonStyle(.borderedProminent)
+                        Button("Cancel", role: .cancel) { model.resolvePrompt(false) }.buttonStyle(.bordered)
+                    }.padding(24)
+                }.navigationTitle("Review request").navigationBarTitleDisplayMode(.inline)
+            }.interactiveDismissDisabled(false)
         }
     }
 }

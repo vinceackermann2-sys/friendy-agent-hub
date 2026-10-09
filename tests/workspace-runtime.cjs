@@ -80,7 +80,7 @@ async function main() {
   assert.match(system, /Name: Mira/);
   assert.match(system, /Color: blue/);
   assert.match(system, /own mailbox on mail\.belna\.se/);
-  assert.match(system, /Shop Pay if connected/);
+  assert.match(system, /Shop account if connected/);
   assert.match(system, /started only for full-OS tools/);
   assert.doesNotMatch(system, /Read connection with shop_status/);
 

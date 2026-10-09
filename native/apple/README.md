@@ -13,7 +13,7 @@ or Mac Catalyst on a compatible Mac. Build with Xcode 26 / iOS 26 SDK or later.
 | Calendar | Read a date range; create, update, delete events | At most 31 days per read; paginated; recurring changes stay in Calendar |
 | Reminders | Read, create, update, complete, delete | Paginated; recurring changes stay in Reminders |
 | Contacts | Search a specific name; create, update, delete | Respects limited contact access; no address book export |
-| Health | Steps, distance, exercise and merged sleep summary | Read-only, 1–7 days, wellness purpose; preview and consent for each result |
+| Health | Steps, distance, exercise and merged sleep summary | Read-only, the last 1–7 days or since a `start` within them (local midnight for “today”; builds before this ignore `start` and report the rolling window), wellness purpose; preview and consent for each result |
 
 Mac uses its own synced Calendar, Reminders and Contacts store. It does not
 reach directly into an iPhone. Health is only offered when

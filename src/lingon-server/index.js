@@ -34,6 +34,7 @@ import * as authEmail from './auth-email.js';
 import { durableLimited, normalEmail } from './durable-limit.js';
 import * as shoppay from './shoppay.js';
 import { createBelnaWallet } from './belna-wallet.js';
+import { installPrivyWalletRoutes } from './privy-wallet-routes.js';
 import { createPrivateCheckoutClient } from './private-checkout-client.js';
 import { exportCheckout } from './agents/azure-vm.js';
 const privateCheckout = createPrivateCheckoutClient({exportCheckout});
@@ -79,7 +80,9 @@ app.post('/api/stripe/webhook', async (req, res) => {
         }
         const customerId = typeof obj.customer === 'string' ? obj.customer : obj.customer?.id;
         const item = obj.items?.data?.[0];
-        await store.setSubscription(userId, plan, obj.cancel_at_period_end ? 'canceling' : obj.status, {
+        // "Canceling" keeps the paid tier to the period end, so only a paid subscription gets
+        // it: one canceled while past_due stays past_due.
+        await store.setSubscription(userId, plan, obj.cancel_at_period_end && ['active','trialing'].includes(obj.status) ? 'canceling' : obj.status, {
           stripe_customer_id: customerId || prev.stripe_customer_id,
           stripe_subscription_id: obj.id,
           current_period_end: item?.current_period_end ? new Date(item.current_period_end * 1000).toISOString() : prev.current_period_end,
@@ -331,7 +334,8 @@ app.post('/api/auth/signup', rateLimit(10, 60000), async (req, res) => {
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message });
-    res.status(500).json({ error: 'Signup failed: ' + e.message });
+    console.error('[auth] signup failed:', e && e.message);
+    res.status(500).json({ error: 'Sign-up failed. Please try again.' });
   }
 });
 app.post('/api/auth/signin', rateLimit(15, 60000), async (req, res) => {
@@ -349,7 +353,8 @@ app.post('/api/auth/signin', rateLimit(15, 60000), async (req, res) => {
     }
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
-    res.status(500).json({ error: 'Signin failed: ' + e.message });
+    console.error('[auth] signin failed:', e && e.message);
+    res.status(500).json({ error: 'Sign-in failed. Please try again.' });
   }
 });
 app.post('/api/auth/refresh', rateLimit(15, 60000), async (req, res) => {
@@ -361,7 +366,8 @@ app.post('/api/auth/refresh', rateLimit(15, 60000), async (req, res) => {
     if (error) return res.status(401).json({ error: error.message });
     res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token, user: { id: data.user.id, email: data.user.email } });
   } catch (e) {
-    res.status(500).json({ error: 'Refresh failed: ' + e.message });
+    console.error('[auth] refresh failed:', e && e.message);
+    res.status(500).json({ error: 'Your session could not be refreshed. Please sign in again.' });
   }
 });
 app.get('/api/auth/me', async (req, res) => {
@@ -420,7 +426,8 @@ app.get('/api/auth/oauth-url', rateLimit(15, 60000), async (req, res) => {
       record: { next: safeNext(req.query.next), redirectUri, termsVersion: TERMS_VERSION, flow } });
     res.json({ url: googleUrl(state) });
   } catch (e) {
-    res.status(500).json({ error: 'OAuth failed: ' + e.message });
+    console.error('[auth] oauth failed:', e && e.message);
+    res.status(500).json({ error: 'Google sign-in could not start. Please try again.' });
   }
 });
 app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
@@ -488,7 +495,8 @@ app.get('/api/auth/google/callback', rateLimit(15, 60000), async (req, res) => {
       + '&flow=' + encodeURIComponent(saved.flow);
     res.redirect(safeNext(saved.next.split('#')[0].split('?')[0]) + frag);
   } catch (e) {
-    return back(e.message);
+    console.error('[auth] google callback failed:', e && e.message);
+    return back('Sign-in failed. Please try again.');
   }
 });
 // The Apple app opens the sealed session with the verifier only its page holds, so a
@@ -521,7 +529,8 @@ app.post('/api/auth/otp', rateLimit(10, 60000), async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message });
-    res.status(500).json({ error: 'Could not send code: ' + e.message });
+    console.error('[auth] could not send code:', e && e.message);
+    res.status(500).json({ error: 'Could not send the code. Please try again.' });
   }
 });
 // Email-first sign-in: tells the form whether to show log-in or sign-up for this address.
@@ -552,7 +561,8 @@ app.post('/api/auth/verify', rateLimit(10, 60000), async (req, res) => {
     } catch (e) { return res.status(e.status || 503).json({ error: e.message }); }
     res.json({ access_token: session.access_token, refresh_token: session.refresh_token, user: { id: user.id, email: user.email } });
   } catch (e) {
-    res.status(500).json({ error: 'Verify failed: ' + e.message });
+    console.error('[auth] verify failed:', e && e.message);
+    res.status(500).json({ error: 'Could not verify the code. Please try again.' });
   }
 });
 
@@ -606,7 +616,7 @@ app.get('/api/billing', requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   res.json(await billingFor(req.user.id));
 }));
-app.post('/api/billing/redeem', requireAuth(async (req, res) => {
+app.post('/api/billing/redeem', rateLimit(10, 60000), requireAuth(async (req, res) => {
   const r = await store.redeemGift(req.user.id, (req.body || {}).code);
   if (!r.ok) return res.status(400).json({ error: r.error });
   res.json({ ok: true, amount: r.amount, credits: r.credits, tokens: r.tokens, billing: await billingFor(req.user.id) });
@@ -623,7 +633,7 @@ app.get('/api/referrals/mine', requireAuth(async (req, res) => {
     });
   } catch { res.status(503).json({ error:'Referral service is unavailable.' }); }
 }));
-app.post('/api/referrals/redeem', requireAuth(async (req, res) => {
+app.post('/api/referrals/redeem', rateLimit(10, 60000), requireAuth(async (req, res) => {
   try {
     const result = await store.redeemReferral(req.user.id, (req.body || {}).code);
     if (!result.ok) return res.status(400).json({ error:result.error });
@@ -1096,6 +1106,7 @@ function shopPayErr(e) {
     : e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG' ? 503
     : 502;
 }
+installPrivyWalletRoutes({app,wallet:belnaWallet,requireAuth,rateLimit});
 function belnaWalletErr(e) {
   return e.code === 'BAD_INPUT' ? 400 : e.code === 'NOT_SET_UP' ? 503 : e.code === 'VERIFY' || e.code === 'REVIEW' ? 409 : 502;
 }
@@ -1136,8 +1147,7 @@ app.post('/api/belna-wallet/card-waitlist',rateLimit(10,60000),requireAuth(async
   res.setHeader('Cache-Control','no-store');
   try{res.json(await belnaWallet.joinCardWaitlist(req.user.id));}catch(e){res.status(belnaWalletErr(e)).json({error:e.message});}
 }));
-// Each load reads the wallet from Whop several times on the key all owners share, so it is
-// limited like the other wallet routes: one account cannot use up that key's quota.
+// Rate-limit wallet reads against the shared provider and Base RPC quotas.
 app.get('/api/belna-wallet', rateLimit(30, 60000), requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try { res.json(await belnaWallet.snapshot(req.user.id)); }
@@ -1160,7 +1170,7 @@ for (const action of ['setup', 'oauth-finish', 'verify', 'verification-session',
         : action === 'withdraw-session' ? await belnaWallet.withdrawalSession(req.user.id)
         : action === 'card-session' ? await belnaWallet.cardSession(req.user.id)
         : action === 'quote' ? await belnaWallet.transferQuote(req.user.id, req.body || {})
-        : await belnaWallet.confirmTransfer(req.user.id, req.body || {});
+        : await belnaWallet.confirmTransfer(req.user.id, req.body || {},req.headers['privy-id-token']);
       res.json(result);
     } catch (e) { res.status(belnaWalletErr(e)).json({ error:e.message, ...(action === 'send' && e.transferNotStarted === true ? {transferNotStarted:true} : {}) }); }
   }));
@@ -1215,13 +1225,13 @@ app.get('/api/mail', requireAuth(async (req, res) => {
     res.json(await mail.snapshot(req.user.id, {
       folder: req.query.folder || 'inbox',
       q: req.query.q || '',
-      ensureName: req.query.name || '',
     }));
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
 app.post('/api/mail/ensure', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try {
-    const box = await mail.ensureMailbox(req.user.id, (req.body || {}).agentName || req.body?.name);
+    // The address follows the saved agent name, not a name the request carries.
+    const box = await mail.ensureMailbox(req.user.id);
     res.json(await mail.snapshot(req.user.id, { mailbox: box }));
   } catch (e) { res.status(mailErr(e)).json({ error: e.message }); }
 }));
@@ -1285,7 +1295,10 @@ app.get('/api/agent-context', requireAuth(async (req, res) => {
 app.put('/api/agent-context', rateLimit(20, 60000), requireAuth(async (req, res) => {
   try {
     const body=req.body || {};
-    res.json(await store.saveAgentContext(req.user.id,{agent:body.agent,documents:body.documents,revision:body.revision}));
+    const saved=await store.saveAgentContext(req.user.id,{agent:body.agent,documents:body.documents,revision:body.revision});
+    // The mail address is the agent's name, so a rename moves it (alva@ → bo@).
+    await mail.ensureMailbox(req.user.id,saved.agent?.name).catch(e=>console.warn('[mail] mailbox not renamed:',e.message));
+    res.json(saved);
   } catch(e) { res.status(e.code==='CONFLICT'?409:e.code==='PERSISTENCE'?503:400).json({error:e.message}); }
 }));
 
@@ -1443,7 +1456,7 @@ app.get('/api/secrets', requireAuth(async (req, res) => {
   try { res.json({ secrets: await store.listSecrets(req.user.id), encrypted: store.secretsEncrypted() }); }
   catch (e) { vaultFailure(res, e); }
 }));
-app.post('/api/secrets', requireAuth(async (req, res) => {
+app.post('/api/secrets', rateLimit(30, 60000), requireAuth(async (req, res) => {
   const { name, value } = req.body || {};
   // Collapse whitespace so an agent vault_request finds the name it asked for.
   const label = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -1452,7 +1465,7 @@ app.post('/api/secrets', requireAuth(async (req, res) => {
   try { res.json({ secret: await store.addSecret(req.user.id, label, value) }); }
   catch (e) { vaultFailure(res, e); }
 }));
-app.post('/api/secrets/:id/reveal', requireAuth(async (req, res) => {
+app.post('/api/secrets/:id/reveal', rateLimit(20, 60000), requireAuth(async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const v = await store.revealSecret(req.user.id, req.params.id);
@@ -1460,7 +1473,7 @@ app.post('/api/secrets/:id/reveal', requireAuth(async (req, res) => {
     res.json({ value: v });
   } catch (e) { vaultFailure(res, e); }
 }));
-app.delete('/api/secrets/:id', requireAuth(async (req, res) => {
+app.delete('/api/secrets/:id', rateLimit(30, 60000), requireAuth(async (req, res) => {
   try { await store.delSecret(req.user.id, req.params.id); res.json({ ok: true }); }
   catch (e) { vaultFailure(res, e); }
 }));

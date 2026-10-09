@@ -96,6 +96,12 @@ const {chromium}=require('playwright');
         await page.locator('details.goals-create').waitFor();
       }
     }
+    // The native app has no top bar, so Settings → Profiles is where Apple apps, consent and account deletion open.
+    await navigate('settings');
+    await page.locator('.set-row[data-act="stab"][data-t="profiles"]').click();
+    await page.locator('.psec [data-act="apple-apps"]').click();
+    await page.waitForFunction(()=>window.__nativeCalls.filter(x=>x.method==='settings').length===2);
+    assert.equal((await page.evaluate(()=>window.__nativeCalls.filter(x=>x.method==='settings')[1])).scope,undefined,'Settings opens the whole Apple apps screen');
     await navigate('chat');
     await page.locator('.chathead [data-act="togglecanvas"]').click();
     await page.waitForFunction(()=>document.querySelector('.canvas-close').getBoundingClientRect().right<=innerWidth+1);

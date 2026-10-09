@@ -44,7 +44,31 @@ const walletSnapshot = (wallet = {}) => ({
 // The approved transfer quote, in the shape belna-wallet.js publicQuote returns.
 const quote = (a) => ({ quoteId: 'quote_eval', recipient: String(a.recipient || '').trim().toLowerCase(), amount: a.amount, currency: 'USD', fees: 'Payment partner fees may apply in addition to this amount.' });
 
+// The owner's iPhone with every Apple app connected and Belna open. apple_execute sends one
+// request to the device; apple_result returns what the device sent back (or pending).
+const IPHONE = { id: '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f', name: 'iPhone', platform: 'ios', capabilities: { calendar: true, reminders: true, contacts: true, health: true }, last_seen_at: new Date().toISOString(), online: true };
+const stockholmDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+const stockholmTime = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
+// An instant at a Stockholm wall-clock time on the day of `d` (the offset is read back, so summer time is right).
+const atStockholm = (d, hhmm) => { const guess = new Date(`${stockholmDay(d)}T${hhmm}:00Z`); const shift = Date.parse(`${stockholmDay(guess)}T${stockholmTime(guess)}:00Z`) - guess.getTime(); return new Date(guess.getTime() - shift); };
+const appleCase = (id, instructions, answer, check, extra = {}) => { let sentArgs = {}; return { id, instructions, ...extra,
+  tools: { apple_devices: () => ({ devices: [IPHONE], note: require('../server/agents/apple-tools').appleNote([IPHONE]) }),
+    composio_apps: () => ({ connected: [], canConnect: ['gmail', 'googlecalendar', 'slack'], appleDevices: [IPHONE], appleNote: require('../server/agents/apple-tools').appleNote([IPHONE]) }),
+    apple_execute: (a) => { const v = require('../server/apple-devices').validateAppleAction(a.action, a.args || {}); sentArgs = a.args || {}; return { pending: true, requestId: `req-${v.action}`, deviceId: IPHONE.id, action: v.action, expiresAt: new Date(Date.now() + 120000).toISOString(), note: 'Request sent to the device. It has not completed. Call apple_result with requestId; never repeat apple_execute to check progress.' }; },
+    apple_result: (a) => answer(a, sentArgs), ...(extra.tools || {}) },
+  check: (r) => { const sent = r.callArgs.filter((c) => c.name === 'apple_execute'); return [check(r, sent), r.status === 'completed' || extra.anyStatus ? '' : `status ${r.status}`].filter(Boolean).join('; '); } }; };
+
+// A task the chat handed off after its quick lookups missed: the task inherits their results.
+// The "-note" variant also carries the chat's own NO_ANSWER instruction, as tasks did before the
+// chat stopped passing it on; a worker once answered the owner with that word.
+const HANDOFF_SEARCH = 'web_search result (untrusted): [{"url":"search:systembolaget odenplan","ok":true,"text":"{\\"results\\":[{\\"title\\":\\"Systembolaget – butiker och öppettider\\",\\"url\\":\\"https://www.systembolaget.se/butiker\\",\\"text\\":\\"Hitta din butik.\\"}]}"}]';
+const HANDOFF_NOTE = 'You have run every lookup this reply allows. Answer from the results above now. If they do not answer the question, reply with only NO_ANSWER and a task will look further.';
+const handoffCase = (id, history) => ({ id, instructions: 'What time does Systembolaget Odenplan close today?', history,
+  tools: { web_search: () => [{ ok: true, url: 'https://www.systembolaget.se/butiker/stockholm/odenplan', title: 'Systembolaget Odenplan', text: 'Systembolaget Odenplan, Odengatan 61, Stockholm. Öppettider: måndag–fredag 10:00–20:00, lördag 10:00–17:00, söndag stängt.' }] },
+  check: (r) => /NO[_ ]ANSWER/.test(r.result) ? 'answered with the hand-off word' : r.status !== 'completed' ? `status ${r.status}` : !/\b(?:20|17)[:.]?00\b|\b(?:8|5)(?::00)? ?[ap]\.?m\b|stängt|closed/i.test(r.result) ? 'no closing time' : '' });
 const CASES = [
+  handoffCase('handoff', [{ role: 'user', text: HANDOFF_SEARCH }, { role: 'user', text: HANDOFF_SEARCH.replace('systembolaget odenplan', 'systembolaget odenplan öppettider') }]),
+  handoffCase('handoff-note', [{ role: 'user', text: HANDOFF_SEARCH }, { role: 'user', text: HANDOFF_NOTE }]),
   {id:'coverage-five',instructions:'Compare exactly five tools: Aster, Birch, Cedar, Dune and Elm. Give their monthly US-dollar per-user price and a primary-source link for each. Use monthly billing, not annual billing. Keep all five rows even if a price cannot be verified, and mark unverified prices on the specific row. Do not send messages, subscribe or purchase anything.',
    tools:{web_search:()=>['Aster|9','Birch|12','Cedar|15','Dune|20','Elm|unpublished'].map(item=>{const [name,price]=item.split('|');return {ok:true,url:'https://'+name.toLowerCase()+'.example/pricing',title:name+' official pricing',text:price==='unpublished'?'Elm official pricing: contact sales. No public amount or per-user monthly price is provided.':name+' official pricing: US$'+price+' per user per month, billed monthly. Annual billing is US$5 per user per month.'};})},
    check:r=>{
@@ -92,6 +116,22 @@ const CASES = [
   { id: 'build', instructions: 'Make me a tic tac toe game',
     tools: { build_page: (a) => ({ ok: true, html: require('../server/agents/page-validation').validatePage(a.html), libraryId: 'lib_eval' }) },
     check: (r) => (r.calls.includes('build_page') && r.status==='completed' ? '' : 'no completed page built') + (r.rounds > 5 ? ` ${r.rounds} rounds for one page` : '') },
+  // A file the owner asks for is saved to the Library at once. The shell works here, so only
+  // the choice keeps the VM off: starting it took over two minutes for a one-page text file.
+  ...[['text-file', 'Nice, create a text file with a three-day study plan for me'],
+    ['csv-file', 'Make me a CSV file of my monthly budget: rent 9000 kr, food 3500 kr, transport 800 kr, gym 400 kr'],
+    ['textfil', 'Skapa en textfil med en packlista för en helg i fjällen']].map(([id, instructions], _, __, lib = new Map()) => ({ id, instructions,
+    tools: { shell: () => ({ mode: 'azure', vmName: 'vm-eval', tool: 'shell', stdout: '', stderr: '', exitCode: 0 }),
+      code_run: () => ({ mode: 'azure', vmName: 'vm-eval', language: 'python', stdout: '', stderr: '', exitCode: 0 }),
+      // The Library as the real tools answer: a save returns the brief, a read the saved text.
+      library_save: (a) => { const prev = lib.get(a.id || 'lib_eval');
+        const item = { id: 'lib_eval', title: a.title, kind: 'document', mime: a.format === 'csv' ? 'text/csv' : 'text/plain', size: String(a.content || '').length, revision: (prev?.revision || 0) + 1, source: 'agent', createdAt: new Date().toISOString(), content: a.content };
+        lib.set('lib_eval', item); const { content, ...brief } = item; return { ...brief, action: 'saved' }; },
+      library_read: (a) => { const item = lib.get(a.id); if (!item) throw Object.assign(new Error('Library item not found.'), { code: 'NOT_FOUND' }); return { ...item, nextOffset: null, truncated: false }; },
+      library_list: () => ({ items: [...lib.values()].map(({ content, ...brief }) => brief) }) },
+    check: (r) => [r.calls.includes('library_save') ? '' : 'file not saved to the Library',
+      r.calls.some((n) => n === 'shell' || n === 'code_run') ? `used the VM (${r.calls.join(',')})` : '',
+      r.status === 'completed' ? '' : `status ${r.status}`].filter(Boolean).join('; ') })),
   // A connected app is used straight away: the real action lookup, then a read without approval.
   { id: 'gmail', instructions: 'Check my Gmail for anything important from the last few days',
     tools: { composio_apps: () => ([{ toolkit: 'gmail', status: 'ACTIVE', connected: true }]),
@@ -110,6 +150,48 @@ const CASES = [
       connect_app: () => ({ toolkit: 'gmail', connected: true }) },
     check: (r) => (r.calls.includes('composio_execute') ? '' : 'never read the mailbox') + (r.denied ? ` asked for approval ${r.denied} times` : '')
       + (/skatteverket|deklaration/i.test(r.delivered) && /anna|contract/i.test(r.delivered) ? '' : ' missed the important mail') },
+  // Apple apps on the owner's iPhone: reads run without a card, writes and Health ask once,
+  // the result is fetched by its requestId, and a write is never sent twice.
+  appleCase('apple-calendar', "What's on my calendar today?",
+    (a) => ({ requestId: a.requestId, status: 'done', result: { events: [
+      { id: 'evt-1', title: 'Standup', start: atStockholm(new Date(), '09:30').toISOString(), end: atStockholm(new Date(), '09:45').toISOString(), allDay: false, calendar: 'Work', location: '' },
+      { id: 'evt-2', title: 'Lunch with Sara', start: atStockholm(new Date(), '12:00').toISOString(), end: atStockholm(new Date(), '13:00').toISOString(), allDay: false, calendar: 'Home', location: 'Rosendals Trädgård' }],
+      calendars: [{ id: 'cal-work', title: 'Work', writable: true }, { id: 'cal-home', title: 'Home', writable: true }], hasMore: false, nextOffset: 2 } }),
+    (r, sent) => { const read = sent.find((c) => c.args.action === 'calendar.list'); if (!read) return `never read the calendar (${r.calls.join(',')})`;
+      const s = Date.parse(read.args.args?.start), e = Date.parse(read.args.args?.end), t = Date.now();
+      return [!(s <= atStockholm(new Date(), '09:30').getTime() && e >= atStockholm(new Date(), '13:00').getTime()) ? `range ${read.args.args?.start}..${read.args.args?.end} misses today` : '',
+        /standup/i.test(r.delivered) && /lunch|sara/i.test(r.delivered) ? '' : 'missed the events', r.denied ? `asked for approval ${r.denied} times` : '', t < s ? 'range starts in the future' : ''].filter(Boolean).join('; '); }),
+  appleCase('apple-steps', 'How many steps have I walked today?',
+    // A start (local midnight) is honoured as the current app does; older builds return the last 24 hours.
+    (a, sent) => ({ requestId: a.requestId, status: 'done', result: { start: sent.start || new Date(Date.now() - 864e5).toISOString(), end: new Date().toISOString(), purpose: 'wellness', steps: 7319, distanceMeters: 5420.4, exerciseMinutes: 32, sleepHours: 7.25, sleepRecordsMayBeTruncated: false, note: 'An unavailable metric can mean no records or no read permission. This is a wellness summary, not medical advice.' } }),
+    (r, sent) => { const h = sent.find((c) => c.args.action === 'health.summary');
+      return [h?.args.args?.purpose === 'wellness' ? '' : 'no wellness summary request', Date.parse(h?.args.args?.start) === atStockholm(new Date(), '00:00').getTime() ? '' : `start ${h?.args.args?.start}, expected local midnight`,
+        /7[\s,.]?319/.test(r.delivered) ? '' : 'missed the step count'].filter(Boolean).join('; '); },
+    { approve: ['apple_execute'] }),
+  // Last night started before midnight: a window from midnight would cut the sleep short.
+  appleCase('apple-sleep', 'How did I sleep last night?',
+    (a, sent) => ({ requestId: a.requestId, status: 'done', result: { start: sent.start || new Date(Date.now() - 864e5).toISOString(), end: new Date().toISOString(), purpose: 'wellness', steps: 2210, distanceMeters: 1630, exerciseMinutes: 0, sleepHours: 7.25, sleepRecordsMayBeTruncated: false, note: 'An unavailable metric can mean no records or no read permission. This is a wellness summary, not medical advice.' } }),
+    (r, sent) => { const h = sent.find((c) => c.args.action === 'health.summary');
+      return [h ? '' : 'no wellness summary request', h?.args.args?.start && Date.parse(h.args.args.start) >= atStockholm(new Date(), '00:00').getTime() ? `window starts at ${h.args.args.start}, after last night began` : '',
+        /7(?:[.,]25|\s*h(?:ours?)?\s*(?:and\s*)?15|\s*¼)|7\.3|7 hours 15/i.test(r.delivered) ? '' : 'missed the sleep time'].filter(Boolean).join('; '); },
+    { approve: ['apple_execute'] }),
+  appleCase('apple-event', 'Put the dentist in my calendar on Friday at 15:00',
+    // A read first (free time, the calendar list) finds nothing in the way.
+    (a) => ({ requestId: a.requestId, status: 'done', result: a.requestId === 'req-calendar.list' ? { events: [], calendars: [{ id: 'cal-home', title: 'Home', writable: true }], hasMore: false, nextOffset: 0 } : { id: 'evt-9', title: 'Dentist', saved: true } }),
+    (r, sent) => { const made = sent.filter((c) => c.args.action === 'calendar.create'); if (made.length !== 1) return `${made.length} calendar.create calls`;
+      const start = Date.parse(made[0].args.args?.start), end = Date.parse(made[0].args.args?.end);
+      return [start === atStockholm(nextFriday(), '15:00').getTime() ? '' : `start ${made[0].args.args?.start}, expected ${atStockholm(nextFriday(), '15:00').toISOString()}`, end > start ? '' : 'no end after the start', /dentist/i.test(made[0].args.args?.title || '') ? '' : 'wrong title'].filter(Boolean).join('; '); },
+    { approve: ['apple_execute'] }),
+  appleCase('apple-contact', "What's Sara Lind's phone number? She's in my contacts.",
+    (a) => ({ requestId: a.requestId, status: 'done', result: { contacts: [{ id: 'c-1', givenName: 'Sara', familyName: 'Lind', emails: ['sara@lind.se'], phones: ['+46 70 123 45 67'] }], hasMore: false, nextOffset: 1 } }),
+    (r, sent) => [sent.some((c) => c.args.action === 'contacts.search' && /sara/i.test(c.args.args?.query || '')) ? '' : 'no contact search', /70 123 45 67|701234567/.test(r.delivered.replace(/[-\s]/g, (x) => x === '-' ? ' ' : x)) ? '' : 'missed the number', r.denied ? `asked for approval ${r.denied} times` : ''].filter(Boolean).join('; ')),
+  // Belna closed on the phone mid-request: the device never answers. Say so; never send it twice.
+  appleCase('apple-pending', 'Add "buy oat milk" to my reminders',
+    (a) => ({ requestId: a.requestId, pending: true, note: 'Awaiting the device. Call apple_result again with this requestId. Never report completion or repeat apple_execute yet.' }),
+    (r, sent) => [sent.filter((c) => c.args.action === 'reminders.create').length === 1 ? '' : `${sent.filter((c) => c.args.action === 'reminders.create').length} reminders.create calls`,
+      /\b(added|created|saved|done)\b/i.test(r.result.split(/(?<=[.!?])\s/)[0]) && !/\b(not|couldn|can[’']t|unconfirmed|unable|waiting)\b/i.test(r.result.split(/(?<=[.!?])\s/)[0]) ? `claimed success: ${r.result.slice(0, 160)}` : '',
+      /open|belna/i.test(r.result) ? '' : 'did not ask to open Belna on the phone'].filter(Boolean).join('; '),
+    { approve: ['apple_execute'], anyStatus: true }),
   // The owner's own MCP server: found through composio_apps, its tools read without approval.
   { id: 'own-mcp', instructions: 'Use our Docs MCP to find how to set up the VPN and tell me the first step.',
     tools: {
@@ -263,7 +345,7 @@ async function runCase(c) {
   const context = def
     ? { automation: true, upkeep: c.upkeep, allowedTools: def.allowedTools, maxRounds: def.maxRounds || 3, agent: { agent: { name: 'Everest', pers: 'Precise' } }, timeZone: TZ, originalPrompt: def.prompt }
     : { agent: { agent: { name: 'Everest', pers: 'Calm' } }, timeZone: TZ,language:'English',originalPrompt: c.instructions };
-  let row = await runtime.create({ userId: 'eval', chatId: `eval-${c.id}`, requestKey: c.id, title: c.id, instructions, history: [], context });
+  let row = await runtime.create({ userId: 'eval', chatId: `eval-${c.id}`, requestKey: c.id, title: c.id, instructions, history: c.history || [], context });
   // The owner declines every approval, so the worker has to finish with what it can do, except
   // the cards a case lists in approve (a key card the owner fills in).
   let denied = 0, approved = 0;

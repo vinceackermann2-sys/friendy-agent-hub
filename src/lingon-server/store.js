@@ -15,6 +15,7 @@ import { createPersonalStore } from './personal-store.js';
 import { createClientStateStore } from './client-state.js';
 import { createCustomConnectorStore } from './custom-connector-store.js';
 import { createBelnaWalletStore } from './belna-wallet-store.js';
+import { createPrivyWalletStore } from './privy-wallet-store.js';
 
 // Edge runtime has no writable app filesystem: the local fallback store lives
 // in memory for the lifetime of the worker. Supabase is the durable store.
@@ -27,9 +28,18 @@ function saveLocal(d) {
   LOCAL = d;
 }
 
+// A write the database refused must not be reported as saved: on the edge the local
+// fallback is a per-worker memory copy that is gone on the next request, and a webhook
+// that answers "ok" is never retried by its provider.
+function storageUnavailable(label) {
+  return Object.assign(new Error('Storage is temporarily unavailable (' + label + '). Please try again.'), { code: 'PERSISTENCE' });
+}
+
 // ---- encryption ----
 function encKey() {
-  const h = (process.env.ENCRYPTION_KEY || '').trim();
+  // Same names as apple-devices.js and oauth-security.js, so a host that only sets the
+  // prefixed name does not leave the vault locked while other sealing works.
+  const h = (process.env.ENCRYPTION_KEY || process.env.LINGON_ENCRYPTION_KEY || '').trim();
   if (/^[0-9a-fA-F]{64}$/.test(h)) return Buffer.from(h, 'hex');
   if (h.length >= 16) return crypto.createHash('sha256').update(h).digest();
   return null;
@@ -1054,11 +1064,15 @@ async function getMailboxByAddress(address) {
   const s = supa();
   if (s) {
     try {
-      const { data, error } = await s.from('agent_mailboxes').select('*').ilike('address', addr).maybeSingle();
+      // Addresses are stored lowercase (mail.js addressFor). An exact match: the recipient
+      // comes from an inbound message, and in ilike its % and _ would act as wildcards.
+      const { data, error } = await s.from('agent_mailboxes').select('*').eq('address', addr).maybeSingle();
       if (error) throw error;
       if (data) return mapMailbox(data, data.user_id);
     } catch (e) {
-      console.warn('[store] supabase mailbox-by-address fallback:', e.message);
+      // An unreadable mailbox table is not "no such mailbox": the webhook would drop the mail.
+      console.warn('[store] mailbox lookup failed:', e.message);
+      throw storageUnavailable('mailbox lookup');
     }
   }
   const d = loadLocal();
@@ -1075,11 +1089,34 @@ async function mailLocalPartTaken(part, exceptUserId) {
       if (error && error.code !== 'PGRST116') throw error;
       return !!data;
     } catch (e) {
-      console.warn('[store] supabase local-part fallback:', e.message);
+      // Guessing "free" here could hand out an address another owner has.
+      console.warn('[store] mailbox address check failed:', e.message);
+      throw storageUnavailable('mailbox address check');
     }
   }
   const d = loadLocal();
   return (d.mailboxes || []).some((m) => m.localPart === local && m.userId !== exceptUserId);
+}
+// The owner whose mail last used this address, also after a rename moved their mailbox.
+async function mailAddressPastOwner(address) {
+  const addr = String(address || '').trim().toLowerCase();
+  if (!addr) return null;
+  const s = supa();
+  if (s) {
+    try {
+      const { data, error } = await s.from('agent_mail_messages').select('user_id')
+        .eq('mailbox_address', addr).order('created_at', { ascending: false }).limit(1);
+      if (error) throw error;
+      return data && data[0] ? data[0].user_id : null;
+    } catch (e) {
+      // Guessing "never used" could hand an old address and its mail to another owner.
+      console.warn('[store] past mailbox lookup failed:', e.message);
+      throw storageUnavailable('past mailbox lookup');
+    }
+  }
+  const d = loadLocal();
+  const row = (d.mailMessages || []).find((m) => String(m.mailboxAddress || '').toLowerCase() === addr);
+  return row ? row.userId : null;
 }
 async function upsertMailbox(userId, patch) {
   const prev = await getMailboxByUser(userId);
@@ -1103,7 +1140,9 @@ async function upsertMailbox(userId, patch) {
       if (error) throw error;
       return next;
     } catch (e) {
-      console.warn('[store] supabase upsert mailbox fallback:', e.message);
+      // An address that was never saved must not be shown as the owner one.
+      console.warn('[store] mailbox save failed:', e.message);
+      throw storageUnavailable('mailbox save');
     }
   }
   const d = loadLocal();
@@ -1163,7 +1202,9 @@ async function getMailMessageByResendId(resendId) {
       if (error) throw error;
       if (data) return mapMailMessage(data, data.user_id);
     } catch (e) {
-      console.warn('[store] supabase mail resend-id fallback:', e.message);
+      // The duplicate check failing must not let the same delivery be stored twice.
+      console.warn('[store] mail duplicate check failed:', e.message);
+      throw storageUnavailable('mail duplicate check');
     }
   }
   const d = loadLocal();
@@ -1216,7 +1257,9 @@ async function insertMailMessage(userId, msg) {
       if (error) throw error;
       return row;
     } catch (e) {
-      console.warn('[store] supabase insert mail fallback:', e.message);
+      // Inbound mail must be retried by the provider, not acknowledged and lost.
+      console.warn('[store] mail save failed:', e.message);
+      throw storageUnavailable('mail save');
     }
   }
   const d = loadLocal();
@@ -1237,7 +1280,9 @@ async function updateMailMessage(userId, id, patch) {
       const { error } = await s.from('agent_mail_messages').update(upd).eq('id', id).eq('user_id', userId);
       if (error) throw error;
     } catch (e) {
-      console.warn('[store] supabase update mail fallback:', e.message);
+      // A change that was not saved is reported, not shown as done.
+      console.warn('[store] mail update failed:', e.message);
+      throw storageUnavailable('mail update');
     }
   }
   const d = loadLocal();
@@ -1332,7 +1377,9 @@ async function upsertMailDraft(userId, input) {
       if (error) throw error;
       return row;
     } catch (e) {
-      console.warn('[store] supabase upsert draft fallback:', e.message);
+      // A draft that was not saved is reported, not shown as saved.
+      console.warn('[store] draft save failed:', e.message);
+      throw storageUnavailable('draft save');
     }
   }
   const d = loadLocal();
@@ -1365,7 +1412,9 @@ async function getConnectorPermissions(userId, toolkit) {
       if (error) throw error;
       return normalizeDisabled(data && data.disabled);
     } catch (e) {
-      console.warn('[store] connector_permissions fallback:', e.message);
+      // An unreadable permission list must not read as "nothing disabled" (as in server/store.js).
+      console.warn('[store] connector permissions failed:', e.message);
+      throw storageUnavailable('connector permissions');
     }
   }
   const d = loadLocal();
@@ -1386,7 +1435,9 @@ async function setConnectorPermissions(userId, toolkit, disabled) {
       if (error) throw error;
       return list;
     } catch (e) {
-      console.warn('[store] connector_permissions upsert fallback:', e.message);
+      // A permission change that was not saved must not be acknowledged (as in server/store.js).
+      console.warn('[store] connector permissions save failed:', e.message);
+      throw storageUnavailable('connector permissions save');
     }
   }
   const d = loadLocal();
@@ -1520,7 +1571,9 @@ async function upsertShopPayAccount(userId, patch) {
       if (error) throw error;
       return next;
     } catch (e) {
-      console.warn('[store] supabase upsert shop pay fallback:', e.message);
+      // Sealed Shop Pay tokens never go to the local fallback copy.
+      console.warn('[store] Shop Pay account save failed:', e.message);
+      throw storageUnavailable('Shop Pay account save');
     }
   }
   const d = loadLocal();
@@ -1694,7 +1747,9 @@ const clientState = createClientStateStore({ supa, loadLocal, saveLocal, ensureP
 const { list: listClientState, save: saveClientState, removeChat: deleteClientChat } = clientState;
 const { listCustomConnectors, addCustomConnector, updateCustomConnector, deleteCustomConnector, dropConnectorsForSecret } = createCustomConnectorStore({ supa, loadLocal, saveLocal, ensureProfile, uid });
 
+const {getPrivyWallet,claimPrivyWallet,updatePrivyWallet,createPrivyIntent,getPrivyIntent,listPrivyIntents,beginPrivyIntent,updatePrivyIntent,markPrivyIntentAwaitingOwner,cancelPrivyIntent,findPrivyRecipient,getPrivyAccountUser,recordPrivyBalance,getPrivyWalletConfiguration}=createPrivyWalletStore({supa,ensureProfile});
 export {
+  getPrivyWallet,claimPrivyWallet,updatePrivyWallet,createPrivyIntent,getPrivyIntent,listPrivyIntents,beginPrivyIntent,updatePrivyIntent,markPrivyIntentAwaitingOwner,cancelPrivyIntent,findPrivyRecipient,getPrivyAccountUser,recordPrivyBalance,getPrivyWalletConfiguration,
   getConnectedWalletConfiguration,claimConnectedBelnaWallet,
   listPermissionGrants,createPermissionGrant,revokePermissionGrant,
   getPersonalWalletConfiguration,getLegacyBelnaWallet,saveWhopWalletOAuthState,consumeWhopWalletOAuthState,connectPersonalWhopWallet,getWhopWalletAuth,claimWhopWalletRefresh,finishWhopWalletRefresh,releaseWhopWalletRefresh,saveWalletPaymentRequest,getWalletPaymentRequest,getWalletTransferByRequest,
@@ -1722,7 +1777,7 @@ export {
   listClientState, saveClientState, deleteClientChat,
   listSubAgents, getSubAgent, createSubAgent, updateSubAgent, deleteSubAgent, ensureSystemSubAgents,
   listDueSubAgents, listAppSubAgentsForSync, markAppTriggerSync, markSubAgentRun, listUpkeepSignals, beginAutomationRun, getAutomationRunByDedupeKey, attachAutomationTask, listPendingAutomationRuns, finishAutomationRun, listAutomationRuns,
-  getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, upsertMailbox,
+  getMailboxByUser, getMailboxByAddress, mailLocalPartTaken, mailAddressPastOwner, upsertMailbox,
   listMailMessages, getMailMessage, getMailMessageByResendId, insertMailMessage, updateMailMessage, deleteMailMessage,
   countUnreadMail, countOutboundMailToday,   listMailDrafts, upsertMailDraft, deleteMailDraft,
   getConnectorPermissions, setConnectorPermissions,

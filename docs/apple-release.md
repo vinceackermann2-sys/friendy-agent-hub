@@ -149,8 +149,9 @@ Support: `https://belna.se/support`, `support@belna.se`. The support route is li
 and returns 200. Privacy: `https://belna.se/privacy`.
 
 Draft reviewer notes: Sign in using the supplied reviewer account or email code.
-Apple apps is the Apple logo button at the top right and is also available in
-Connectors. Connecting is optional; no user data is uploaded on connection.
+Apple apps opens from Settings → Profiles → Apple apps & privacy and from the
+Apple cards in Connectors; the web app fills the screen with no native top bar.
+Connecting is optional; no user data is uploaded on connection.
 Calendar/Reminders/Contacts changes ask in the agent and on the device. Every
 Health summary is previewed and explicitly shared for fitness/wellness only.
 Notes, Mail and Messages are not general integrations. Mac reads its own synced

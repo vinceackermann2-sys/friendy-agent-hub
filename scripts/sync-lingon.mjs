@@ -1,13 +1,15 @@
 // Keeps the Lovable build congruent with the lingon source of truth.
-// app/ (vanilla frontend) is copied verbatim to public/lingon/ and the
-// public pages to public/, so every `npm run build` (incl. Lovable hosting)
-// serves the current code — never a stale copy.
+// app/ (vanilla frontend) is copied to public/lingon/ (its scripts and styles
+// minified) and the public pages to public/, so every `npm run build` (incl.
+// Lovable hosting) serves the current code — never a stale copy.
 // The Node/Express backend in server/ is mirrored to src/lingon-server/
 // (ESM edge port) by hand; this script verifies the branding strings match
 // and warns when they drift so the API identity stays in sync.
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { transformSync } from 'esbuild';
+import './build-wallet.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -25,12 +27,28 @@ function copy(src, dest) {
   console.log(`sync-lingon: ${src} -> ${dest}`);
 }
 
+// The served scripts and styles are minified: about a quarter less to download and
+// parse on a phone. app/ stays the readable source (and what `npm start` serves).
+function minifyCopy(src, dest) {
+  const from = join(root, src);
+  if (!existsSync(from)) {
+    console.error(`sync-lingon: MISSING source ${src}`);
+    failures++;
+    return;
+  }
+  const { code } = transformSync(readFileSync(from, 'utf8'), { loader: src.endsWith('.css') ? 'css' : 'js', minify: true, legalComments: 'none' });
+  const to = join(root, dest);
+  mkdirSync(dirname(to), { recursive: true });
+  writeFileSync(to, code);
+  console.log(`sync-lingon: ${src} -> ${dest} (minified)`);
+}
+
 // Frontend JS/CSS served by the TanStack route from /lingon/*
 for (const f of ['app.js', 'auth.js', 'config.js', 'engine.real.js', 'engine.managed.js', 'mascot.js', 'styles.css', 'task-routing.js', 'apple-native.js']) {
-  copy(join('app', f), join('public', 'lingon', f));
+  minifyCopy(join('app', f), join('public', 'lingon', f));
 }
 // Standalone public pages load /styles.css, while the app loads /lingon/styles.css.
-copy(join('app', 'styles.css'), join('public', 'styles.css'));
+minifyCopy(join('app', 'styles.css'), join('public', 'styles.css'));
 // Original Apple app artwork used to identify the native connectors.
 for (const f of readdirSync(join(root, 'app', 'connectors', 'apple')).filter((name) => name.endsWith('.jpg'))) {
   copy(join('app', 'connectors', 'apple', f), join('public', 'lingon', 'connectors', 'apple', f));
@@ -133,7 +151,7 @@ for (const name of ['oauth-security', 'request-limits', 'shoppay']) {
   writeFileSync(join(root, 'src/lingon-server/agents/wallet-tools.js'), src.replace('module.exports = { createWalletTools };', 'export { createWalletTools };'), 'utf8');
 }
 
-for (const [name, factory] of [['whop-user-auth','createWhopUserAuth'],['personal-wallet','createPersonalWallet'],['belna-wallet', 'createBelnaWallet'], ['belna-wallet-store', 'createBelnaWalletStore'], ['wallet-purchases','createWalletPurchases'], ['private-checkout-client','createPrivateCheckoutClient']]) {
+for (const [name, factory] of [['privy-wallet','createPrivyWallet'],['privy-wallet-store','createPrivyWalletStore'],['privy-wallet-routes','installPrivyWalletRoutes'],['whop-user-auth','createWhopUserAuth'],['personal-wallet','createPersonalWallet'],['belna-wallet', 'createBelnaWallet'], ['belna-wallet-store', 'createBelnaWalletStore'], ['wallet-purchases','createWalletPurchases'], ['private-checkout-client','createPrivateCheckoutClient']]) {
   const src = readFileSync(join(root, `server/${name}.js`), 'utf8');
   const esm = src.replace(/^const \{\s*([^}]+)\s*\}\s*=\s*require\('([^']+)'\);/gm,(_,symbols,path)=>`import {${symbols}} from '${path}.js';`).replace(/module\.exports\s*=\s*\{([^}]+)\};?/g,(_,symbols)=>`export {${symbols}};`);
   if (/module\.exports|require\(/.test(esm)) throw new Error('Unconverted Belna wallet module');
@@ -202,8 +220,8 @@ for (const name of ['apple-tools', 'page-validation', 'goal-work', 'permission-p
     `import ${bindings} from '${spec.startsWith('.') ? spec + '.js' : spec}';`);
   src = src.replace(/const (\w+) = require\('([^']+)'\);/g, (_, binding, spec) =>
     spec === 'crypto' ? `import ${binding} from 'node:crypto';` : spec === 'path' ? `import path from 'node:path';` : `import * as ${binding} from '${spec}.js';`);
-  src = src.replace('module.exports={createCoordinator,updateChatSummary,acknowledgeTask,finishTaskMemory,handle:coordinator.handle,tasks,startWorker};',
-    'const handle=coordinator.handle;\nexport {createCoordinator,updateChatSummary,acknowledgeTask,finishTaskMemory,handle,tasks,startWorker};');
+  src = src.replace('module.exports={createCoordinator,updateChatSummary,acknowledgeTask,finishTaskMemory,shownStart,handle:coordinator.handle,tasks,startWorker};',
+    'const handle=coordinator.handle;\nexport {createCoordinator,updateChatSummary,acknowledgeTask,finishTaskMemory,shownStart,handle,tasks,startWorker};');
   src = src.replace(/module\.exports\s*=\s*\{/g, 'export {');
   if (/require\(|module\.exports/.test(src)) throw new Error(`Unconverted CommonJS in ${name}`);
   writeFileSync(join(root, `src/lingon-server/agents/${name}.js`), src, 'utf8');

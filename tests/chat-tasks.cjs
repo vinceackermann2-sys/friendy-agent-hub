@@ -173,6 +173,15 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
   assert.deepEqual([update.type,update.phase,update.text],['message','task_update','Found the answer'],'an update reaches the chat as the agent\'s message');
   await m.runtime.step('a',mid);assert.equal(m.rows.get(mid).state.status,'completed');
   assert.equal(m.rows.get(mid).state.events.at(-1).phase,'task_answer');
+  // The chat's hand-off word is never a task's answer: a bare NO_ANSWER sends the worker back
+  // to the work once, and the word is cut from an answer that carries it.
+  const bare=setup();bare.answers.push({text:'NO_ANSWER'},{text:'Paris is the capital. NO_ANSWER'});
+  const bareRow=await bare.create();
+  await bare.runtime.step('a',bareRow.id);
+  assert.notEqual(bare.rows.get(bareRow.id).state.status,'completed','a bare NO_ANSWER does not finish the task');
+  await bare.runtime.step('a',bareRow.id);
+  assert.equal(bare.rows.get(bareRow.id).state.status,'completed');
+  assert.equal(bare.rows.get(bareRow.id).state.result,'Paris is the capital.');
   const failedEvidence=setup();failedEvidence.d.tools.lookup={run:async()=>[{ok:false,error:'Could not fetch'}]};
   const fid=await planned(failedEvidence,'lookup');await failedEvidence.runtime.step('a',fid);
   const failedRef=failedEvidence.rows.get(fid).state.observations[0].id;
@@ -529,6 +538,13 @@ async function planned(h,name,args={}) {h.answers.push({functionCalls:[{name,arg
     .run({userId:'a',chatId:'chat',requestId:'ack-chat',prompt:'Find me a hotel in Lisbon for next weekend',onEvent:e=>chatAckEvents.push(e)});
   assert.deepEqual(acks,[{prompt:'Find me a hotel in Lisbon for next weekend',title:'Lisbon hotels'}]);
   assert.equal(chatAckEvents.find(e=>e.type==='message').text,'Building your tic tac toe game now.');
+  // The confirmation sees the agent's last messages in the chat, so it does not start the same way.
+  let ackRequest=null;
+  const recentAck=setup();
+  await createCoordinator(ackBase(recentAck,{store:{listMemories:async()=>[],saveTurn:async()=>{},listChatMessages:async()=>[{role:'user',text:'Weather?'},{role:'agent',text:'Checking the weather for you.'},{role:'user',text:'Thanks'},{role:'agent',text:'Sunny all day.'}]},
+    model:async()=>({functionCalls:[{name:'delegate_task',args:{title:'Lisbon hotels',instructions:'Find hotels'}}]}),acknowledge:async r=>{ackRequest=r;return 'Lisbon it is.';}}))
+    .run({userId:'a',chatId:'chat',requestId:'ack-recent',prompt:'Find me a hotel in Lisbon for next weekend',onEvent:()=>{}});
+  assert.deepEqual(ackRequest.recent,['Checking the weather for you.','Sunny all day.']);
   // Steering keeps its own reply and needs no confirmation call.
   acks.length=0;const steerEvents=[];
   const steerable=[...chatAck.rows.values()].at(-1);

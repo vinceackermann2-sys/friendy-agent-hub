@@ -44,11 +44,11 @@ const {chromium}=require('playwright');
   await page.locator('[data-act="togglecanvas"]').first().click();await page.locator('[data-act="ctab"][data-t="wallet"]').click();
   assert.equal(await page.locator('[data-act="ctab"][data-t="payments"]').count(),0,'no separate Payments tab');
   await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.locator('#payment-connections').waitFor();
-  for(const name of ['Payment apps and pay later','Cards saved in stores'])assert.equal(await page.locator('#payment-connections').getByRole('switch',{name,exact:true}).getAttribute('aria-checked'),'false',name+' starts off');
-  await page.getByRole('button',{name:'Connect Shop Pay',exact:true}).waitFor();
-  await page.getByRole('switch',{name:'Cards saved in stores',exact:true}).click();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Cards saved in stores"][aria-checked="true"]').waitFor();await leaveSettings();
-  await page.locator('.wallet-panel').getByRole('button',{name:/^Payment methods/}).filter({hasText:'Cards saved in stores on'}).waitFor();
-  assert.match(await page.locator('.wallet-panel').getByRole('region',{name:'Wallet activity'}).innerText(),/Amazon[\s\S]*Submitted/,'own-method purchases show in Activity even before a Belna Wallet exists');
+  for(const name of ['Payment apps','Cards saved in your store accounts'])assert.equal(await page.locator('#payment-connections').getByRole('switch',{name,exact:true}).getAttribute('aria-checked'),'false',name+' starts off');
+  await page.getByRole('button',{name:'Connect Shop account',exact:true}).waitFor();
+  await page.getByRole('switch',{name:'Cards saved in your store accounts',exact:true}).click();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Cards saved in your store accounts"][aria-checked="true"]').waitFor();await leaveSettings();
+  await page.locator('.wallet-panel').getByRole('button',{name:/^How .* pays for purchases/}).filter({hasText:'Store cards on'}).waitFor();
+  assert.match(await page.locator('.wallet-panel').getByRole('region',{name:'Wallet activity'}).innerText(),/Amazon[\s\S]*Order placed/,'own-method purchases show in Activity even before a Belna Wallet exists');
   await page.locator('.wallet-panel [data-act="payments-manage"]').click();await page.locator('#wallet-settings-content').waitFor();
   assert.equal(await page.locator('#wallet-settings-content').getByText('Amazon',{exact:true}).count(),0,'purchases are not listed in Settings');
   assert.ok(await page.locator('#wallet-settings-content').isVisible(),'wallet settings open from the delivery action');
@@ -118,13 +118,13 @@ const {chromium}=require('playwright');
   assert.deepEqual(requests.filter(x=>x.path.endsWith('/controls')).at(-1).body,{frozen:true});
   // Choosing Belna Wallet keeps your own methods; they are switched one by one and never spend the balance.
   assert.equal(prefs.activeMethod,'belna_wallet');
-  await page.locator('#payment-connections').getByRole('switch',{name:'Payment apps and pay later',exact:true}).click();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Payment apps and pay later"][aria-checked="true"]').waitFor();
-  await page.reload();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Payment apps and pay later"][aria-checked="true"]').waitFor();
+  await page.locator('#payment-connections').getByRole('switch',{name:'Payment apps',exact:true}).click();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Payment apps"][aria-checked="true"]').waitFor();
+  await page.reload();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Payment apps"][aria-checked="true"]').waitFor();
   assert.equal(prefs.methods.saved_card,true);assert.equal(prefs.activeMethod,'belna_wallet');
   await leaveSettings();if(!await page.getByText('Total balance · Belna',{exact:true}).isVisible())await page.locator('[data-act="togglecanvas"]').first().click();await page.getByText('Total balance · Belna',{exact:true}).waitFor();assert.match(await page.locator('.wallet-panel').innerText(),/\$12\.50/);
   assert.match(await page.locator('.wallet-panel').innerText(),/Card spending is paused/);
   await page.getByRole('button',{name:'Wallet settings',exact:true}).click();
-  for(const name of ['Payment apps and pay later','Cards saved in stores']){await page.locator('#payment-connections').getByRole('switch',{name,exact:true}).click();await page.locator('#payment-connections').locator(`[role="switch"][aria-label="${name}"][aria-checked="false"]`).waitFor();}
+  for(const name of ['Payment apps','Cards saved in your store accounts']){await page.locator('#payment-connections').getByRole('switch',{name,exact:true}).click();await page.locator('#payment-connections').locator(`[role="switch"][aria-label="${name}"][aria-checked="false"]`).waitFor();}
   assert.equal(await page.locator('#wallet-shipping-section').count(),1,'delivery can be managed while every method is off');
   await page.locator('[data-act="wallet-address-edit"]').click();await page.locator('.wallet-address-form [data-act="wallet-address-delete"]').click();await page.locator('.wallet-address').waitFor({state:'detached'});assert.deepEqual(errors,[]);await context.close();
  }

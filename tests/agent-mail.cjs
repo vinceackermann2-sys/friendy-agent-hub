@@ -115,6 +115,74 @@ async function main() {
     store.insertMailMessage = old.insertMailMessage;
   }
 
+  // The address is the agent's saved name, and follows it when the agent is renamed.
+  {
+    const saved = {};
+    for (const k of ['getAgentContext', 'getMailboxByUser', 'getMailboxByAddress', 'upsertMailbox', 'mailLocalPartTaken', 'mailAddressPastOwner', 'getMailMessageByResendId', 'insertMailMessage']) saved[k] = store[k];
+    const boxes = new Map(), names = new Map(), used = new Map(), inserted = [];
+    store.getAgentContext = async (userId) => ({ agent: { name: names.get(userId) || 'Your agent' } });
+    store.getMailboxByUser = async (userId) => boxes.get(userId) || null;
+    store.getMailboxByAddress = async (addr) => [...boxes.values()].find((b) => b.address === addr) || null;
+    store.upsertMailbox = async (userId, patch) => { const next = { ...(boxes.get(userId) || {}), ...patch, userId }; boxes.set(userId, next); return next; };
+    store.mailLocalPartTaken = async (part, userId) => [...boxes.values()].some((b) => b.localPart === part && b.userId !== userId);
+    store.mailAddressPastOwner = async (addr) => used.get(addr) || null;
+    store.getMailMessageByResendId = async () => null;
+    store.insertMailMessage = async (userId, row) => { inserted.push({ userId, ...row }); return { id: 'in_' + inserted.length, ...row }; };
+    try {
+      // Before the owner picks a name the mailbox has a neutral address, never your-agent@.
+      const unnamed = await mail.ensureMailbox('u1');
+      assert.match(unnamed.address, /^agent-[0-9a-f]{4}@mail\.belna\.se$/);
+      names.set('u1', 'Alva');
+      assert.equal((await mail.ensureMailbox('u1')).address, 'alva@mail.belna.se', 'naming the agent moves the address to its name');
+      assert.equal(boxes.get('u1').displayName, 'Alva');
+      // A name passed by a request or the model is ignored; only the saved name counts.
+      assert.equal((await mail.agentStatus('u1', 'Hacker')).address, 'alva@mail.belna.se');
+      assert.equal((await mail.ensureMailbox('u1', 'Your agent')).address, 'alva@mail.belna.se', 'a placeholder keeps the named address');
+
+      // Another owner who also picks Alva gets the closest free form of the name.
+      names.set('u2', 'Alva');
+      const second = await mail.ensureMailbox('u2');
+      assert.match(second.address, /^alva-[0-9a-f]{4}@mail\.belna\.se$/);
+      assert.equal((await mail.ensureMailbox('u2')).address, second.address, 'a suffixed address is stable');
+
+      // Renaming moves the address; the old one, once used for mail, is never handed on.
+      used.set('alva@mail.belna.se', 'u1');
+      names.set('u1', 'Åsa Berg');
+      assert.equal((await mail.ensureMailbox('u1')).address, 'asa-berg@mail.belna.se');
+      names.set('u3', 'Alva');
+      assert.notEqual((await mail.ensureMailbox('u3')).address, 'alva@mail.belna.se');
+      names.set('u1', 'Alva');
+      assert.equal((await mail.ensureMailbox('u1')).address, 'alva@mail.belna.se', 'an owner can take back their own old address');
+
+      // With every form of the name taken, the fallback address is kept rather than redrawn on each read.
+      const taken = store.mailLocalPartTaken;
+      store.mailLocalPartTaken = async () => true;
+      try {
+        names.set('u4', 'Alva');
+        const fallback = (await mail.ensureMailbox('u4')).address;
+        assert.match(fallback, /^agent-[0-9a-f]{8}@mail\.belna\.se$/);
+        assert.equal((await mail.ensureMailbox('u4')).address, fallback, 'a fallback address is stable');
+      } finally { store.mailLocalPartTaken = taken; }
+
+      // Mail to the address an agent had before a rename still reaches that agent.
+      names.set('u1', 'Bo');
+      assert.equal((await mail.ensureMailbox('u1')).address, 'bo@mail.belna.se');
+      const previous = process.env.RESEND_WEBHOOK_SECRET;
+      const crypto = require('node:crypto'), key = crypto.randomBytes(24);
+      process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + key.toString('base64');
+      try {
+        const body = JSON.stringify({ type: 'email.received', data: { email_id: 'r1', from: 'Sam <sam@example.com>', to: ['alva@mail.belna.se'], subject: 'Hi', text: 'Hello' } });
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = 'v1,' + crypto.createHmac('sha256', key).update('w1.' + ts + '.' + body).digest('base64');
+        const out = await mail.ingestWebhook(body, { 'svix-id': 'w1', 'svix-timestamp': ts, 'svix-signature': sig });
+        assert.equal(out.address, 'bo@mail.belna.se');
+        assert.equal(inserted.at(-1).userId, 'u1');
+      } finally { previous === undefined ? delete process.env.RESEND_WEBHOOK_SECRET : process.env.RESEND_WEBHOOK_SECRET = previous; }
+    } finally {
+      Object.assign(store, saved);
+    }
+  }
+
   console.log('agent mail: ok');
 }
 

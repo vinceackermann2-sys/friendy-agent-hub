@@ -86,6 +86,22 @@ final class NativeModel: NSObject, ObservableObject {
     private func lock() {
         revision += 1; cancelPrompt(); services.accountId = ""; completed.removeAll()
     }
+    /// The owner reads what will change, not the action's internal name.
+    static func reviewTitle(_ action: String) -> String {
+        switch action {
+        case "calendar.create": return "Add this event to Calendar?"
+        case "calendar.update": return "Change this Calendar event?"
+        case "calendar.delete": return "Delete this Calendar event?"
+        case "reminders.create": return "Add this reminder?"
+        case "reminders.update": return "Change this reminder?"
+        case "reminders.complete": return "Update this reminder?"
+        case "reminders.delete": return "Delete this reminder?"
+        case "contacts.create": return "Add this contact?"
+        case "contacts.update": return "Change this contact?"
+        case "contacts.delete": return "Delete this contact?"
+        default: return "Allow this change?"
+        }
+    }
     private func commandActive(_ id: String) async -> Bool {
         guard let webView else { return false }
         return (try? await webView.callAsyncJavaScript("return await window.BelnaApple?.commandActive(id);", arguments: ["id":id], in: nil, in: .page)) as? Bool ?? false
@@ -136,7 +152,7 @@ final class NativeModel: NSObject, ObservableObject {
         let isWrite = !["calendar.list","reminders.list","contacts.search","health.summary"].contains(action)
         if isWrite {
             let description = try services.describe(action, args: args)
-            guard await review(title: "Allow \(action)?", detail: description) else { throw DeviceError.message("The owner cancelled this Apple change.") }
+            guard await review(title: Self.reviewTitle(action), detail: description) else { throw DeviceError.message("The owner cancelled this Apple change.") }
         }
         let allowedBefore = await commandActive(commandId)
         guard allowedBefore, foreground, aiConsent, services.accountId == accountId, revision == currentRevision, expiresAt > Date() else {

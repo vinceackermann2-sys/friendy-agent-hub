@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { LingonApp, lingonHeadLinks } from "@/components/LingonApp";
+import { LingonApp, lingonHeadLinks, lingonHeadScripts } from "@/components/LingonApp";
 import {
   pageMeta,
   SITE_DESCRIPTION,
@@ -16,6 +16,7 @@ export const Route = createFileRoute("/")({
       { rel: "canonical", href: `${SITE_ORIGIN}/` },
     ],
     scripts: [
+      ...lingonHeadScripts,
       {
         type: "application/ld+json",
         children: JSON.stringify({

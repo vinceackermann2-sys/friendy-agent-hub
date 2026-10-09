@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { LingonApp, lingonHeadLinks } from "@/components/LingonApp";
+import { LingonApp, lingonHeadLinks, lingonHeadScripts } from "@/components/LingonApp";
 import { pageMeta, SITE_ORIGIN } from "@/lib/seo";
 
 const title = "Sign in to Belna | Your personal AI agent";
@@ -18,6 +18,7 @@ export const Route = createFileRoute("/app")({
       ...lingonHeadLinks,
       { rel: "canonical", href: `${SITE_ORIGIN}/app` },
     ],
+    scripts: lingonHeadScripts,
   }),
   component: () => <LingonApp page="app" />,
 });

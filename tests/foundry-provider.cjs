@@ -202,6 +202,15 @@ global.fetch = async (url, options = {}) => {
   assert.equal(loopCut.functionCalls[0].name, 'delegate_task');
   assert.ok(loopCut.functionCalls[0].args._raw.length > 1000 && loopCut.functionCalls[0].args._raw.length < 1200, 'the stream stops soon after the limit');
   assert.equal(JSON.parse(calls.at(-1).options.body).max_output_tokens, 4096);
+  // Arguments that run on after their JSON object closes (reasoning leaking into the call) end
+  // at the close: the call is whole, and nothing after it is waited for.
+  const rambling = [{ type: 'response.output_item.added', item: { type: 'function_call', id: 'fc_ramble', call_id: 'call_ramble', name: 'present' } },
+    { type: 'response.function_call_arguments.delta', item_id: 'fc_ramble', delta: '{"kind":"list","title":"Say \\"hi\\" {now}",' },
+    { type: 'response.function_call_arguments.delta', item_id: 'fc_ramble', delta: '"items":[{"title":"A"}]}); in the call valid JSON? redo' },
+    ...Array.from({ length: 40 }, () => ({ type: 'response.function_call_arguments.delta', item_id: 'fc_ramble', delta: ' more reasoning'.repeat(10) }))];
+  queued.push(() => sse(rambling));
+  const ended = await provider.callFoundryWithTools({ prompt: 'Show it', tools: [{ name: 'present', parameters: { type: 'object', properties: {} } }], maxArgumentChars: 9000 });
+  assert.deepEqual(ended.functionCalls[0].args, { kind: 'list', title: 'Say "hi" {now}', items: [{ title: 'A' }] });
   // A flood of parallel calls stops after maxFunctionCalls; finished calls are kept.
   const flood = Array.from({ length: 50 }, (_, i) => [
     { type: 'response.output_item.added', item: { type: 'function_call', id: `fc_${i}`, call_id: `call_${i}`, name: 'web_search' } },
@@ -211,6 +220,36 @@ global.fetch = async (url, options = {}) => {
   const flooded = await provider.callFoundryWithTools({ prompt: 'Research', tools: [{ name: 'web_search', parameters: { type: 'object', properties: {} } }], maxFunctionCalls: 6 });
   assert.equal(flooded.functionCalls.length, 6);
   assert.deepEqual(flooded.functionCalls.map((c) => c.args.query), ['q0', 'q1', 'q2', 'q3', 'q4', 'q5']);
+  // A response that is accepted and then goes quiet before writing anything is stuck: with
+  // stallMs it ends and is sent again, instead of waiting out the three-minute limit.
+  const quiet = (signal) => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'response.created', response: { id: 'r_quiet' } })}\n\n`));
+    signal.addEventListener('abort', () => controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+  } }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  const answered = [{ type: 'response.output_text.delta', delta: 'Back again.' }, { type: 'response.completed', response: { model: 'gpt-6-luna', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Back again.' }] }], usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 } } }];
+  const sentBefore = calls.length, t0 = Date.now();
+  queued.push(() => quiet(calls.at(-1).options.signal), () => sse(answered));
+  const resent = await provider.callFoundryWithTools({ prompt: 'Hi', tools: [], stallMs: 150, reasoningEffort: 'low' });
+  assert.equal(resent.text, 'Back again.');
+  assert.equal(calls.length - sentBefore, 2, 'the stuck call is sent once more');
+  assert.ok(Date.now() - t0 < 2500, 'it does not wait out the long limit');
+  // The second try has no short limit: when the service is slow for everyone, it still answers.
+  const slow = () => new Response(new ReadableStream({ start(controller) {
+    setTimeout(() => { controller.enqueue(new TextEncoder().encode(answered.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''))); controller.close(); }, 350);
+  } }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  queued.push(() => quiet(calls.at(-1).options.signal), slow);
+  assert.equal((await provider.callFoundryWithTools({ prompt: 'Hi', tools: [], stallMs: 150, reasoningEffort: 'low' })).text, 'Back again.');
+  // Once output has started, going quiet is not a stall: the caller's signal still ends it as before.
+  const stop = new AbortController();
+  const writing = (signal) => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'Part' })}\n\n`));
+    signal.addEventListener('abort', () => controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+  } }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  queued.push(() => writing(calls.at(-1).options.signal));
+  setTimeout(() => stop.abort(), 400);
+  const counted = calls.length;
+  await assert.rejects(provider.callFoundryWithTools({ prompt: 'Hi', tools: [], stallMs: 100, reasoningEffort: 'low', signal: stop.signal }));
+  assert.equal(calls.length - counted, 1, 'a call that already wrote is never sent twice');
   console.log('foundry provider: responses, tools, transcription, and images ok');
 })().catch((error) => {
   console.error(error);

@@ -47,6 +47,7 @@ const leases = new Map(); // userId -> Map(leaseId, { kind, expiresAt })
 const stopping = new Map(); // userId -> Promise, prevents duplicate deallocate calls
 const restoredState = new Map(); // userId -> Azure VM incarnation; replacement must restore again
 const workerReadyState = new Map(); // userId -> VM incarnation whose worker image is ready
+const pendingRestore = new Map(); // userId -> VM incarnation started without its restore check yet
 let sweepTokenCache = { value: '', at: 0 };
 let durableStorageCache = { accountId: '', accountKey: '', storage: null, exp: 0 };
 
@@ -70,7 +71,7 @@ function azureConfig() {
     nsg: env('AZURE_NSG', 'lingon-sandbox-nsg'),
     storageAccount: env('AZURE_STORAGE_ACCOUNT'),
     image: env('AZURE_VM_IMAGE', 'Canonical:0001-com-ubuntu-server-jammy:22_04-lts:latest'),
-    idleMinutes: Number(env('AZURE_VM_IDLE_MINUTES', '5')) || 5,
+    idleMinutes: Number(env('AZURE_VM_IDLE_MINUTES', '10')) || 10,
     perUserVM: env('AZURE_PER_USER_VM', 'true').toLowerCase() !== 'false',
     autoProvision: env('AZURE_AUTO_PROVISION', 'true').toLowerCase() === 'true',
     durableState: env('AZURE_DURABLE_STATE', 'true').toLowerCase() !== 'false',
@@ -249,7 +250,10 @@ function buildRunScript(language, code, taskId) {
     `echo '${b64}' | base64 -d > "$JOB"`,
     'chown lingon:lingon "$JOB" && chmod 600 "$JOB"',
     'set +e',
-    `timeout 20s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --ulimit nofile=256:256 --ipc=private --pid=private --uts=private --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.${ext}:ro" --workdir /workspace --env HOME=/home/lingon ${image} ${bin} "/run/lingon/job.${ext}"; EC=$?`,
+    // -k: a job that ignores TERM (podman forwards it into the container) is killed 5 s later,
+    // and a container the killed client left behind is removed, so the slot is freed.
+    `timeout -k 5s 20s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --ulimit nofile=256:256 --ipc=private --pid=private --uts=private --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.${ext}:ro" --workdir /workspace --env HOME=/home/lingon ${image} ${bin} "/run/lingon/job.${ext}"; EC=$?`,
+    'podman rm -f "lingon-job-$$" >/dev/null 2>&1',
     'exit $EC',
   ].join('\n');
 }
@@ -270,8 +274,9 @@ function buildShellScript(command, taskId) {
     `echo '${b64}' | base64 -d > "$JOB"`,
     'chown lingon:lingon "$JOB" && chmod 600 "$JOB"',
     'set +e',
-    `timeout 30s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --ulimit nofile=256:256 --ipc=private --pid=private --uts=private --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.sh:ro" --workdir /workspace --env HOME=/home/lingon ${image} bash /run/lingon/job.sh`,
+    `timeout -k 5s 30s podman run --rm --name "lingon-job-$$" --user "$(id -u lingon):$(id -g lingon)" --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only --pids-limit=128 --ulimit nofile=256:256 --ipc=private --pid=private --uts=private --memory=512m --cpus=1 --tmpfs /tmp:rw,nosuid,nodev,size=64m --volume "$WORKDIR:/workspace:rw" --volume "$JOB:/run/lingon/job.sh:ro" --workdir /workspace --env HOME=/home/lingon ${image} bash /run/lingon/job.sh`,
     'EC=$?',
+    'podman rm -f "lingon-job-$$" >/dev/null 2>&1',
     'exit $EC',
   ].join('\n');
 }
@@ -1124,6 +1129,113 @@ function liveStreamerLaunch(sessionId, live) {
   ];
 }
 
+/*
+ * Shell and code steps sent over the owner's own channel run here, exactly as the VM command
+ * would run them, without a VM command per step: Azure Run Command takes about 11 s even for
+ * "echo". The agent runs as root like those commands, and only scripts signed with the key
+ * the server gave it at launch, not expired and not seen before. Results go to a private
+ * upload link in the job, never to the channel. It is serialized with toString(), so it uses
+ * only its arguments (see browserKit).
+ */
+const SHELL_AGENT_BUILD = 'jobs-2';
+const shellAgentVersion = (live) => `${SHELL_AGENT_BUILD}-${crypto.createHash('sha256').update(String(live.cmdKey || '')).digest('hex').slice(0, 12)}`;
+function shellAgent(cfg, load) {
+  const proc = load('process');
+  const fs = load('fs');
+  const cp = load('child_process');
+  const crypto = load('crypto');
+  const WebSocket = load('/opt/lingon/node_modules/ws');
+  const topic = `realtime:${cfg.topic}`;
+  const BLOB = /^https:\/\/[a-z0-9]{3,24}\.blob\.core\.windows\.net\//;
+  // Longer than the VM's idle window, so it ends only on a VM nobody uses; a stop ends it anyway.
+  const IDLE_EXIT_MS = 30 * 60000, MAX_OUT = 64000, JOB_MS = 120000;
+  let ws = null, ref = 1, lastActivity = Date.now(), queue = Promise.resolve();
+  const seen = new Map();
+  // Keys sorted: the channel does not keep an object's key order (see signStep).
+  const canon = (v) => (Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v === undefined ? null : v));
+  const digest = (text) => crypto.createHash('sha256').update(String(text)).digest('hex');
+  const signature = (p) => crypto.createHmac('sha256', String(cfg.cmdKey)).update(canon([p.id, 'job', digest(p.script), p.resultUrl, p.exp])).digest('hex');
+  const valid = (p) => {
+    if (!cfg.cmdKey || !p || typeof p.id !== 'string' || p.id.length > 80 || seen.has(p.id)) return false;
+    if (!(Number(p.exp) > Date.now()) || Number(p.exp) > Date.now() + 5 * 60000) return false;
+    if (typeof p.script !== 'string' || !p.script || p.script.length > 200000 || !BLOB.test(String(p.resultUrl || ''))) return false;
+    const expected = Buffer.from(signature(p)), given = Buffer.from(String(p.sig || ''));
+    return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+  };
+  const report = (url, body, first) => fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json', 'x-ms-blob-type': 'BlockBlob', ...(first ? { 'If-None-Match': '*' } : {}) }, body: JSON.stringify(body) });
+  const execute = (script) => new Promise((resolve) => {
+    const file = `/run/lingon/agent/job-${crypto.randomUUID()}.sh`;
+    fs.writeFileSync(file, script, { mode: 0o600 });
+    // A clean environment: the job never sees the agent's key.
+    // Its own process group, so a timeout ends everything the job started. The job settles at
+    // most 5 s after that even if something still holds its output open: one hung command must
+    // not leave every later job queued behind it.
+    const child = cp.spawn('bash', [file], { cwd: '/', detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', HOME: '/root', LANG: 'C.UTF-8' } });
+    let stdout = '', stderr = '', settled = false;
+    child.stdout.on('data', (d) => { if (stdout.length < MAX_OUT) stdout += d; });
+    child.stderr.on('data', (d) => { if (stderr.length < MAX_OUT) stderr += d; });
+    const timer = setTimeout(() => {
+      try { proc.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+      setTimeout(() => done(137, '\nThe command was stopped after ' + JOB_MS / 1000 + ' seconds.'), 5000).unref?.();
+    }, JOB_MS);
+    const done = (exitCode, extra) => { if (settled) return; settled = true; clearTimeout(timer); fs.rmSync(file, { force: true }); resolve({ stdout, stderr: stderr + (extra || ''), exitCode }); };
+    child.on('close', (code) => done(code));
+    child.on('error', (error) => done(127, String(error.message || error)));
+  });
+  const run = (p) => {
+    seen.set(p.id, Date.now());
+    for (const [id, at] of seen) if (Date.now() - at > 10 * 60000) seen.delete(id);
+    lastActivity = Date.now();
+    // Taking the job creates its result blob. The server, giving up waiting, tries to create
+    // the same blob; whoever creates it first owns the job, so it never runs twice.
+    const taken = report(p.resultUrl, { ack: true }, true).then((r) => r.status === 201).catch(() => false);
+    queue = queue.then(async () => {
+      if (!(await taken)) return;
+      const result = await execute(p.script);
+      await report(p.resultUrl, { done: true, ...result }).catch(() => {});
+      lastActivity = Date.now();
+    });
+  };
+  const connect = () => {
+    ws = new WebSocket(`${cfg.url}?apikey=${encodeURIComponent(cfg.key)}&vsn=1.0.0`);
+    ws.on('open', () => ws.send(JSON.stringify({ topic, event: 'phx_join', payload: { config: { broadcast: { self: false, ack: false }, presence: { key: '' }, private: false } }, ref: '1', join_ref: '1' })));
+    ws.on('message', (raw) => {
+      let m; try { m = JSON.parse(String(raw)); } catch { return; }
+      if (m.event === 'broadcast' && m.payload && m.payload.event === 'job' && valid(m.payload.payload)) run(m.payload.payload);
+    });
+    ws.on('close', () => setTimeout(connect, 2000));
+    ws.on('error', () => {});
+  };
+  setInterval(() => {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(++ref) }));
+    if (Date.now() - lastActivity > IDLE_EXIT_MS) proc.exit(0);
+  }, 10000);
+  connect();
+}
+
+// Starts the shell agent for this channel unless it already runs. Its key goes in a root-only
+// file, not the command line or the environment.
+function shellAgentLaunch(live) {
+  const dir = '/run/lingon/agent';
+  const source = `(${shellAgent.toString()})(JSON.parse(require('fs').readFileSync('${dir}/payload', 'utf8')), require);`;
+  const codeB64 = Buffer.from(source, 'utf8').toString('base64');
+  const payloadB64 = Buffer.from(JSON.stringify({ url: live.url, key: live.key, topic: live.topic, cmdKey: live.cmdKey }), 'utf8').toString('base64');
+  const version = shellAgentVersion(live);
+  return [
+    `if command -v node >/dev/null 2>&1 && ! { [ -f '${dir}/agent.pid' ] && kill -0 "$(cat '${dir}/agent.pid')" 2>/dev/null && [ "$(cat '${dir}/agent.version' 2>/dev/null)" = '${version}' ]; }; then`,
+    `  if [ -f '${dir}/agent.pid' ]; then kill "$(cat '${dir}/agent.pid')" 2>/dev/null || true; fi`,
+    `  install -d -m 700 -o root -g root '${dir}'`,
+    `  echo '${codeB64}' | base64 -d > '${dir}/agent.js'`,
+    `  ( umask 077; echo '${payloadB64}' | base64 -d > '${dir}/payload' )`,
+    `  ${OWN_SCOPE}`,
+    // ws is installed in the background on a VM that has no browser yet, so the job never waits.
+    `  $SCOPE nohup sh -c "[ -d /opt/lingon/node_modules/ws ] || npm install --prefix /opt/lingon ws@8.21.3 >/dev/null 2>&1; exec node '${dir}/agent.js'" >> '${dir}/agent.log' 2>&1 < /dev/null &`,
+    `  echo $! > '${dir}/agent.pid'`,
+    `  echo '${version}' > '${dir}/agent.version'`,
+    'fi',
+  ].join('\n');
+}
+
 let tokenCache = { accessToken: '', exp: 0 };
 
 async function azureToken(cfg) {
@@ -1914,6 +2026,21 @@ function buildRestoreStateScript(url) {
   ].join('\n');
 }
 
+// The restore as the first part of another command. A disk that was restored before (every VM
+// that only stopped and started again) skips it at once; a separate restore command cost a
+// VM round trip of 12-15 s on every cold start.
+function buildRestorePrelude(url) {
+  return [
+    'if [ ! -f /var/lib/lingon-state/restored-v1 ]; then',
+    'LINGON_RESTORE_ERR=$(mktemp)',
+    '(',
+    buildRestoreStateScript(url),
+    ') >/dev/null 2>"$LINGON_RESTORE_ERR" || { echo "Workspace restore failed: $(tail -c 400 "$LINGON_RESTORE_ERR")" >&2; exit 1; }',
+    'rm -f "$LINGON_RESTORE_ERR"',
+    'fi',
+  ].join('\n');
+}
+
 function buildSnapshotStateScript(url) {
   const encoded = assertStateTransferUrl(url);
   return [
@@ -2049,7 +2176,11 @@ async function ensureInfrastructure(cfg = azureConfig()) {
 // is then created on, or resized to, the next of these: all 2 vCPUs on x64 at a similar price.
 // The configured AZURE_VM_SIZE stays first.
 const VM_SIZE_FALLBACKS = ['Standard_B2as_v2', 'Standard_B2s_v2', 'Standard_D2as_v5', 'Standard_D2s_v5'];
-const vmSizes = (cfg) => [...new Set([cfg.vmSize, ...VM_SIZE_FALLBACKS].filter(Boolean))];
+// A size that just had no capacity usually still has none: for half an hour the size that last
+// worked is tried first, so a new VM does not fail on the same sizes again (5-10 s each).
+let sizeWithCapacity = { size: '', at: 0 };
+const noteCapacity = (size) => { sizeWithCapacity = { size, at: Date.now() }; };
+const vmSizes = (cfg) => [...new Set([Date.now() - sizeWithCapacity.at < 30 * 60000 ? sizeWithCapacity.size : '', cfg.vmSize, ...VM_SIZE_FALLBACKS].filter(Boolean))];
 const noCapacity = (error) => /AllocationFailed|sufficient capacity|OverconstrainedAllocationRequest|SkuNotAvailable|not available (?:to|in) the current (?:subscription|region)/i.test(String(error && error.message));
 
 async function ensureVm(userId, { create = false } = {}) {
@@ -2120,7 +2251,7 @@ async function ensureVm(userId, { create = false } = {}) {
     try {
       await assertAccountActive(userId);
       const vm = await arm(cfg, 'PUT', vmPath, body(sizes[i]), COMPUTE_API);
-      if (i) console.warn('[vm] created on a fallback size', { vm: name, size: sizes[i] });
+      if (i) { console.warn('[vm] created on a fallback size', { vm: name, size: sizes[i] }); noteCapacity(sizes[i]); }
       return { vmName: name, id: vm.id, vmId: vm.properties?.vmId || null, provisioningState: vm.properties?.provisioningState || 'Creating', created: true, vmSize: sizes[i] };
     } catch (error) {
       if (!noCapacity(error) || i + 1 >= sizes.length) throw error;
@@ -2263,6 +2394,7 @@ async function startVm(userId) {
         await assertAccountActive(userId);
         await arm(cfg, 'PATCH', vmPath, { properties: { hardwareProfile: { vmSize: sizes[i] } } }, COMPUTE_API);
         await arm(cfg, 'POST', `${vmPath}/start`, undefined, COMPUTE_API);
+        noteCapacity(sizes[i]);
         break;
       } catch (next) {
         if (!noCapacity(next) || i + 1 >= sizes.length) throw next;
@@ -2347,13 +2479,16 @@ async function acquireLease(userId, { leaseId, kind = 'app' } = {}) {
     timing.started = vm.started;
     const workerKey = String(userId);
     if (workerReadyState.get(workerKey) && vm.vmId && workerReadyState.get(workerKey) !== vm.vmId) workerReadyState.delete(workerKey);
-    // A VM recorded as running was restored when it started (it is marked running only after
-    // that), and its disk keeps the files while it runs. Only a VM that had to start or was
-    // just created restores; repeating it on every step cost a VM command each time.
-    if (vm.started || vm.created || recorded !== 'running') {
+    // A new VM restores the owner's files before anything runs. A VM that only stopped and
+    // started kept its disk, so its restore check rides along with its first command (see
+    // runCommand) instead of costing a command of its own. A VM recorded as running was
+    // checked when it started.
+    if (vm.created) {
       const restoreAt = Date.now();
       await restoreDurableState(userId, { vmId: vm.vmId });
       timing.restoreMs = Date.now() - restoreAt;
+    } else if (vm.started || recorded !== 'running') {
+      if (azureConfig().durableState && (!vm.vmId || restoredState.get(workerKey) !== vm.vmId)) pendingRestore.set(workerKey, vm.vmId || 'started');
     } else if (vm.vmId) restoredState.set(String(userId), vm.vmId);
     await supabaseRpc('mark_agent_vm_running', { p_user_id: String(userId) });
     await meterVm(userId);
@@ -2620,9 +2755,12 @@ async function clearStuckRunCommand(cfg, name) {
   return false;
 }
 
-async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
+async function runCommand(userId, script, { maxStdout = 12000, restore = true } = {}) {
   const cfg = azureConfig();
   const name = vmNameForUser(userId);
+  const key = String(userId);
+  const pending = restore ? pendingRestore.get(key) : null;
+  if (pending) script = `${buildRestorePrelude((await createDurableStateTransfer(userId)).url)}\n${script}`;
   const path_ = `${rgPath(cfg)}/providers/Microsoft.Compute/virtualMachines/${name}/runCommand`;
   // Azure runs one command per VM at a time. Another one (a workspace restore right after
   // the VM starts, a backup) makes a new command fail at once; it waits its turn instead.
@@ -2634,7 +2772,12 @@ async function runCommand(userId, script, { maxStdout = 12000 } = {}) {
     await assertAccountActive(userId);
     try {
       const data = await arm(cfg, 'POST', path_, { commandId: 'RunShellScript', script: [script] }, COMPUTE_API);
-      return parseRunOutput(data, { maxStdout });
+      const out = parseRunOutput(data, { maxStdout });
+      if (pending && !/Workspace restore failed/.test(out.stderr || '') && pendingRestore.get(key) === pending) {
+        pendingRestore.delete(key);
+        restoredState.set(key, pending);
+      }
+      return out;
     } catch (error) {
       if (!busy(error)) throw error;
       if (attempt >= 36) {
@@ -2685,9 +2828,10 @@ async function restoreDurableState(userId, { vmId } = {}) {
   const key = String(userId);
   if (vmId && restoredState.get(key) === vmId) return { restored: true, cached: true };
   const transfer = await createDurableStateTransfer(userId);
-  const out = await runCommand(userId, buildRestoreStateScript(transfer.url), { maxStdout: 2000 });
+  const out = await runCommand(userId, buildRestoreStateScript(transfer.url), { maxStdout: 2000, restore: false });
   assertStateCommandSucceeded(out, 'STATE_RESTORED', 'AZURE_STATE_RESTORE');
   if (vmId) restoredState.set(key, vmId);
+  pendingRestore.delete(key);
   return { restored: true };
 }
 
@@ -2696,7 +2840,9 @@ async function snapshotDurableState(userId) {
   const cfg = azureConfig();
   if (!cfg.durableState) return { saved: false, disabled: true };
   const transfer = await createDurableStateTransfer(userId);
-  const out = await runCommand(userId, buildSnapshotStateScript(transfer.url), { maxStdout: 2000 });
+  // A disk that was never restored is restored before it is saved, so a backup can never
+  // replace the owner's saved files with an empty workspace.
+  const out = await runCommand(userId, `${buildRestorePrelude(transfer.url)}\n${buildSnapshotStateScript(transfer.url)}`, { maxStdout: 2000, restore: false });
   assertStateCommandSucceeded(out, 'STATE_SAVED', 'AZURE_STATE_SAVE');
   return { saved: true };
 }
@@ -2791,21 +2937,25 @@ async function streamerBrowserStep(userId, sb, args, live, { ackMs = STEP_ACK_MS
   if (!live?.cmdKey || (args.event && args.event.secret)) return null;
   const [shot, report] = await Promise.all([createScreenshotTransfer(userId, args.sessionId), createScreenshotTransfer(userId, args.sessionId, 'json')]);
   const drop = () => Promise.all([shot, report].map((t) => fetch(t.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {})));
+  const dropShot = () => fetch(shot.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {});
   const step = { id: crypto.randomUUID(), action: args.action, url: String(args.url || ''), event: args.event && typeof args.event === 'object' ? args.event : null,
     uploadUrl: shot.url, resultUrl: report.url, exp: Date.now() + STEP_DONE_MS, ...(build ? { build } : {}) };
   step.sig = signStep(live.cmdKey, step);
   const sent = await fetch(realtimeBroadcastUrl(live), { method: 'POST', headers: { apikey: live.key, Authorization: `Bearer ${live.key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages: [{ topic: live.topic, event: 'step', payload: step, private: false }] }) }).catch(() => null);
-  if (!sent || !sent.ok) { await drop(); return null; }
   const started = Date.now();
-  let taken = false, claimAt = ackMs;
+  // A failed send may still have reached the streamer (an approved final click among them):
+  // the claim below, not that reply, settles who takes the step, so it is claimed at once.
+  let taken = false, claimAt = sent && sent.ok ? ackMs : 0;
   for (;;) {
     const waited = Date.now() - started;
     if (!taken && waited > claimAt) {
       // Giving up creates the step's result blob first, unless the streamer just did: then it
       // owns the step and its result is awaited, so the step never runs a second way.
       const cancel = await fetch(report.url, { method: 'PUT', headers: { 'x-ms-version': BLOB_API, 'x-ms-blob-type': 'BlockBlob', 'content-type': 'application/json', 'If-None-Match': '*' }, body: '{"cancelled":true}' }).catch(() => null);
-      if (cancel && cancel.status === 201) { await drop(); return null; }
+      // The cancel marker stays: deleting it would let a streamer whose claim is still in
+      // flight create the blob after all and run the step while the caller runs it again.
+      if (cancel && cancel.status === 201) { await dropShot(); return null; }
       // Only "it already exists" means the streamer owns the step. A network or storage
       // error says nothing either way, so the claim is tried again shortly.
       if (cancel && (cancel.status === 409 || cancel.status === 412)) taken = true;
@@ -2821,6 +2971,8 @@ async function streamerBrowserStep(userId, sb, args, live, { ackMs = STEP_ACK_MS
     const got = await fetch(report.url, { headers: { 'x-ms-version': BLOB_API } }).catch(() => null);
     if (!got || !got.ok) continue;
     const body = await got.json().catch(() => ({}));
+    // Our own cancel marker (its 201 reply was lost): the streamer never took the step.
+    if (body.cancelled === true && !body.done && !body.ack) { await dropShot(); return null; }
     taken = true;
     if (!body.done) continue;
     await fetch(report.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API } }).catch(() => {});
@@ -2832,6 +2984,54 @@ async function streamerBrowserStep(userId, sb, args, live, { ackMs = STEP_ACK_MS
     const screenshot = await readAndDeleteScreenshot(shot);
     console.info(`[vm] ${label} step`, { via: 'streamer', action: step.action, ms: Date.now() - started });
     return { mode: 'azure', vmName: sb.vmName, ...parsed, screenshot };
+  }
+}
+
+// A shell or code step sent to the VM's shell agent (see shellAgent). Null when no agent took
+// it in time (none running yet on this boot): the caller then runs it as a VM command, which
+// also starts the agent. Once taken, a job never runs a second way.
+const JOB_ACK_MS = 2500, JOB_DONE_MS = 150000;
+const signJob = (key, job) => crypto.createHmac('sha256', key).update(canon([job.id, 'job', crypto.createHash('sha256').update(job.script).digest('hex'), job.resultUrl, job.exp])).digest('hex');
+async function shellAgentJob(userId, script, live, { ackMs = JOB_ACK_MS, maxStdout = 12000, maxStderr = 4000 } = {}) {
+  if (!live?.cmdKey) return null;
+  // Nothing is sent yet: a storage error leaves the job to the VM command path.
+  let report;
+  try { report = await createScreenshotTransfer(userId, 'shell-agent', 'json'); } catch { return null; }
+  const drop = () => fetch(report.url, { method: 'DELETE', headers: { 'x-ms-version': BLOB_API }, signal: AbortSignal.timeout(8000) }).catch(() => {});
+  const job = { id: crypto.randomUUID(), script, resultUrl: report.url, exp: Date.now() + JOB_DONE_MS };
+  job.sig = signJob(live.cmdKey, job);
+  const sent = await fetch(realtimeBroadcastUrl(live), { method: 'POST', headers: { apikey: live.key, Authorization: `Bearer ${live.key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: [{ topic: live.topic, event: 'job', payload: job, private: false }] }), signal: AbortSignal.timeout(8000) }).catch(() => null);
+  const started = Date.now();
+  // A send that failed or timed out may still have arrived: the claim below, not that reply,
+  // settles whether the agent runs the job, so it is claimed at once.
+  let taken = false, claimAt = sent && sent.ok ? ackMs : 0;
+  for (;;) {
+    const waited = Date.now() - started;
+    if (!taken && waited > claimAt) {
+      const cancel = await fetch(report.url, { method: 'PUT', headers: { 'x-ms-version': BLOB_API, 'x-ms-blob-type': 'BlockBlob', 'content-type': 'application/json', 'If-None-Match': '*' }, body: '{"cancelled":true}', signal: AbortSignal.timeout(8000) }).catch(() => null);
+      // The marker is left in place (see streamerBrowserStep): the caller runs this job
+      // another way, so a late claim by the agent must keep failing.
+      if (cancel && cancel.status === 201) return null;
+      if (cancel && (cancel.status === 409 || cancel.status === 412)) taken = true;
+      else claimAt = waited + 1000;
+    }
+    if (waited > JOB_DONE_MS) {
+      await drop();
+      throw Object.assign(new Error(taken
+        ? 'The computer took this command but did not report its result. Check its files before running it again.'
+        : 'Whether the computer took this command could not be checked. Check its files before running it again.'), { code: 'AZURE_SHELL' });
+    }
+    await new Promise((resolve) => setTimeout(resolve, waited < 4000 ? 150 : 400));
+    const got = await fetch(report.url, { headers: { 'x-ms-version': BLOB_API }, signal: AbortSignal.timeout(8000) }).catch(() => null);
+    if (!got || !got.ok) continue;
+    const body = await got.json().catch(() => ({}));
+    if (body.cancelled === true && !body.done && !body.ack) return null;
+    taken = true;
+    if (!body.done) continue;
+    await drop();
+    console.info('[vm] shell step', { via: 'agent', ms: Date.now() - started });
+    return { stdout: String(body.stdout || '').replace(/\r?\n$/, '').slice(0, maxStdout), stderr: String(body.stderr || '').replace(/\r?\n$/, '').slice(0, maxStderr) };
   }
 }
 
@@ -2889,12 +3089,33 @@ async function runDesktopStep(userId, sb, args) {
   return done(started);
 }
 
+// Starts the VM for work that holds no lease (an approval card reading the checkout page, a
+// live view action after its lease lapsed). A VM started this way used to be recorded nowhere,
+// so the idle sweeper never stopped it. It is now recorded as running with the usual idle
+// grace, exactly as when a lease is released.
+async function ensureRunningUnleased(userId) {
+  // Only a lease creates a VM: it restores the owner's files first and honours the token
+  // check and AZURE_AUTO_PROVISION. A VM made here would run unrecorded and unrestored.
+  const vm = await ensureRunning(userId, { create: false });
+  if (!vm?.started || !isLeaseStoreConfigured()) return vm;
+  const leaseId = `start:${crypto.randomUUID()}`;
+  try {
+    await supabaseRpc('acquire_agent_vm_lease', { p_user_id: String(userId), p_lease_id: leaseId, p_kind: 'agent',
+      p_vm_name: vmNameForUser(userId), p_expires_at: new Date(Date.now() + LEASE_TTL_MS).toISOString() });
+    await supabaseRpc('mark_agent_vm_running', { p_user_id: String(userId) });
+    await releaseLease(userId, { leaseId, skipSnapshot: true });
+  } catch (error) {
+    console.warn('[vm] start outside a lease not recorded:', error.code || error.message);
+  }
+  return vm;
+}
+
 async function startBrowserRelay(userId, args = {}, { alreadyRunning = false } = {}) {
   const sb = await getSandbox(userId);
   if (sb.mode !== 'azure') {
     throw Object.assign(new Error('Live browser relay requires the user Azure VM.'), { code: 'DISABLED' });
   }
-  if (!alreadyRunning) await ensureRunning(userId);
+  if (!alreadyRunning) await ensureRunningUnleased(userId);
   const out = await runCommand(userId, buildBrowserRelayScript(args), { maxStdout: 2000, maxStderr: 4000 });
   if (!/\bREADY\b/.test(out.stdout || '')) {
     throw Object.assign(new Error(out.stderr || 'Browser live relay did not start.'), { code: 'AZURE_BROWSER_RELAY' });
@@ -2937,12 +3158,18 @@ async function execInSandbox(userId, tool, args = {}, { alreadyRunning = false, 
   }
   // A newly acquired agent lease already confirmed power state. Other callers
   // still verify it here before touching the VM.
-  if (!alreadyRunning) await ensureRunning(userId);
+  if (!alreadyRunning) await ensureRunningUnleased(userId);
   if (tool === 'code_run' || tool === 'shell') {
     const script = tool === 'shell' ? buildShellScript(args.command, taskId) : buildRunScript(args.language, args.code, taskId);
     // The script checks the worker image itself, so a ready VM needs one command, not a
     // readiness check first. Only a first boot still preparing the image waits for it.
-    let out = await runCommand(userId, script);
+    // The VM's shell agent runs it in a second or two. A VM whose restore check is still due
+    // uses a VM command, which carries that check (and its storage link) instead.
+    const live = args.live ? liveRealtimeArgs(args.live) : null;
+    let out = live?.cmdKey && !pendingRestore.has(String(userId)) ? await shellAgentJob(userId, script, live) : null;
+    if (!out || /Worker container (?:runtime|image) is not ready/.test(out.stderr || '')) {
+      out = await runCommand(userId, live?.cmdKey ? `${shellAgentLaunch(live)}\n${script}` : script);
+    }
     if (/Worker container (?:runtime|image) is not ready/.test(out.stderr || '')) {
       workerReadyState.delete(String(userId));
       await waitWorkerReady(userId);
@@ -2988,7 +3215,7 @@ const accountErasure = createAzureAccountErasure({config:azureConfig,arm,userHas
 const planAccountErasure = (owner,previous) => accountErasure.plan(owner,previous);
 const eraseAccountWorkspace = async (owner,manifest) => {
   const result = await accountErasure.erase(owner,manifest);
-  for (const map of [leases,restoredState,workerReadyState]) map.delete(String(owner));
+  for (const map of [leases,restoredState,workerReadyState,pendingRestore]) map.delete(String(owner));
   return result;
 };
 
@@ -3013,6 +3240,9 @@ module.exports = {
   desktopContainerfile,
   desktopStreamer,
   desktopStreamerSource,
+  shellAgent,
+  shellAgentLaunch,
+  shellAgentJob,
   buildDesktopSessionScript,
   buildDesktopStopScript,
   toolDesktopSessionId,

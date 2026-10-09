@@ -50,7 +50,19 @@ final class BelnaUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "Reviewer must reach the working agent chat")
         let chat = XCTAttachment(screenshot: app.screenshot())
         chat.name = "App Store - Your personal agent"; chat.lifetime = .keepAlways; add(chat)
-        app.buttons["Apple apps and privacy"].tap()
+        XCTAssertFalse(app.navigationBars.firstMatch.exists, "The web app fills the screen without a native top bar")
+        // Apple apps opens from the web app: menu → account → Settings → Profiles → Apple apps & privacy.
+        // iPad gets the desktop web layout, with the sidebar already showing and no menu button.
+        let menu = app.webViews.buttons["Open navigation"]
+        if menu.exists && menu.isHittable { menu.tap() }
+        let account = app.webViews.buttons.matching(NSPredicate(format: "label CONTAINS %@", credentials.email)).firstMatch
+        XCTAssertTrue(account.waitForExistence(timeout: 10)); account.tap()
+        let settings = app.webViews.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Settings")).firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10)); settings.tap()
+        let profiles = app.webViews.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Profiles")).firstMatch
+        XCTAssertTrue(profiles.waitForExistence(timeout: 10)); profiles.tap()
+        let appleApps = app.webViews.buttons["Open"]
+        XCTAssertTrue(appleApps.waitForExistence(timeout: 10)); appleApps.tap()
         XCTAssertTrue(app.staticTexts["Calendar"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons.matching(identifier: "Connect").firstMatch.isEnabled)
         let connections = XCTAttachment(screenshot: app.screenshot())
@@ -82,29 +94,22 @@ final class BelnaUITests: XCTestCase {
         // Google's OAuth sign-in is intentionally hidden in the embedded app.
         XCTAssertFalse(app.webViews.buttons["Continue with Google"].exists)
         XCTAssertFalse(app.staticTexts["Couldn’t open Belna"].exists)
-
-        app.buttons["Apple apps and privacy"].tap()
-        XCTAssertTrue(app.staticTexts["Calendar"].waitForExistence(timeout: 5))
-        for button in app.buttons.matching(identifier: "Connect").allElementsBoundByIndex {
-            XCTAssertFalse(button.isEnabled, "Anonymous WebView must not unlock Apple data")
-        }
+        // No native bar or Apple apps button above the web app; signed out, Apple apps has no entry point.
+        XCTAssertFalse(app.navigationBars.firstMatch.exists)
+        XCTAssertFalse(app.buttons["Apple apps and privacy"].exists)
     }
 
-    func testNativePrivacyGateAndOptionalAppleConnections() {
+    func testNativePrivacyGate() {
         let app = XCUIApplication()
         app.launchArguments = ["--reset-consent-for-testing"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Your agent, on your Apple devices"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["I agree — continue to Belna"].exists)
+        // Before consent the web app and Apple apps cannot be reached at all.
+        XCTAssertFalse(app.navigationBars.firstMatch.exists)
+        XCTAssertFalse(app.buttons["Apple apps and privacy"].exists)
+        XCTAssertFalse(app.webViews.firstMatch.exists)
         let consent = XCTAttachment(screenshot: app.screenshot())
         consent.name = "iPhone native consent"; consent.lifetime = .keepAlways; add(consent)
-        app.buttons["Apple apps and privacy"].tap()
-        XCTAssertTrue(app.staticTexts["Calendar"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Reminders"].exists)
-        XCTAssertTrue(app.staticTexts["Contacts"].exists)
-        XCTAssertTrue(app.staticTexts["Health"].exists)
-        for button in app.buttons.matching(identifier: "Connect").allElementsBoundByIndex { XCTAssertFalse(button.isEnabled, "Apple connection needs account and AI consent") }
-        let connections = XCTAttachment(screenshot: app.screenshot())
-        connections.name = "Native Apple connections"; connections.lifetime = .keepAlways; add(connections)
     }
 }

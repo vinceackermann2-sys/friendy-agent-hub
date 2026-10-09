@@ -164,33 +164,32 @@ window.Mascot = (() => {
    * same frame; the arm tips are already cut out of the prop). Props swap on
    * a little squash-and-hop while the eyes are mid-blink. Pure CSS: 16s loop,
    * no JS timers. Keyframes live in styles.css scoped under .mhold.
+   * Every moving part is its own layer over the same 320×320 frame, so the GPU
+   * moves it; parts animated inside one SVG made the browser lay the whole
+   * drawing out again on every frame.
    */
   function loop(){
+    const frame = 'viewBox="0 0 320 320"';
     const at = 'x="40" y="29.5" width="240" height="240"';
-    const layer = name => `<image href="${ASSET}${name}.webp" ${at}/>`;
     const ink = '#1A1B22';
+    // Face parts are drawn in the face's own 120×120 coordinates, like svg().
+    const face = parts => `<svg ${frame}><g transform="translate(40 29.5) scale(2)">${parts}</g></svg>`;
+    const scene = name => `<span class="mloop-layer scene scene-${name}"><svg ${frame}><image href="${ASSET}prop-${name}.webp" ${at}/></svg></span>`;
     return `
 <span class="mloop-stage" aria-hidden="true">
   <span class="mloop-halo"></span>
   <span class="mloop-wrap">
-    <svg viewBox="0 0 320 320" role="img" aria-label="Star mascot cycling through mail, phone, laptop and wallet tasks">
-      <ellipse cx="160" cy="238" rx="64" ry="8" fill="#1B2A4A" opacity=".08"/>
-      <g class="body-star">
-        <image href="${sprite('lingon', '-hold')}" ${at}/>
-        <g class="scene scene-mail">${layer('prop-mail')}</g>
-        <g class="scene scene-phone">${layer('prop-phone')}</g>
-        <g class="scene scene-laptop">${layer('prop-laptop')}</g>
-        <g class="scene scene-wallet">${layer('prop-wallet')}</g>
-        <g transform="translate(40 29.5) scale(2)">
-          ${blush([41.5, 78.5], 70.2, 6.4, 4.2, PALETTE.lingon.blush)}
-          <g class="face face-happy"><g class="eyes">${eyes('happy', ink)}</g>${mouth('happy', ink)}</g>
-          <g class="face face-talk"><g class="eyes">${eyes('idle', ink)}</g><ellipse class="mouth-talk" cx="60" cy="70.2" rx="2.5" ry="2.9" fill="${ink}"/></g>
-          <g class="face face-focus"><g transform="translate(0 1)"><g class="eyes">${eyes('idle', ink)}</g></g><path d="M57.2 69.8 q2.8 1.4 5.6 0" stroke="${ink}" stroke-width="2" fill="none" stroke-linecap="round"/></g>
-        </g>
-      </g>
-      <path class="spark" d="M216 170 l2.6 6 6 2.6-6 2.6-2.6 6-2.6-6-6-2.6 6-2.6z" fill="var(--dark)"/>
-      <path class="spark s2" d="M102 186 l2 4.4 4.4 2-4.4 2-2 4.4-2-4.4-4.4-2 4.4-2z" fill="var(--body)"/>
-    </svg>
+    <svg ${frame} role="img" aria-label="Star mascot cycling through mail, phone, laptop and wallet tasks"><ellipse cx="160" cy="238" rx="64" ry="8" fill="#1B2A4A" opacity=".08"/></svg>
+    <span class="mloop-layer body-star">
+      <svg ${frame}><image href="${sprite('lingon', '-hold')}" ${at}/></svg>
+      ${scene('mail')}${scene('phone')}${scene('laptop')}${scene('wallet')}
+      ${face(blush([41.5, 78.5], 70.2, 6.4, 4.2, PALETTE.lingon.blush))}
+      <span class="mloop-layer face face-happy"><span class="mloop-layer eyes">${face(eyes('happy', ink))}</span>${face(mouth('happy', ink))}</span>
+      <span class="mloop-layer face face-talk"><span class="mloop-layer eyes">${face(eyes('idle', ink))}</span><span class="mloop-layer mouth-talk">${face(`<ellipse cx="60" cy="70.2" rx="2.5" ry="2.9" fill="${ink}"/>`)}</span></span>
+      <span class="mloop-layer face face-focus"><span class="mloop-layer eyes">${face(`<g transform="translate(0 1)">${eyes('idle', ink)}</g>`)}</span>${face(`<path d="M57.2 69.8 q2.8 1.4 5.6 0" stroke="${ink}" stroke-width="2" fill="none" stroke-linecap="round"/>`)}</span>
+    </span>
+    <span class="mloop-layer spark"><svg ${frame}><path d="M216 170 l2.6 6 6 2.6-6 2.6-2.6 6-2.6-6-6-2.6 6-2.6z" fill="var(--dark)"/></svg></span>
+    <span class="mloop-layer spark s2"><svg ${frame}><path d="M102 186 l2 4.4 4.4 2-4.4 2-2 4.4-2-4.4-4.4-2 4.4-2z" fill="var(--body)"/></svg></span>
   </span>
 </span>`;
   }

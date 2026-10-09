@@ -24,6 +24,13 @@ const clone=x=>x==null?x:structuredClone(x);
   const order=approvalCard('shop_purchase',{merchant:'allsports.example',checkoutId:'c1'},quote);
   assert.equal(order.view.kind,'purchase');assert.equal(order.view.total,'$59.99');assert.equal(order.view.items[0].title,'Girls Champ Matte Helmet');
   assert.equal(order.detail,quote,'the approved quote detail is preserved for the purchase check');
+  const bank=approvalCard('wallet_withdraw',{},JSON.stringify({amount:5,currency:'USD',recipient:'Bank ····1234 · EUR'}));
+  assert.match(bank.title,/withdrawal.*Bank.*1234/);
+  assert.match(bank.title,/5/);
+  assert.equal(bank.view.action,'bank_withdraw');
+  const earn=approvalCard('wallet_earn',{},JSON.stringify({kind:'earn_deposit',amount:5,currency:'USD',recipient:'Aave USDC Vault',risk:'Yield varies.'}));
+  assert.equal(earn.view.to,'Earn');
+  assert.doesNotMatch(JSON.stringify({title:earn.title,view:earn.view}),/USDC|Aave/);
   const secret=approvalCard('vault_request',{name:'GitHub password'},'',TOOLS.vault_request);
   assert.equal(secret.type,'secret','credential requests keep the secure vault card');
 
@@ -53,12 +60,27 @@ const clone=x=>x==null?x:structuredClone(x);
   for(const name of ['ask_user','present','connect_app']) assert.ok(TOOL_SCHEMAS.some(s=>s.name===name),`${name} has a model schema`);
 
   // Markdown tables and task lists written instead of present become cards; plain lists stay text.
-  const table=cardFromMarkdown('Intro.\n\n| Phone | Price |\n|---|---|\n| Pixel 9 | $799 |\n| iPhone 16 | $799 |\n\nOutro.');
-  assert.equal(table.card.kind,'table');assert.deepEqual(table.card.rows,[['Pixel 9','$799'],['iPhone 16','$799']]);assert.equal(table.rest,'Intro.\n\nOutro.');
-  const steps=cardFromMarkdown('## Move\n- [ ] Book movers\n- [x] Pack\n- [ ] Change address: online');
-  assert.equal(steps.card.kind,'steps');assert.equal(steps.card.title,'Move');assert.equal(steps.card.items[1].done,true);assert.equal(steps.card.items[2].subtitle,'online');
+  const table=cardFromMarkdown('Both are good phones.\n\n| Phone | Price |\n|---|---|\n| Pixel 9 | $799 |\n| iPhone 16 | $799 |\n\nPick on the camera you prefer.');
+  assert.equal(table.card.kind,'table');assert.deepEqual(table.card.rows,[['Pixel 9','$799'],['iPhone 16','$799']]);assert.equal(table.rest,'Both are good phones.\n\nPick on the camera you prefer.');
+  // A task list converts when the reply has words of its own beside it; it becomes a checklist.
+  const steps=cardFromMarkdown('## Move\n- [ ] Book movers\n- [x] Pack\n- [ ] Change address: online\n\nStart with the movers, they book up fast.');
+  assert.equal(steps.card.kind,'checklist');assert.equal(steps.card.title,'Move');assert.equal(steps.card.items[1].done,true);assert.equal(steps.card.items[2].subtitle,'online');
+  assert.equal(cardFromMarkdown('## Move\n- [ ] Book movers\n- [x] Pack\n- [ ] Keys'),null,'a list alone stays the reply');
   assert.equal(cardFromMarkdown('- one\n- two\n- three'),null);
-  assert.equal(cardFromMarkdown('**Before**\n- [ ] Book movers\n**Moving day**\n- [ ] Load truck\n- [ ] Keys').rest,'','section labels are not left behind');
+  const sections=cardFromMarkdown('**Before**\n- [ ] Book movers\n**Moving day**\n- [ ] Load truck\n- [ ] Keys\n\nGood luck with the move this weekend!');
+  assert.equal(sections.rest,'Good luck with the move this weekend!','section labels are not left behind');
+  assert.deepEqual(sections.card.items.map(i=>i.group),['Before','Moving day','Moving day'],'section labels group the items');
+  // A shopping list written as plain bullets is still ticked off; other bullet lists stay text.
+  const shop=cardFromMarkdown('Shopping list for tacos:\n\n**Produce**\n- 2 avocados\n- 1 lime\n- 1 red onion\n**Other**\n- 8 tortillas\n- 500 g minced beef\n- Sour cream\n\nThe lime goes in the guacamole too.');
+  assert.equal(shop.card.kind,'checklist');assert.equal(shop.card.items.length,6);assert.equal(shop.card.items[4].group,'Other');assert.equal(shop.card.title,'Shopping list for tacos');
+  assert.equal(shop.rest,'The lime goes in the guacamole too.');
+  assert.equal(cardFromMarkdown('Three ideas for a rainy Sunday:\n- a\n- b\n- c\n- d\n- e\n- f\n\nHave fun with whichever you pick!'),null,'other bullet lists stay text');
+  // Checklists keep up to 60 things in their sections; Help me choose keeps real questions only; a note travels along.
+  const packing=presentArgs({kind:'checklist',title:'Pack',items:Array.from({length:70},(_,i)=>({title:`Thing ${i}`,group:i<35?'Clothes':'Gear',done:i===0})),note:'For two nights.'});
+  assert.equal(packing.items.length,60);assert.equal(packing.items[0].done,true);assert.equal(packing.items[59].group,'Gear');assert.equal(packing.note,'For two nights.');
+  const picked=presentArgs({kind:'compare',title:'A or B',items:[{title:'A'},{title:'B'}],refine:[{question:'What phone?',options:['iPhone','Android','Android']},{question:'Only one',options:['x']},{question:'',options:['a','b']},{question:'Budget?',options:['Low','High']},{question:'Size?',options:['Small','Big']},{question:'Fifth?',options:['a','b']}]});
+  assert.deepEqual(picked.refine,[{q:'What phone?',options:['iPhone','Android']},{q:'Budget?',options:['Low','High']},{q:'Size?',options:['Small','Big']}],'invalid questions are dropped, then three at most');
+  assert.equal(presentArgs({kind:'table',title:'T',rows:[['a','b']],refine:[{question:'Q?',options:['a','b']}]}).refine,undefined,'a table asks nothing');
 
   // Chat turn: ask_user shows a question card and ends the turn without a second model call.
   const coordinator=(replies,extra={})=>{
@@ -88,9 +110,14 @@ const clone=x=>x==null?x:structuredClone(x);
   assert.equal(presentEvents.find(e=>e.type==='message').text,'Here are three picks.');
 
   const mdEvents=[];
-  await coordinator([{text:'Sure.\n\n- [ ] Book movers\n- [ ] Pack\n- [ ] Change address'}]).c.run({userId:'a',chatId:'chat',requestId:'r-md',prompt:'Moving checklist',onEvent:e=>mdEvents.push(e)}).catch(()=>{});
-  assert.equal(mdEvents.find(e=>e.type==='card')?.card.kind,'steps','a markdown checklist reply arrives as a card');
-  assert.equal(mdEvents.find(e=>e.type==='message').text,'Sure.');
+  await coordinator([{text:'Start with the movers, they book up fast.\n\n- [ ] Book movers\n- [ ] Pack\n- [ ] Change address'}]).c.run({userId:'a',chatId:'chat',requestId:'r-md',prompt:'Moving checklist',onEvent:e=>mdEvents.push(e)}).catch(()=>{});
+  assert.equal(mdEvents.find(e=>e.type==='card')?.card.kind,'checklist','a markdown checklist reply arrives as a card');
+  assert.equal(mdEvents.find(e=>e.type==='message').text,'Start with the movers, they book up fast.');
+  // Asked for no cards, the same reply stays text.
+  const plainEvents=[];
+  await coordinator([{text:'Start with the movers, they book up fast.\n\n- [ ] Book movers\n- [ ] Pack\n- [ ] Change address'}]).c.run({userId:'a',chatId:'chat',requestId:'r-plain',prompt:'Moving checklist, just text please, no cards',onEvent:e=>plainEvents.push(e)}).catch(()=>{});
+  assert.equal(plainEvents.find(e=>e.type==='card'),undefined,'no card after "no cards"');
+  assert.match(plainEvents.find(e=>e.type==='message').text,/- \[ \] Book movers/);
 
   // One request never starts the same background job twice; clearly separate jobs may run side by side.
   const delegations=async calls=>{

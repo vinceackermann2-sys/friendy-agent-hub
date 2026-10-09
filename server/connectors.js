@@ -161,6 +161,7 @@ function useTransport(fn) { transport = fn || pinnedFetch; }
 // redirect to another site; sameOrigin refuses such a redirect outright.
 async function send(url, init, { signal, sameOrigin = false, authHeaders = [] } = {}) {
   let current = url, options = { ...init, headers: { ...(init.headers || {}) } };
+  if (!Object.keys(options.headers).some(name => name.toLowerCase() === 'user-agent')) options.headers['User-Agent'] = 'Belna/1.0';
   for (let hop = 0; hop <= 4; hop++) {
     const target = await publicTarget(current);
     const res = await transport(target.href, { ...options, redirect: 'manual', signal });
@@ -196,7 +197,10 @@ async function readText(res, maxBytes = MAX_BODY_BYTES) {
 // Server-sent events from a fetch body, one { event, data } at a time.
 async function* sseEvents(body) {
   const reader = body.getReader(), decoder = new TextDecoder();
-  let buffer = '', size = 0;
+  // Searching the whole buffer on every chunk is quadratic when a server never sends a
+  // blank line; resume a few characters back, where a split separator may have started.
+  const GAP = /\r?\n\r?\n/g;
+  let buffer = '', size = 0, scanned = 0;
   try {
     for (;;) {
       const { value, done } = await reader.read();
@@ -204,10 +208,13 @@ async function* sseEvents(body) {
       size += value.byteLength;
       if (size > 8 * MAX_BODY_BYTES) throw new Error('The server sent too much data.');
       buffer += decoder.decode(value, { stream: true });
-      let gap;
-      while ((gap = /\r?\n\r?\n/.exec(buffer))) {
+      for (;;) {
+        GAP.lastIndex = Math.max(0, scanned - 3);
+        const gap = GAP.exec(buffer);
+        if (!gap) { scanned = buffer.length; break; }
         const block = buffer.slice(0, gap.index);
         buffer = buffer.slice(gap.index + gap[0].length);
+        scanned = 0;
         const event = { event: 'message', data: '' }, data = [];
         for (const line of block.split(/\r?\n/)) {
           if (!line || line.startsWith(':')) continue;
@@ -543,7 +550,14 @@ async function find(userId, ref) {
   const key = String(ref || '').trim().toLowerCase();
   if (!key) throw badInput('connector is required: the id composio_apps lists under custom.');
   const all = await store.listCustomConnectors(userId);
-  const c = all.find((x) => x.id === ref || x.slug === key) || all.find((x) => x.name.toLowerCase() === key) || all.find((x) => x.slug.startsWith(key) || x.name.toLowerCase().startsWith(key));
+  let c = all.find((x) => x.id === ref || x.slug === key) || all.find((x) => x.name.toLowerCase() === key);
+  if (!c) {
+    // A short name may still pick a connector, but only when it names exactly one: "git"
+    // must not send the GitHub credential to whichever of GitHub and GitLab sorts first.
+    const prefixed = all.filter((x) => x.slug.startsWith(key) || x.name.toLowerCase().startsWith(key));
+    if (prefixed.length > 1) throw badInput(`${ref} matches more than one connector (${prefixed.map((x) => x.name).join(', ')}). Use the exact id composio_apps lists under custom.`);
+    c = prefixed[0];
+  }
   if (!c) throw badInput(`No connector named ${ref}. composio_apps lists the owner's connectors under custom.`);
   return c;
 }

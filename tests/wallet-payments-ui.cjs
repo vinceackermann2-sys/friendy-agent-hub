@@ -50,9 +50,8 @@ const {startAppServer}=require('./helpers/app-server.cjs');
   assert.ok(order.every((n,i)=>n>=0 && (i===0 || n>order[i-1])),'balance, actions, activity, then the card and Payment methods box: '+order);
   assert.equal(await panel.getByRole('switch').count(),0,'payment methods are not switched in the Wallet tab');
   assert.equal(await panel.getByText('Shop Pay',{exact:true}).count(),0);
-  // Withdraw is always shown; it is greyed out while bank withdrawals are off.
-  assert.equal(await panel.getByRole('button',{name:'Withdraw',exact:true}).isDisabled(),true);
-  await panel.getByText('Bank withdrawals are currently unavailable.',{exact:true}).waitFor();
+  // Withdraw is always shown; the Privy wallet explains inside it when bank withdrawals are off.
+  await panel.getByRole('button',{name:'Withdraw',exact:true}).waitFor();
   // One Activity list: Belna money and purchases with your own methods, in the same rows.
   const activity=panel.getByRole('region',{name:'Wallet activity'});
   await activity.getByText('Deposit',{exact:true}).waitFor();await activity.getByText('Store purchase',{exact:true}).waitFor();
@@ -60,10 +59,10 @@ const {startAppServer}=require('./helpers/app-server.cjs');
   assert.equal(await activity.locator('.wl-row').count(),3,'deposit, own-method purchase and Shop Pay order share one list');
   assert.equal(await panel.locator('a[href*="malicious.example"]').count(),0,'credential-bearing checkout URLs are never offered');
   const more=panel.getByRole('region',{name:'Card and payment methods'});
-  await more.getByText('Spend your balance with a card',{exact:true}).waitFor();await more.getByText('Coming soon',{exact:true}).waitFor();
+  await more.getByText('Spend your balance with a card',{exact:true}).waitFor();await more.getByText(/^Coming soon/).waitFor();
   await more.getByRole('button',{name:'Apply interest',exact:true}).click();await panel.getByText('Registered',{exact:true}).waitFor();
-  const link=panel.getByRole('button',{name:/^Payment methods/});
-  assert.match(await link.innerText(),/never uses your balance/);
+  const link=panel.getByRole('button',{name:/^How .* pays for purchases/});
+  assert.match(await link.innerText(),/None on yet · Audit sends you checkout links/,'with every method off the button says checkout links still work');
   assert.equal(await panel.evaluate(e=>e.scrollWidth<=e.clientWidth),true,'Wallet fits without sideways scrolling');
   fs.mkdirSync(path.resolve('artifacts/wallet-payments'),{recursive:true});await panel.screenshot({path:path.resolve(`artifacts/wallet-payments/wallet-${width}.png`)});
 
@@ -72,18 +71,24 @@ const {startAppServer}=require('./helpers/app-server.cjs');
   const settings=page.locator('#wallet-settings-content'),own=settings.locator('#payment-connections');await own.waitFor();
   assert.equal(await page.locator('[data-act="stab"][data-t="payments"]').count(),0,'no Payments tab in Settings');
   await page.waitForFunction(()=>{const r=document.querySelector('#payment-connections')?.getBoundingClientRect();return r && r.top>=-2 && r.top<window.innerHeight/2;});
-  assert.deepEqual(await settings.getByRole('list',{name:'How payment methods work'}).getByRole('listitem').allInnerTexts(),['Never uses your Belna balance','You approve every purchase','Audit never sees card or bank details']);
+  // Purchases starts with how a purchase works, in three steps, before any switch.
+  const steps=await settings.getByRole('list',{name:'How a purchase works'}).getByRole('listitem').allInnerTexts();
+  assert.deepEqual(steps.map(s=>s.split(/\n+/)[1]),['Audit fills in the order','You approve it in chat','You pay from your own account']);
+  assert.match(steps[2],/never sees card or bank details, and your Belna balance is never used/);
+  assert.match(await own.locator('.pm-row').filter({hasText:'Pay on the store’s page'}).innerText(),/Always on/);
   assert.equal(await settings.getByText('Store logins',{exact:true}).count(),0,'logins live in Secrets, not Wallet');
   await settings.getByText('Spend your balance with a card',{exact:true}).waitFor();
-  assert.deepEqual(await own.getByRole('switch').evaluateAll(n=>n.map(x=>x.getAttribute('aria-label'))),['Cards saved in stores','Payment apps and pay later'],'two switches until Shop Pay is connected');
-  for(const name of ['Payment apps and pay later','Cards saved in stores'])assert.equal(await own.getByRole('switch',{name,exact:true}).getAttribute('aria-checked'),'false',name+' starts off');
-  await own.getByRole('switch',{name:'Payment apps and pay later',exact:true}).click();await own.locator('[role="switch"][aria-label="Payment apps and pay later"][aria-checked="true"]').waitFor();
+  assert.deepEqual(await own.getByRole('switch').evaluateAll(n=>n.map(x=>x.getAttribute('aria-label'))),['Payment apps','Cards saved in your store accounts'],'two switches; Shop Pay is one of the payment apps');
+  assert.match(await own.locator('.pm-row').filter({hasText:'Payment apps'}).first().innerText(),/Klarna, Swish, Shop Pay/);
+  for(const name of ['Payment apps','Cards saved in your store accounts'])assert.equal(await own.getByRole('switch',{name,exact:true}).getAttribute('aria-checked'),'false',name+' starts off');
+  await own.getByRole('switch',{name:'Payment apps',exact:true}).click();await own.locator('[role="switch"][aria-label="Payment apps"][aria-checked="true"]').waitFor();
   assert.deepEqual(calls.filter(x=>x.pathname==='/api/wallet-preferences' && x.method==='POST').at(-1).body,{methods:{payment_apps:true}});
-  rejectSave=true;await own.getByRole('switch',{name:'Cards saved in stores',exact:true}).click();
+  rejectSave=true;await own.getByRole('switch',{name:'Cards saved in your store accounts',exact:true}).click();
   await own.getByRole('alert').filter({hasText:'Payment methods could not be saved'}).waitFor();assert.equal(methods.saved_card,false);
-  await own.getByRole('button',{name:'Connect Shop Pay',exact:true}).click();await own.getByRole('alert').filter({hasText:'Shop Pay is temporarily unavailable'}).waitFor();
-  assert.equal(await own.getByRole('switch',{name:'Shop Pay',exact:true}).count(),0,'Shop Pay cannot be turned on before it is connected');
-  await own.getByRole('switch',{name:'Cards saved in stores',exact:true}).click();await own.locator('[role="switch"][aria-label="Cards saved in stores"][aria-checked="true"]').waitFor();
+  await own.getByRole('button',{name:'Connect Shop account',exact:true}).click();await own.getByRole('alert').filter({hasText:'Shop Pay is temporarily unavailable'}).waitFor();
+  assert.equal(await own.getByRole('switch',{name:'Shop Pay',exact:true}).count(),0,'Shop Pay has no switch of its own');
+  assert.match(await own.locator('.pm-row').filter({hasText:'Shop account'}).innerText(),/Optional/,'the Shop account link is optional');
+  await own.getByRole('switch',{name:'Cards saved in your store accounts',exact:true}).click();await own.locator('[role="switch"][aria-label="Cards saved in your store accounts"][aria-checked="true"]').waitFor();
   assert.equal(await settings.getByText('Store purchase',{exact:true}).count(),0,'purchases are in Activity, not Settings');
   await settings.getByRole('button',{name:'Add address',exact:true}).click();
   for(const [name,value] of Object.entries({label:'Home',recipient:'Ada',line1:'Main Street 1',city:'Stockholm',postalCode:'11122'}))await page.locator('#wallet-address-'+name).fill(value);
@@ -94,7 +99,7 @@ const {startAppServer}=require('./helpers/app-server.cjs');
   if(await page.getByRole('button',{name:'Back to chat',exact:true}).isVisible())await page.getByRole('button',{name:'Back to chat',exact:true}).click();else{await page.getByRole('button',{name:'Back to Settings',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();}
   if(!await panel.isVisible())await page.locator('[data-act="togglecanvas"]:visible').first().click();
   await panel.getByRole('tab',{name:'Wallet',exact:true}).click();
-  await panel.getByRole('button',{name:/^Payment methods/}).filter({hasText:'Cards saved in stores, Payment apps and pay later on'}).waitFor();
+  await panel.getByRole('button',{name:/^How .* pays for purchases/}).filter({hasText:'Payment apps and store cards on · never this balance'}).waitFor();
 
   // The order card in the chat says the payment is approved in Swish afterwards.
   await page.locator('.cv-pay').filter({hasText:'You approve the payment in Swish yourself'}).first().waitFor({state:'attached'});
@@ -102,6 +107,6 @@ const {startAppServer}=require('./helpers/app-server.cjs');
   assert.deepEqual(errors,[]);
   await context.close();
  }
- console.log('Wallet: Belna Wallet layout with activity then card interest, no Payments tab, Payment methods button separate from the balance into Settings, methods off until turned on, retry, one Activity list, disabled Withdraw, phone approval cards and secure links passed on desktop and mobile');
+ console.log('Wallet: Belna Wallet layout with activity then card interest, no Payments tab, purchases button separate from the balance into Settings, three-step explainer, Shop Pay inside payment apps, methods off until turned on, retry, one Activity list, Withdraw shown, phone approval cards and secure links passed on desktop and mobile');
  }finally{await browser.close();await server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -14,7 +14,8 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   // The questions, cards or problems of a learning card, briefly, so the agent can talk about them.
   const learnItems = card => (card.questions || []).map((q, i) => `${i + 1}. ${q.question}`)
-    .concat((card.cards || []).map(f => f.front), (card.problems || []).map(p => p.question), (card.functions || []).map(f => f.label))
+    .concat((card.cards || []).map(f => f.front), (card.problems || []).map(p => p.question), (card.functions || []).map(f => f.label),
+      (card.steps || []).map(s => s.title || s.text), (card.nodes || []).map(n => n.label), (card.pairs || []).map(p => `${p.term} = ${p.match}`), card.sequence || [])
     .join(' | ').slice(0, 500);
   function acceptTask(rt, task) {
     rt.managedTask(task);
@@ -112,10 +113,17 @@
           if (!indicator) indicator = rt.typing({mood:'think'});
           return;
         }
-        if (['message','message_delta','done','paused','error'].includes(event.type)) clearIndicator();
+        // A started task shows its own working dots; two sets of dots at once read as a glitch.
+        // A card being drawn shows its own progress, so the dots give way to it too.
+        if (['message','message_delta','done','paused','error','task','card_delta'].includes(event.type)) clearIndicator();
+        if (event.type === 'message' || event.type === 'message_delta') runState.replied = true;
         if (event.type === 'message' && event.phase === 'final_answer') runState.answerReady = true;
         if(event.type==='task') {acceptTask(rt,event.task);void recoverTasks(rt);}
         else rt.managedEvent(event);
+        // Once a card is finished and its reply has not started, the dots wait below the card.
+        if (event.type === 'card' && ['present','learn'].includes(event.card?.type) && !runState.replied && !indicator) indicator = rt.typing({mood:'think'});
+        // The start of an answer stays on screen while it looks the rest up; the dots wait below it.
+        if (event.type === 'progress' && runState.replied && !runState.answerReady && !indicator) indicator = rt.typing({mood:'think'});
         if (event.type === 'card' && event.card?.managedArtifactId && /\.(png|jpe?g|webp)$/i.test(event.card.name) && event.card.size <= 1000000) {
           void previewImage(rt, event).catch(error => rt.trace('alert', error.message));
         }
@@ -157,13 +165,22 @@
     const last = rt.chat.messages.filter(m => m.role === 'user').slice(-1)[0];
     const history = rt.chat.messages.filter(m => m.kind === 'text' && m !== last).slice(-24).map(m => ({ role: m.role, text: m.text,
       metadata:m.questionReply ? {questionReply:{...m.questionReply,answer:m.text}} : undefined }));
-    const cards = rt.chat.messages.filter(m => m.kind === 'card' && m.card?.type !== 'progress').slice(-12).map(({id,managedId,card}) => ({
+    const cards = rt.chat.messages.filter(m => m.kind === 'card' && m.card?.type !== 'progress' && !m.card?.streaming).slice(-12).map(({id,managedId,card}) => ({
       id:managedId || id,options:card.type === 'question' ? card.options : undefined,context:card.context,
       type:card.type,title:card.title,name:card.name,status:card.status,text:card.text,q:card.q,choice:card.choice,kind:card.kind || card.view?.kind,
       url:card.url,note:card.note,content:String(card.content || '').slice(0,8000),
       lines:(card.lines || []).slice(-8),agents:card.agents,
       // A learning card: what it asks and how the owner is doing, for "how did I do?".
       ...(card.type === 'learn' ? { items:learnItems(card), progress:window.learnSummaryText?.(card) || undefined } : {}),
+      // A calculator: what its inputs are set to now and what it works out.
+      ...(card.type === 'present' && card.kind === 'calculator' ? { items:window.calcSummaryText?.(card) || undefined } : {}),
+      // A draft as the owner edited it, and a recipe's servings, for "make it shorter" or "for 8".
+      ...(card.type === 'present' && card.kind === 'draft' ? { items:String(card.progress?.body ?? card.body ?? '').slice(0, 1500) } : {}),
+      ...(card.type === 'present' && card.kind === 'recipe' ? { items:`serves ${card.progress?.servings || card.servings || '?'}; ${(card.ingredients || []).map(g => g.item).join(', ')}`.slice(0, 500) } : {}),
+      // A checklist as the owner ticked it, for "what's left?"; a card's Help me choose questions.
+      ...(card.type === 'present' && card.kind === 'checklist' ? { items:(card.items || []).map((it, i) => `${(Array.isArray(card.progress?.done) ? card.progress.done[i] : it.done) ? '[x]' : '[ ]'} ${it.title}`).join('; ').slice(0, 1500) } : {}),
+      ...(card.type === 'present' && card.kind === 'plan' ? { items:(card.sections || []).map(s => `${s.title}: ${(s.items || []).map(it => it.title).concat((s.rows || []).map(r => r.join(' '))).join(', ')}`).join(' | ').slice(0, 1500) } : {}),
+      ...(card.type === 'present' && card.refine ? { refine:card.refine.map(q => `${q.q} (${q.options.join(' / ')})`).join(' | ').slice(0, 600) } : {}),
     }));
     return stream(rt, '/api/agent/conversation', { prompt, requestId: crypto.randomUUID(), history,
       context: { agent: { name: rt.agent.name, pers: rt.agent.pers, ownerName: rt.ownerName || undefined }, replyTo: last?.replyTo, timeZone: localTimeZone(),

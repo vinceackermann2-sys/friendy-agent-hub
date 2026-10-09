@@ -32,6 +32,7 @@ function validateAppleAction(action, args = {}) {
   jsonSize(args, 12000);
   if (action === 'contacts.search' && (!String(args.query || '').trim() || String(args.query).length > 100)) throw fail('Search Contacts with a specific name; bulk export is unavailable.');
   if (action === 'health.summary' && args.purpose !== 'wellness') throw fail('Health summaries are only available for the owner’s own fitness and wellness.');
+  if (action === 'health.summary' && args.start != null && !(Date.parse(args.start) < Date.now() && Date.now() - Date.parse(args.start) <= 7 * 86400000)) throw fail('A health summary start must be an ISO 8601 time within the last 7 days.');
   if (action === 'calendar.list' && (!Number.isFinite(Date.parse(args.start)) || !Number.isFinite(Date.parse(args.end)) || Date.parse(args.end) <= Date.parse(args.start) || Date.parse(args.end) - Date.parse(args.start) > 31 * 86400000)) throw fail('Calendar reads need start/end dates covering at most 31 days.');
   if (action.endsWith('.create') && !String(args.title || args.givenName || '').trim()) throw fail('A title or contact name is required.');
   if (/\.(update|delete|complete)$/.test(action) && !String(args.id || '').trim()) throw fail('Use an exact item id returned by an earlier Apple read.');

@@ -220,15 +220,19 @@ function storedFile(mode, action){
     };
   });
 }
+// Files whose data this page already read from or wrote to IndexedDB; boot hydrates several
+// times and must not rewrite every attachment each time.
+const storedFileData = new Map();
 function hydrateStoredFiles(){
   const files = [
     ...(Array.isArray(state.pendingPromptFiles) ? state.pendingPromptFiles : []),
     ...(state.chats || []).flatMap(c => (c.messages || []).flatMap(m => m.files || [])),
   ];
-  return Promise.all(files.filter(f => f.storageId).map(async f => {
+  return Promise.all(files.filter(f => f.storageId && !(f.dataUrl && storedFileData.get(f.storageId) === f.dataUrl)).map(async f => {
     try {
       if (f.dataUrl) await storedFile('readwrite', store => store.put(f.dataUrl, f.storageId));
       else f.dataUrl = await storedFile('readonly', store => store.get(f.storageId)) || '';
+      if (f.dataUrl) storedFileData.set(f.storageId, f.dataUrl);
     } catch { if (!f.dataUrl) f.dataUrl = ''; }
   }));
 }
@@ -302,6 +306,11 @@ function paintAttachPills(){
   syncComposerActions(chat());
 }
 function resizePrompt(textarea){
+  if (!textarea.value){
+    textarea.style.height = '';
+    textarea.style.overflowY = 'hidden';
+    return;
+  }
   textarea.style.height = 'auto';
   textarea.style.height = Math.min(textarea.scrollHeight, 180) + 'px';
   textarea.style.overflowY = textarea.scrollHeight > 180 ? 'auto' : 'hidden';
@@ -340,7 +349,11 @@ function wirePromptBox(form, textarea){
   });
 }
 
-const voiceIn = { rec:null, stream:null, chunks:[], on:false, busy:false, timer:null };
+const voiceIn = { rec:null, stream:null, chunks:[], on:false, busy:false, starting:false,
+  timer:null, generation:0, owner:null, chatId:null, abort:null, cancelStop:null };
+function voiceContextCurrent(){
+  return voiceIn.owner === billingIdentity() && voiceIn.chatId === state.activeChat && state.view === 'chat';
+}
 function joinSpoken(base, spoken){
   const a = String(base || '');
   const b = String(spoken || '').replace(/\s+/g, ' ').trim();
@@ -371,12 +384,12 @@ function syncVoiceButton(){
   if (!btn) return;
   btn.classList.toggle('on', !!voiceIn.on);
   btn.classList.toggle('busy', !!voiceIn.busy);
-  btn.disabled = !!voiceIn.busy;
-  const label = voiceIn.busy ? 'Transcribing…' : voiceIn.on ? 'Stop voice' : 'Speak prompt';
+  btn.disabled = !!(voiceIn.busy || voiceIn.starting);
+  const label = voiceIn.starting ? 'Starting microphone…' : voiceIn.busy ? 'Transcribing…' : voiceIn.on ? 'Stop voice' : 'Speak prompt';
   btn.title = label;
   btn.setAttribute('aria-pressed', voiceIn.on ? 'true' : 'false');
-  btn.setAttribute('aria-busy', voiceIn.busy ? 'true' : 'false');
-  btn.setAttribute('aria-label', voiceIn.busy ? 'Transcribing speech' : voiceIn.on ? 'Stop voice input' : 'Speak your prompt');
+  btn.setAttribute('aria-busy', voiceIn.busy || voiceIn.starting ? 'true' : 'false');
+  btn.setAttribute('aria-label', voiceIn.starting ? 'Starting microphone' : voiceIn.busy ? 'Transcribing speech' : voiceIn.on ? 'Stop voice input' : 'Speak your prompt');
 }
 function voiceMime(){
   const types = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'];
@@ -390,20 +403,28 @@ function stopVoiceTracks(){
   voiceIn.stream = null;
 }
 function stopVoice(){
+  voiceIn.generation++;
+  voiceIn.starting = false;
+  voiceIn.busy = false;
   voiceIn.on = false;
+  voiceIn.abort?.abort(); voiceIn.abort = null;
+  voiceIn.cancelStop?.(); voiceIn.cancelStop = null;
   if (voiceIn.timer){ clearTimeout(voiceIn.timer); voiceIn.timer = null; }
   const rec = voiceIn.rec;
   voiceIn.rec = null;
   voiceIn.chunks = [];
-  if (rec && rec.state !== 'inactive'){
+  if (rec){
     rec.ondataavailable = null;
     rec.onstop = null;
     rec.onerror = null;
-    try { rec.stop(); } catch {}
+    try { if (rec.state !== 'inactive') rec.stop(); } catch {}
   }
   stopVoiceTracks();
-  if (!voiceIn.busy) syncVoiceButton();
+  syncVoiceButton();
 }
+window.addEventListener('belna-auth-changed', () => {
+  if ((voiceIn.starting || voiceIn.on || voiceIn.busy) && voiceIn.owner !== billingIdentity()) stopVoice();
+});
 function blobToDataUrl(blob){
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -413,26 +434,39 @@ function blobToDataUrl(blob){
   });
 }
 async function startVoice(){
-  if (voiceIn.busy || voiceIn.on) return;
+  if (voiceIn.busy || voiceIn.on || voiceIn.starting) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
     toast('Voice input isn’t available in this browser.'); return;
   }
   if (!window.isSecureContext){ toast('Voice input needs a secure connection.'); return; }
   if (!signedIn()){ toast('Sign in to use voice input.'); return; }
+  const generation = ++voiceIn.generation;
+  voiceIn.owner = billingIdentity();
+  voiceIn.chatId = state.activeChat;
+  voiceIn.starting = true;
+  syncVoiceButton();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    if (generation !== voiceIn.generation || !voiceContextCurrent()){
+      stream.getTracks().forEach(t => t.stop());
+      if (generation === voiceIn.generation) stopVoice();
+      return;
+    }
+    voiceIn.stream = stream;
     const mime = voiceMime();
     const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
     voiceIn.chunks = [];
     rec.ondataavailable = e => { if (e.data && e.data.size) voiceIn.chunks.push(e.data); };
     rec.onerror = () => { toast('Microphone error.'); stopVoice(); };
     voiceIn.rec = rec;
-    voiceIn.stream = stream;
+    voiceIn.starting = false;
     voiceIn.on = true;
     try { rec.start(250); } catch { rec.start(); }
+    rec.onstop = () => { if (voiceIn.rec === rec && voiceIn.on) void finishVoice(); };
     voiceIn.timer = setTimeout(() => { if (voiceIn.on) finishVoice(); }, 60000);
     syncVoiceButton();
   } catch (e) {
+    if (generation !== voiceIn.generation) return;
     stopVoice();
     toast(e && e.name === 'NotAllowedError' ? 'Microphone permission denied.' : 'Couldn’t start the microphone.');
   }
@@ -441,48 +475,141 @@ async function finishVoice(){
   if (voiceIn.busy) return;
   const rec = voiceIn.rec;
   if (!rec){ stopVoice(); return; }
+  const generation = voiceIn.generation;
+  const voiceOwner = voiceIn.owner ?? billingIdentity();
+  const voiceChat = voiceIn.chatId ?? state.activeChat;
+  voiceIn.busy = true;
   voiceIn.on = false;
   if (voiceIn.timer){ clearTimeout(voiceIn.timer); voiceIn.timer = null; }
   const mime = rec.mimeType || 'audio/webm';
-  const blob = await new Promise(resolve => {
-    rec.onstop = () => resolve(new Blob(voiceIn.chunks, { type: mime }));
-    try { if (rec.state !== 'inactive') rec.stop(); else resolve(new Blob(voiceIn.chunks, { type: mime })); }
-    catch { resolve(new Blob(voiceIn.chunks, { type: mime })); }
-  });
-  voiceIn.rec = null;
-  voiceIn.chunks = [];
-  stopVoiceTracks();
-  if (!blob.size){ syncVoiceButton(); toast('No speech captured.'); return; }
-  voiceIn.busy = true;
   syncVoiceButton();
-  const voiceOwner = billingIdentity();
   try {
-    const audio = await blobToDataUrl(blob);
-    const j = await window.LingonAuth.api('/api/voice/transcribe', { method:'POST', body: JSON.stringify({ audio, mime: blob.type || mime }) });
+    const chunks = voiceIn.chunks;
+    const blob = await new Promise((resolve, reject) => {
+      let stopTimer;
+      const settle = (error, cancelled = false) => {
+        clearTimeout(stopTimer);
+        rec.onstop = null; rec.onerror = null; rec.ondataavailable = null;
+        voiceIn.cancelStop = null;
+        if (error) reject(error);
+        else resolve(cancelled ? null : new Blob(chunks, { type: mime }));
+      };
+      voiceIn.cancelStop = () => settle(null, true);
+      rec.onstop = () => settle();
+      rec.onerror = () => settle(new Error('Microphone error. Try again.'));
+      stopTimer = setTimeout(() => settle(new Error('Couldn’t finish recording. Try again.')), 5000);
+      try { if (rec.state !== 'inactive') rec.stop(); else settle(); }
+      catch { settle(new Error('Couldn’t finish recording. Try again.')); }
+    });
+    if (generation !== voiceIn.generation || !blob) return;
+    voiceIn.rec = null;
+    voiceIn.chunks = [];
+    stopVoiceTracks();
+    if (!blob.size){ toast('No speech captured.'); return; }
+    if (voiceOwner !== billingIdentity() || voiceChat !== state.activeChat || state.view !== 'chat') return;
+    if (blob.size > 4 * 1024 * 1024){ toast('Recording is too long. Keep it under a minute.'); return; }
+    const controller = new AbortController();
+    voiceIn.abort = controller;
+    const timeout = setTimeout(() => controller.abort(), 70000);
+    let j;
+    try {
+      const audio = await blobToDataUrl(blob);
+      if (generation !== voiceIn.generation) return;
+      j = await window.LingonAuth.api('/api/voice/transcribe', { method:'POST', signal:controller.signal, body: JSON.stringify({ audio, mime: blob.type || mime }) });
+    } finally { clearTimeout(timeout); }
+    if (generation !== voiceIn.generation || voiceOwner !== billingIdentity() || voiceChat !== state.activeChat || state.view !== 'chat') return;
     const spoken = String(j.text || '').trim();
     if (!spoken) toast('Couldn’t hear that. Try again.');
     else applyPromptText(joinSpoken((($('#cprompt') || {}).value || ''), spoken));
   } catch (e) {
-    toast(e.message || 'Couldn’t transcribe that.');
+    if (generation === voiceIn.generation) toast(e.name === 'AbortError' ? 'Transcription timed out. Try again.' : e.message || 'Couldn’t transcribe that.');
   } finally {
-    voiceIn.busy = false;
-    syncVoiceButton();
+    if (generation === voiceIn.generation){
+      stopVoice();
+    }
     if (voiceOwner === billingIdentity()) refreshBillingUsage();
   }
 }
-function toggleVoice(){ if (voiceIn.busy) return; if (voiceIn.on) finishVoice(); else startVoice(); }
+function toggleVoice(){ if (voiceIn.busy || voiceIn.starting) return; if (voiceIn.on) finishVoice(); else startVoice(); }
 
-/* ---------------- markdown-lite ---------------- */
-function md(src){
-  const s = esc(src)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-  return s.split(/\n{2,}/).map(b => {
-    const lines = b.split('\n');
-    if (lines.every(l => /^\s*[-•]\s*/.test(l)))
-      return '<ul>' + lines.map(l => '<li>' + l.replace(/^\s*[-•]\s*/, '') + '</li>').join('') + '</ul>';
-    return '<p>' + lines.join('<br>') + '</p>';
+/* ---------------- markdown-lite ----------------
+   What the agent writes: paragraphs, **bold**, *italic*, `code`, code blocks, headings,
+   bullet and numbered lists, quotes, tables and https links. The text is escaped first, so
+   nothing it contains becomes markup of its own. */
+const MD_LINK = /\[([^\]\n]{1,200})\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\)){1,1200})\)|(https?:\/\/(?:(?!&lt;|&gt;|&quot;)[^\s<]){2,1200})/g;
+function mdInline(s){
+  // Code spans are left as written; links, bold and italic apply to the rest.
+  return s.split(/(`[^`\n]+`)/).map((part, i) => {
+    if (i % 2) return `<code>${part.slice(1, -1)}</code>`;
+    return part
+      .replace(MD_LINK, (whole, label, href, bare) => {
+        let url = href || bare, tail = '';
+        // A bare link ends before closing punctuation ("see https://x.com.") and an unopened bracket.
+        if (bare) { const t = /[.,;:!?'"]+$|\)+$/.exec(url); if (t && !(t[0].startsWith(')') && url.includes('('))) { tail = t[0]; url = url.slice(0, -t[0].length); } }
+        const text = label || url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text.length > 60 && !label ? text.slice(0, 57) + '…' : text}</a>${tail}`;
+      })
+      // Bold and italic mark text only: an asterisk inside a link's address stays in it.
+      .split(/(<a [^>]*>)/).map((seg, k) => k % 2 ? seg : seg
+        .replace(/\*\*(?=\S)(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[\s(])\*(?=[^\s*])([^*\n]+?)\*(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>')).join('');
   }).join('');
+}
+const MD_ITEM = /^\s*(?:([-*•+])|(\d{1,3})[.)])\s+(.*)$/;
+const MD_ROW = /^\s*\|.*\|\s*$/, MD_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+function md(src){
+  const lines = esc(src).replace(/\r\n?/g, '\n').split('\n');
+  const out = [], para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${para.map(mdInline).join('<br>')}</p>`); para.length = 0; } };
+  const cells = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => mdInline(c.trim()));
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      flush();
+      const code = [];
+      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) code.push(lines[i]);
+      i++;
+      out.push(`<pre><code>${code.join('\n')}</code></pre>`);
+      continue;
+    }
+    if (!line.trim()) { flush(); i++; continue; }
+    const heading = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) { flush(); out.push(`<p class="md-h">${mdInline(heading[1])}</p>`); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); out.push('<hr>'); i++; continue; }
+    if (MD_ROW.test(line) && MD_RULE.test(lines[i + 1] || '')) {
+      flush();
+      const head = cells(line), rows = [];
+      for (i += 2; i < lines.length && MD_ROW.test(lines[i]); i++) rows.push(cells(lines[i]));
+      out.push(`<div class="cv-table-wrap md-table"><table class="cv-table"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(v => `<td>${v}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
+    const item = MD_ITEM.exec(line);
+    if (item) {
+      flush();
+      const ordered = !item[1], start = ordered ? Number(item[2]) : 1, items = [];
+      while (i < lines.length) {
+        const it = MD_ITEM.exec(lines[i]);
+        if (it && !it[1] === ordered) { items.push([it[3]]); i++; continue; }
+        // An indented line under an item continues it.
+        if (items.length && /^\s{2,}\S/.test(lines[i]) && !it) { items[items.length - 1].push(lines[i].trim()); i++; continue; }
+        break;
+      }
+      // A task list ("- [ ] Pack") shows its boxes, ticked or not.
+      const lis = items.map(parts => `<li>${parts.map((part, k) => mdInline(k ? part : part.replace(/^\[( |x|X)\]\s+/, (_, done) => (done === ' ' ? '☐ ' : '☑ ')))).join('<br>')}</li>`).join('');
+      out.push(ordered ? `<ol${start !== 1 ? ` start="${start}"` : ''}>${lis}</ol>` : `<ul>${lis}</ul>`);
+      continue;
+    }
+    if (/^\s*&gt;\s?/.test(line)) {
+      flush();
+      const quote = [];
+      for (; i < lines.length && /^\s*&gt;\s?/.test(lines[i]); i++) quote.push(lines[i].replace(/^\s*&gt;\s?/, ''));
+      out.push(`<blockquote>${quote.map(mdInline).join('<br>')}</blockquote>`);
+      continue;
+    }
+    para.push(line); i++;
+  }
+  flush();
+  return out.join('');
 }
 
 /* ---------------- state ---------------- */
@@ -596,19 +723,29 @@ state.composioLoading = false;
     vaultApprovals:(state.vault?.approvals || []).filter(Boolean).map(({id,key,label,at}) => ({id,key,label,at})),
     updatedAt:Number(state.profileUpdatedAt) || 0,
   });
-  const clientChat = c => {
-    const source=Object.fromEntries(clientChatFields.filter(key => Object.hasOwn(c,key)).map(key => [key,c[key]]));
+  // A chat as it is synced to the account, as JSON without its updatedAt: the same text
+  // means an unchanged chat. Each save serializes every chat once, so this stays one pass.
+  const clientChatUntimed = c => {
+    const source=Object.fromEntries(clientChatFields.filter(key => key !== 'updatedAt' && Object.hasOwn(c,key)).map(key => [key,c[key]]));
+    // A card or answer still being written is not kept; the finished one replaces it.
+    if (Array.isArray(source.messages)) source.messages=source.messages.filter(m => !unfinishedMessage(m));
     const serialize=(omitFiles=false) => JSON.stringify(source,(key,value) =>
       key === 'previewUrl' || (omitFiles && key === 'dataUrl') ? undefined : value);
-    const full=serialize();
+    const untimed=serialize();
     // A large attachment must not prevent the rest of a conversation from
     // syncing. Its local IndexedDB copy still survives refresh on this device.
-    return JSON.parse(full.length > 11 * 1024 * 1024 ? serialize(true) : full);
+    return untimed.length > 11 * 1024 * 1024 ? serialize(true) : untimed;
   };
+  // updatedAt is the synced chat's last key, so its JSON is the untimed JSON plus the time.
+  const withTime = (untimed,at) => {
+    const time=JSON.stringify(at);
+    return time === undefined ? untimed : untimed === '{}' ? `{"updatedAt":${time}}` : `${untimed.slice(0,-1)},"updatedAt":${time}}`;
+  };
+  const clientChatJSON = c => withTime(clientChatUntimed(c),c.updatedAt);
   const fingerprint = value => JSON.stringify(value);
   const withoutTime = value => { const copy={...value}; delete copy.updatedAt; return fingerprint(copy); };
   let profileFingerprint = withoutTime(clientProfile());
-  const chatFingerprints = new Map((state.chats || []).filter(c => c.source !== 'automation').map(c => [c.id,withoutTime(clientChat(c))]));
+  const chatFingerprints = new Map((state.chats || []).filter(c => c.source !== 'automation').map(c => [c.id,clientChatUntimed(c)]));
   const clientUploaded = new Map();
   const clientQueued = new Map();
   const clientPending = new Map();
@@ -619,27 +756,30 @@ state.composioLoading = false;
     clientUploaded.clear(); clientQueued.clear(); clientPending.clear();
     profileFingerprint=withoutTime(clientProfile());
     chatFingerprints.clear();
-    for (const c of state.chats || []) if (c.source !== 'automation') chatFingerprints.set(c.id,withoutTime(clientChat(c)));
+    for (const c of state.chats || []) if (c.source !== 'automation') chatFingerprints.set(c.id,clientChatUntimed(c));
   }
+  // Returns each synced chat with its untimed JSON, for queueClientState in the same save.
   function updateClientTimes(){
     const profile = clientProfile();
     const nextProfile = withoutTime(profile);
     if (nextProfile !== profileFingerprint) { state.profileUpdatedAt = Date.now(); profileFingerprint = nextProfile; }
-    const active = new Set();
+    const active = new Set(), synced = [];
     for (const c of state.chats || []) {
       if (c.source === 'automation') continue;
       active.add(c.id);
-      const next = withoutTime(clientChat(c));
+      const next = clientChatUntimed(c);
       if (next !== chatFingerprints.get(c.id)) { c.updatedAt = Date.now(); chatFingerprints.set(c.id,next); }
+      synced.push([c,next]);
     }
     for (const id of chatFingerprints.keys()) if (!active.has(id)) chatFingerprints.delete(id);
+    return synced;
   }
-  function queueClientState(){
+  function queueClientState(synced){
     const owner = window.LingonAuth?.get()?.user?.id;
     if (!owner || owner !== state.ownerId || owner !== clientReadyOwner) return;
-    const entries = [['profile',clientProfile()],...(state.chats || []).filter(c => c.source !== 'automation').map(c => ['chat:'+c.id,clientChat(c)])];
-    for (const [key,value] of entries) {
-      const json = fingerprint(value);
+    const chats = synced || (state.chats || []).filter(c => c.source !== 'automation').map(c => [c,clientChatUntimed(c)]);
+    const entries = [['profile',fingerprint(clientProfile())],...chats.map(([c,untimed]) => ['chat:'+c.id,withTime(untimed,c.updatedAt)])];
+    for (const [key,json] of entries) {
       if (json === clientUploaded.get(key) || json === clientQueued.get(key)) continue;
       clientQueued.set(key,json);
       clientPending.set(key,json);
@@ -665,6 +805,7 @@ state.composioLoading = false;
     }
   }
   async function flushClientState(){
+    flushSave();
     if (clientFlushPromise) {
       await clientFlushPromise;
       return clientPending.size && !clientSyncWarning ? flushClientState() : undefined;
@@ -720,7 +861,8 @@ state.composioLoading = false;
         state.agent=remoteProfile.agent ? {...state.agent,...remoteProfile.agent} : state.agent;
         state.theme=remoteProfile.theme || state.theme;
         state.userProfile=remoteProfile.userProfile || state.userProfile;
-        state.activeChat=remoteProfile.activeChat || state.activeChat;
+        // Once this device's chats are on screen, the chat the owner is looking at stays.
+        if (!(bootSync && chatsOnScreen)) state.activeChat=remoteProfile.activeChat || state.activeChat;
         state.vault.mode=remoteProfile.vaultMode || state.vault.mode;
         if (Array.isArray(remoteProfile.vaultApprovals)) state.vault.approvals=remoteProfile.vaultApprovals;
         state.profileUpdatedAt=Number(remoteProfile.updatedAt) || 0;
@@ -734,20 +876,23 @@ state.composioLoading = false;
       if (state.deletedChatIds?.includes(remoteChat.id)) continue;
       const key='chat:'+remoteChat.id;
       if (!state.syncedChatIds.includes(remoteChat.id)) state.syncedChatIds.push(remoteChat.id);
-      if (!remoteChat.legacy) clientUploaded.set(key,fingerprint(clientChat(remoteChat)));
+      if (!remoteChat.legacy) clientUploaded.set(key,clientChatJSON(remoteChat));
       const local=locals.get(remoteChat.id);
-      if (!local || (!remoteChat.legacy && Number(remoteChat.updatedAt || 0) > Number(local.updatedAt || local.createdAt || 0)))
-        locals.set(remoteChat.id,remoteChat);
+      if (!local) locals.set(remoteChat.id,remoteChat);
+      else if (!remoteChat.legacy && Number(remoteChat.updatedAt || 0) > Number(local.updatedAt || local.createdAt || 0)) {
+        // The chat on screen (and any reply already following it) takes the newer copy in place.
+        for (const k of Object.keys(local)) delete local[k];
+        Object.assign(local,remoteChat);
+      }
     }
     state.chats=[...locals.values()].sort((a,b)=>Number(b.updatedAt || b.createdAt || 0)-Number(a.updatedAt || a.createdAt || 0));
     if (!state.chats.some(c => c.id === state.activeChat)) state.activeChat=state.chats[0]?.id || null;
     profileFingerprint=withoutTime(clientProfile());
     chatFingerprints.clear();
-    for (const c of state.chats) if (c.source !== 'automation') chatFingerprints.set(c.id,withoutTime(clientChat(c)));
+    for (const c of state.chats) if (c.source !== 'automation') chatFingerprints.set(c.id,clientChatUntimed(c));
     clientReadyOwner=remote.durable === false ? null : owner;
     await hydrateStoredFiles();
     save();
-    queueClientState();
     void flushDeletedChats();
     if (remote.durable === false && !clientSyncWarning) {
       clientSyncWarning=true;
@@ -769,21 +914,47 @@ state.composioLoading = false;
       } catch(error) { console.warn('Chat deletion sync failed:',error); return; }
     }
   }
+  // A save serializes every chat, so saves in quick succession (streamed events, a click
+  // that changes several things) share one write, made just after the next frame is drawn
+  // so the screen updates first (or within 120 ms when no frames are drawn, as in a hidden
+  // tab). Hiding or leaving the page, signing out and switching accounts write at once (flushSave).
+  let saveTimer = null, saveScopedOwner = null;
   const save = () => {
-    updateClientTimes();
-    const persisted=JSON.parse(JSON.stringify(state, function(key, value){ return key === 'dataUrl' && this?.storageId ? undefined : value; }));
-    if(persisted.vault?.secrets)persisted.vault.secrets=persisted.vault.secrets.map((secret)=>secret.backend?{id:secret.id,ref:secret.ref,name:secret.name,at:secret.at,backend:true}:secret);
-    delete persisted.customConnectors;
+    // Whether this session may update the owner's own copy is decided when the change is made.
+    if (state.ownerId && window.LingonAuth?.get()?.user?.id === state.ownerId) saveScopedOwner = state.ownerId;
+    if (saveTimer) return;
+    const timer = saveTimer = setTimeout(saveNow, 120);
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(() => { if (saveTimer === timer) saveNow(); }, 0));
+  };
+  const flushSave = () => { if (saveTimer) saveNow(); };
+  const cancelSave = () => { if (saveTimer) clearTimeout(saveTimer); saveTimer = null; saveScopedOwner = null; };
+  function saveNow(){
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    const scoped = saveScopedOwner;
+    saveScopedOwner = null;
+    const synced = updateClientTimes();
+    const chats = new Set(state.chats || []);
     let localSaved=true;
     try {
-      const json=JSON.stringify(persisted);
+      // One pass: files kept in IndexedDB, unfinished messages, secret values and
+      // custom connectors stay out of browser storage.
+      const json=JSON.stringify(state, function(key, value){
+        if (key === 'dataUrl' && this?.storageId) return undefined;
+        if (key === 'customConnectors' && this === state) return undefined;
+        if (key === 'messages' && Array.isArray(value) && chats.has(this)) return value.filter(m => !unfinishedMessage(m));
+        if (key === 'secrets' && Array.isArray(value) && this === state.vault) return value.map((secret)=>secret?.backend?{id:secret.id,ref:secret.ref,name:secret.name,at:secret.at,backend:true}:secret);
+        return value;
+      });
       localStorage.setItem(LS,json);
-      if (state.ownerId && window.LingonAuth?.get()?.user?.id === state.ownerId) localStorage.setItem(LS+'.'+state.ownerId,json);
+      if (state.ownerId && (scoped === state.ownerId || window.LingonAuth?.get()?.user?.id === state.ownerId)) localStorage.setItem(LS+'.'+state.ownerId,json);
     }
     catch(error) { localSaved=false; console.warn('Browser state save failed:',error); }
-    queueClientState();
+    queueClientState(synced);
     if (!localSaved) void flushClientState();
-  };
+  }
+  window.addEventListener('pagehide', flushSave);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave(); });
 const taskRuns = new Map();
 
 // Remove implementation details left in conversations by older app versions.
@@ -1007,7 +1178,7 @@ function refreshComposioApps(force = false) {
         for (const app of j.apps.filter((a) => a.connected)) resumeConnectCards(app.toolkit, { tasksOnly: true }).catch(() => {});
       }
     } catch (e) {
-      if (owner === billingIdentity()) toast(e.message || 'Could not load apps.');
+      if (owner === billingIdentity() && state.view === 'apps') toast(e.message || 'Could not load apps.');
     } finally {
       if (owner === billingIdentity()) {
         state.composioLoading = false;
@@ -1027,7 +1198,7 @@ function refreshComposioApps(force = false) {
   return request;
 }
 
-let pendingConnect = null; // { toolkit, before: string[], startedAt }
+let pendingConnect = null; // { owner, toolkit, before: string[], startedAt }
 function accountLabel(acc){
   if (!acc) return '';
   if (acc.name && acc.email && acc.name !== acc.email) return `${acc.name} · ${acc.email}`;
@@ -1035,7 +1206,8 @@ function accountLabel(acc){
 }
 async function connectComposioApp(toolkit, authConfigId, { fromChat = false } = {}) {
   const tk = String(toolkit || '').toLowerCase();
-  if (!tk) return;
+  const owner = billingIdentity();
+  if (!tk || !owner) return;
   try {
     toast(`Opening ${cvAppName(tk)} sign-in…`);
     const before = ((composioAppByToolkit(tk) || {}).accounts || []).map((a) => a.id);
@@ -1043,6 +1215,7 @@ async function connectComposioApp(toolkit, authConfigId, { fromChat = false } = 
       method: 'POST',
       body: JSON.stringify({ toolkit: tk, authConfigId }),
     });
+    if (owner !== billingIdentity()) return;
     if (j.redirectUrl) {
       // From a chat card the owner stays in the chat; elsewhere the connector
       // stays open so the new account identity lands in view.
@@ -1052,7 +1225,7 @@ async function connectComposioApp(toolkit, authConfigId, { fromChat = false } = 
         if (state.view === 'apps' && $('#main')) paintApps($('#main'));
         else openConnector(tk, true);
       }
-      pendingConnect = { toolkit: tk, before, startedAt: Date.now(), fromChat };
+      pendingConnect = { owner, toolkit: tk, before, startedAt: Date.now(), fromChat };
       window.open(j.redirectUrl, '_blank', 'noopener');
       toast(fromChat ? 'Finish signing in — I’ll continue here once it’s connected.' : 'Finish signing in — your account will appear here automatically.');
       pollPendingConnect();
@@ -1084,16 +1257,18 @@ async function resumeConnectCards(toolkit, { tasksOnly = false } = {}){
 }
 async function pollPendingConnect(){
   if (!pendingConnect) return;
-  const { toolkit, before, startedAt, fromChat } = pendingConnect;
+  const connection = pendingConnect;
+  const { owner, toolkit, before, startedAt, fromChat } = connection;
   // Poll for up to ~2 minutes: Composio OAuth happens in another tab.
   for (let i = 0; i < 30; i++) {
-    if (!pendingConnect || pendingConnect.toolkit !== toolkit) return;
+    if (pendingConnect !== connection || owner !== billingIdentity()) return;
     if (Date.now() - startedAt > 120000) break;
     await sleep(4000);
-    if (!pendingConnect || pendingConnect.toolkit !== toolkit) return;
+    if (pendingConnect !== connection || owner !== billingIdentity()) return;
     if (!signedIn()) continue;
     try {
       await refreshComposioApps(true);
+      if (pendingConnect !== connection || owner !== billingIdentity()) return;
       const app = composioAppByToolkit(toolkit);
       const now = (app && app.accounts) || [];
       const fresh = now.filter((a) => !before.includes(a.id));
@@ -1117,6 +1292,9 @@ async function pollPendingConnect(){
   }
   pendingConnect = null;
 }
+window.addEventListener('belna-auth-changed', () => {
+  if (pendingConnect && pendingConnect.owner !== billingIdentity()) pendingConnect = null;
+});
 // OAuth callback lands back on /?connected_app=<toolkit> (see /api/composio/connect).
 // Claim it: open Connectors on that app and surface the connected mail/name/profile.
 async function handleConnectedAppReturn(){
@@ -1303,7 +1481,10 @@ function toast(msg){
 const waits = {};
 const wkey = (chatId, msgId) => chatId + '/' + msgId;
 
-let root = document.getElementById('root');
+// Under the site's React page the host comes from LingonAppRuntime.mount (see bootReady).
+let root = window.LingonDeferMount ? null : document.getElementById('root');
+let hostReady = () => {};
+const hostGiven = new Promise(resolve => { hostReady = resolve; });
 const chat = () => state.chats.find(c => c.id === state.activeChat);
 const isActive = c => state.view === 'chat' && state.activeChat === c.id;
 
@@ -1398,6 +1579,8 @@ function ensureOwnerScope(){
   if (!uid) return;
   if (!state.ownerId){ state.ownerId = uid; save(); return; }
   if (state.ownerId !== uid){
+    // The previous account's last changes are written to its own copy first.
+    flushSave();
     const theme = state.theme;
     const pending = state.pendingPrompt;
     const pendingFiles = state.pendingPromptFiles;
@@ -2333,7 +2516,20 @@ const BELNA_PROMPTS = [
 ];
 function belnaStopRotator(){ /* headline loop is pure CSS — nothing to stop */ }
 function belnaStopTypewriter(){ if (window.__typeTimer){ clearTimeout(window.__typeTimer); window.__typeTimer = null; } }
-function belnaStopLandingFx(){ belnaStopRotator(); belnaStopTypewriter(); }
+function belnaStopLandingFx(){ belnaStopRotator(); belnaStopTypewriter(); landingFxObserver?.disconnect(); landingFxObserver = null; }
+/* A landing section animates only while it is on screen (.fx-off pauses it). Its SVG
+   drawings (mascots, the comparison scenes) are laid out again on every animation frame,
+   which kept phones busy for sections scrolled out of view. */
+let landingFxObserver = null;
+function pauseOffscreenFx(scope){
+  landingFxObserver?.disconnect();
+  landingFxObserver = null;
+  if (typeof IntersectionObserver !== 'function') return;
+  landingFxObserver = new IntersectionObserver(entries => {
+    for (const e of entries) e.target.classList.toggle('fx-off', !e.isIntersecting);
+  });
+  for (const n of scope.querySelectorAll('.hero-wrap, section')) landingFxObserver.observe(n);
+}
 function belnaStartTypewriter(){
   belnaStopTypewriter();
   const ta = document.getElementById('lprompt');
@@ -2341,13 +2537,15 @@ function belnaStartTypewriter(){
   if (!ta && !ta2) return;
   const CARET = '▏';
   let pi = 0, ci = 0, del = false;
+  // Only a box on screen is retyped: each new placeholder lays the box out again.
+  const shown = box => box && !box.closest('.fx-off');
   const setPh = txt => {
-    if (ta && document.activeElement !== ta && !ta.value) ta.placeholder = txt;
-    if (ta2 && document.activeElement !== ta2 && !ta2.value) ta2.placeholder = txt;
+    if (shown(ta) && document.activeElement !== ta && !ta.value) ta.placeholder = txt;
+    if (shown(ta2) && document.activeElement !== ta2 && !ta2.value) ta2.placeholder = txt;
   };
   const tick = () => {
-    // Pause while the user focuses either box; resume once they leave it empty.
-    if ((ta && document.activeElement === ta) || (ta2 && document.activeElement === ta2)) {
+    // Pause while the user focuses either box, or neither is on screen; resume once they leave it empty.
+    if ((ta && document.activeElement === ta) || (ta2 && document.activeElement === ta2) || (!shown(ta) && !shown(ta2))) {
       window.__typeTimer = setTimeout(tick, 1200);
       return;
     }
@@ -2420,6 +2618,24 @@ const STAR_SKY_SVG = `<svg viewBox="0 0 1672 941" preserveAspectRatio="xMidYMid 
 <g transform="translate(905 130) rotate(-16)" class="hand"><ellipse cx="0" cy="0" rx="24" ry="6" fill="none" stroke="var(--ink)" stroke-width="1.4"/><circle cx="0" cy="0" r="10" fill="var(--blue)" opacity=".9"/></g>
 </g>
 </svg>`;
+
+/* Twinkling stars are drawn in three layers of their own over the sky. A star twinkling
+   inside the big sky SVG repainted the whole sky on every frame; a layer's own opacity is
+   animated on the GPU. Each layer has the sky's viewBox, so its stars stay in place. */
+const STAR_SKY_HTML = (() => {
+  const layers = { a:'', b:'', c:'' };
+  let mid = false;
+  const sky = STAR_SKY_SVG.split(/\r?\n/).filter(line => {
+    if (line.startsWith('<g class="mid-sky">')) mid = true;
+    const twinkle = /^<g [^>]*class="hand twinkle-([abc])"/.exec(line);
+    if (!twinkle) return true;
+    const star = line.replace(` twinkle-${twinkle[1]}`, '');
+    layers[twinkle[1]] += mid ? `<g class="mid-sky">${star}</g>` : star;
+    return false;
+  }).join('\n');
+  const open = STAR_SKY_SVG.slice(0, STAR_SKY_SVG.indexOf('>') + 1);
+  return sky + Object.entries(layers).map(([k, stars]) => `<div class="star-layer twinkle-${k}">${open}${stars}</svg></div>`).join('');
+})();
 
 function landingLifeBento(){
   const ask = 'Do my taxes';
@@ -2631,7 +2847,7 @@ function renderPromo(){
     </nav></div>
 
     <div class="hero-wrap">
-    <div class="belna-stars" aria-hidden="true">${STAR_SKY_SVG}</div>
+    <div class="belna-stars" aria-hidden="true">${STAR_SKY_HTML}</div>
     <header class="hero ahero promo-hero">
       <h1>Så här får du veckan att gå runt utan att barnen får det sämre.</h1>
       <p class="tagline"><strong>Städa, hämta, lämna, handla, tar det någonsin slut?</strong></p>
@@ -2762,6 +2978,7 @@ function renderPromo(){
     p.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); f.requestSubmit(); } });
   }
   wirePromptBox(document.getElementById('pform'), document.getElementById('pprompt'));
+  pauseOffscreenFx(root);
   try { window.scrollTo({ top:0 }); } catch {}
 }
 
@@ -2778,7 +2995,7 @@ function renderLanding(){
     </nav></div>
 
     <div class="hero-wrap">
-    <div class="belna-stars" aria-hidden="true">${STAR_SKY_SVG}</div>
+    <div class="belna-stars" aria-hidden="true">${STAR_SKY_HTML}</div>
     <header class="hero ahero">
       <h1>Make time <span class="mhold" id="mhold" title="Your Belna agent at work — handling mail, calls, laptop work and counting" aria-label="Your Belna agent at work — handling mail, calls, laptop work and counting">${Mascot.loop()}</span> <span style="white-space:nowrap">for life.</span></h1>
       <div class="safe-note" style="margin-top:18px;text-transform:none;letter-spacing:.02em">Belna shops, schedules, structures your entire life</div>
@@ -2969,6 +3186,7 @@ function renderLanding(){
   wirePromptBox(document.getElementById('lform'), document.getElementById('lprompt'));
   wirePromptBox(document.getElementById('lform2'), document.getElementById('lprompt2'));
   belnaStartTypewriter();
+  pauseOffscreenFx(root);
   // The landing sections are rendered after navigation, so a hash from a
   // public page can resolve before its target exists in the document.
   const landingTarget = window.location.hash.slice(1);
@@ -3012,6 +3230,7 @@ async function landingRun(prompt, files = []){
 function startPendingPromptFlow(pendingOverride){
   if (!signedIn()) { renderAuth(); return; }
   ensureOwnerScope();
+  const previousView = state.view;
   if (typeof pendingOverride === 'string' && pendingOverride.trim()) state.pendingPrompt = pendingOverride.trim();
   if (!state.agent) state.agent = { name:'Your agent', color:'lingon', provisional:true };
   state.agent.provisional = true;
@@ -3026,8 +3245,11 @@ function startPendingPromptFlow(pendingOverride){
   state.activeChat = c.id; state.view = 'chat'; state.canvasOpen = false;
   mobileNavOpen = false;
   runInChatOnboarding(c);
+  if (previousView === 'apps' && c.onboardingAnswers?.theme) state.view = 'apps';
+  state.agent.name = c.onboardingAnswers?.name ? publicAgentName(c.onboardingAnswers.name) : 'Your au pair';
+  if (c.onboardingAnswers?.color) state.agent.color = c.onboardingAnswers.color;
   save(); renderApp();
-  if (c.onboardingAnswers?.name && c.onboardingAnswers?.color) void completeOnboarding(c);
+  if (c.onboarding && c.messages.some(m => m.onboardingFinal && m.onboardingDone)) void completeOnboarding(c);
 }
 
 /* Signing in or opening the app never lands on the finished setup chat: its
@@ -3036,7 +3258,7 @@ function startPendingPromptFlow(pendingOverride){
    and stays open while a request saved before setup is still being worked on. */
 function leaveSetupChat(){
   const c = chat();
-  if (needsOnboarding() || state.pendingPrompt || !c || c.onboarding || liveTaskIds(c).length) return;
+  if (needsOnboarding() || state.pendingPrompt || state.view !== 'chat' || !c || c.onboarding || liveTaskIds(c).length) return;
   if (!(c.onboardingAnswers || c.messages?.some(m => m.card?.onboarding))) return;
   let next = state.chats.find(x => x.source !== 'automation' && !x.onboardingAnswers && !x.messages?.length);
   if (!next) {
@@ -3049,6 +3271,66 @@ function leaveSetupChat(){
 
 function pendingQuestion(c){
   return c && (c.messages || []).slice().reverse().map(m => ({c,m})).find(({m}) => m.card?.type === 'question' && m.card.status === 'pending');
+}
+
+const onboardingPlayback = new Map();
+let onboardingTimer = null;
+function onboardingUnlocked(c, m){
+  const after = m.onboardingAfter || m.card?.onboardingAfter;
+  return !after || !!c.messages.find(item => item.id === after)?.onboardingDone;
+}
+function onboardingCardHTML(c, m){
+  const cd = m.card, pending = cd.status === 'pending';
+  const attrs = `data-chat="${c.id}" data-msg="${m.id}"`;
+  if (cd.type === 'onboarding-connectors') return `<div class="onboarding-connectors"><button class="onboarding-link" data-act="onboarding-connectors" ${attrs}>${icon('box',15)} Open connectors ${icon('chevr',14)}</button><span class="onboarding-optional">Optional</span></div>`;
+  if (cd.type === 'onboarding-ready') return '';
+  if (!pending) return `<span class="onboarding-answer">${esc(cd.choice)}</span>`;
+  const userName = cd.step === 'userName';
+  return `<section class="onboarding-card onboarding-card-${cd.step}" aria-label="${esc(cd.q)}">
+    ${cd.customName ? `<form class="qname" data-onboarding-name data-onboarding-step="${cd.step}" ${attrs}>
+      <label class="onboarding-sr" for="qname-${m.id}">${userName ? 'Your name or nickname' : 'A name for your au pair'}</label>
+      <div class="qname-row"><input id="qname-${m.id}" class="field" name="agentName" placeholder="${userName ? 'Your name or nickname…' : 'Give me a name…'}" maxlength="${userName ? 40 : 18}" autocomplete="${userName ? 'given-name' : 'off'}" autocapitalize="words" spellcheck="false" required value="${esc(cd.draft || '')}"><button class="btn" type="submit" aria-label="${userName ? 'Use your name' : 'Use this agent name'}" title="${userName ? 'Use your name' : 'Use this agent name'}">${icon('up',16)}</button></div>
+    </form>` : ''}
+    <div class="qopts onboarding-choices ${cd.mascotColors ? 'onboarding-mascot-choices' : cd.themeColors ? 'onboarding-theme-choices' : ''}">${cd.options.map(o => {
+      const color = cd.mascotColors && Mascot.keys.find(k => Mascot.PALETTE[k].name === o);
+      const theme = cd.themeColors && THEMES.find(t => t.name === o);
+      return `<button class="qopt" data-act="qopt" ${attrs} data-o="${esc(o)}">${color ? Mascot.svg(color,'happy',48) : theme ? `<span class="onboarding-theme-swatch" style="--preview:${theme.c}" aria-hidden="true"></span>` : ''}<span>${esc(o)}</span></button>`;
+    }).join('')}</div>
+  </section>`;
+}
+function finishOnboardingSpeech(c, m){
+  m.onboardingDone = true;
+  onboardingPlayback.delete(m.id);
+  clearTimeout(onboardingTimer); onboardingTimer = null;
+  save();
+  if (m.onboardingFinal && c.onboarding) { void completeOnboarding(c); return; }
+  if (isActive(c) && state.view === 'chat') paintChat($('#main'));
+}
+// Full messages are persisted immediately. Playback stays separate from the
+// transcript, so a repaint cannot expose the full reply or replay finished text.
+function animateOnboarding(c){
+  clearTimeout(onboardingTimer); onboardingTimer = null;
+  const m = c.messages.find(item => item.onboardingSpeech && !item.onboardingDone);
+  if (!m || !onboardingUnlocked(c, m) || !isActive(c) || state.view !== 'chat') return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { finishOnboardingSpeech(c, m); return; }
+  let playback = onboardingPlayback.get(m.id);
+  if (!playback) { playback = { count:0, pause:true }; onboardingPlayback.set(m.id, playback); }
+  const tick = () => {
+    onboardingTimer = null;
+    if (!signedIn() || !isActive(c) || state.view !== 'chat' || !state.chats.includes(c)) return;
+    const output = document.querySelector(`[data-mid="${m.id}"] [data-onboarding-output]`);
+    if (!output) return;
+    if (playback.count >= m.text.length) { finishOnboardingSpeech(c, m); return; }
+    const th = $('#thread'), pinned = th && th.scrollHeight - th.scrollTop - th.clientHeight < 120;
+    playback.count = Math.min(m.text.length, playback.count + 2);
+    output.textContent = m.text.slice(0, playback.count);
+    output.hidden = false;
+    if (pinned) th.scrollTop = th.scrollHeight;
+    const last = m.text[playback.count - 1];
+    onboardingTimer = setTimeout(tick, playback.count === m.text.length ? 300 : /[.!?]/.test(last) ? 180 : /[,;]/.test(last) ? 80 : 28);
+  };
+  onboardingTimer = setTimeout(tick, playback.pause ? 900 : 28);
+  playback.pause = false;
 }
 
 function runInChatOnboarding(c){
@@ -3071,53 +3353,92 @@ function runInChatOnboarding(c){
     c.messages = c.messages.filter(m => !m.card?.onboarding || m.card.status === 'answered');
   }
   const answers = c.onboardingAnswers;
-  if (c.messages.some(m => m.card?.onboarding && m.card.status === 'pending')) return;
-  const say = text => c.messages.push({ id:uid(), role:'agent', kind:'text', text, mood:'happy' });
-  const card = data => c.messages.push({ id:uid(), kind:'card', card:{...data, onboarding:true, status:'pending'} });
-  if (!answers.name) {
-    if (!c.onboardingWelcomed) {
-      say(state.pendingPrompt ? 'Hi! I’ve saved your request. Let’s make your agent yours before I get started.' : 'Hi! Let’s set up your personal agent. First, give me a name.');
-      c.onboardingWelcomed = true;
+  // Keep existing answers when resuming the old two-question setup, but replace
+  // its pending question with the next step in the personal introduction.
+  if (answers.version !== 3) {
+    if (answers.version === 2) {
+      const oldReady = c.messages.find(m => m.card?.type === 'onboarding-ready');
+      const final = oldReady && c.messages.find(m => m.id === oldReady.card.onboardingAfter);
+      if (final) {
+        final.text = `You can connect your apps at any time, ${answers.userName}. What do you want to work on?`;
+        final.onboardingFinal = true; final.onboardingDone = false;
+      }
+      c.messages = c.messages.filter(m => m.card?.type !== 'onboarding-ready');
+    } else {
+      c.messages = c.messages.filter(m => !m.card?.onboarding || m.card.status === 'answered');
+      c.onboardingWelcomed = false;
     }
-    card({ type:'question', step:'name', q:'What should I call myself?', options:['Alex','Rosa','Tao'], customName:true });
+    answers.version = 3;
+  }
+  if (c.messages.some(m => m.onboardingFinal || (m.card?.onboarding && m.card.status === 'pending'))) return;
+  const say = (text, after) => {
+    const m = { id:uid(), role:'agent', kind:'text', text, mood:'happy', onboardingSpeech:true, onboardingSpeaker:answers.name || '', onboardingAfter:after };
+    c.messages.push(m); return m.id;
+  };
+  const card = (data, after) => c.messages.push({ id:uid(), kind:'card', card:{...data, onboarding:true, onboardingAfter:after, status:data.status || 'pending'} });
+  if (!answers.name) {
+    const welcome = say(`Hi there! I’m your personal au pair, always at your service. ${state.pendingPrompt ? 'I’ve saved your request for our first adventure. ' : ''}Before we begin, I need a name. What would you like to call me?`);
+    c.onboardingWelcomed = true;
+    card({ type:'question', step:'name', q:'Give me a name', options:['Alex','Rosa','Tao'], customName:true }, welcome);
+  } else if (!answers.userName) {
+    state.agent.name = publicAgentName(answers.name);
+    const hello = say(`${state.agent.name}… nice, I like it! Now, what should I call you?`);
+    card({ type:'question', step:'userName', q:'And your name?', options:[], customName:true }, hello);
   } else if (!answers.color) {
     state.agent.name = publicAgentName(answers.name);
-    card({ type:'question', step:'color', q:'Pick a color for ' + state.agent.name, options:Mascot.keys.map(k => Mascot.PALETTE[k].name), mascotColors:true });
+    const color = say(`Lovely to meet you, ${answers.userName} :) Let’s give me a little personality. Which color feels like me?`);
+    card({ type:'question', step:'color', q:'Choose my color', options:Mascot.keys.map(k => Mascot.PALETTE[k].name), mascotColors:true }, color);
+  } else if (!answers.theme) {
+    const theme = say(`I love this look! Your turn, ${answers.userName}. Pick a theme color and make this space feel like your own.`);
+    card({ type:'question', step:'theme', q:'Set the color of your world', options:THEMES.map(t => t.name), themeColors:true }, theme);
+  } else {
+    const universe = say(`I can work at the speed of light, but to work at my best, I need your universe and the things you care about most :)`);
+    card({ type:'onboarding-connectors', status:'available' }, universe);
+    // The connector invitation appears between these two replies. Access is
+    // optional. The last animated question hands straight over to normal chat.
+    say(`You can connect your apps at any time, ${answers.userName}. What do you want to work on?`, universe);
+    c.messages[c.messages.length - 1].onboardingFinal = true;
   }
 }
 
 async function answerOnboarding(c, m, value){
-  if (!signedIn() || !needsOnboarding() || !c?.onboarding || !m?.card?.onboarding || m.card.status !== 'pending' || m.card.type !== 'question') return;
-  const choice = String(value || '').trim().slice(0, m.card.step === 'name' ? 18 : 60);
+  if (!signedIn() || !needsOnboarding() || !c?.onboarding || !m?.card?.onboarding || m.card.status !== 'pending' || m.card.type !== 'question' || !onboardingUnlocked(c, m)) return;
+  const choice = String(value || '').trim().slice(0, m.card.step === 'name' ? 18 : m.card.step === 'userName' ? 40 : 60);
   if (!choice) { toast('Type a name or choose a suggestion.'); return; }
   if (m.card.step === 'color') {
     const key = Mascot.keys.find(k => k.toLowerCase() === choice.toLowerCase() || Mascot.PALETTE[k].name.toLowerCase() === choice.toLowerCase());
     if (!key) { toast('Choose one of the colors shown.'); return; }
     c.onboardingAnswers.color = key;
+    state.agent.color = key;
+  } else if (m.card.step === 'theme') {
+    const theme = THEMES.find(t => t.id === choice || t.name === choice);
+    if (!theme) { toast('Choose one of the theme colors shown.'); return; }
+    c.onboardingAnswers.theme = theme.id;
+    state.theme = theme.id; applyTheme();
+  } else if (m.card.step === 'userName') {
+    c.onboardingAnswers.userName = choice;
+    state.userProfile = { ...state.userProfile, name:choice };
   } else c.onboardingAnswers.name = choice;
   m.card.choice = choice; m.card.status = 'answered';
   runInChatOnboarding(c);
-  if (c.onboardingAnswers.name && c.onboardingAnswers.color) await completeOnboarding(c);
-  else { save(); renderApp(); }
+  save(); renderApp();
 }
 
 async function completeOnboarding(c){
   if (!signedIn() || !c?.onboarding || state.onboarded) return;
   const answers = c.onboardingAnswers;
-  if (!answers?.name || !Mascot.PALETTE[answers.color]) return;
+  const final = c.messages.find(m => m.onboardingFinal);
+  if (!answers?.name || !answers.userName || !Mascot.PALETTE[answers.color] || !THEMES.some(t => t.id === answers.theme) || !final?.onboardingDone) return;
   const ownerId = currentUserId();
   state.agent = { name:publicAgentName(answers.name), color:answers.color, ownerId, claimedAt:Date.now() };
   const pending = state.pendingPrompt;
-  const intro = `Hi ${currentUser().name}! I’m ${state.agent.name}, your personal agent. I have my own secure computer and can work on your behalf: browse the web, research, write, code, create files, and help manage tasks across your connected apps. ${pending ? 'I’m getting started on your request now.' : 'Tell me what you want done, and I’ll take it from there.'} I’ll ask for access or approval when needed.`;
-  const priorIntro = c.messages.find(m => m.role === 'agent' && /own secure computer/.test(m.text || ''));
-  if (priorIntro) priorIntro.text = intro;
-  else c.messages.push({ id:uid(), role:'agent', kind:'text', text:intro, mood:'happy' });
+  if (pending) c.messages.push({ id:uid(), role:'agent', kind:'text', text:`I’m getting started on your request now, ${answers.userName}!`, mood:'happy' });
   c.messages = c.messages.filter(m => m.card?.type !== 'passport');
   state.onboarded = true; c.onboarding = false; c.busy = false;
   state.pendingPrompt = null;
   state.pendingPromptFiles = [];
   // On a phone the agent panel covers the chat; keep a saved request visible as it starts.
-  state.canvasOpen = !(pending && phoneLayout()); state.canvasTab = 'canvas';
+  state.canvasOpen = false; state.canvasTab = 'canvas';
   save(); renderApp();
   await Promise.all([
     persistAgentContext().catch(error => toast(error.message || 'Could not save agent setup to your account.')),
@@ -3295,6 +3616,25 @@ function switchView(){
   paintSide(); paintMain(); paintCanvas();
   syncShellClasses();
   refreshGoals(false); refreshLibrary(false);
+  warmAppPanels();
+}
+
+// Start account panels after the shell paints; navigation reuses their in-flight
+// requests and memory caches instead of starting a mobile network round trip.
+let panelsWarmOwner = null;
+window.addEventListener('belna-auth-changed', () => {
+  if (panelsWarmOwner !== billingIdentity()) panelsWarmOwner = null;
+  scopeBelnaWallet();
+});
+function warmAppPanels(){
+  const owner = billingIdentity();
+  if (!owner || panelsWarmOwner === owner) return;
+  panelsWarmOwner = owner;
+  setTimeout(() => {
+    if (owner !== billingIdentity()) return;
+    refreshComposioApps();
+    refreshBelnaWallet();
+  }, 0);
 }
 function setCanvasOpen(open, opts = {}){
   state.canvasOpen = !!open;
@@ -3386,13 +3726,13 @@ function renderApp(){
   ensureOwnerScope();
   if (needsOnboarding()) {
     if (!chat()?.onboarding) return startPendingPromptFlow();
-    state.view = 'chat';
+    if (state.view !== 'apps' || !chat()?.onboardingAnswers?.theme) state.view = 'chat';
   }
   if (!state.agent) state.agent = { name: 'Your agent', color: 'lingon', provisional: true, claimedAt: Date.now() };
   applyTheme();
   belnaStopLandingFx();
   root.innerHTML = `
-  <div class="app ${canvasShouldShow() ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''}" id="app">
+  <div class="app ${canvasShouldShow() ? '' : 'nocanvas'} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${needsOnboarding() ? 'is-onboarding' : ''}" id="app">
     <button class="mobile-nav-toggle" data-act="togglemenu" aria-label="${mobileNavOpen ? 'Close navigation' : 'Open navigation'}" aria-expanded="${mobileNavOpen}">${icon(mobileNavOpen ? 'x' : 'menu',20)}</button>
     <button class="side-scrim" data-act="togglemenu" aria-label="Close navigation" tabindex="-1"></button>
     <aside class="side" id="side" aria-hidden="${mobileNavOpen ? 'false' : 'true'}"></aside>
@@ -3406,6 +3746,7 @@ function renderApp(){
   syncShellClasses();
   // Goals and Library are account data the agent can change; refresh at most every 30s.
   refreshGoals(false); refreshLibrary(false);
+  warmAppPanels();
 }
 
 function currentUser(){
@@ -4116,6 +4457,7 @@ function saveGoalChange(id, request){
 }
 
 let workspaceIntroStartedAt = null;
+const sideHTML = new WeakMap();
 function paintSide(){
   const a = state.agent;
   if (!a) return;
@@ -4125,7 +4467,6 @@ function paintSide(){
   const introElapsed = workspaceIntroStartedAt === null ? Infinity : performance.now() - workspaceIntroStartedAt;
   const workspaceIntroClass = introElapsed < 1500 ? ' is-entering' : '';
   const workspaceIntroStyle = introElapsed < 1500 ? ` style="--workspace-intro-delay:-${Math.round(introElapsed)}ms"` : '';
-  const chatScrollTop = $('#side .chatlist')?.scrollTop || 0;
   const u = currentUser();
   const initials = esc((u.name || 'U').slice(0, 1).toUpperCase());
   let libCount = 0;
@@ -4136,7 +4477,8 @@ function paintSide(){
   // Existing automations have their own chat link. Keep Updates and history
   // without a current automation visible, including while the list is loading.
   const automationChats = new Set((state.subAgents || []).map(agent => agent.chatId));
-  $('#side').innerHTML = `
+  const side = $('#side');
+  const html = `
     <button class="sidebrand" data-act="nav" data-view="chat" title="Belna — back to chat">${Mascot.logo(28)}<span>belna</span></button>
     <button class="btn" style="margin:8px 4px 4px" data-act="newchat">${icon('plus',15)} New chat</button>
     <div class="side-workspace${workspaceIntroClass}"${workspaceIntroStyle}>
@@ -4174,8 +4516,14 @@ function paintSide(){
         </button>
       </div>
     </div>`;
-  const chatList = $('#side .chatlist');
-  if (chatList) chatList.scrollTop = chatScrollTop;
+  // Most repaints change nothing here; the drawn sidebar (and its scroll) stays as it is.
+  if (sideHTML.get(side) !== html) {
+    const chatScrollTop = side.querySelector('.chatlist')?.scrollTop || 0;
+    side.innerHTML = html;
+    sideHTML.set(side, html);
+    const chatList = side.querySelector('.chatlist');
+    if (chatList) chatList.scrollTop = chatScrollTop;
+  }
   // usage card: credit usage meter (real billing when signed in).
   // Only touch the DOM when the resolved HTML actually changed (avoids
   // layout thrash on every paintSide while a billing fetch is in flight).
@@ -4372,6 +4720,7 @@ const liveTaskIds = (c) => Object.entries(c?.managedTasks || {}).filter(([, t]) 
 /* ---------------- chat view ---------------- */
 function paintChat(M){
   const c = chat();
+  if ((voiceIn.starting || voiceIn.on || voiceIn.busy) && !voiceContextCurrent()) stopVoice();
   if (!c){
     stopVoice();
     M.innerHTML = `<div class="empty" style="margin:auto">${Mascot.svg(state.agent.color,'idle',90,'mascot-bob')}<div style="margin-top:14px;font-weight:700">No chat open</div><div class="t2">Start one and ${esc(state.agent.name)} is on it.</div><button class="btn" data-act="newchat">${icon('plus',15)} New chat</button></div>`;
@@ -4390,8 +4739,8 @@ function paintChat(M){
   // Chats saved before paused cards moved under their answer.
   for (const m of c.messages.filter(x => x.card?.type === 'task')) placeTaskCard(c, m);
   const fv = floatView(c);
-  M.innerHTML = `
-    <div class="floathead${fv.working ? ' working' : ''}"><div class="fav">${Mascot.head(state.agent.color,44)}</div><div class="pill" role="status" aria-live="polite">${esc(state.agent.name)}<span class="st" id="floatstatus">${esc(fv.text)}</span></div></div>
+  const html = `
+    <div class="floathead${fv.working ? ' working' : ''}"><div class="fav">${Mascot.head(state.agent.color,44)}</div><div class="pill" role="status" aria-live="polite">${esc(c.onboarding && !c.onboardingAnswers?.name ? 'Your personal au pair' : state.agent.name)}<span class="st" id="floatstatus">${esc(fv.text)}</span></div></div>
     <div class="chathead">
       <span class="chathead-lead">
       <span class="ttl" title="${esc(c.title)}">${esc(c.title)}</span>
@@ -4403,14 +4752,12 @@ function paintChat(M){
       <button class="giftbtn" data-act="opengift" title="Invite a friend" aria-label="Invite a friend">${Mascot.logo(20)}<span>Invite a friend</span></button>
       <button class="iconbtn" data-act="togglecanvas" title="Toggle canvas" aria-label="Toggle canvas">${icon('menu',16)}</button>
     </div>
-    <div class="thread" id="thread"><div class="threadinner" id="tinner">
-      ${c.messages.map(m => msgNode(c, m).outerHTML).join('')}
-    </div></div>
+    <div class="thread ${c.onboarding ? 'onboarding-thread' : ''}" id="thread"><div class="threadinner" id="tinner"></div></div>
     <div class="composerwrap"><div class="composer">
       ${c.taskReply ? `<div class="reply-draft"><span><b>${c.taskReplyScope==='team'?'Updating the shared goal':'Changing this task'}</b><small>${esc(c.managedTasks?.[c.taskReply]?.title || 'Task')}</small></span><button type="button" class="iconbtn" data-act="task-change-cancel" data-chat="${c.id}" aria-label="Cancel task change">${icon('x',14)}</button></div>` : ''}
       ${c.replyingTo ? `<div class="reply-draft"><span><b>Replying to ${c.replyingTo.role === 'user' ? 'yourself' : esc(state.agent.name)}</b><small>${esc(c.replyingTo.text)}</small></span><button type="button" class="iconbtn" data-act="cancelreply" data-chat="${c.id}" title="Cancel reply" aria-label="Cancel reply">${icon('x',14)}</button></div>` : ''}
       <form class="promptbox" id="cform">
-        <textarea id="cprompt" rows="1" placeholder="Ask ${esc(state.agent.name)} anything…"></textarea>
+        <textarea id="cprompt" rows="1" placeholder="${c.onboarding ? (!c.onboardingAnswers?.name ? 'Or type a name for me here…' : !c.onboardingAnswers?.userName ? 'Or tell me your name here…' : 'Choose an option above to continue…') : `Ask ${esc(state.agent.name)} anything…`}"></textarea>
         <div class="attach-pills"></div>
         <div class="pb-row">
           <button type="button" class="iconbtn" data-act="attach" title="Attach files" aria-label="Attach files">${icon('plus',16)}</button>
@@ -4422,8 +4769,22 @@ function paintChat(M){
         </div>
       </form>
     </div></div>`;
+  // The same chat keeps its thread in the page: everything around it is redrawn and only
+  // its changed rows are, so a repaint costs about the rows that changed.
+  const keepThread = oldThread?.parentNode === M && !!oldThread.querySelector('#tinner');
+  if (keepThread) {
+    const t = document.createElement('template');
+    t.innerHTML = html;
+    const fresh = t.content.querySelector('#thread');
+    oldThread.className = fresh.className;
+    for (const n of [...M.childNodes]) if (n !== oldThread) n.remove();
+    while (t.content.firstChild !== fresh) M.insertBefore(t.content.firstChild, oldThread);
+    fresh.remove();
+    M.append(t.content);
+  } else M.innerHTML = html;
   const prevLast = M.dataset.chatId === c.id ? M.dataset.lastMsg : null;
   M.dataset.chatId = c.id;
+  threadRows(c, $('#tinner'), keepThread);
   watchAgentRuns($('#tinner'));
   pinThread($('#thread'), keepTop);
   // Animate only a message that just arrived: repaints for other reasons (a new mascot
@@ -4444,7 +4805,8 @@ function paintChat(M){
   wirePromptBox($('#cform'), $('#cprompt'));
   paintAttachPills();
   syncVoiceButton();
-  if (Engine.managed && signedIn() && !needsOnboarding()) void Engine.recoverTasks?.(makeRT(c));
+  animateOnboarding(c);
+  if (Engine.managed && signedIn() && !needsOnboarding() && !bootSync) void Engine.recoverTasks?.(makeRT(c));
 }
 
 // Keeps the newest message in view: while the reader is at the bottom, any growth
@@ -4452,17 +4814,23 @@ function paintChat(M){
 // re-pins the thread. Scrolling up releases it until they return to the bottom.
 let threadStickNext = false;
 let threadObserver = null;
+let threadPinned = true;
+// A kept thread is pinned again on every repaint; it gets its scroll listener once.
+const pinListening = new WeakSet();
 function pinThread(th, keepTop = null){
   threadObserver?.disconnect();
   threadObserver = null;
   if (!th) return;
-  let pinned = keepTop == null;
+  threadPinned = keepTop == null;
   const toBottom = () => { th.scrollTop = th.scrollHeight; };
-  if (pinned) { toBottom(); requestAnimationFrame(toBottom); }
-  else th.scrollTop = keepTop;
-  th.addEventListener('scroll', () => { pinned = th.scrollHeight - th.scrollTop - th.clientHeight < 120; }, { passive:true });
+  if (threadPinned) { toBottom(); requestAnimationFrame(toBottom); }
+  else if (th.scrollTop !== keepTop) th.scrollTop = keepTop;
+  if (!pinListening.has(th)) {
+    pinListening.add(th);
+    th.addEventListener('scroll', () => { if (th.isConnected) threadPinned = th.scrollHeight - th.scrollTop - th.clientHeight < 120; }, { passive:true });
+  }
   if (typeof ResizeObserver !== 'function') return;
-  threadObserver = new ResizeObserver(() => { if (pinned && th.isConnected) toBottom(); });
+  threadObserver = new ResizeObserver(() => { if (threadPinned && th.isConnected) toBottom(); });
   threadObserver.observe(th);
   const inner = th.querySelector('#tinner');
   if (inner) threadObserver.observe(inner);
@@ -4489,7 +4857,8 @@ function appleEmojiHTML(emoji, code){
   return `<img class="imessage-emoji" src="${APPLE_EMOJI_CDN}${unified}.png" alt="${esc(emoji)}" draggable="false" data-fallback="${APPLE_EMOJI_CDN}${fallback}.png" onerror="if(!this.dataset.tried&&this.getAttribute('src')!==this.dataset.fallback){this.dataset.tried=1;this.src=this.dataset.fallback}else{this.replaceWith(document.createTextNode(this.alt))}">`;
 }
 function paintAppleEmoji(html){
-  return String(html).replace(/\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)*/gu, (emoji) => appleEmojiHTML(emoji));
+  // Tags are skipped: an emoji inside a link's address must stay text, not become markup there.
+  return String(html).replace(/(<[^>]*>)|\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)*/gu, (match, tag) => tag || appleEmojiHTML(match));
 }
 function replyPreviewHTML(m){
   if (!m.replyTo) return '';
@@ -4553,6 +4922,9 @@ function markAgentRuns(root){
     if (n.hidden || n.classList.contains('msg-hidden') || n.classList.contains('superseded') || n.classList.contains('task-working') || n.style.display === 'none') continue;
     const agent = n.classList.contains('msg') && n.classList.contains('agent');
     n.classList.toggle('run-start', agent && prev !== 'agent');
+    // A run that opens with a card shows the agent beside it, as a run that opens with a
+    // message does. Other card rows keep an empty slot of the same width (no hidden mascot).
+    if (agent && prev !== 'agent') { const slot = n.querySelector(':scope > .card-ava'); if (slot?.querySelector('.ava-gap')) slot.innerHTML = Mascot.svg(state.agent?.color || 'lingon', 'idle', 30); }
     prev = agent ? 'agent' : 'other';
   }
 }
@@ -4565,38 +4937,116 @@ function watchAgentRuns(root){
   agentRunObserver.observe(root, { childList:true });
 }
 const agentNameHTML = () => `<div class="msg-name">${esc(state.agent.name)}</div>`;
-function msgNode(c, m){
+function msgHTML(c, m){
+  if (m.card?.type === 'onboarding-ready') return (`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
+  if (m.card?.onboarding && m.card.type === 'question' && m.card.status === 'answered') return (`<div class="msg user onboarding-answer-row" data-mid="${m.id}"><div class="message-stack"><div class="bub-wrap"><div class="bub">${esc(m.card.choice)}</div></div></div></div>`);
+  if ((m.onboardingSpeech || m.card?.onboarding) && !onboardingUnlocked(c, m)) return (`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
+  if (m.onboardingSpeech) {
+    const speaking = !m.onboardingDone;
+    const visible = speaking ? m.text.slice(0, onboardingPlayback.get(m.id)?.count || 0) : m.text;
+    return (`<div class="msg agent onboarding-speech ${speaking ? 'is-speaking' : ''}" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color,'happy',30)}</div><div class="body message-stack">${m.onboardingSpeaker ? `<div class="msg-name">${esc(m.onboardingSpeaker)}</div>` : ''}<div class="bub-wrap"><div class="bub"><span data-onboarding-output ${speaking ? `aria-hidden="true" ${visible ? '' : 'hidden'}` : ''}>${esc(visible)}</span>${speaking ? '<span class="tdots onboarding-dots" aria-hidden="true"><i></i><i></i><i></i></span>' : ''}</div></div>${speaking ? `<span class="onboarding-sr" role="status">${esc(m.text)}</span><button class="onboarding-reveal" data-act="onboarding-reveal" data-chat="${c.id}" data-msg="${m.id}">Show full message ${icon('chevr',12)}</button>` : ''}</div></div>`);
+  }
   const chrome = (m.kind === 'text') ? messageChromeHTML(c, m) : { has:false, reactions:'', actions:'' };
   if (m.kind === 'text' && m.role === 'user'){
     const filesHtml = (m.files && m.files.length) ? `<div class="msg-files">${m.files.map((f,i) => `<button class="attach-pill sent" data-act="canvas-upload" data-chat="${c.id}" data-msg="${m.id}" data-i="${i}" title="View in Canvas">${icon('file',12)}<span class="ap-name">${esc(f.name.length > 24 ? f.name.slice(0,21)+'…' : f.name)}</span><span class="ap-size">${fmtBytes(f.size)}</span></button>`).join('')}</div>` : '';
-    return el(`<div class="msg user" data-mid="${m.id}"><div class="message-stack${chrome.has ? ' has-reactions' : ''}"><div class="bub-wrap"><div class="bub">${replyPreviewHTML(m)}${filesHtml}${paintAppleEmoji(esc(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
+    return (`<div class="msg user" data-mid="${m.id}"><div class="message-stack${chrome.has ? ' has-reactions' : ''}"><div class="bub-wrap"><div class="bub">${replyPreviewHTML(m)}${filesHtml}${paintAppleEmoji(esc(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
   }
   if (m.kind === 'text')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body message-stack${chrome.has ? ' has-reactions' : ''}">${agentNameHTML()}<div class="bub-wrap"><div class="bub md">${replyPreviewHTML(m)}${paintAppleEmoji(md(m.text))}</div>${chrome.reactions}</div>${chrome.actions}</div></div>`);
+    return (`<div class="msg agent" data-mid="${m.id}"><div class="ava">${Mascot.svg(state.agent.color, m.mood || 'idle', 30)}</div><div class="body message-stack${chrome.has ? ' has-reactions' : ''}">${agentNameHTML()}<div class="bub-wrap"><div class="bub md">${replyPreviewHTML(m)}${paintAppleEmoji(md(m.text))}</div>${chrome.reactions}</div>${m.sources ? sourcesHTML(m.sources) : ''}${chrome.actions}</div></div>`);
   if (m.kind === 'tools')
-    return el(`<div class="msg agent" data-mid="${m.id}"><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body">${agentNameHTML()}<div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
+    return (`<div class="msg agent" data-mid="${m.id}"><div class="ava card-ava"><span class="ava-gap"></span></div><div class="body">${agentNameHTML()}<div class="tools">${m.items.map(t => tlineHTML(t)).join('')}</div></div></div>`);
   if (m.kind === 'chips')
-    return el('<div style="display:none"></div>');
+    return ('<div style="display:none"></div>');
   // Belna is for everyone: shell commands and their output (npm, ls …) run on the agent's
   // computer out of sight. The work still happens; the chat shows only what it produced.
   if (m.kind === 'card' && (m.card?.type === 'memory' || m.card?.type === 'computer'))
-    return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
+    return (`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
   // A working task shows only as typing dots at the end of the chat (CSS order keeps
   // them below newer messages). Results, approvals and questions arrive as their own
   // cards; only a paused task keeps a card, for Continue.
   if (m.kind === 'card' && m.card?.type === 'task' && m.card.status !== 'partial') {
-    if (!['queued','running','waiting_peers','stopping'].includes(m.card.status)) return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
-    return el(`<div class="msg agent task-working" data-mid="${m.id}" role="status" aria-label="${esc(state.agent.name)} is working on ${esc(m.card.title || 'a task')}"><div class="ava">${Mascot.svg(state.agent.color,'think',30)}</div><div class="body"><div class="bub-wrap"><div class="bub"><span class="tdots"><i></i><i></i><i></i></span></div></div></div></div>`);
+    if (!['queued','running','waiting_peers','stopping'].includes(m.card.status)) return (`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
+    return (`<div class="msg agent task-working" data-mid="${m.id}" role="status" aria-label="${esc(state.agent.name)} is working on ${esc(m.card.title || 'a task')}"><div class="ava">${Mascot.svg(state.agent.color,'think',30)}</div><div class="body"><div class="bub-wrap"><div class="bub"><span class="tdots"><i></i><i></i><i></i></span></div></div></div></div>`);
   }
   // A task's updates arrive as the agent's own messages. The "changes queued" note (and
   // milestone cards from older tasks) is chatter the chat reply already covers. Failures still show.
   if (m.kind === 'card' && m.card?.type === 'progress' && m.card.taskId && m.card.status === 'done')
-    return el(`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
+    return (`<div class="msg-hidden" data-mid="${m.id}" hidden></div>`);
   if (m.kind === 'card') {
     const group = visualGroup(m.card);
-    return el(`<div class="msg agent" data-mid="${m.id}"${group ? ` data-vgroup="${esc(group)}"` : ''}><div class="ava" style="visibility:hidden">${Mascot.svg(state.agent.color,'idle',30)}</div><div class="body card-body">${agentNameHTML()}${cardNode(c, m)}${!(m.card.type === 'subagents' || m.card.type === 'learn' || (m.card.type === 'present' && ['dashboard','table'].includes(m.card.kind))) ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
+    const canvasLink = !m.card.streaming && canvasKind(m.card) === 'card';
+    return (`<div class="msg agent ${m.card.onboarding ? 'onboarding-card-row' : ''}" data-mid="${m.id}"${group ? ` data-vgroup="${esc(group)}"` : ''}><div class="ava card-ava"><span class="ava-gap"></span></div><div class="body card-body">${m.card.onboarding ? '' : agentNameHTML()}${m.card.streaming ? streamingCardHTML(c, m) : cardNode(c, m)}${!canvasLink ? '' : `<button class="canvas-card-link" data-act="canvas-card" data-chat="${c.id}" data-msg="${m.id}">${icon('easel',14)} Show in Canvas</button>`}</div></div>`);
   }
-  return el('<div></div>');
+  return ('<div></div>');
+}
+// The HTML a row was drawn from stays with its node: a repaint of the same chat keeps
+// every row whose HTML is unchanged (no re-parse; its images, open menus and typed
+// values stay) and draws only the rows that changed.
+const rowHTML = new WeakMap();
+// Mascot gradients get a fresh id on every draw; they don't make a row different.
+const rowKey = html => html.replace(/\b(mblush|macc)\d+/g, '$1');
+function msgNode(c, m){
+  const html = msgHTML(c, m);
+  const node = el(html);
+  if (node) rowHTML.set(node, rowKey(html));
+  return node;
+}
+// Fills the thread with the chat's rows. reuse maps message ids to the rows drawn before
+// (same chat only). Rows already on screen are drawn now; a long chat opened afresh draws
+// its newest rows now and the older ones in small batches after the first frame, keeping
+// what the reader sees in place as they are added above.
+const THREAD_FIRST_ROWS = 40, THREAD_ROW_BATCH = 20;
+let threadRowsRun = 0;
+function threadRows(c, tinner, keep){
+  const run = ++threadRowsRun;
+  const all = c.messages.slice();
+  const reuse = keep ? new Map([...tinner.children].filter(n => n.dataset.mid).map(n => [n.dataset.mid, n])) : null;
+  const row = m => {
+    const html = msgHTML(c, m), key = rowKey(html);
+    const old = reuse?.get(m.id);
+    if (old && rowHTML.get(old) === key) { reuse.delete(m.id); return old; }
+    const node = el(html);
+    if (node) rowHTML.set(node, key);
+    return node;
+  };
+  let from = Math.max(0, all.length - THREAD_FIRST_ROWS);
+  while (from > 0 && reuse?.has(all[from - 1].id)) from--;
+  if (keep) {
+    // Each row goes to its place. Rows already in place are not touched (moving one would
+    // restyle it and restart its animations); rows of messages that are gone or were
+    // redrawn are removed.
+    const rows = [];
+    for (let i = from; i < all.length; i++) { const n = row(all[i]); if (n) rows.push(n); }
+    const wanted = new Set(rows);
+    let at = tinner.firstChild;
+    for (const n of rows) {
+      while (at && !wanted.has(at)) { const next = at.nextSibling; at.remove(); at = next; }
+      if (n === at) at = at.nextSibling;
+      else tinner.insertBefore(n, at);
+    }
+    while (at) { const next = at.nextSibling; at.remove(); at = next; }
+  } else {
+    const now = document.createDocumentFragment();
+    for (let i = from; i < all.length; i++) { const n = row(all[i]); if (n) now.append(n); }
+    tinner.append(now);
+  }
+  if (!from) return;
+  const later = typeof requestIdleCallback === 'function' ? fn => requestIdleCallback(fn, { timeout:150 }) : fn => setTimeout(fn, 16);
+  const step = () => {
+    if (run !== threadRowsRun || !tinner.isConnected) return;
+    const to = from;
+    from = Math.max(0, from - THREAD_ROW_BATCH);
+    const live = new Set(c.messages), batch = document.createDocumentFragment();
+    for (let i = from; i < to; i++) if (live.has(all[i])) { const n = row(all[i]); if (n) batch.append(n); }
+    const th = tinner.parentElement, anchor = tinner.firstElementChild;
+    const top = anchor ? anchor.getBoundingClientRect().top : 0;
+    tinner.prepend(batch);
+    // Browsers without scroll anchoring would push the reader down by the new rows' height.
+    const moved = anchor ? anchor.getBoundingClientRect().top - top : 0;
+    if (moved && th) th.scrollTop += moved;
+    if (from) later(step);
+  };
+  later(step);
 }
 const tlineHTML = t => `<div class="tline">${icon(t.ic,14)}<span>${esc(t.t)}</span>${t.d ? `<span class="d">${esc(t.d)}</span>` : ''}</div>`;
 
@@ -4728,6 +5178,9 @@ const CV_TOOLKITS = { gmail:'Gmail', googlecalendar:'Google Calendar', googledri
 const cvAppName = (tk) => CV_TOOLKITS[String(tk || '').toLowerCase()] || humanizeSlug(tk || 'App');
 function cvAppMark(tk){
   const toolkit = String(tk || '').toLowerCase();
+  // Chats can paint before APPLE_CONNECTORS (further down) has run, so the icon path is built here.
+  const apple = /^apple_(calendar|reminders|contacts|health)$/.exec(toolkit);
+  if (apple) return `<span class="cv-app"><img src="/lingon/connectors/apple/${apple[1]}.jpg" alt="" decoding="async"></span>`;
   const app = composioAppByToolkit(toolkit);
   if (app && app.logo) return `<span class="cv-app">${appLogoHtml(app)}</span>`;
   if (toolkit === 'gmail') return `<span class="cv-app">${GMAIL_MARK}</span>`;
@@ -4789,16 +5242,23 @@ function cvOrderHTML(c, v){
     ${v.checkoutExcerpt ? `<p class="cv-fine">Live checkout text: ${esc(v.checkoutExcerpt)}</p>` : ''}
   </div>`;
 }
-const APPROVAL_TILES = { email:'mail', message:'chatb', event:'clock', app_action:'box', purchase:'card', submit:'check', credential:'key', website:'globe', search:'websearch', web_action:'globe', automation:'clock', money:'wallet', generic:'shieldcheck' };
-const APPROVAL_VERBS = { email:'Send', message:'Send', event:'Add event', purchase:'Place order', automation:'Create', website:'Open site', search:'Search', credential:'Allow', submit:'Allow', web_action:'Allow', app_action:'Allow', generic:'Allow' };
+const APPROVAL_TILES = { email:'mail', message:'chatb', event:'clock', app_action:'box', purchase:'card', submit:'check', credential:'key', website:'globe', search:'websearch', web_action:'globe', automation:'clock', money:'wallet', apple:'shieldcheck', generic:'shieldcheck' };
+const APPROVAL_VERBS = { email:'Send', message:'Send', event:'Add event', purchase:'Place order', automation:'Create', website:'Open site', search:'Search', credential:'Allow', submit:'Allow', web_action:'Allow', app_action:'Allow', apple:'Allow', generic:'Allow' };
+// "2026-10-09T15:00:00+02:00" as "Fri 9 Oct, 15:00" in the owner's own time; anything else as written.
+function cvWhen(value){
+  const text = String(value || '');
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(text) || !Number.isFinite(Date.parse(text))) return text;
+  try { return new Date(text).toLocaleString(undefined, { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }); } catch { return text; }
+}
 const MONEY_VERBS = { send:'Send money', link:'Create link', limit:'Change limit', resume:'Resume', pause:'Pause' };
 function cvApprovalBody(c, cd){
   const v = cd.view || {};
   switch (v.kind) {
     case 'email': return v.draft ? cvEmailHTML(v, { hideFrom:true }) : cvEmailHTML(v);
     case 'message': return `<div class="cv-kvs">${cvRow('Where', esc(v.to || ''))}</div>${v.body ? cvClamp(`<div class="cv-bubble">${esc(v.body)}</div>`, '', cvLong(v.body)) : ''}`;
-    case 'event': return `<div class="cv-event"><b>${esc(v.title || 'Event')}</b><div class="cv-kvs">${cvRow('Starts', esc(v.start))}${cvRow('Ends', esc(v.end))}${cvRow('Where', esc(v.location))}</div>${(v.attendees || []).length ? `<div class="cv-chips">${cvChips(v.attendees)}</div>` : ''}</div>`;
+    case 'event': return `<div class="cv-event"><b>${esc(v.title || 'Event')}</b><div class="cv-kvs">${cvRow('Starts', esc(cvWhen(v.start)))}${cvRow('Ends', esc(cvWhen(v.end)))}${cvRow('Where', esc(v.location))}</div>${(v.attendees || []).length ? `<div class="cv-chips">${cvChips(v.attendees)}</div>` : ''}</div>`;
     case 'app_action': return (v.fields || []).length ? `<div class="cv-kvs">${v.fields.map(f => cvRow(esc(f.k), esc(f.v))).join('')}</div>` : '';
+    case 'apple': return `${(v.fields || []).length ? `<div class="cv-kvs">${v.fields.map(f => cvRow(esc(f.k), esc(cvWhen(f.v)))).join('')}</div>` : ''}${v.note ? `<p class="cv-fine">${esc(v.note)}</p>` : ''}`;
     case 'purchase': return cvOrderHTML(c, v) + `<p class="cv-fine">Compare these details with the live merchant checkout before approving.</p>`;
     case 'submit': return `<div class="cv-callout">${icon(v.surface === 'computer' ? 'laptop' : 'globe',16)}<span>${esc(v.summary || 'Final step on the website')}</span></div><p class="cv-fine">This is the final click. It may not be reversible.</p>`;
     case 'credential': return `<div class="cv-callout">${icon('key',16)}<span>${esc(v.summary || 'Type a saved credential')}</span></div><p class="cv-fine">${esc(state.agent.name)} never sees the value. It is typed only while ${esc(v.host || v.window || 'that page')} is open.</p>`;
@@ -4806,7 +5266,7 @@ function cvApprovalBody(c, cd){
     case 'search': return v.query ? `<div class="cv-callout">${icon('websearch',16)}<span>“${esc(v.query)}”</span></div>` : `<div class="cv-chips">${cvChips(v.urls)}</div>`;
     case 'web_action': return `<div class="cv-callout">${icon(v.surface === 'computer' ? 'laptop' : 'globe',16)}<span>${esc(humanizeSlug(v.action || 'action'))}${v.text ? ` · ${esc(v.text)}` : ''}</span></div>`;
     case 'automation': return `<div class="cv-kvs">${cvRow('Name', esc(v.name))}${cvRow('When', esc(v.when))}</div>${v.prompt ? cvClamp(`<div class="cv-bubble">${esc(v.prompt)}</div>`, '', cvLong(v.prompt)) : ''}`;
-    case 'money': return `<div class="cv-kvs">${cvRow('Amount', esc(v.amount || ''))}${cvRow('To', esc(v.to || ''))}${cvRow('For', esc(v.title || ''))}</div><p class="cv-fine">${esc(v.action === 'send' ? (v.note || 'Payment partner fees may apply.') : v.action === 'link' ? 'Creates a link to share. Money arrives only after someone pays it. Partner fees may apply.' : v.action === 'resume' ? 'Your card can be used again. Every purchase still needs your approval.' : 'Every purchase still needs your approval.')}</p>`;
+    case 'money': return `<div class="cv-kvs">${cvRow('Amount', esc(v.amount || ''))}${cvRow('To', esc(v.to || ''))}${cvRow('For', esc(v.title || ''))}</div><p class="cv-fine">${esc(v.action === 'send' || v.action === 'bank_withdraw' || v.action?.startsWith('earn_') ? (v.note || 'Network and provider fees may apply.')+' Approval creates a request. Review and authorize it in Wallet before money moves.' : v.action === 'resume' ? 'Sends, bank withdrawals and Earn transfers can be prepared again. You approve every transfer.' : v.action === 'pause' ? 'Stops new sends, bank withdrawals and Earn transfers. Transfers already underway continue.' : 'Every transfer still needs your authorization.')}</p>`;
     default: return `<pre class="cv-pre">${esc(cd.detail || '')}</pre>`;
   }
 }
@@ -4846,11 +5306,9 @@ function questionCardHTML(c, m){
   const own = answered && cd.choice && !opts.some(o => o.label === cd.choice) && !(cd.selectedAnswers?.length ? cd.selectedAnswers : String(cd.choice).split(', ')).every(x => opts.some(o => o.label === x));
   const image = safeImg(cd.image);
   return `<div class="acard cv-card cv-question">
-    ${cvHead(cvTile('spark'), 'Question', `${esc(state.agent.name)} is asking`, answered ? `<span class="chip green">answered</span>` : skipped ? STCHIP.skipped : '')}
+    ${cvHead('', esc(cd.q || 'Question'), cd.context ? esc(cd.context) : '', answered ? `<span class="chip green">answered</span>` : skipped ? STCHIP.skipped : '')}
     <div class="bd">
-      ${cd.context ? `<p class="cv-context">${esc(cd.context)}</p>` : ''}
       ${image ? `<div class="cv-hero"><img src="${esc(image)}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>` : ''}
-      <b class="cv-q">${esc(cd.q || '')}</b>
       ${opts.length ? `<div class="${grid ? 'cv-picks' : 'qopts cv-opts'}">${optHTML}</div>` : ''}
       ${own ? `<div class="cv-own">${icon('chatb',13)} ${esc(cd.choice)}</div>` : ''}
       ${live && cd.allowOther ? `<form class="cv-other" data-q-other ${attrs}><input name="answer" aria-label="Type your own answer" placeholder="${opts.length ? 'Or type your own answer' : 'Type your answer'}" maxlength="500" autocomplete="off"><button class="btn small" type="submit">${icon('up',14)}</button></form>` : ''}
@@ -4883,16 +5341,37 @@ function connectCardHTML(c, m){
   </div>`;
 }
 
+// Shares of one whole as a ring, with each part's share in the legend.
+const DONUT_COLORS = ['var(--ag-dark)', 'var(--purple)', 'var(--green)', '#C2410C', '#0E7490', '#A16207', '#64748B', '#BE185D'];
+function cvDonutSVG(chart){
+  const values = (chart.series?.[0]?.values || []).map(v => Math.max(0, Number(v) || 0));
+  const total = values.reduce((a, b) => a + b, 0);
+  if (!total) return '';
+  const r = 38, C = 2 * Math.PI * r;
+  let at = 0;
+  const arcs = values.map((v, i) => {
+    const len = v / total * C, arc = `<circle cx="50" cy="50" r="${r}" fill="none" stroke="${DONUT_COLORS[i % DONUT_COLORS.length]}" stroke-width="16" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-at).toFixed(2)}"><title>${esc(chart.labels?.[i] || '')}: ${v}</title></circle>`;
+    at += len; return arc;
+  }).join('');
+  const pct = v => `${Math.round(v / total * 100)}%`;
+  return `<div class="cv-chart cv-donut"><svg viewBox="0 0 100 100" role="img" aria-label="Chart" style="transform:rotate(-90deg)">${arcs}</svg><ul class="cv-donut-legend">${values.map((v, i) => `<li><i style="background:${DONUT_COLORS[i % DONUT_COLORS.length]}"></i><span>${esc(chart.labels?.[i] || `Part ${i + 1}`)}</span><b>${pct(v)}</b></li>`).join('')}</ul></div>`;
+}
 function cvChartSVG(chart){
+  if (chart.type === 'donut') return cvDonutSVG(chart);
   const series = (chart.series || []).filter(s => (s.values || []).length);
   if (!series.length) return '';
   const W = 320, H = 132, pad = 8, base = H - 18;
   const n = Math.max(...series.map(s => s.values.length));
   const max = Math.max(1, ...series.flatMap(s => s.values));
   const min = Math.min(0, ...series.flatMap(s => s.values));
-  const y = v => base - ((v - min) / (max - min || 1)) * (base - pad);
-  const colors = ['var(--ink)', 'var(--purple)', 'var(--green)'];
+  // One series of a few bars carries its values on top, so nothing needs a hover to read; the
+  // tallest bar leaves room for its label.
+  const labelled = chart.type !== 'line' && series.length === 1 && n <= 8;
+  const roof = labelled ? 18 : pad;
+  const y = v => base - ((v - min) / (max - min || 1)) * (base - roof);
+  const colors = ['var(--ag)', 'var(--purple)', 'var(--green)'];
   const step = (W - pad * 2) / n;
+  const fmtValue = v => Math.abs(v) >= 1e6 ? `${+(v / 1e6).toFixed(1)}M` : Math.abs(v) >= 1e4 ? `${+(v / 1e3).toFixed(1)}k` : String(+v.toFixed(2));
   let marks = '';
   if (chart.type === 'line') {
     series.forEach((s, si) => {
@@ -4901,10 +5380,12 @@ function cvChartSVG(chart){
       s.values.forEach((v, i) => { marks += `<circle cx="${(pad + step * i + step / 2).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="${colors[si]}"><title>${esc(s.name || '')} ${esc(chart.labels?.[i] || '')}: ${v}</title></circle>`; });
     });
   } else {
-    const bw = Math.max(3, (step - 4) / series.length);
+    // Bars stay slim however few there are, centred over their label.
+    const group = Math.min(step - 6, 34 * series.length), bw = Math.max(3, group / series.length);
     series.forEach((s, si) => s.values.forEach((v, i) => {
-      const x = pad + step * i + 2 + bw * si, top = Math.min(y(v), y(0)), h = Math.max(1.5, Math.abs(y(0) - y(v)));
-      marks += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${(bw - 1.5).toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="${colors[si]}" opacity="${si ? .85 : 1}"><title>${esc(s.name || '')} ${esc(chart.labels?.[i] || '')}: ${v}</title></rect>`;
+      const x = pad + step * i + (step - group) / 2 + bw * si, top = Math.min(y(v), y(0)), h = Math.max(1.5, Math.abs(y(0) - y(v)));
+      marks += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${(bw - 1.5).toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(6, (bw - 1.5) / 3).toFixed(1)}" fill="${colors[si]}" opacity="${si ? .7 : .9}"><title>${esc(s.name || '')} ${esc(chart.labels?.[i] || '')}: ${v}</title></rect>`;
+      if (labelled) marks += `<text class="cv-bar-val" x="${(x + (bw - 1.5) / 2).toFixed(1)}" y="${Math.max(9, top - 4).toFixed(1)}" text-anchor="middle">${esc(fmtValue(v))}</text>`;
     }));
   }
   const every = Math.ceil(n / 6);
@@ -4914,29 +5395,402 @@ function cvChartSVG(chart){
 }
 function presentCardHTML(c, m){
   const cd = m.card;
+  const attrs = `data-chat="${c.id}" data-msg="${m.id}"`;
+  const { body, actions, carousel } = cd.kind === 'plan' ? planParts(c, m, cd, attrs) : presentParts(c, m, cd, attrs);
+  const facts = cd.kind === 'recipe' ? [cd.time, ...(cd.facts || [])].filter(Boolean).slice(0, 4) : cd.facts || [];
+  const hero = safeImg(cd.image);
+  // The heading is the card's title and what it is about; a kind icon or an item count added nothing.
+  return `<div class="acard cv-card cv-present is-${esc(cd.kind || 'list')}${carousel ? ' is-carousel' : ''}">
+    ${hero ? `<div class="cv-cover"><img src="${esc(hero)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')"></div>` : ''}
+    ${cvHead('', esc(cd.title || 'Overview'), cd.subtitle ? esc(cd.subtitle) : cd.kind === 'forecast' && cd.place ? esc(cd.place) : '', '')}
+    ${facts.length ? `<div class="cv-facts">${facts.map(f => `<span class="cv-fact">${esc(f)}</span>`).join('')}</div>` : ''}
+    <div class="bd">${body}${cd.note ? `<p class="cv-note">${esc(cd.note)}</p>` : ''}${refineHTML(cd, attrs)}</div>
+    ${actions ? `<div class="cv-actions">${actions}</div>` : ''}
+  </div>`;
+}
+// A plan answers with its parts in order, as ChatGPT's answers do: photos of the whole on top,
+// then each part under a numbered heading, drawn as its own kind of card with its own buttons.
+function planParts(c, m, cd, attrs){
+  const sections = cd.sections || [];
+  const shots = sections.flatMap(s => s.items || []).map(it => ({ src:safeImg(it.image) })).filter(s => s.src);
+  const body = `${shots.length >= 2 ? collageHTML(shots) : ''}${sections.map((s, k) => {
+    const part = presentParts(c, m, { ...s, type:'present', inPlan:true, progress:cd.progress?.sections?.[k] }, `${attrs} data-s="${k}"`);
+    return `<section class="cv-sec"><h4 class="cv-sec-hd"><span>${k + 1}</span>${esc(s.title || '')}</h4>${part.body}${s.note ? `<p class="cv-note">${esc(s.note)}</p>` : ''}${part.actions ? `<div class="cv-sec-actions">${part.actions}</div>` : ''}</section>`;
+  }).join('')}`;
+  return { body, actions:'', carousel:false };
+}
+// The body and buttons of one kind of shown card.
+function presentParts(c, m, cd, attrs){
   const items = cd.items || [];
-  const kindIcon = { products:'card', inbox:'mail', gallery:'image', dashboard:'chart', table:'grid', steps:'checksq', list:'list' }[cd.kind] || 'list';
-  let body = '';
+  // A row whose first cell says it is the total (a budget) stands out. Two columns read as
+  // labels and their values (an estimate, a budget), the values lined up on the right.
+  const table = (columns, rows) => `<div class="cv-table-wrap"><table class="cv-table${(rows || []).length && (rows || []).every(r => r.length === 2) && (columns || []).length <= 2 ? ' is-kv' : ''}">${(columns || []).length ? `<thead><tr>${columns.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>` : ''}<tbody>${(rows || []).map(r => `<tr${/^(?:total|totalt|summa|sum|in total|grand total|estimated total|est\.? total|(?:uppskattad|beräknad) total\w*)\b/i.test(String(r[0] || '').trim()) ? ' class="is-total"' : ''}>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  let body = '', actions = '';
+  // Three or more items that all have photos (products, news, sights) browse as a row of image cards.
+  // In a plan, a list stays rows under its labels (Starter, Main course) below the plan's photos.
+  const carousel = ['products', 'list'].includes(cd.kind) && items.length >= 3 && items.every(it => safeImg(it.image)) && !cd.inPlan;
   if (cd.kind === 'dashboard') {
     body = `${(cd.metrics || []).length ? `<div class="cv-metrics">${cd.metrics.map(x => `<div class="cv-metric"><small>${esc(x.label)}</small><b>${esc(x.value)}</b>${x.delta ? `<span class="cv-delta ${esc(x.trend || '')}">${x.trend === 'up' ? '▲ ' : x.trend === 'down' ? '▼ ' : ''}${esc(x.delta)}</span>` : ''}</div>`).join('')}</div>` : ''}${cd.chart ? cvChartSVG(cd.chart) : ''}`;
   } else if (cd.kind === 'table') {
-    body = `<div class="cv-table-wrap"><table class="cv-table">${(cd.columns || []).length ? `<thead><tr>${cd.columns.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>` : ''}<tbody>${(cd.rows || []).map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    body = table(cd.columns, cd.rows);
   } else if (cd.kind === 'gallery') {
-    body = `<div class="cv-gallery">${items.map(it => { const img = safeImg(it.image), link = safeLink(it.url); const inner = `${img ? `<img src="${esc(img)}" alt="${esc(it.title)}" loading="lazy" referrerpolicy="no-referrer">` : `<span class="cv-pick-empty">${icon('image',22)}</span>`}<figcaption>${esc(it.title)}</figcaption>`; return link ? `<a class="cv-fig" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${inner}</a>` : `<figure class="cv-fig">${inner}</figure>`; }).join('')}</div>`;
+    body = `<div class="cv-gallery">${items.map(it => { const img = safeImg(it.image), link = presentLink(it); const inner = `${img ? `<img src="${esc(img)}" alt="${esc(it.title)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')">` : `<span class="cv-pick-empty">${icon('image',22)}</span>`}<figcaption>${esc(it.title)}</figcaption>`; return link ? `<a class="cv-fig" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${inner}</a>` : `<figure class="cv-fig">${inner}</figure>`; }).join('')}</div>`;
   } else if (cd.kind === 'steps') {
     body = `<ol class="cv-steps">${items.map((it, i) => `<li class="${it.done ? 'done' : ''}"><span class="cv-step-dot">${it.done ? icon('check',12) : i + 1}</span><div><b>${esc(it.title)}</b>${it.subtitle ? `<small>${esc(it.subtitle)}</small>` : ''}</div></li>`).join('')}</ol>`;
+  } else if (cd.kind === 'checklist') {
+    body = checklistHTML(cd, attrs);
+    actions = `<button class="btn ghost" data-act="pc-copy" ${attrs}>${icon('copy',14)} Copy list</button><button class="btn ghost" data-act="pc-reset" ${attrs}>Clear ticks</button>`;
+  } else if (cd.kind === 'timeline') {
+    // A schedule in order: the time or day on the left, a line through the steps, days as headings.
+    // A longer plan over several days shows one day at a time when the owner picks it.
+    const days = [...new Set(items.map(it => it.group).filter(Boolean))];
+    const day = days.length >= 2 && items.length >= 6 && days.includes(cd.progress?.day) ? cd.progress.day : '';
+    let group = '';
+    const chips = days.length >= 2 && items.length >= 6 ? `<div class="cv-days" role="group" aria-label="Show a day">${['', ...days].map(g => `<button type="button" class="cv-day${g === day ? ' on' : ''}" data-act="pc-day" data-g="${esc(g)}" ${attrs} aria-pressed="${g === day}">${g ? esc(g) : 'All'}</button>`).join('')}</div>` : '';
+    body = `${chips}<div class="cv-timeline">${items.filter(it => !day || it.group === day).map(it => {
+      const head = it.group && it.group !== group ? `<div class="cv-tl-group">${esc(it.group)}</div>` : '';
+      if (it.group) group = it.group;
+      const link = presentLink(it), img = safeImg(it.image);
+      return `${head}<div class="cv-tl-item${img ? ' has-img' : ''}"><span class="cv-tl-when">${esc(it.when || '')}</span><span class="cv-tl-dot" aria-hidden="true"></span><div class="cv-tl-main"><b>${link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>` : esc(it.title)}</b>${it.subtitle ? `<small>${esc(it.subtitle)}</small>` : ''}${it.meta ? `<small class="cv-meta">${esc(it.meta)}</small>` : ''}${it.price ? `<span class="cv-item-price">${esc(it.price)}</span>` : ''}</div>${img ? `<span class="cv-tl-img"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')"></span>` : ''}</div>`;
+    }).join('')}</div>`;
+  } else if (cd.kind === 'compare' && items.length) {
+    body = compareHTML(cd, items.slice(0, 4));
+  } else if (cd.kind === 'compare') {
+    body = table(cd.columns, cd.rows);
+  } else if (cd.kind === 'calculator') {
+    const vals = calcValues(cd);
+    body = `<div class="cv-calc" data-chat="${c.id}" data-msg="${m.id}"><div class="cv-calc-in">${(cd.inputs || []).map(inp => calcInputHTML(inp, vals[inp.name])).join('')}</div><div class="cv-calc-out" data-calc-out aria-live="polite">${calcOutputsHTML(cd, vals)}</div></div>`;
+  } else if (cd.kind === 'places') {
+    body = placesHTML(items);
+    if (items.length >= 2) actions = `<a class="btn" href="${esc(mapsRouteUrl(items))}" target="_blank" rel="noopener noreferrer">${icon('map',14)} Open route in Maps</a>`;
+  } else if (cd.kind === 'recipe') {
+    body = recipeHTML(cd, attrs);
+  } else if (cd.kind === 'forecast') {
+    body = forecastHTML(cd);
+  } else if (cd.kind === 'draft') {
+    body = draftHTML(cd, attrs);
+    actions = `<button class="btn ghost" data-act="pc-copy" ${attrs}>${icon('copy',14)} Copy</button>${cd.to || cd.subject ? `<button class="btn" data-act="pc-mail" ${attrs}>${icon('mail',14)} Open in Mail</button>` : ''}`;
+  } else if (carousel) {
+    body = `<div class="cv-carousel">${items.map(it => {
+      const link = presentLink(it), tag = link ? 'a' : 'div';
+      return `<${tag} class="cv-tile-card"${link ? ` href="${esc(link)}" target="_blank" rel="noopener noreferrer"` : ''}><span class="cv-tile-img${cd.kind === 'products' ? ' is-product' : ''}"><img src="${esc(safeImg(it.image))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')"></span><span class="cv-tile-body"><b>${esc(it.title)}</b>${it.price ? `<span class="cv-item-price">${esc(it.price)}</span>` : ''}${it.subtitle || it.rating ? `<small>${[ratingHTML(it.rating), esc(it.subtitle || '')].filter(Boolean).join(' · ')}</small>` : ''}${it.meta ? `<small class="cv-meta">${esc(it.meta)}</small>` : ''}</span></${tag}>`;
+    }).join('')}</div>`;
   } else {
     body = `<div class="cv-list">${items.map(it => {
-      const img = safeImg(it.image), link = safeLink(it.url);
+      const img = safeImg(it.image), link = presentLink(it);
       const tag = link ? 'a' : 'div';
-      const thumb = img ? `<span class="cv-thumb"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : cd.kind === 'inbox' ? `<span class="cv-thumb">${icon('mail',16)}</span>` : cd.kind === 'products' ? `<span class="cv-thumb">${icon('card',16)}</span>` : '';
-      return `<${tag} class="cv-item${img ? ' has-img' : ''}"${link ? ` href="${esc(link)}" target="_blank" rel="noopener noreferrer"` : ''}>${thumb}<span class="cv-item-main"><b>${esc(it.title)}</b>${it.subtitle ? `<small>${esc(it.subtitle)}</small>` : ''}${it.price ? `<span class="cv-item-price">${esc(it.price)}</span>` : ''}${it.meta ? `<small class="cv-meta">${esc(it.meta)}</small>` : ''}</span>${it.badge ? `<span class="chip green">${esc(it.badge)}</span>` : ''}${link ? `<span class="cv-go">${icon('chev',14)}</span>` : ''}</${tag}>`;
+      const thumb = img ? `<span class="cv-thumb"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')"></span>` : cd.kind === 'inbox' ? `<span class="cv-thumb">${icon('mail',16)}</span>` : cd.kind === 'products' ? `<span class="cv-thumb">${icon('card',16)}</span>` : '';
+      // An item's section ("Starter", "Main course") reads as a small label above its name.
+      return `<${tag} class="cv-item${img ? ' has-img' : ''}"${link ? ` href="${esc(link)}" target="_blank" rel="noopener noreferrer"` : ''}>${thumb}<span class="cv-item-main">${it.group && cd.kind === 'list' ? `<span class="cv-over">${esc(it.group)}</span>` : ''}<b>${esc(it.title)}</b>${it.subtitle || it.rating ? `<small>${[ratingHTML(it.rating), esc(it.subtitle || '')].filter(Boolean).join(' · ')}</small>` : ''}${it.price ? `<span class="cv-item-price">${esc(it.price)}</span>` : ''}${it.meta ? `<small class="cv-meta">${esc(it.meta)}</small>` : ''}</span>${it.badge ? `<span class="chip green">${esc(it.badge)}</span>` : ''}${link ? `<span class="cv-go">${icon('chev',14)}</span>` : ''}</${tag}>`;
     }).join('') || '<p class="mut">Nothing to show.</p>'}</div>`;
   }
-  return `<div class="acard cv-card cv-present is-${esc(cd.kind || 'list')}">
-    ${cvHead(cvTile(kindIcon), esc(cd.title || 'Overview'), cd.subtitle ? esc(cd.subtitle) : items.length ? `${items.length} ${items.length === 1 ? 'item' : 'items'}` : '', '')}
-    <div class="bd">${body}</div>
-  </div>`;
+  return { body, actions, carousel };
+}
+
+/* ---------- places, recipes, forecasts and drafts ---------- */
+// An item opens its own page, else the article its photo came from.
+const presentLink = it => safeLink(it.url) || safeLink(it.imageLink);
+const ratingHTML = r => Number(r) > 0 ? `<span class="cv-rating">${icon('star',11)} ${esc(String(r))}</span>` : '';
+// Places open in Maps by name and address: Apple Maps on Apple devices, Google Maps elsewhere.
+// A route of several stops opens in Google Maps, which takes the stops in between.
+const placeQuery = it => [it.title, it.address].filter(Boolean).join(', ');
+const appleDevice = () => typeof navigator !== 'undefined' && /iPhone|iPad|Macintosh/.test(navigator.userAgent || '');
+function mapsPlaceUrl(it){
+  const q = encodeURIComponent(placeQuery(it));
+  return appleDevice() ? `https://maps.apple.com/?q=${q}` : `https://www.google.com/maps/search/?api=1&query=${q}`;
+}
+function mapsRouteUrl(items){
+  const stops = items.slice(0, 10).map(it => encodeURIComponent(placeQuery(it)));
+  const between = stops.slice(1, -1);
+  return `https://www.google.com/maps/dir/?api=1&origin=${stops[0]}&destination=${stops[stops.length - 1]}${between.length ? `&waypoints=${between.join('%7C')}` : ''}`;
+}
+// Photos at the top of a card: one large and up to two beside it, each marked with its stop's
+// number, and how many more there are.
+function collageHTML(shots){
+  const shown = shots.slice(0, 3), more = shots.length - shown.length;
+  return `<div class="cv-collage n${shown.length}">${shown.map((s, k) => `<span>${s.n ? `<em class="cv-collage-n">${s.n}</em>` : ''}<img src="${esc(s.src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')">${k === shown.length - 1 && more > 0 ? `<b class="cv-collage-more">+${more}</b>` : ''}</span>`).join('')}</div>`;
+}
+function placesHTML(items){
+  const shots = items.map((it, i) => ({ src:safeImg(it.image), n:i + 1 })).filter(s => s.src);
+  // With two or more photos they sit together on top, numbered; the stops below then need none.
+  const collage = shots.length >= 2 ? collageHTML(shots) : '';
+  return `${collage}<ol class="cv-places">${items.map((it, i) => {
+    const link = presentLink(it), img = collage ? '' : safeImg(it.image);
+    const line = [ratingHTML(it.rating), esc(it.subtitle || ''), it.price ? esc(it.price) : ''].filter(Boolean).join(' · ');
+    return `<li class="cv-place"><span class="cv-place-n">${i + 1}</span>${img ? `<span class="cv-place-img"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')"></span>` : ''}<div class="cv-place-main"><b>${link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>` : esc(it.title)}</b>${line ? `<small>${line}</small>` : ''}${it.address ? `<small class="cv-meta">${esc(it.address)}</small>` : ''}${it.meta ? `<small class="cv-meta">${esc(it.meta)}</small>` : ''}</div><a class="cv-place-map" href="${esc(mapsPlaceUrl(it))}" target="_blank" rel="noopener noreferrer" aria-label="Open ${esc(it.title)} in Maps" title="Open in Maps">${icon('pin',15)}</a></li>`;
+  }).join('')}</ol>`;
+}
+// Amounts read like a cook writes them: ½ and ¾ for small ones, whole numbers for large ones.
+function recipeAmount(x){
+  if (!Number.isFinite(x) || x <= 0) return '';
+  if (x >= 100) return String(Math.round(x / 5) * 5);
+  if (x >= 10) return String(Math.round(x));
+  const whole = Math.floor(x), frac = x - whole;
+  const near = [[0, ''], [0.25, '¼'], [1 / 3, '⅓'], [0.5, '½'], [2 / 3, '⅔'], [0.75, '¾'], [1, '']].find(([v]) => Math.abs(frac - v) < 0.04);
+  if (near) { const w = near[0] === 1 ? whole + 1 : whole; return near[1] ? `${w || ''}${near[1]}` : String(w); }
+  return String(Math.round(x * 10) / 10);
+}
+function recipeProgress(cd){
+  const p = cd.progress && typeof cd.progress === 'object' ? cd.progress : {};
+  const servings = Math.min(99, Math.max(1, Math.round(Number(p.servings) || cd.servings || 1)));
+  return { servings, have:Array.isArray(p.have) ? p.have : [], done:Array.isArray(p.done) ? p.done : [] };
+}
+function recipeHTML(cd, attrs){
+  const p = recipeProgress(cd), factor = cd.servings ? p.servings / cd.servings : 1;
+  const serv = cd.servings ? `<div class="cv-serv"><span>Servings</span><button type="button" data-act="pc-serv" data-d="-1" ${attrs} aria-label="Fewer servings"${p.servings <= 1 ? ' disabled' : ''}>−</button><b aria-live="polite">${p.servings}</b><button type="button" data-act="pc-serv" data-d="1" ${attrs} aria-label="More servings">+</button></div>` : '';
+  const ings = (cd.ingredients || []).map((g, i) => `<li class="${p.have[i] ? 'done' : ''}"><button type="button" class="cv-check" data-act="pc-have" data-i="${i}" ${attrs} aria-pressed="${!!p.have[i]}" aria-label="Have ${esc(g.item)}">${p.have[i] ? icon('check',12) : ''}</button><span>${g.amount ? `<b>${recipeAmount(g.amount * factor)}${g.unit ? ` ${esc(g.unit)}` : ''}</b> ` : ''}${esc(g.item)}${g.note ? `<small>, ${esc(g.note)}</small>` : ''}</span></li>`).join('');
+  const steps = (cd.steps || []).map((s, i) => `<li class="${p.done[i] ? 'done' : ''}"><button type="button" class="cv-step-dot" data-act="pc-step" data-i="${i}" ${attrs} aria-pressed="${!!p.done[i]}" aria-label="Step ${i + 1} done">${p.done[i] ? icon('check',12) : i + 1}</button><span>${esc(s)}</span></li>`).join('');
+  return `${serv}${ings ? `<div class="cv-sub">Ingredients</div><ul class="cv-ings">${ings}</ul>` : ''}${steps ? `<div class="cv-sub">Steps</div><ol class="cv-rsteps">${steps}</ol>` : ''}`;
+}
+// Weather glyphs drawn here, in the forecast's own soft colours.
+const SKY = {
+  sun:'<circle cx="12" cy="12" r="4.5" fill="#F4B41A" stroke="none"/><g stroke="#F4B41A">' + [0, 45, 90, 135, 180, 225, 270, 315].map(a => `<line x1="${(12 + Math.cos(a * Math.PI / 180) * 7.2).toFixed(1)}" y1="${(12 + Math.sin(a * Math.PI / 180) * 7.2).toFixed(1)}" x2="${(12 + Math.cos(a * Math.PI / 180) * 9.6).toFixed(1)}" y2="${(12 + Math.sin(a * Math.PI / 180) * 9.6).toFixed(1)}"/>`).join('') + '</g>',
+  cloud:'<path d="M7 18h10a4 4 0 0 0 0-8 5.5 5.5 0 0 0-10.6 1.6A3.3 3.3 0 0 0 7 18z" fill="#C9CDD4" stroke="none"/>',
+  partly:'<circle cx="9" cy="9" r="3.6" fill="#F4B41A" stroke="none"/><path d="M8.5 19h9a3.5 3.5 0 0 0 0-7 4.8 4.8 0 0 0-9.2 1.4A2.9 2.9 0 0 0 8.5 19z" fill="#C9CDD4" stroke="#fff" stroke-width="1"/>',
+  rain:'<path d="M7 14h10a3.6 3.6 0 0 0 0-7.2 5 5 0 0 0-9.6 1.4A2.9 2.9 0 0 0 7 14z" fill="#AEB4BE" stroke="none"/><g stroke="#4A90D9">' + '<line x1="8.5" y1="16.5" x2="7.5" y2="19.5"/><line x1="12.5" y1="16.5" x2="11.5" y2="19.5"/><line x1="16.5" y1="16.5" x2="15.5" y2="19.5"/></g>',
+  showers:'<circle cx="8.5" cy="7.5" r="3" fill="#F4B41A" stroke="none"/><path d="M8 14h9a3.3 3.3 0 0 0 0-6.6 4.6 4.6 0 0 0-8.8 1.3A2.7 2.7 0 0 0 8 14z" fill="#AEB4BE" stroke="none"/><g stroke="#4A90D9"><line x1="10" y1="16.5" x2="9" y2="19.5"/><line x1="14" y1="16.5" x2="13" y2="19.5"/></g>',
+  snow:'<path d="M7 14h10a3.6 3.6 0 0 0 0-7.2 5 5 0 0 0-9.6 1.4A2.9 2.9 0 0 0 7 14z" fill="#C9CDD4" stroke="none"/><g fill="#7FB3E6" stroke="none"><circle cx="8.5" cy="18" r="1.2"/><circle cx="12.5" cy="19" r="1.2"/><circle cx="16.5" cy="18" r="1.2"/></g>',
+  storm:'<path d="M7 13h10a3.6 3.6 0 0 0 0-7.2 5 5 0 0 0-9.6 1.4A2.9 2.9 0 0 0 7 13z" fill="#8E95A1" stroke="none"/><path d="M12.5 14l-2.5 4h3l-1.5 4" stroke="#F4B41A" stroke-width="1.8"/>',
+  fog:'<g stroke="#AEB4BE"><line x1="4" y1="9" x2="20" y2="9"/><line x1="6" y1="13" x2="18" y2="13"/><line x1="4" y1="17" x2="20" y2="17"/></g>',
+  wind:'<g stroke="#8E95A1"><path d="M3 9h11a3 3 0 1 0-3-3"/><path d="M3 14h15a3 3 0 1 1-3 3"/></g>',
+};
+const skyIcon = (sky, s = 30) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">${SKY[sky] || SKY.cloud}</svg>`;
+function forecastHTML(cd){
+  const deg = v => (v == null ? '' : `${v}°`);
+  return `<div class="cv-wx">${(cd.days || []).map((d, i) => `<div class="cv-wx-day${i === 0 ? ' is-first' : ''}" aria-label="${esc(d.when)}: ${esc(d.sky)}, high ${deg(d.high)}, low ${deg(d.low)}"><small>${esc(d.when)}</small>${skyIcon(d.sky, i === 0 ? 38 : 30)}<b>${deg(d.high)}</b>${d.low != null ? `<span class="cv-wx-low">${deg(d.low)}</span>` : ''}${d.rain ? `<span class="cv-wx-rain">${esc(d.rain)}</span>` : ''}</div>`).join('')}</div>${(cd.days || []).some(d => d.note) ? `<p class="cv-wx-note">${esc(cd.days.find(d => d.note).note)}</p>` : ''}`;
+}
+// A draft the owner edits in place; Copy and Open in Mail take the edited text.
+const draftText = cd => String(cd.progress?.body ?? cd.body ?? '');
+function draftHTML(cd, attrs){
+  return `${cd.to ? cvRow('To', esc(cd.to)) : ''}${cd.subject ? cvRow('Subject', esc(cd.subject)) : ''}<div class="cv-draft-body" contenteditable="plaintext-only" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Draft text" data-draft-body ${attrs}>${esc(draftText(cd))}</div>`;
+}
+/* ---------- checklists and Help me choose ----------
+   A checklist is ticked off in place, in its sections, with how many are done; Copy takes
+   the list as text. Help me choose asks what would change the agent's pick: the owner picks
+   an answer to each question and sends them together as their next message. */
+function checklistDone(cd){
+  const saved = Array.isArray(cd.progress?.done) ? cd.progress.done : null;
+  return (cd.items || []).map((it, i) => saved ? saved[i] === true : it.done === true);
+}
+function checklistHTML(cd, attrs){
+  const items = cd.items || [], done = checklistDone(cd), n = done.filter(Boolean).length;
+  const groups = [];
+  items.forEach((it, i) => { const g = it.group || ''; if (!groups.length || groups[groups.length - 1].g !== g) groups.push({ g, rows:[] }); groups[groups.length - 1].rows.push(i); });
+  const pct = items.length ? Math.round(n / items.length * 100) : 0;
+  return `<div class="cv-cl-head"><span aria-live="polite">${n === items.length && n ? 'All done' : `${n} of ${items.length} checked`}</span><div class="cv-cl-meter" role="progressbar" aria-valuemin="0" aria-valuemax="${items.length}" aria-valuenow="${n}"><i style="width:${pct}%"></i></div></div>
+    ${groups.map(({ g, rows }) => `${g ? `<div class="cv-cl-group">${esc(g)}</div>` : ''}<ul class="cv-cl">${rows.map(i => `<li><button type="button" class="cv-cl-row${done[i] ? ' done' : ''}" data-act="pc-tick" data-i="${i}" ${attrs} aria-pressed="${done[i]}"><span class="cv-cl-box">${done[i] ? icon('check',12) : ''}</span><span class="cv-cl-text">${esc(items[i].title)}${items[i].subtitle ? `<small>${esc(items[i].subtitle)}</small>` : ''}</span></button></li>`).join('')}</ul>`).join('')}`;
+}
+function checklistText(cd){
+  const done = checklistDone(cd);
+  let group = null;
+  const lines = [cd.title || 'Checklist'];
+  (cd.items || []).forEach((it, i) => {
+    if ((it.group || '') !== group) { group = it.group || ''; if (group) lines.push('', group); }
+    lines.push(`${done[i] ? '☑' : '☐'} ${it.title}${it.subtitle ? ` (${it.subtitle})` : ''}`);
+  });
+  return lines.join('\n');
+}
+function refineHTML(cd, attrs){
+  const qs = Array.isArray(cd.refine) ? cd.refine : [];
+  if (!qs.length || cd.streaming) return '';
+  const p = cd.progress?.refine || {}, picks = Array.isArray(p.picks) ? p.picks : [], sent = p.sent === true;
+  const ready = qs.some((_, k) => Number.isInteger(picks[k]));
+  return `<div class="cv-refine${sent ? ' is-sent' : ''}"><div class="cv-refine-title">${icon('spark',14)} Help me choose</div>
+    ${qs.map((q, k) => `<div class="cv-refine-q" role="group" aria-label="${esc(q.q)}"><p>${esc(q.q)}</p><div class="cv-refine-opts">${q.options.map((o, j) => `<button type="button" class="cv-refine-opt${picks[k] === j ? ' on' : ''}" data-act="pc-pick" data-q="${k}" data-o="${j}" ${attrs} aria-pressed="${picks[k] === j}"${sent ? ' disabled' : ''}>${esc(o)}</button>`).join('')}</div></div>`).join('')}
+    <button type="button" class="btn cv-refine-go" data-act="pc-choose" ${attrs}${sent || !ready ? ' disabled' : ''}>${sent ? `${icon('check',14)} Sent` : 'Help me choose'}</button></div>`;
+}
+// What a tap does to a shown card: true when the card changed and is drawn again. A plan's
+// section is changed through a copy of it, and its ticks and chosen day are kept with the plan.
+function presentAct(c, m, act, b){
+  const cd = m.card;
+  if (cd.streaming) return;
+  const k = cd.kind === 'plan' && b.dataset?.s != null && b.dataset.s !== '' ? Number(b.dataset.s) : NaN;
+  if (Number.isInteger(k)) {
+    const sec = (cd.sections || [])[k];
+    if (!sec) return;
+    const part = { ...sec, type:'present', progress:cd.progress?.sections?.[k] };
+    if (!presentChange(part, act, b, c)) return;
+    cd.progress = { ...(cd.progress || {}), sections:{ ...(cd.progress?.sections || {}), [k]:part.progress } };
+  } else if (!presentChange(cd, act, b, c)) return;
+  replaceNode(c, m); save();
+}
+function presentChange(cd, act, b, c){
+  if (act === 'pc-tick' && cd.kind === 'checklist') { const done = checklistDone(cd); done[Number(b.dataset.i)] = !done[Number(b.dataset.i)]; cd.progress = { ...(cd.progress || {}), done }; return true; }
+  if (act === 'pc-reset' && cd.kind === 'checklist') { cd.progress = { ...(cd.progress || {}), done:(cd.items || []).map(() => false) }; return true; }
+  if (act === 'pc-copy' && cd.kind === 'checklist') { navigator.clipboard?.writeText(checklistText(cd)).then(() => toast('Copied.'), () => toast('Could not copy.')); return false; }
+  if (act === 'pc-day' && cd.kind === 'timeline') { cd.progress = { ...(cd.progress || {}), day:String(b.dataset.g || '') }; return true; }
+  if (act === 'pc-pick' && Array.isArray(cd.refine)) {
+    const p = cd.progress?.refine || {};
+    if (p.sent) return false;
+    const picks = Array.isArray(p.picks) ? p.picks.slice() : [], q = Number(b.dataset.q), j = Number(b.dataset.o);
+    picks[q] = picks[q] === j ? null : j;
+    cd.progress = { ...(cd.progress || {}), refine:{ picks } };
+    return true;
+  }
+  if (act === 'pc-choose' && Array.isArray(cd.refine)) {
+    const p = cd.progress?.refine || {}, picks = Array.isArray(p.picks) ? p.picks : [];
+    const said = cd.refine.map((q, i) => Number.isInteger(picks[i]) && q.options[picks[i]] ? `${q.q} ${q.options[picks[i]]}.` : '').filter(Boolean);
+    if (p.sent || !said.length) return false;
+    cd.progress = { ...(cd.progress || {}), refine:{ picks, sent:true } };
+    // The card's title says what is being chosen, in the owner's own language.
+    sendPrompt(`${cd.title ? `${cd.title}: ` : ''}${said.join(' ')}`, undefined, { chat:c });
+    return true;
+  }
+  if (act === 'pc-serv' && cd.kind === 'recipe') { const p = recipeProgress(cd); cd.progress = { ...p, servings:Math.min(99, Math.max(1, p.servings + Number(b.dataset.d || 0))) }; return true; }
+  if ((act === 'pc-have' || act === 'pc-step') && cd.kind === 'recipe') { const p = recipeProgress(cd), key = act === 'pc-have' ? 'have' : 'done', list = p[key].slice(); list[Number(b.dataset.i)] = !list[Number(b.dataset.i)]; cd.progress = { ...p, [key]:list }; return true; }
+  if (act === 'pc-copy' && cd.kind === 'draft') { navigator.clipboard?.writeText(draftText(cd)).then(() => toast('Copied.'), () => toast('Could not copy. Select the text instead.')); return false; }
+  if (act === 'pc-mail' && cd.kind === 'draft') { location.href = `mailto:${encodeURIComponent(cd.to || '').replace(/%40/g, '@').replace(/%2C/gi, ',')}?subject=${encodeURIComponent(cd.subject || '')}&body=${encodeURIComponent(draftText(cd).slice(0, 1800))}`; return false; }
+  return false;
+}
+// The pages a looked-up answer used, as small links under it.
+function sourcesHTML(list){
+  const shown = (Array.isArray(list) ? list : []).filter(s => safeLink(s?.url) && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s.host || '')).slice(0, 4);
+  return shown.length ? `<div class="msg-sources">${shown.map(s => `<a class="src-chip" href="${esc(safeLink(s.url))}" target="_blank" rel="noopener noreferrer" title="${esc(s.title || s.host)}"><img src="https://${esc(s.host)}/favicon.ico" alt="" width="14" height="14" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()"><span>${esc(s.host)}</span></a>`).join('')}</div>` : '';
+}
+
+/* Two to four options side by side: each with its picture, price, strengths and weaknesses,
+   the recommended one marked, then the aspects that matter as rows. */
+function compareHTML(cd, opts){
+  const key = String(cd.pick || '').toLowerCase().trim();
+  const pick = key ? opts.findIndex(it => { const t = it.title.toLowerCase(); return t === key || t.includes(key) || key.includes(t); }) : -1;
+  const cols = opts.map((it, i) => {
+    const img = safeImg(it.image), link = presentLink(it);
+    const name = link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>` : esc(it.title);
+    return `<div class="cv-cmp-opt${i === pick ? ' is-pick' : ''}">${i === pick ? `<span class="cv-cmp-badge">${icon('check',11)} Pick</span>` : ''}
+      ${img ? `<span class="cv-cmp-img"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')"></span>` : ''}
+      <b class="cv-cmp-name">${name}</b>${it.price ? `<span class="cv-item-price">${esc(it.price)}</span>` : ''}${it.subtitle ? `<small>${esc(it.subtitle)}</small>` : ''}
+      ${(it.pros || []).length ? `<ul class="cv-pros">${it.pros.map(p => `<li>${icon('check',12)}<span>${esc(p)}</span></li>`).join('')}</ul>` : ''}
+      ${(it.cons || []).length ? `<ul class="cv-cons">${it.cons.map(p => `<li>${icon('x',12)}<span>${esc(p)}</span></li>`).join('')}</ul>` : ''}</div>`;
+  }).join('');
+  const rows = (cd.rows || []).filter(r => r.length > 1);
+  const table = rows.length ? `<div class="cv-table-wrap cv-cmp-rows"><table class="cv-table"><thead><tr><th></th>${opts.map((it, i) => `<th class="${i === pick ? 'is-pick' : ''}">${esc(it.title)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr><th scope="row">${esc(r[0])}</th>${opts.map((_, i) => `<td class="${i === pick ? 'is-pick' : ''}">${esc(r[i + 1] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '';
+  return `<div class="cv-cmp" style="--n:${opts.length}">${cols}</div>${table}`;
+}
+
+/* ---------- calculator cards ----------
+   Inputs the owner changes and outputs worked out from them as they type or slide, with the
+   formulas the agent wrote (cards.js checks them first). The same small grammar as the server:
+   numbers, named values, + - * / ^, parentheses and a few functions. Never eval. */
+const CALC_FUNCS = { sqrt:Math.sqrt, abs:Math.abs, ln:Math.log, log:Math.log10, exp:Math.exp, floor:Math.floor, ceil:Math.ceil, round:Math.round, sin:Math.sin, cos:Math.cos, tan:Math.tan };
+const CALC_MULTI = { min:Math.min, max:Math.max };
+const calcCompiled = new Map();
+function calcCompile(src, names){
+  const key = `${[...names].join(',')}:${src}`;
+  if (calcCompiled.has(key)) return calcCompiled.get(key);
+  const s = String(src ?? '').toLowerCase().replace(/[×·]/g, '*').replace(/÷/g, '/').replace(/[−–]/g, '-').replace(/\*\*/g, '^');
+  const known = new Set(names), toks = [];
+  let fn = null;
+  try {
+    for (let i = 0; i < s.length;) {
+      const ch = s[i];
+      if (/\s/.test(ch)) { i++; continue; }
+      const num = /^(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/.exec(s.slice(i, i + 40));
+      if (num) { toks.push({ t:'n', v:Number(num[0]) }); i += num[0].length; continue; }
+      const word = /^[a-z_][a-z0-9_]*/.exec(s.slice(i, i + 40));
+      if (word) { toks.push({ t:'id', v:word[0] }); i += word[0].length; continue; }
+      if ('+-*/^(),'.includes(ch)) { toks.push({ t:ch }); i++; continue; }
+      throw new Error('char');
+    }
+    let k = 0;
+    const peek = () => toks[k], take = t => (toks[k] && toks[k].t === t ? toks[k++] : null);
+    const expr = () => { let a = term(); for (;;) { if (take('+')) { const l = a, r = term(); a = v => l(v) + r(v); } else if (take('-')) { const l = a, r = term(); a = v => l(v) - r(v); } else return a; } };
+    const term = () => { let a = unary(); for (;;) {
+      if (take('*')) { const l = a, r = unary(); a = v => l(v) * r(v); }
+      else if (take('/')) { const l = a, r = unary(); a = v => l(v) / r(v); }
+      else if (peek() && ['n','id','('].includes(peek().t)) { const l = a, r = power(); a = v => l(v) * r(v); }
+      else return a; } };
+    const unary = () => { if (take('-')) { const a = unary(); return v => -a(v); } if (take('+')) return unary(); return power(); };
+    const power = () => { const base = atom(); if (take('^')) { const ex = unary(); return v => Math.pow(base(v), ex(v)); } return base; };
+    const atom = () => {
+      const tok = toks[k++];
+      if (!tok) throw new Error('end');
+      if (tok.t === 'n') return () => tok.v;
+      if (tok.t === '(') { const a = expr(); if (!take(')')) throw new Error(')'); return a; }
+      if (tok.t !== 'id') throw new Error('token');
+      const f = CALC_FUNCS[tok.v] || CALC_MULTI[tok.v];
+      if (f) { if (!take('(')) throw new Error('('); const args = [expr()]; while (CALC_MULTI[tok.v] && take(',')) args.push(expr()); if (!take(')')) throw new Error(')'); return v => f(...args.map(a => a(v))); }
+      if (tok.v === 'pi') return () => Math.PI;
+      if (tok.v === 'e') return () => Math.E;
+      if (!known.has(tok.v)) throw new Error('name');
+      const name = tok.v;
+      return v => Number(v[name]);
+    };
+    fn = expr();
+    if (k !== toks.length) fn = null;
+  } catch { fn = null; }
+  calcCompiled.set(key, fn);
+  return fn;
+}
+function calcValues(cd){
+  const saved = cd.progress?.values || {};
+  return Object.fromEntries((cd.inputs || []).map(inp => [inp.name, Number.isFinite(Number(saved[inp.name])) ? Number(saved[inp.name]) : Number(inp.value) || 0]));
+}
+function calcEvaluate(cd, vals){
+  const v = { ...vals }, names = new Set(Object.keys(v));
+  return (cd.outputs || []).map(out => {
+    const fn = calcCompile(out.formula, names);
+    let value = NaN;
+    try { value = fn ? fn(v) : NaN; } catch {}
+    if (out.name) { v[out.name] = value; names.add(out.name); }
+    return { out, value:Number.isFinite(value) ? value : null };
+  });
+}
+// Currency signs go before the number, other units after it.
+function calcFmt(value, unit, decimals){
+  if (value == null) return '—';
+  const places = Number.isInteger(decimals) ? decimals : Math.abs(value) >= 1000 || Number.isInteger(value) ? 0 : 2;
+  const n = new Intl.NumberFormat(undefined, { minimumFractionDigits:places, maximumFractionDigits:places }).format(value);
+  if (!unit) return esc(n);
+  return /^[$€£¥]$/.test(unit) ? `${esc(unit)}${esc(n)}` : `${esc(n)}<small>${unit === '%' ? '' : ' '}${esc(unit)}</small>`;
+}
+function calcInputHTML(inp, value){
+  const ranged = Number.isFinite(inp.min) && Number.isFinite(inp.max);
+  const bounds = `${Number.isFinite(inp.min) ? ` min="${inp.min}"` : ''}${Number.isFinite(inp.max) ? ` max="${inp.max}"` : ''}`;
+  // The slider moves in whole steps over a small whole-number range, else in hundredths of it.
+  // Steps come from card data, so only a positive number reaches the attribute.
+  const step = Number(inp.step) > 0 ? Number(inp.step) : 0;
+  const slide = step || (ranged && Number.isInteger(inp.min) && Number.isInteger(inp.max) && inp.max - inp.min <= 200 ? 1 : ranged ? (inp.max - inp.min) / 100 : 1);
+  return `<label class="cv-calc-field"><span class="cv-calc-label">${esc(inp.label)}</span>
+    <span class="cv-calc-num"><input type="number" inputmode="decimal" data-calc-input="${esc(inp.name)}" value="${value}"${bounds} step="${step || 'any'}" aria-label="${esc(inp.label)}">${inp.unit ? `<em>${esc(inp.unit)}</em>` : ''}</span>
+    ${ranged ? `<input type="range" class="cv-calc-range" data-calc-input="${esc(inp.name)}" value="${value}"${bounds} step="${slide}" aria-label="${esc(inp.label)}">` : ''}</label>`;
+}
+function calcOutputsHTML(cd, vals){
+  const results = calcEvaluate(cd, vals);
+  return results.map(({ out, value }, i) => `<div class="cv-calc-res${i === results.length - 1 ? ' is-main' : ''}"><small>${esc(out.label)}</small><b>${calcFmt(value, out.unit, out.decimals)}</b></div>`).join('') + calcGraphHTML(cd, vals);
+}
+function calcGraphHTML(cd, vals){
+  const g = cd.graph, input = g && (cd.inputs || []).find(inp => inp.name === g.x), out = g && (cd.outputs || [])[g.output];
+  if (!input || !out || !(g.to > g.from)) return '';
+  // Whole steps over a short whole-number range (years), else 20 even steps.
+  const whole = Number.isInteger(g.from) && Number.isInteger(g.to) && g.to - g.from <= 40;
+  const count = whole ? g.to - g.from : 20;
+  const xs = Array.from({ length:count + 1 }, (_, k) => g.from + (g.to - g.from) * k / count);
+  const values = xs.map(x => calcEvaluate(cd, { ...vals, [g.x]:x })[g.output]?.value);
+  if (values.filter(v => v != null).length < 2) return '';
+  const label = x => (whole ? String(x) : String(Math.round(x * 100) / 100));
+  return `<div class="cv-calc-graph"><small>${esc(out.label)} by ${esc(input.label.toLowerCase())}, ${label(g.from)}–${label(g.to)}</small>${cvChartSVG({ type:'line', labels:xs.map(label), series:[{ name:out.label, values:values.map(v => v ?? 0) }] })}</div>`;
+}
+// What the calculator shows now, for the agent ("so what is it per person?").
+function calcSummaryText(cd){
+  const vals = calcValues(cd);
+  const inputs = (cd.inputs || []).map(inp => `${inp.label} ${vals[inp.name]}${inp.unit ? ' ' + inp.unit : ''}`).join(', ');
+  const outputs = calcEvaluate(cd, vals).map(({ out, value }) => `${out.label} ${value == null ? '—' : Math.round(value * 100) / 100}${out.unit ? ' ' + out.unit : ''}`).join(', ');
+  return `${inputs} → ${outputs}`.slice(0, 500);
+}
+if (typeof window !== 'undefined') window.calcSummaryText = calcSummaryText;
+
+/* A card the agent is still writing: drawn from what has arrived, not yet clickable, with a
+   pulse where more is coming. Before its first item it shows the heading only. */
+function streamingCardHTML(c, m){
+  const cd = m.card;
+  const filled = cd.type === 'present'
+    ? (cd.items || []).length || (cd.rows || []).length || (cd.metrics || []).length || cd.chart || ((cd.inputs || []).length && (cd.outputs || []).length) || (cd.ingredients || []).length || (cd.days || []).length || cd.body || (cd.sections || []).length
+    : (cd.questions || cd.cards || cd.problems || cd.functions || cd.steps || cd.nodes || cd.pairs || cd.sequence || []).length;
+  let html = '';
+  if (filled) { try { html = cd.type === 'learn' ? learnCardHTML(c, m) : presentCardHTML(c, m); } catch { html = ''; } }
+  if (!html) html = `<div class="acard cv-card ${cd.type === 'learn' ? 'lc-card' : 'cv-present'}">${cvHead('', esc(cd.title || ''), '', '')}<div class="bd"><div class="cv-skel"><i></i><i></i><i></i></div></div></div>`;
+  const more = '<div class="cv-stream-more" aria-hidden="true"><span class="tdots"><i></i><i></i><i></i></span></div>';
+  return `<div class="cv-streaming" aria-busy="true">${html.replace(/<\/div>\s*$/, `${more}</div>`)}</div>`;
 }
 
 /* ---------- learning cards: quiz, flashcards, practice problems, graphs ----------
@@ -4953,11 +5807,16 @@ function learnMath(s){
 }
 function learnProgress(cd){
   const p = cd.progress && typeof cd.progress === 'object' ? cd.progress : {};
-  const n = cd.kind === 'quiz' ? (cd.questions || []).length : cd.kind === 'flashcards' ? (cd.cards || []).length : cd.kind === 'problem' ? (cd.problems || []).length : 0;
+  const n = cd.kind === 'quiz' ? (cd.questions || []).length : cd.kind === 'flashcards' ? (cd.cards || []).length : cd.kind === 'problem' ? (cd.problems || []).length : cd.kind === 'explain' ? (cd.steps || []).length : 0;
   const list = (v, fill) => Array.from({ length:n }, (_, i) => Array.isArray(v) && v[i] !== undefined ? v[i] : fill);
+  const pairs = (cd.pairs || []).length, seq = (cd.sequence || []).length;
+  const index = (v, size) => (Number.isInteger(v) && v >= 0 && v < size ? v : -1);
   return { i:Math.min(Math.max(0, Number(p.i) || 0), Math.max(0, n - 1)), done:!!p.done, flipped:!!p.flipped,
     picks:list(p.picks, null), known:list(p.known, null), hints:list(p.hints, 0), solved:list(p.solved, false), shown:list(p.shown, false),
-    tries:list(p.tries, 0), last:list(p.last, ''), value:Number.isFinite(Number(p.value)) ? Number(p.value) : cd.slider?.value };
+    tries:list(p.tries, 0), last:list(p.last, ''), value:Number.isFinite(Number(p.value)) ? Number(p.value) : cd.slider?.value,
+    sel:index(p.sel, Math.max(pairs, (cd.nodes || []).length)), wrong:index(p.wrong, Math.max(pairs, seq)), misses:Math.max(0, Number(p.misses) || 0),
+    matched:Array.from({ length:pairs }, (_, i) => Array.isArray(p.matched) && p.matched[i] === true),
+    placed:(Array.isArray(p.placed) ? p.placed : []).filter((k, j, all) => Number.isInteger(k) && k >= 0 && k < seq && all.indexOf(k) === j) };
 }
 // A typed answer matches when it reads the same as the answer (or an accepted form), or
 // names the same numbers: "4", "x = 4" and "x=4.0" all match "x = 4"; "3/4" matches "0.75".
@@ -5027,19 +5886,71 @@ function learnCardHTML(c, m){
     actions = solved || shown
       ? `${i > 0 ? btn('learn-prev', 'Back') : ''}${i < list.length - 1 ? btn('learn-next', 'Next problem', '') : btn('learn-restart', 'Start over')}`
       : `${hints < pr.steps.length ? btn('learn-hint', hints ? `Next hint (${pr.steps.length - hints} left)` : 'Hint') : ''}${btn('learn-show', 'Show solution')}`;
+  } else if (cd.kind === 'explain') {
+    // One step at a time: its photo, title, explanation and the point to keep; dots jump between steps.
+    const steps = cd.steps || [], st = steps[p.i] || {};
+    const img = safeImg(st.image), link = safeLink(st.imageLink);
+    if (!sub) sub = `${steps.length} steps`;
+    body = `${meter(p.i + 1, steps.length)}<div class="lc-count">Step ${p.i + 1} of ${steps.length}</div>
+      ${img ? `<${link ? `a href="${esc(link)}" target="_blank" rel="noopener noreferrer"` : 'div'} class="lc-ex-img"><img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('img-failed')"></${link ? 'a' : 'div'}>` : ''}
+      ${st.title ? `<p class="lc-q">${learnMath(st.title)}</p>` : ''}<p class="lc-ex-text">${learnMath(st.text || '')}</p>
+      ${st.point ? `<div class="lc-ex-point">${icon('spark', 14)}<span>${learnMath(st.point)}</span></div>` : ''}
+      <div class="lc-dots">${steps.map((x, k) => `<button class="lc-dot${k === p.i ? ' on' : k < p.i ? ' seen' : ''}" data-act="learn-go" data-o="${k}" ${attrs} aria-label="Step ${k + 1}${x.title ? `: ${esc(x.title)}` : ''}"${k === p.i ? ' aria-current="step"' : ''}></button>`).join('')}</div>`;
+    actions = `${p.i > 0 ? btn('learn-prev', 'Back') : ''}${p.i < steps.length - 1 ? btn('learn-next', 'Next step', '') : btn('learn-go', 'From the start', 'ghost', 'data-o="0"')}`;
+  } else if (cd.kind === 'diagram') {
+    // The parts and how they connect; tapping a part shows what happens there.
+    const nodes = cd.nodes || [], sel = p.sel;
+    if (!sub) sub = { flow:'Step by step', cycle:'A cycle', hub:'How the parts fit' }[cd.layout] || '';
+    body = `${learnDiagramHTML(cd, sel, attrs)}${sel >= 0 && nodes[sel] ? `<div class="lc-node-detail" aria-live="polite"><b>${learnMath(nodes[sel].label)}</b>${nodes[sel].detail ? ` ${learnMath(nodes[sel].detail)}` : ''}</div>` : `<p class="lc-caption">${cd.caption ? `${learnMath(cd.caption)} ` : ''}Tap a part to see what happens there.</p>`}`;
+  } else if (cd.kind === 'match') {
+    // Tap a term, then its match: a right pair locks in green, a wrong one counts as a miss.
+    const pairs = cd.pairs || [], order = Array.isArray(cd.order) && cd.order.length === pairs.length ? cd.order : pairs.map((_, k) => k);
+    const matched = p.matched.filter(Boolean).length, all = pairs.length > 0 && matched === pairs.length;
+    if (!sub) sub = `${pairs.length} pairs`;
+    body = `${meter(matched, pairs.length)}<div class="lc-count">${all ? `All matched · ${p.misses ? `${p.misses} miss${p.misses === 1 ? '' : 'es'}` : 'no misses'}` : p.sel >= 0 ? 'Now tap its match' : 'Tap a term, then its match'}</div>
+      <div class="lc-match"><div class="lc-col">${pairs.map((pr, k) => `<button class="lc-tile${p.matched[k] ? ' done' : ''}${p.sel === k ? ' sel' : ''}" data-act="learn-term" data-o="${k}" ${attrs}${p.matched[k] ? ' disabled' : ''} aria-pressed="${p.sel === k}">${learnMath(pr.term)}</button>`).join('')}</div>
+      <div class="lc-col">${order.map(k => `<button class="lc-tile is-match${p.matched[k] ? ' done' : ''}${p.wrong === k ? ' wrong' : ''}" data-act="learn-pair" data-o="${k}" ${attrs}${p.matched[k] ? ' disabled' : ''}>${learnMath(pairs[k].match)}</button>`).join('')}</div></div>`;
+    actions = all ? btn('learn-restart', 'Try again', '') : '';
+  } else if (cd.kind === 'order') {
+    // Tap the items in their order; the ones placed build the sequence above what is left.
+    const seq = cd.sequence || [], shuffled = Array.isArray(cd.shuffled) && cd.shuffled.length === seq.length ? cd.shuffled : seq.map((_, k) => k);
+    const finished = seq.length > 0 && p.placed.length === seq.length;
+    if (!sub) sub = `${seq.length} items`;
+    body = `${meter(p.placed.length, seq.length)}<div class="lc-count">${finished ? (p.misses ? `Done · ${p.misses} miss${p.misses === 1 ? '' : 'es'}` : 'Perfect order!') : `Tap what comes ${p.placed.length ? 'next' : 'first'}`}</div>
+      ${p.placed.length ? `<ol class="lc-placed">${p.placed.map((k, j) => `<li><span class="lc-key">${j + 1}</span><span>${learnMath(seq[k])}</span></li>`).join('')}</ol>` : ''}
+      ${finished ? (cd.explanation ? `<div class="lc-feedback ok">${learnMath(cd.explanation)}</div>` : '') : `<div class="lc-opts">${shuffled.filter(k => !p.placed.includes(k)).map(k => `<button class="lc-opt${p.wrong === k ? ' wrong' : ''}" data-act="learn-put" data-o="${k}" ${attrs}>${learnMath(seq[k])}</button>`).join('')}</div>`}`;
+    actions = finished ? btn('learn-restart', 'Try again', '') : '';
   } else if (cd.kind === 'plot') {
-    if (!sub) sub = (cd.functions || []).map(f => f.label).join(' · ');
+    if (!sub) sub = (cd.functions || []).map(f => learnMath(f.label)).join(' · ');
     body = `<div class="lc-plot" data-learn-plot ${attrs}>${learnPlotSVG(cd, p.value)}</div>
       ${(cd.functions || []).length > 1 ? `<div class="lc-legend">${cd.functions.map((f, i) => `<span><i style="background:${LEARN_COLORS[i]}"></i>${learnMath(f.label)}</span>`).join('')}</div>` : ''}
       ${cd.slider ? `<label class="lc-slider"><span>${learnMath(cd.slider.label || cd.slider.name)} = <b data-learn-value>${learnFmt(p.value)}</b></span><input type="range" data-learn-slider ${attrs} min="${cd.slider.min}" max="${cd.slider.max}" step="${cd.slider.step}" value="${p.value}"></label>` : ''}
       ${cd.caption ? `<p class="lc-caption">${learnMath(cd.caption)}</p>` : ''}`;
   }
-  const tile = { quiz:'help', flashcards:'book', problem:'calc', plot:'chart' }[cd.kind] || 'book';
   return `<div class="acard cv-card lc-card is-${esc(cd.kind || 'quiz')}" data-learn="${m.id}">
-    ${cvHead(cvTile(tile), learnMath(cd.title || 'Practice'), sub, '')}
+    ${cvHead('', learnMath(cd.title || 'Practice'), sub, '')}
     <div class="bd">${body}</div>
     ${actions ? `<div class="cv-actions">${actions}</div>` : ''}
   </div>`;
+}
+/* A diagram's parts: a flow runs top to bottom with arrows; a cycle and a hub place the parts on
+   a ring (arrows round it for a cycle, spokes from the centre for a hub). Parts are buttons. */
+function learnDiagramHTML(cd, sel, attrs){
+  const nodes = cd.nodes || [];
+  const node = (n, k, style = '') => `<button class="lc-node${k === sel ? ' sel' : ''}" data-act="learn-node" data-o="${k}" ${attrs} aria-pressed="${k === sel}"${style}>${cd.layout === 'flow' ? `<span class="lc-key">${k + 1}</span>` : ''}<span>${learnMath(n.label)}</span></button>`;
+  if (cd.layout === 'flow' || nodes.length < 3) return `<ol class="lc-flow">${nodes.map((n, k) => `<li>${node(n, k)}</li>`).join('')}</ol>`;
+  const at = k => { const a = (k / nodes.length) * 2 * Math.PI - Math.PI / 2; return [50 + 38 * Math.cos(a), 50 + 38 * Math.sin(a)]; };
+  let lines = '';
+  if (cd.layout === 'hub') lines = nodes.map((_, k) => { const [x, y] = at(k); return `<line x1="50" y1="50" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}"/>`; }).join('');
+  else {
+    lines = '<circle cx="50" cy="50" r="38" fill="none"/>';
+    // An arrowhead half way between each part and the next, pointing round the cycle.
+    for (let k = 0; k < nodes.length; k++) {
+      const a = ((k + 0.5) / nodes.length) * 2 * Math.PI - Math.PI / 2, x = 50 + 38 * Math.cos(a), y = 50 + 38 * Math.sin(a), deg = (a * 180 / Math.PI) + 90;
+      lines += `<path d="M-2.6 -2.4 L2.6 0 L-2.6 2.4" transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${deg.toFixed(1)})" class="lc-arrow"/>`;
+    }
+  }
+  return `<div class="lc-ring is-${esc(cd.layout)}"><svg viewBox="0 0 100 100" aria-hidden="true">${lines}</svg>${cd.layout === 'hub' ? `<div class="lc-center">${learnMath(cd.center || cd.title)}</div>` : ''}${nodes.map((n, k) => { const [x, y] = at(k); return node(n, k, ` style="left:${x.toFixed(1)}%;top:${y.toFixed(1)}%"`); }).join('')}</div>`;
 }
 let learnSaveTimer = 0;
 const LEARN_COLORS = ['var(--ag-dark)', 'var(--purple)', 'var(--green)', '#C2410C'];
@@ -5139,7 +6050,8 @@ function learnPlotSVG(cd, value){
 // Clicks on a learning card change only its progress; the card is drawn again from it.
 function learnAct(c, m, act, b){
   const cd = m.card, p = learnProgress(cd);
-  const total = cd.kind === 'quiz' ? (cd.questions || []).length : cd.kind === 'flashcards' ? (cd.cards || []).length : (cd.problems || []).length;
+  const total = cd.kind === 'quiz' ? (cd.questions || []).length : cd.kind === 'flashcards' ? (cd.cards || []).length : cd.kind === 'explain' ? (cd.steps || []).length : (cd.problems || []).length;
+  const o = Number(b?.dataset?.o);
   if (act === 'learn-pick' && cd.kind === 'quiz' && p.picks[p.i] === null) p.picks[p.i] = Number(b.dataset.o);
   else if (act === 'learn-next') { if (cd.kind === 'quiz' && p.i === total - 1) p.done = true; else p.i = Math.min(total - 1, p.i + 1); p.flipped = false; }
   else if (act === 'learn-prev') { p.i = Math.max(0, p.i - 1); p.flipped = false; }
@@ -5154,6 +6066,19 @@ function learnAct(c, m, act, b){
   else if (act === 'learn-review') { p.done = false; p.i = Math.max(0, p.known.findIndex(k => k !== true)); p.known = p.known.map(k => k === true ? true : null); p.flipped = false; }
   else if (act === 'learn-hint') p.hints[p.i] += 1;
   else if (act === 'learn-show') p.shown[p.i] = true;
+  else if (act === 'learn-go' && cd.kind === 'explain') p.i = Math.min(total - 1, Math.max(0, o || 0));
+  else if (act === 'learn-node' && cd.kind === 'diagram') p.sel = p.sel === o ? -1 : o;
+  else if (act === 'learn-term' && cd.kind === 'match') { p.sel = p.sel === o ? -1 : o; p.wrong = -1; }
+  else if (act === 'learn-pair' && cd.kind === 'match') {
+    if (p.sel < 0) return;
+    if (p.sel === o) { p.matched[o] = true; p.sel = -1; p.wrong = -1; }
+    else { p.misses += 1; p.wrong = o; }
+  }
+  else if (act === 'learn-put' && cd.kind === 'order') {
+    // The next item in the sequence is the lowest one not placed yet.
+    if (o === p.placed.length) { p.placed.push(o); p.wrong = -1; }
+    else { p.misses += 1; p.wrong = o; }
+  }
   cd.progress = p;
   replaceNode(c, m); save();
 }
@@ -5176,6 +6101,10 @@ function learnSummaryText(cd){
     return `${answered}/${qs.length} answered, ${p.picks.filter((x, i) => x === qs[i]?.answer).length} right${missed.length ? `; missed: ${missed.join('; ')}` : ''}`.slice(0, 600); }
   if (cd.kind === 'flashcards') { const cards = cd.cards || []; const seen = p.known.filter(x => x !== null).length; return seen ? `${p.known.filter(x => x === true).length}/${cards.length} known; still learning: ${cards.filter((_, i) => p.known[i] === false).map(x => x.front).join(', ') || 'none'}`.slice(0, 600) : 'not started'; }
   if (cd.kind === 'problem') { const list = cd.problems || []; return `${p.solved.filter(Boolean).length}/${list.length} solved, ${p.shown.filter(Boolean).length} solutions shown, ${p.hints.reduce((a, b) => a + b, 0)} hints used`; }
+  if (cd.kind === 'explain') return `on step ${p.i + 1} of ${(cd.steps || []).length}`;
+  if (cd.kind === 'diagram') return p.sel >= 0 ? `looking at ${cd.nodes[p.sel].label}` : '';
+  if (cd.kind === 'match') return `${p.matched.filter(Boolean).length}/${(cd.pairs || []).length} matched, ${p.misses} misses`;
+  if (cd.kind === 'order') return `${p.placed.length}/${(cd.sequence || []).length} placed, ${p.misses} misses`;
   return cd.slider ? `slider ${cd.slider.name} = ${learnFmt(p.value)}` : '';
 }
 if (typeof window !== 'undefined') window.learnSummaryText = learnSummaryText;
@@ -5357,6 +6286,7 @@ const stChip = c => { const v = STCHIP[c.status]; return typeof v === 'function'
 
 function cardNode(c, m){
   const k = c.id, mid = m.id, cd = m.card;
+  if (cd.onboarding) return onboardingCardHTML(c, m);
   const auto = cd.type === 'subagents' || cd.type === 'browser' || cd.type === 'computer';
   const chip = auto
     ? (cd.status === 'done' ? STCHIP.done : cd.status === 'interrupted' ? '<span class="chip">interrupted</span>' : cd.status === 'failed' ? '<span class="chip">failed</span>' : '<span class="chip">running</span>')
@@ -5473,8 +6403,9 @@ function cardNode(c, m){
   }
 
   if (cd.type === 'question') return `<div class="acard">
-    ${hd(icon('spark',20),'var(--acc-soft)','var(--acc)','Question', state.agent.name + ' is asking')}
+    ${hd(icon('spark',20),'var(--acc-soft)','var(--acc)','Question', esc(state.agent.name) + ' is asking')}
     <div class="bd"><b>${esc(cd.q)}</b>
+    ${cd.customName && pending ? `<form class="qname" data-onboarding-name data-chat="${k}" data-msg="${mid}"><label class="qname-label" for="qname-${mid}">Type any name you like</label><div class="qname-row"><input id="qname-${mid}" class="field" name="agentName" placeholder="e.g. Nova" maxlength="18" autocomplete="off" autocapitalize="words" spellcheck="false" required value="${esc(cd.draft || '')}"><button class="btn" type="submit">Use name</button></div></form><div class="qname-or">Or pick one</div>` : ''}
     <div class="qopts" style="margin-top:10px">${cd.options.map(o => {
       const on = cd.status === 'answered' && cd.choice === o;
       const dim = cd.status === 'answered' && cd.choice !== o;
@@ -5483,7 +6414,7 @@ function cardNode(c, m){
       return pending
         ? `<button class="qopt" data-act="qopt" data-chat="${k}" data-msg="${mid}" data-o="${esc(o)}">${label}<span class="tick">${icon('check',12)}</span></button>`
         : `<span class="qopt ${on ? 'on' : 'dim'}" style="cursor:default">${label}<span class="tick">${icon('check',12)}</span></span>`;
-    }).join('')}${cd.customName ? (pending ? `<form class="qopt qcustom" data-onboarding-name data-chat="${k}" data-msg="${mid}"><input name="agentName" aria-label="Type your own name" placeholder="Type your own" maxlength="18" required value="${esc(cd.draft || '')}"><button class="btn small" type="submit">Use name</button></form>` : (!cd.options.includes(cd.choice) ? `<span class="qopt on">${esc(cd.choice)}<span class="tick">${icon('check',12)}</span></span>` : '')) : ''}</div></div></div>`;
+    }).join('')}${cd.customName && !pending && !cd.options.includes(cd.choice) ? `<span class="qopt on">${esc(cd.choice)}<span class="tick">${icon('check',12)}</span></span>` : ''}</div></div></div>`;
 
   if (cd.type === 'subagents') return `<div class="acard">
     ${hd(icon('box',20),'var(--line2)','var(--mut)',cd.agents.length === 1 ? 'Delegated task' : 'Parallel tasks',cd.agents.length === 1 ? 'main agent remains available' : 'working concurrently')}
@@ -5546,8 +6477,8 @@ function prevFor(c, cd){
   if (!a || a.title !== cd.title) return '';
   if (a.kind === 'html') return `<div class="prev"><iframe sandbox="allow-scripts" srcdoc="${esc(a.html)}"></iframe></div>`;
   if (a.kind === 'chart'){
-    const max = Math.max.apply(null, a.data.map(d => d.v));
-    return `<div class="prev"><div class="minibars">${a.data.map(d => `<i style="height:${Math.round(d.v / max * 100)}%;background:${d.c}"></i>`).join('')}</div></div>`;
+    const max = Math.max.apply(null, a.data.map(d => chartValue(d.v)));
+    return `<div class="prev"><div class="minibars">${a.data.map(d => `<i style="height:${Math.round(chartValue(d.v) / max * 100)}%;background:${chartColor(d.c)}"></i>`).join('')}</div></div>`;
   }
   if (a.kind === 'code') return `<div class="prev"><div class="minicode">${esc(a.code.split('\n').slice(0, 6).join('\n'))}</div></div>`;
   if (a.kind === 'plan') return `<div class="prev"><div class="miniplan">${a.items.slice(0, 3).map(i => `<span>• ${esc(i.replace(/\*\*/g,''))}</span>`).join('')}</div></div>`;
@@ -5593,6 +6524,12 @@ function makeRT(c){
         rt.managedEvent(event,{id:task.id,version:event.version || task.version});sequence=event.seq;
       }
       snapshot.sequence=sequence;c.managedTasks[task.id]=snapshot;
+      // The answer streams while the task works in the open chat; once it ends, anything that
+      // streamed and was not replaced by the saved answer goes.
+      if(!['queued','running'].includes(snapshot.status)) for(const draft of c.messages.filter(x=>x.draft && String(x.managedId || '').startsWith(`${task.id}:answer:`))) {
+        c.messages.splice(c.messages.indexOf(draft),1);document.querySelector(`[data-mid="${draft.id}"]`)?.remove();
+      }
+      if(active()) syncAnswerStreams();
       if (newer && (!previous || previous.status!==snapshot.status || previous.metrics?.modelCalls!==snapshot.metrics?.modelCalls)) refreshBillingUsage();
       // The task's browser card streams live only while the task works.
       if(previous?.status!==snapshot.status) {
@@ -5644,7 +6581,14 @@ function makeRT(c){
       if (event.type === 'stopped') c.managedStatus = 'stopped';
       if (event.type === 'paused') c.managedStatus = 'paused';
       if (event.type === 'done') c.managedStatus = event.status;
-      if (['stopped', 'paused', 'done', 'error'].includes(event.type)) finishProgress(event.type === 'error' ? 'failed' : event.type === 'stopped' ? 'interrupted' : 'done');
+      if (['stopped', 'paused', 'done', 'error'].includes(event.type)) {
+        finishProgress(event.type === 'error' ? 'failed' : event.type === 'stopped' ? 'interrupted' : 'done');
+        // A reply that ends before its card was finished does not leave half a card behind.
+        if (!task) for (const m of c.messages.filter(x => x.card?.streaming && !x.card.taskId)) {
+          c.messages.splice(c.messages.indexOf(m), 1);
+          if (active()) document.querySelector(`[data-mid="${m.id}"]`)?.remove();
+        }
+      }
       if (event.type === 'trace') { rt.trace(event.trace.ic || 'box', event.trace.t); return; }
       if (event.type === 'artifact') { rt.artifact(event.artifact,{background:!!task}); return; }
       if (event.type === 'decision') {
@@ -5681,6 +6625,9 @@ function makeRT(c){
           if (active()) streamPaint(c, m);
         } else {
           m.text = event.text;
+          delete m.draft;
+          // Where a looked-up answer came from, as links under it.
+          if (Array.isArray(event.sources) && event.sources.length) m.sources = event.sources.slice(0, 4);
           replaceNode(c, m);
         }
       }
@@ -5691,9 +6638,20 @@ function makeRT(c){
         save();
         return;
       }
+      // A card the agent is still writing: drawn as it arrives, kept only once it is finished.
+      if (event.type === 'card_delta') {
+        let m = c.messages.find(x => x.managedId === event.id);
+        if (m && !m.card?.streaming) return;
+        const card = { ...event.card, streaming:true, taskId:task?.id };
+        if (!m) { m = { id:uid(), managedId:event.id, at:Date.now(), kind:'card', card }; c.messages.push(m); if (active()) append(msgNode(c,m)); }
+        else { m.card = card; if (active()) streamCardPaint(c, m); }
+        return;
+      }
       if (event.type === 'card') {
         let m = c.messages.find(x => x.managedId === event.id);
         const card = { ...event.card, managedCallId:event.callId, taskId:task?.id, taskVersion:task?.version };
+        // What the owner already did with a card that was still arriving (a slider, a first answer) stays.
+        if (m?.card?.progress && !card.progress) card.progress = m.card.progress;
         // A task's browser is one card that follows it step by step (and streams live while it
         // works), not a new card for every click; it keeps the last page and picture meanwhile.
         const browserOf = !m && task && card.type === 'browser' && !card.desktop ? c.messages.find(x => x.kind === 'card' && x.card?.type === 'browser' && !x.card.desktop && x.card.taskId === task.id) : null;
@@ -5759,6 +6717,8 @@ function makeRT(c){
       let bodyEl = null;
       if (active()){
         node = msgNode(c, m);
+        // While the reply is pending, a working task's own dots stay hidden (styles.css).
+        node.classList.add('is-typing');
         append(node);
         bodyEl = node.querySelector('.md');
         if (bodyEl) bodyEl.innerHTML = '<span class="tdots" aria-label="typing"><i></i><i></i><i></i></span>';
@@ -5924,6 +6884,15 @@ function placeTaskCard(c, m){
 }
 
 const streamPaintPending = new WeakMap();
+const streamPaintDone = new WeakMap();
+// Everything before a streamed message's last blank line is finished text: it is drawn once,
+// and each frame redraws only the paragraph still being written. Inside an open code block
+// the whole message stays live.
+function streamCut(text){
+  const cut = text.lastIndexOf('\n\n');
+  if (cut < 0) return 0;
+  return (text.slice(0, cut).match(/^\s*```/gm) || []).length % 2 ? 0 : cut;
+}
 function streamPaint(c, m){
   const old = document.querySelector(`[data-mid="${m.id}"]`);
   if (!old) { replaceNode(c, m); return; }
@@ -5933,7 +6902,15 @@ function streamPaint(c, m){
     const node = document.querySelector(`[data-mid="${m.id}"]`);
     const bodyEl = node?.querySelector('.md');
     if (!bodyEl || !bodyEl.isConnected) { replaceNode(c, m); return; }
-    bodyEl.innerHTML = md(m.text);
+    const cut = streamCut(m.text);
+    let done = streamPaintDone.get(m);
+    if (!done || done.body !== bodyEl || cut < done.cut) {
+      bodyEl.innerHTML = '<div class="md-done"></div><div class="md-live"></div>';
+      done = { body:bodyEl, cut:0 };
+      streamPaintDone.set(m, done);
+    }
+    if (cut !== done.cut) { bodyEl.firstElementChild.innerHTML = md(m.text.slice(0, cut)); done.cut = cut; }
+    bodyEl.lastElementChild.innerHTML = md(m.text.slice(cut));
     const t = $('#thread');
     if (t && t.scrollHeight - t.scrollTop - t.clientHeight < 100) t.scrollTop = t.scrollHeight;
   };
@@ -5941,6 +6918,28 @@ function streamPaint(c, m){
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
   else run();
 }
+
+// A card still being written is redrawn at most once a frame, keeping the thread pinned to its end.
+const streamCardPending = new WeakSet();
+function streamCardPaint(c, m){
+  if (streamCardPending.has(m)) return;
+  streamCardPending.add(m);
+  const run = () => {
+    streamCardPending.delete(m);
+    const old = document.querySelector(`[data-mid="${m.id}"]`);
+    if (!old) return;
+    const t = $('#thread');
+    const pinned = t && t.scrollHeight - t.scrollTop - t.clientHeight < 100;
+    old.replaceWith(msgNode(c, m));
+    if (pinned) t.scrollTop = t.scrollHeight;
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else run();
+}
+// Cards and answers still arriving are shown but never saved.
+// A reply still being typed counts too: a reload ends its stream, and a saved half-reply
+// would stay in the chat for good.
+function unfinishedMessage(m){ return !!(m && (m.card?.streaming || m.draft || m.typing)); }
 
 function replaceNode(c, m){
   const old = document.querySelector(`[data-mid="${m.id}"]`);
@@ -5958,15 +6957,21 @@ function resolveCard(c, m, payload, status){
 }
 
 /* ---------------- send / chats (real accounts only) ---------------- */
+// Set while the first screen shows this device's chats and the account's copy is loading.
+let bootSync = null, chatsOnScreen = false;
 async function sendPrompt(text, files, options = {}){
+  // A message sent in the first moments goes to the chat as merged with the account: the
+  // chat that was on screen when it was sent. A stalled account load does not hold it.
+  const target = bootSync ? (options.chat || chat())?.id : null;
+  if (bootSync) await Promise.race([bootSync, new Promise(resolve => setTimeout(resolve, 8000))]);
   if (!signedIn()){ state.pendingPrompt = text; save(); renderAuth(); toast('Sign up or log in — your message is saved and will be sent after.'); return; }
   ensureOwnerScope();
-  const c = options.chat || chat();
+  const c = (target && state.chats.find(x => x.id === target)) || options.chat || chat();
   if (needsOnboarding()) {
     if (c?.onboarding) {
       const pq = pendingQuestion(c);
-      if (pq) await answerOnboarding(c, pq.m, text);
-      else toast('Finish setup by choosing your agent’s name and color.');
+      if (pq && onboardingUnlocked(c, pq.m)) await answerOnboarding(c, pq.m, text);
+      else toast('Your au pair is saying hello. Choose an option above to continue.');
     } else startPendingPromptFlow(text);
     return;
   }
@@ -6319,78 +7324,30 @@ async function updateShopPay(action,payload={}){
     if(owner!==scopeBelnaWallet())return;
     if(action==='connect'){
       const url=new URL(j.url);
-      if(url.protocol!=='https:' || url.hostname!=='accounts.shop.app')throw Error('Could not confirm your Shop Pay sign-in link.');
-      sessionStorage.setItem('belna.shopPayChoice',JSON.stringify({owner,activeMethod:walletPreferences?.activeMethod || null}));
+      if(url.protocol!=='https:' || url.hostname!=='accounts.shop.app')throw Error('Could not confirm your Shop sign-in link.');
       window.location.assign(url.href);return;
     }
     state.shopPay=j.shopPay || {connected:false,configured:true};state.shopPayOrders=j.orders || [];
     save();
-    if(action==='disconnect' && walletPreferences?.methods?.shop_pay){
-      const preferences=await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({methods:{shop_pay:false}})});
-      if(owner!==scopeBelnaWallet())return;
-      walletPreferences=preferences;
-    }
-    toast(action==='disconnect'?'Shop Pay disconnected.':'Shop Pay daily limit saved.');
+    // Paying with Shop Pay is the Payment apps switch, so disconnecting the account leaves it as it is.
+    toast(action==='disconnect'?'Shop account disconnected.':'Shop Pay daily limit saved.');
   }catch(e){if(owner===scopeBelnaWallet())shopPayError=e.message || 'Could not update Shop Pay. Try again.';}
   finally{if(owner===scopeBelnaWallet()){shopPayBusy=false;repaintWallet();}}
 }
-async function finishShopPayChoice(){
-  const owner=scopeBelnaWallet();
-  let pending;try{pending=JSON.parse(sessionStorage.getItem('belna.shopPayChoice') || 'null');sessionStorage.removeItem('belna.shopPayChoice');}catch{}
-  if(!owner || pending?.owner!==owner)return;
-  try{
-    const preferences=await window.LingonAuth.api('/api/wallet-preferences');
-    if(owner!==scopeBelnaWallet() || !shopPaySnapshot().connected)return;
-    if(!preferences.methods?.shop_pay){
-      const selected=await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({methods:{shop_pay:true}})});
-      if(owner!==scopeBelnaWallet())return;
-      walletPreferences=selected;walletExistingOpen=false;repaintWallet();
-    }
-  }catch(e){if(owner===scopeBelnaWallet()){walletPreferencesError=e.message || 'Shop Pay connected. Turn it on in Wallet to use it.';repaintWallet();}}
-}
-let walletHistory=[];
+let walletHistory=[],walletHistoryLoading=false,walletHistoryLoaded=false;
 let walletPreferences=null,walletPreferencesLoading=false,walletConnectOpen=false,walletExistingOpen=false,walletAction=null;
 let shopPayBusy=false,shopPayError='',walletPreferencesError='';
 let walletCardWaitlist=null,walletCardWaitlistLoading=false,walletCardWaitlistBusy=false,walletCardWaitlistError='';
 let walletAddresses=null, walletAddressesLoading=false, walletAddressEdit=null, walletAddressError='';
 let belnaWalletOwner = null, belnaWalletCache = null, belnaWalletLoading = false, belnaWalletError = '', belnaWalletBusy = false, belnaTransferQuote = null, walletActionError = '';
+let belnaWalletCheckedAt = 0;
+let walletBankState=null,walletBankLoading=false,walletBankLink=null;
 let walletWithdrawalClose=null, walletCardSetupClose=null, walletElementsLoading=null, walletVerificationClose=null, walletMoneyClose=null, walletMoneyRoot=null, walletLimitEdit=false;
 let walletSetupRefreshTimer=null, walletSetupRefreshUntil=0;
 let personalWalletReturnRunning=null;
-function capturePersonalWalletReturn(){
-  const q=new URLSearchParams(location.search);
-  try{
-    const pending=JSON.parse(sessionStorage.getItem('belna.whopConnect')||'null');
-    if(pending && q.get('state') && (q.has('code') || q.has('error'))){
-      if(q.get('state')===pending.state)sessionStorage.setItem('belna.whopCallback',JSON.stringify({...pending,code:q.get('code'),error:q.get('error')}));
-      for(const key of ['code','state','error','error_description'])q.delete(key);
-      history.replaceState(null,'',location.pathname+(q.size?'?'+q:'')+location.hash);
-    }
-  }catch{}
-}
-capturePersonalWalletReturn();
-function completePersonalWalletReturn(){
-  if(personalWalletReturnRunning)return personalWalletReturnRunning;
-  personalWalletReturnRunning=processPersonalWalletReturn().finally(()=>{personalWalletReturnRunning=null;});return personalWalletReturnRunning;
-}
-async function processPersonalWalletReturn(){
-  const owner=billingIdentity();if(!owner)return;
-  try{
-    const callback=JSON.parse(sessionStorage.getItem('belna.whopCallback')||'null');
-    if(callback){
-      sessionStorage.removeItem('belna.whopCallback');sessionStorage.removeItem('belna.whopConnect');
-      if(callback.owner!==owner || callback.error || !callback.code)throw Error('Personal wallet connection was canceled or the Belna account changed. Connect again.');
-      const result=await window.LingonAuth.api('/api/belna-wallet/oauth-finish',{method:'POST',body:JSON.stringify({state:callback.state,code:callback.code})});
-      if(owner!==billingIdentity())return;
-      belnaWalletOwner=owner;belnaWalletCache=result;belnaWalletError='';walletConnectOpen=false;
-      const pref=await window.LingonAuth.api('/api/wallet-preferences');
-      if(owner!==billingIdentity())return;
-      if(!pref.selectionSaved && !pref.activeMethod)await window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})});
-      state.view='chat';state.canvasOpen=true;state.canvasTab='wallet';save();renderApp();
-      toast(result.wallet?.cardProgramAvailable === false ? 'Your wallet is connected.' : 'Your wallet is connected. Set up your virtual card next.');
-    }
-  }catch(e){toast(e.message||'Your personal wallet could not be connected.');}
-}
+function capturePersonalWalletReturn(){}
+function completePersonalWalletReturn(){return Promise.resolve();}
+async function processPersonalWalletReturn(){}
 function walletVisible(){
   return document.visibilityState !== 'hidden' && ((state.view==='settings' && ['wallet','payments'].includes(state.settingsTab)) || (state.view==='chat' && state.canvasOpen && ['wallet','payments'].includes(state.canvasTab)));
 }
@@ -6398,6 +7355,7 @@ function refreshReturningWallet(){
   if(!signedIn() || !walletVisible())return;
   walletSetupRefreshUntil=Date.now()+120000;
   refreshBelnaWallet(true);refreshShopPay(true);
+  if(walletAction==='bank_withdraw')refreshWalletBank();
 }
 function scheduleWalletSetupRefresh(){
   clearTimeout(walletSetupRefreshTimer);
@@ -6425,14 +7383,14 @@ async function openWalletVerification(purchaseId){
  overlay.querySelector('form').onsubmit=e=>{e.preventDefault();const field=overlay.querySelector('input'),text=field.value;field.value='';if(text)input({type:'type',text});};
  overlay.querySelectorAll('[data-key]').forEach(b=>b.onclick=()=>input({type:'key',key:b.dataset.key}));refresh();
 }
-function loadWalletElements(){
-  if(window.WhopElements)return Promise.resolve(window.WhopElements);
+function loadPrivyWallet(){
+  if(window.BelnaPrivy)return Promise.resolve(window.BelnaPrivy);
   if(walletElementsLoading)return walletElementsLoading;
   walletElementsLoading=new Promise((resolve,reject)=>{
-    const script=document.createElement('script');script.src='https://cdn.whop.com/elements/amber/elements.js';script.dataset.whopElements='';
-    const timer=setTimeout(()=>{script.remove();walletElementsLoading=null;reject(Error('The secure bank connection timed out. Please try again.'));},15000);
-    script.onload=()=>{clearTimeout(timer);if(window.WhopElements)resolve(window.WhopElements);else{walletElementsLoading=null;reject(Error('The secure bank connection could not load.'));}};
-    script.onerror=()=>{clearTimeout(timer);script.remove();walletElementsLoading=null;reject(Error('The secure bank connection could not load. Please try again.'));};document.head.append(script);
+    const script=document.createElement('script');script.src=(window.LingonConfig.apiBase||'')+'/lingon/privy-wallet.js';script.dataset.privyWallet='';
+    const timer=setTimeout(()=>{script.remove();walletElementsLoading=null;reject(Error('Your secure wallet connection timed out. Try again.'));},30000);
+    script.onload=()=>{clearTimeout(timer);if(window.BelnaPrivy)resolve(window.BelnaPrivy);else{walletElementsLoading=null;reject(Error('Your secure wallet connection could not load.'));}};
+    script.onerror=()=>{clearTimeout(timer);script.remove();walletElementsLoading=null;reject(Error('Your secure wallet connection could not load. Try again.'));};document.head.append(script);
   });return walletElementsLoading;
 }
 function restoreWalletFocus(previous){
@@ -6440,108 +7398,15 @@ function restoreWalletFocus(previous){
   target?.focus?.({preventScroll:true});
 }
 async function openWalletWithdrawal(kind='withdraw'){
-  const owner=scopeBelnaWallet();if(!owner)return;
-  if(kind!=='verify')walletMoneyClose?.();
-  walletWithdrawalClose?.();
-  const previous=document.activeElement;
-  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-withdraw-title"><header><div><h3 id="wallet-withdraw-title">'+(kind==='deposit'?'Add money to Belna Wallet':kind==='verify'?'Continue your wallet setup':'Withdraw to your bank')+'</h3><p>'+(kind==='deposit'?'Choose how to fund your wallet. Review the method and fees before continuing.':kind==='verify'?'Complete the secure check required for this money action.':'Choose your bank, review fees and arrival time, then confirm.')+'</p></div><button class="btn ghost small" data-sheet-close aria-label="Close wallet action">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening your secure wallet connection…</div><div id="wallet-withdraw-element"></div><button type="button" class="btn ghost small wallet-action-retry" hidden>Try again</button></section></div>');
-  let element,group,expiryTimer,frameTimer,identityTimer,fundingTimer,closed=false,loading=false,funding=false,verifying=kind==='verify',mountId=0;
-  const close=()=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearTimeout(frameTimer);clearInterval(identityTimer);clearInterval(fundingTimer);try{element?.destroy?.();group?.destroy?.();}catch{}dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletWithdrawalClose===close)walletWithdrawalClose=null;restoreWalletFocus(previous);if(funding && owner===billingIdentity())refreshBelnaWallet(true);};
-  const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const focusable=[...overlay.querySelectorAll('button:not([hidden]):not(:disabled),iframe,[tabindex="0"]')];const first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
-  walletWithdrawalClose=close;overlay.querySelector('button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};document.addEventListener('keydown',onKey);document.body.append(overlay);overlay.querySelector('button').focus();
-  identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close();},1000);
-  const status=overlay.querySelector('.wallet-withdraw-status'),retry=overlay.querySelector('.wallet-action-retry');
-  const back=el('<button type="button" class="btn ghost small wallet-action-back" hidden>Back to funding methods</button>');overlay.querySelector('section').append(back);
-  const appearance={theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}};
-  const clearElement=()=>{clearTimeout(frameTimer);clearInterval(fundingTimer);try{element?.destroy?.();group?.destroy?.();}catch{}element=group=null;overlay.querySelector('#wallet-withdraw-element').innerHTML='';};
-  const showError=message=>{clearTimeout(frameTimer);if(!closed){status.textContent=message || 'Your wallet connection could not load. Try again.';retry.hidden=false;}};
-  async function openCardFunding(){
-    if(closed || loading || owner!==billingIdentity())return;
-    loading=true;funding=true;const currentMount=++mountId;clearElement();back.hidden=false;back.disabled=true;retry.hidden=true;status.textContent='Opening secure card funding…';
-    try{
-      const result=await window.LingonAuth.api('/api/belna-wallet/deposit',{method:'POST',body:'{}'});if(closed || owner!==billingIdentity()){close();return;}
-      const url=new URL(result.url);if(url.origin!=='https://whop.com' || !/^\/deposit\/biz_[A-Za-z0-9]+\/$/.test(url.pathname) || url.username || url.password || url.search || url.hash)throw Error('Your funding link could not be confirmed.');
-      const frame=document.createElement('iframe');frame.className='wallet-card-funding-frame';frame.title='Secure card funding';frame.src=url.href;
-      frame.setAttribute('allow','payment *; clipboard-write *; publickey-credentials-get *');frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation');
-      frame.onload=()=>{if(closed || currentMount!==mountId)return;clearTimeout(frameTimer);retry.hidden=true;status.textContent='Review the amount, card and fees in the secure form. Your balance updates after the deposit settles.';};
-      frame.onerror=()=>{if(currentMount===mountId)showError('Secure card funding could not load. Try again or open it in a new tab.');};
-      frameTimer=setTimeout(()=>{if(currentMount===mountId)showError('Secure card funding is taking too long to load. Try again or open it in a new tab.');},20000);
-      const target=overlay.querySelector('#wallet-withdraw-element');target.append(frame,el('<p class="wl-hint">If sign-in or a bank check needs a separate window, <a href="'+esc(url.href)+'" target="_blank" rel="noopener noreferrer">open secure funding in a new tab</a>.</p>'));
-      fundingTimer=setInterval(()=>{if(!closed && owner===billingIdentity() && document.visibilityState!=='hidden')refreshBelnaWallet(true);},30000);
-    }catch(e){showError(e.message);}finally{loading=false;back.disabled=false;}
-  }
-  async function mountAction(){
-   if(closed || loading)return;loading=true;funding=false;back.hidden=true;const currentMount=++mountId;clearElement();retry.hidden=true;status.textContent=verifying?'Opening your secure wallet check…':'Opening your secure wallet connection…';
-   try{
-    // Never persist this token in app state/storage or send it to the agent.
-    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/'+(verifying?'verification-session':kind==='deposit'?'deposit-session':'withdraw-session'),{method:'POST',body:'{}'}),loadWalletElements()]);
-    if(closed || owner!==billingIdentity()){close();return;}
-    const expires=Date.parse(session.expiresAt);
-    // Allow small device/server clock differences; the local timer still caps the session at 15 minutes.
-    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || (verifying || kind==='withdraw') && (typeof session.accessToken!=='string' || session.accessToken.length<32) || !Number.isFinite(expires) || expires<=Date.now() || expires>Date.now()+15*60000+30000)throw Error('Your wallet session expired. Open it again.');
-    const onReady=()=>{if(closed || currentMount!==mountId)return;clearTimeout(frameTimer);retry.hidden=true;status.textContent=verifying?'Complete the secure check to continue.':'Review and confirm in the secure form. Your agent cannot access your bank details.';};
-    const onError=()=>{if(currentMount===mountId)showError('Your wallet connection could not load. Try again.');};
-    frameTimer=setTimeout(()=>{if(currentMount===mountId)showError('Your secure form is taking too long to load. Check your connection and try again.');},20000);
-    if(verifying){
-      if(session.verificationKind!=='individual')throw Error('Your private wallet check could not be confirmed.');
-      group=factory().verifications.create({accountId:session.accountId,kind:'individual',getToken:async()=>session.accessToken,appearance});
-      element=group.create('kyc',{onReady,onStatusChanged:e=>{if(!closed)status.textContent=e.status==='approved'?'Your wallet check is complete.':e.status==='manual_review'?'Your wallet check is in review. You can return when it is complete.':'Complete the secure check to continue.';},onCompleted:()=>{if(closed || currentMount!==mountId)return;walletActionError='';refreshBelnaWallet(true);if(kind==='verify')close();else{verifying=false;queueMicrotask(mountAction);}},onLoadFailed:onError,onError});
-    }else{
-      group=factory().wallet.create({accountId:session.accountId,...(session.accessToken?{accessToken:session.accessToken}:{}),currency:'usd',appearance});
-      if(kind==='withdraw' && (!Number.isFinite(session.availableBalance) || !Number.isFinite(session.pendingBalance) || !/^[A-Z]{2}$/.test(session.payoutCountry || '')))throw Error('Your withdrawal balance could not be confirmed. Refresh and try again.');
-      element=group.create(kind,{...(kind==='withdraw'?{availableBalance:session.availableBalance,pendingBalance:session.pendingBalance,payoutCountry:session.payoutCountry}: {allowNewCard:session.cardFundingAvailable===true,confirmCryptoDeposit:true}),onReady,onDismissed:close,onDone:()=>{close();refreshBelnaWallet(true);},onWithdrawalRequested:()=>refreshBelnaWallet(true),onDepositConfirmed:()=>{status.textContent='Watching for your deposit. Your balance updates after it arrives.';refreshReturningWallet();},onAddCardRequested:openCardFunding,onCardDepositRequested:openCardFunding,onIdentityVerificationRequested:()=>{if(!closed){verifying=true;queueMicrotask(mountAction);}},onError});
-    }
-    element.mount('#wallet-withdraw-element');
-    overlay.querySelectorAll('#wallet-withdraw-element iframe').forEach(frame=>{frame.title=verifying?'Secure identity check':kind==='deposit'?'Secure wallet funding':'Secure bank withdrawal';});
-    clearTimeout(expiryTimer);expiryTimer=setTimeout(()=>{close();toast('Your secure wallet session expired. Open the action again.');},Math.min(15*60000,expires-Date.now()));
-   }catch(e){showError(e.message);}finally{loading=false;}
-  }
-  back.onclick=mountAction;retry.onclick=()=>funding?openCardFunding():mountAction();mountAction();
+  if(kind==='withdraw'){openWalletMoneyAction('withdraw');return;}
+  if(kind!=='deposit')return;
+  const owner=scopeBelnaWallet();if(!owner||belnaWalletBusy)return;
+  belnaWalletBusy=true;repaintWallet();
+  try{const sdk=await loadPrivyWallet();const w=belnaWalletCache?.wallet;await sdk.fund(w?{walletId:w.walletId,address:w.address}:undefined);if(owner===scopeBelnaWallet())toast('Check your wallet balance after your funding arrives.');}
+  catch(e){if(owner===scopeBelnaWallet()&&!/cancelled|canceled|closed/i.test(e.message||''))toast(e.message||'Funding could not open.');}
+  finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;refreshBelnaWallet(true);}}
 }
-async function openWalletCardSetup(){
-  const owner=scopeBelnaWallet();if(!owner)return;
-  walletMoneyClose?.();
-  walletCardSetupClose?.();
-  const previous=document.activeElement;
-  const overlay=el('<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-card-setup-title"><header><div><h3 id="wallet-card-setup-title">Continue card setup</h3><p>Complete your private card issuer verification. Your agent cannot see it.</p></div><button class="btn ghost small" data-sheet-close aria-label="Close card setup">'+icon('x',18)+'</button></header><div class="wallet-withdraw-status" role="status">Opening secure card setup…</div><div id="wallet-card-setup-element"></div></section></div>');
-  let element,cards,group,expiryTimer,identityTimer,closed=false;
-  const close=(refresh=true)=>{if(closed)return;closed=true;clearTimeout(expiryTimer);clearInterval(identityTimer);try{element?.destroy?.();cards?.destroy?.();group?.destroy?.();}catch{}dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletCardSetupClose===close)walletCardSetupClose=null;previous?.focus?.();if(refresh)refreshBelnaWallet(true);};
-  const onKey=e=>{if(e.key==='Escape'){e.preventDefault();close();}};
-  walletCardSetupClose=close;overlay.querySelector('header button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};document.addEventListener('keydown',onKey);document.body.append(overlay);overlay.querySelector('button').focus();
-  identityTimer=setInterval(()=>{if(billingIdentity()!==owner)close(false);},1000);
-  try{
-    // The token stays in this owner-only modal and expires after fifteen minutes.
-    const [session,factory]=await Promise.all([window.LingonAuth.api('/api/belna-wallet/card-session',{method:'POST',body:'{}'}),loadWalletElements()]);
-    if(closed || owner!==billingIdentity()){close();return;}
-    const expires=Date.parse(session.expiresAt);
-    if(!/^biz_[A-Za-z0-9]+$/.test(session.accountId||'') || typeof session.accessToken!=='string' || !Number.isFinite(expires) || expires<=Date.now())throw Error('Your card setup session expired. Open it again.');
-    const showCard=/^icrd_[A-Za-z0-9]+$/.test(session.cardId||'');
-    const appearance={theme:{appearance:'light',accentColor:'ruby',grayColor:'sand'},variables:{'--radius':'12px'}};
-    if(showCard){
-      overlay.querySelector('h3').textContent='Your virtual card';overlay.querySelector('header p').textContent='View your card details privately. Card controls are in Wallet settings.';
-      group=factory().wallet.create({accountId:session.accountId,accessToken:session.accessToken,currency:'usd',appearance});
-      cards=group.create('cards',{accessToken:session.accessToken});
-      element=cards.create('whopCard',{cardId:session.cardId,hideControls:true,hideAppleWalletButton:true,
-        onReady:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Click View details below to reveal your card privately.';},
-        onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your card details could not load. Close and try again.';}});
-    }else{
-      // The Cards list's Verify button hardcodes business KYB. Consumers must
-      // enter the dedicated verification flow with an explicit individual kind.
-      if(session.verificationKind!=='individual')throw Error('Consumer card setup could not be confirmed. Please try again.');
-      overlay.querySelector('header p').textContent='Complete your private identity check. No business registration is required by Belna.';
-      group=factory().verifications.create({accountId:session.accountId,kind:'individual',getToken:async()=>session.accessToken,appearance});
-      let verificationObserved=false;
-      element=group.create('kyc',{
-        onStatusChanged:e=>{if(closed)return;verificationObserved=true;overlay.querySelector('.wallet-withdraw-status').textContent=e.status==='approved'?'Your personal identity is verified. Close this window and check card status.':e.status==='manual_review'?'Your personal identity check is being reviewed.':e.status==='action_required'?'Complete the personal identity information requested below.':'Continue your personal identity check below.';},
-        onCompleted:()=>{if(!closed)refreshBelnaWallet(true);},
-        onReady:()=>{if(!closed&&!verificationObserved)overlay.querySelector('.wallet-withdraw-status').textContent='Continue your personal identity check below.';},
-        onLoadFailed:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your personal identity check could not load. Close and try again.';},
-        onError:()=>{if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent='Your personal identity check could not load. Close and try again.';}});
-    }
-    element.mount('#wallet-card-setup-element');
-    expiryTimer=setTimeout(()=>{close();toast('Your secure card setup expired. Open it again.');},Math.min(15*60000,expires-Date.now()));
-  }catch(e){if(!closed)overlay.querySelector('.wallet-withdraw-status').textContent=e.message||'Could not open secure card setup. Please try again.';}
-}
+async function openWalletCardSetup(){joinWalletCardWaitlist();}
 function scopeBelnaWallet(){
   const owner = billingIdentity();
   if (owner !== belnaWalletOwner) {
@@ -6550,11 +7415,12 @@ function scopeBelnaWallet(){
     walletWithdrawalClose?.();
     walletCardSetupClose?.(false);
     walletVerificationClose?.();
-    walletHistory=[];walletPreferences=null;walletPreferencesLoading=false;walletConnectOpen=false;walletExistingOpen=false;walletAction=null;walletActionError='';walletLimitEdit=false;
+    walletHistory=[];walletHistoryLoading=false;walletHistoryLoaded=false;walletPreferences=null;walletPreferencesLoading=false;walletConnectOpen=false;walletExistingOpen=false;walletAction=null;walletActionError='';walletLimitEdit=false;
     shopPayBusy=false;shopPayError='';walletPreferencesError='';
     walletCardWaitlist=null;walletCardWaitlistLoading=false;walletCardWaitlistBusy=false;walletCardWaitlistError='';
     walletAddresses=null; walletAddressesLoading=false; walletAddressEdit=null; walletAddressError='';
     belnaWalletOwner = owner; belnaWalletCache = null; belnaWalletLoading = false; belnaWalletError = ''; belnaWalletBusy = false; belnaTransferQuote=null;
+    belnaWalletCheckedAt = 0;walletBankState=null;walletBankLoading=false;walletBankLink=null;
   }
   return owner;
 }
@@ -6582,11 +7448,19 @@ function refreshBelnaWallet(force = false){
   refreshWalletPreferences(force);
   refreshWalletCardWaitlist(force);
   const owner = scopeBelnaWallet();
-  if (!owner || belnaWalletLoading || (!force && (belnaWalletCache || belnaWalletError))) return Promise.resolve();
+  if (!owner || belnaWalletLoading || (!force && Date.now() - belnaWalletCheckedAt < 30000)) return Promise.resolve();
+  belnaWalletCheckedAt = Date.now();
   belnaWalletLoading = true; belnaWalletError = '';
   repaintWallet();
   return completePersonalWalletReturn().then(()=>window.LingonAuth.api('/api/belna-wallet')).then(j => {
-    if (owner === scopeBelnaWallet()) belnaWalletCache = j;
+    if (owner === scopeBelnaWallet()) {
+      belnaWalletCache = j;
+      // Mount the secure SDK while the owner reads the wallet. This never sends
+      // an email code, opens a login form or authorizes a wallet operation.
+      if(j.wallet?.status==='ready'&&walletVisible())loadPrivyWallet().then(sdk=>{
+        if(owner===scopeBelnaWallet())return sdk.warm?.(j.wallet);
+      }).catch(()=>{});
+    }
   }).catch(e => {
     if (owner === scopeBelnaWallet()) belnaWalletError = e.message || 'Could not load your wallet. Refresh to try again.';
   }).finally(() => {
@@ -6618,7 +7492,7 @@ async function joinWalletCardWaitlist(){
 }
 const WALLET_CARD_TITLE = 'Spend your balance with a card';
 function walletCardWaitlistSub(){
-  return `Coming soon${walletCardWaitlistError ? ` <span class="wl-error" role="alert">${esc(walletCardWaitlistError)}</span>` : ''}`;
+  return `Coming soon in Sweden${walletCardWaitlistError ? ` <span class="wl-error" role="alert">${esc(walletCardWaitlistError)}</span>` : ''}`;
 }
 function walletCardWaitlistAction(){
   if (walletCardWaitlist?.joined === true) return `<span class="wl-ok" role="status">${icon('check', 13)} Registered</span>`;
@@ -6666,7 +7540,7 @@ function walletCountryOptions(selected='SE'){
 // The chat panel shows the way the agent pays now (Belna Wallet balance, or the owner's
 // existing card); Settings holds the choice, Belna Wallet controls, existing-card
 // connections and delivery addresses. Nothing here shows or stores a card number.
-const WALLET_STATUS = { recorded:'Completed', completed:'Completed', succeeded:'Completed', pending:'Pending', processing:'Processing', authorized:'Authorized', awaiting_confirmation:'Submitted', submitted:'Submitted', needs_buyer:'Finish checkout', escalated:'Finish checkout', failed:'Failed', canceled:'Canceled', declined:'Declined', expired:'Expired' };
+const WALLET_STATUS = { quoted:'Ready for your review', awaiting_owner:'Awaiting your authorization', rejected:'Rejected', recorded:'Completed', completed:'Completed', succeeded:'Completed', pending:'Pending', processing:'Processing', authorized:'Authorized', awaiting_confirmation:'Submitted', submitted:'Submitted', needs_buyer:'Finish checkout', escalated:'Finish checkout', failed:'Failed', canceled:'Canceled', declined:'Declined', expired:'Expired' };
 function walletStatusLabel(status){
   const s = String(status || 'recorded').toLowerCase();
   return WALLET_STATUS[s] || s.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
@@ -6707,24 +7581,15 @@ function walletCardStatus(w){
   return { text:'Identity check needed', tone:'warn' };
 }
 function walletBelnaGroup(){
-  const { w, created } = belnaWalletState();
-  if (!created) return '';
-  const card = walletCardStatus(w), ready = w.cardProgramAvailable!==false && (w.cardReady ?? w.status === 'ready'), busy = belnaWalletBusy ? ' disabled' : '';
-  const cardActions = ready ? '<button type="button" class="btn ghost small" data-act="wallet-view-card">View virtual card</button>' : w.cardProgramAvailable === false ? ''
-    : `<span class="wset-actions">${!w.identityVerified && w.verificationStatus!=='manual_review' ? `<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>Verify identity</button>` : ''}${w.status!=='denied' && (w.kind==='personal' || w.status!=='review' || w.cardApplicationStatus==='approved')?`<button type="button" class="btn ${!w.identityVerified ? 'ghost ' : ''}small" data-act="belna-wallet-card-connect"${busy}>${w.cardApplicationStatus==='approved'?'Activate virtual card':w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':w.status==='review'?'Check card status':'Connect card'}</button>`:''}${['denied','card_unavailable'].includes(w.status)?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a>':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></span>`;
-  const limit = Number(w.dailyCardLimitUsd);
-  const limitRow = walletLimitEdit
-    ? `<div class="wset-row wset-edit wset-limit"><label class="wl-field">Daily card allowance (USD)<input class="field" id="belna-wallet-limit" type="number" min="1" max="2000" step="0.01" value="${Number.isFinite(limit) ? limit : ''}"></label><span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-limit"${busy}>Save</button><button type="button" class="btn ghost small" data-act="wallet-limit-cancel">Cancel</button></span></div>`
-    : `<div class="wset-row"><span class="wset-copy"><b>Daily card allowance</b><small>Up to $2,000. Each purchase still needs your approval.</small></span><span class="wset-value">${esc(walletMoney(Number.isFinite(limit) ? limit : null))}</span><button type="button" class="btn ghost small" data-act="wallet-limit-edit">Change</button></div>`;
-  const pending = Number(w.balance?.pending);
-  const country = w.country ? (() => { try { return new Intl.DisplayNames(['en'], { type:'region' }).of(w.country); } catch { return w.country; } })() : '';
+  const {w,created}=belnaWalletState();if(!created)return '';
+  const busy=belnaWalletBusy?' disabled':'',limit=Number(w.dailyTransferLimitUsd||50);
+  const limitRow=walletLimitEdit?`<div class="wset-row wset-edit"><label class="wl-field">24-hour transfer limit (USD)<input class="field" id="belna-wallet-limit" type="number" min="0.01" max="50" step="0.01" value="${limit}"></label><span class="wset-actions"><button type="button" class="btn small" data-act="belna-wallet-limit"${busy}>Save</button><button type="button" class="btn ghost small" data-act="wallet-limit-cancel">Cancel</button></span></div>`:`<div class="wset-row"><span class="wset-copy"><b>24-hour transfer limit</b><small>Total you can send, withdraw to bank or deposit into Earn in any 24 hours. Maximum $50. You approve every transfer.</small></span><span class="wset-value">${esc(walletMoney(limit))}</span><button type="button" class="btn ghost small" data-act="wallet-limit-edit">Change</button></div>`;
   return `<section class="wset-sec"><h4 class="wset-label">Belna Wallet</h4><div class="wset-group">
-    <button type="button" class="wset-row wset-link" data-act="wallet-open-panel"><span class="wset-copy"><b>Balance</b><small>${esc([pending > 0 ? walletMoney(pending) + ' pending' : '', 'USD', country].filter(Boolean).join(' · '))}</small></span><span class="wset-value">${esc(walletMoney(w.balance?.available))}</span>${icon('chevr', 16)}</button>
-    ${w.cardProgramAvailable===false ? '' : `<div class="wset-row"><span class="wset-copy"><b>Card payments</b><small${card.tone ? ` class="${card.tone}"` : ''}>${esc(card.text)}</small></span>${cardActions}</div>`}
-    ${w.withdrawalsAvailable===false?'<div class="wset-row"><span class="wset-copy"><b>Bank withdrawals</b><small>Not available yet</small></span></div>':''}
-    ${w.cardProgramAvailable === false ? '' : limitRow}
-    ${w.cardProgramAvailable === false ? '' : `<div class="wset-row"><span class="wset-copy"><b>Pause card spending</b><small>Also cancels purchase cards that are waiting.</small></span>${walletSwitch(!!w.paused, 'belna-wallet-freeze', 'Pause card spending', `data-frozen="${!w.paused}"`)}</div>`}
-    ${w.cardProgramAvailable===false?`<div class="wset-row"><span class="wset-copy"><b>${WALLET_CARD_TITLE}</b><small>${walletCardWaitlistSub()}</small></span>${walletCardWaitlistAction()}</div>`:''}
+    <button type="button" class="wset-row wset-link" data-act="wallet-open-panel"><span class="wset-copy"><b>USD balance</b><small>Your digital dollar balance</small></span><span class="wset-value">${esc(walletMoney(w.balance?.available))}</span>${icon('chevr',16)}</button>
+
+    ${limitRow}<div class="wset-row"><span class="wset-copy"><b>Pause wallet transfers</b><small>Stops new sends, bank withdrawals and Earn transfers through Belna. Incoming money and transfers already underway continue.</small></span>${walletSwitch(!!w.paused,'belna-wallet-freeze','Pause wallet transfers',`data-frozen="${!w.paused}"`)}</div>
+    <div class="wset-row"><span class="wset-copy"><b>Wallet recovery</b><small>View your recovery information privately. Keep it safe and never share it.</small></span><button type="button" class="btn ghost small" data-act="wallet-export">Export wallet</button></div>
+    <div class="wset-row"><span class="wset-copy"><b>${WALLET_CARD_TITLE}</b><small>${walletCardWaitlistSub()}</small></span>${walletCardWaitlistAction()}</div>
   </div></section>`;
 }
 function walletAddressForm(){
@@ -6753,8 +7618,19 @@ function walletShippingContent(){
     <p class="wset-foot">${esc(state.agent.name)} uses the default. You see the address again before every purchase.</p>`;
 }
 function refreshWalletPreferences(force=false){
+ refreshWalletHistory(force);
  const owner=scopeBelnaWallet();if(!owner || walletPreferencesLoading || (!force && walletPreferences))return;
- walletPreferencesLoading=true;Promise.allSettled([window.LingonAuth.api('/api/wallet-preferences'),window.LingonAuth.api('/api/wallet-history')]).then(([preferences,history])=>{if(owner!==scopeBelnaWallet())return;if(preferences.status==='fulfilled'){walletPreferences=preferences.value;walletPreferencesError='';}else walletPreferencesError=preferences.reason.message || 'Could not load your wallet choice. Refresh to try again.';if(history.status==='fulfilled')walletHistory=history.value.history || [];}).finally(()=>{if(owner===scopeBelnaWallet()){walletPreferencesLoading=false;repaintWallet();}});
+ walletPreferencesLoading=true;
+ window.LingonAuth.api('/api/wallet-preferences').then(preferences=>{if(owner===scopeBelnaWallet()){walletPreferences=preferences;walletPreferencesError='';}})
+   .catch(error=>{if(owner===scopeBelnaWallet())walletPreferencesError=error.message || 'Could not load your wallet choice. Refresh to try again.';})
+   .finally(()=>{if(owner===scopeBelnaWallet()){walletPreferencesLoading=false;repaintWallet();}});
+}
+function refreshWalletHistory(force=false){
+ const owner=scopeBelnaWallet();if(!owner || walletHistoryLoading || (!force && walletHistoryLoaded))return;
+ walletHistoryLoading=true;
+ window.LingonAuth.api('/api/wallet-history').then(result=>{if(owner===scopeBelnaWallet()){walletHistory=result.history || [];walletHistoryLoaded=true;}})
+   .catch(()=>{})
+   .finally(()=>{if(owner===scopeBelnaWallet()){walletHistoryLoading=false;repaintWallet();}});
 }
 function setWalletPreferences(payload){
  const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy || shopPayBusy)return;
@@ -6767,7 +7643,7 @@ function walletSettingsContent(){
   return `<div class="wset">
     ${belnaWalletError ? `<p class="wl-error" role="alert">${esc(belnaWalletError)}</p>` : ''}
     ${created?walletBelnaGroup():walletCreateContent()}
-    ${w?.previousPersonalWallet?'<p class="wl-hint">Your previous personal balance stays in your previous wallet. <a href="https://whop.com/home/" target="_blank" rel="noopener noreferrer">Open previous wallet</a></p>':''}
+    ${w?.legacyWallet?'<p class="wl-hint">Any previous balance remains with the previous provider. <a href="https://whop.com/home/" target="_blank" rel="noopener noreferrer">Access previous balance</a></p>':''}
     ${created && w?.cardProgramAvailable!==false?`<section class="wset-sec"><h4 class="wset-label">Agent purchases</h4><div class="wset-group"><div class="wset-row"><span class="wset-copy"><b>Pay from Belna Wallet</b><small>One-time card for each purchase you approve.</small></span>${walletPreferences?.activeMethod==='belna_wallet'?'<span class="wl-ok">Selected</span>':'<button type="button" class="btn ghost small" data-act="wallet-switch" data-method="belna_wallet">Use wallet</button>'}</div></div></section>`:''}
     ${ownMethodsSettings()}
     <section class="wset-sec" id="wallet-shipping-section">${walletShippingContent()}</section>
@@ -6775,7 +7651,7 @@ function walletSettingsContent(){
 }
 function walletCreateContent(){
   const {w}=belnaWalletState();
-  return `<section class="wl-choose"><span class="wl-ico">${icon('wallet',24)}</span><h4>Your own Belna Wallet</h4><p class="wl-lede">Add, send and receive money. Your balance and activity live here.</p><label class="wl-field">Country you live in<select class="field" id="belna-wallet-country">${walletCountryOptions('SE')}</select></label><button type="button" class="btn small" data-act="belna-wallet-setup"${!w?.configured || belnaWalletBusy?' disabled':''}>${belnaWalletBusy?'Creating wallet…':'Create Belna Wallet'}</button>${!w?.configured?'<p class="wl-hint">Wallet setup is currently unavailable. Try again later.</p>':''}</section>`;
+  return `<section class="wl-choose"><span class="wl-ico">${icon('wallet',24)}</span><h4>Your own Belna Wallet</h4><p class="wl-lede">Choose your country, then verify your email to receive your wallet. Hold, add and send digital dollars. You authorize every transfer; your agent prepares requests.</p><label class="wl-field">Country you live in<select class="field" id="belna-wallet-country" required><option value="" selected disabled>Choose your country</option>${walletCountryOptions('')}</select></label><button type="button" class="btn small" data-act="belna-wallet-setup"${!w?.configured || belnaWalletBusy?' disabled':''}>${belnaWalletBusy?'Creating wallet…':'Create Belna Wallet'}</button>${!w?.configured?'<p class="wl-hint">The production wallet connection is being configured. You can register card interest below.</p>':''}</section>`;
 }
 
 /* ----- Chat panel ----- */
@@ -6787,6 +7663,7 @@ function walletOwnSpend(){
 }
 function walletActivityContent(){
   const c = belnaWalletCache || {};
+  const requests=(c.intents||[]).map(i=>walletRow({ic:'shieldcheck',title:i.kind==='earn_deposit'?'Earn deposit request':i.kind==='earn_withdraw'?'Earn withdrawal request':i.kind==='bank_withdraw'?'Bank withdrawal request':i.kind==='withdraw'?'Withdrawal request':'Send to '+i.recipient,sub:esc(walletMoney(i.amount)+' USD · '+walletStatusLabel(i.status)),right:`<button type="button" class="btn small" data-act="wallet-intent" data-id="${esc(i.quoteId)}">${i.status==='processing'?'Check':'Review'}</button>`})).join('');
   const verifications = (c.purchases || []).filter(p => p.status === 'submitted' && !p.cardCanceled && Date.parse(p.expiresAt) > Date.now())
     .map(p => walletRow({ ic:'shieldcheck', tone:'warn', cls:'attn', title:'Verify your payment at ' + (p.merchant || 'the store'), sub:'Your bank asks you to confirm this purchase.', right:`<button type="button" class="btn small" data-act="wallet-verify-payment" data-id="${esc(p.purchaseId)}">Verify</button>` })).join('');
   const belna = c.activity?.length ? c.activity : [...(c.transfers || []).map(x => ({ title:'Sent to ' + x.recipient, amount:x.amount, status:x.status, at:x.at })), ...(c.purchases || []).map(x => ({ title:x.merchant, amount:x.amount, status:x.status, at:x.at })), ...(c.transactions || [])];
@@ -6797,60 +7674,75 @@ function walletActivityContent(){
     const title = String(x.title || (own ? 'Purchase' : 'Wallet activity')), status = walletStatusLabel(x.status);
     if (own) {
       const attn = /needs_buyer|escalated/.test(String(x.status)), url = safeCheckoutUrl(x.continueUrl);
-      return walletRow({ ic:'bag', tone:attn ? 'warn' : '', cls:attn ? 'attn' : '', title, sub:esc([walletDate(x.at), x.method, status !== 'Completed' ? status : ''].filter(Boolean).join(' · ')),
+      // The store confirms the payment, not Belna: a placed order reads as placed, not "Submitted".
+      const ownStatus = /^(?:awaiting_confirmation|submitted)$/.test(String(x.status)) ? 'Order placed' : status;
+      return walletRow({ ic:'bag', tone:attn ? 'warn' : '', cls:attn ? 'attn' : '', title, sub:esc([walletDate(x.at), x.method, ownStatus !== 'Completed' ? ownStatus : ''].filter(Boolean).join(' · ')),
         right:`<span class="pay-side"><span class="wl-amt">−${esc(walletAmount(x))}</span>${attn && url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Pay</a>` : ''}</span>` });
     }
-    const incoming = /received|deposit|refund/i.test(title), outgoing = !incoming && /purchase|sent|withdrawal|fee/i.test(title);
+    const incoming = x.direction ? x.direction==='incoming' : /received|deposit|refund/i.test(title), outgoing = x.direction ? x.direction==='outgoing' : !incoming && /purchase|sent|withdrawal|fee/i.test(title);
     const sub = [walletDate(x.at), status !== 'Completed' ? status : ''].filter(Boolean).join(' · ');
     return walletRow({ ic:WALLET_ACTIVITY_ICONS[title] || (incoming ? 'arrin' : outgoing ? 'aur' : 'wallet'), tone:incoming ? 'in' : '', title, sub:esc(sub),
       right:`<span class="wl-amt${incoming ? ' in' : ''}">${incoming ? '+' : outgoing ? '−' : ''}${esc(walletAmount(x))}</span>` });
   }).join('');
-  return `${verifications ? `<div class="wl-list wl-attn">${verifications}</div>` : ''}<section class="wl-sec" aria-label="Wallet activity"><div class="wl-sec-head"><h4>Activity</h4>${c.wallet?.cardProgramAvailable===false?'':`<button type="button" class="wl-link" data-act="wallet-manage-shipping">${home ? 'Delivery: ' + esc(home.label) : 'Add delivery address'}</button>`}</div>
+  return `${requests?`<div class="wl-list wl-attn">${requests}</div>`:''}${verifications ? `<div class="wl-list wl-attn">${verifications}</div>` : ''}<section class="wl-sec" aria-label="Wallet activity"><div class="wl-sec-head"><h4>Activity</h4>${c.wallet?.cardProgramAvailable===false?'':`<button type="button" class="wl-link" data-act="wallet-manage-shipping">${home ? 'Delivery: ' + esc(home.label) : 'Add delivery address'}</button>`}</div>
     ${c.activityError ? `<p class="wl-error" role="status">${esc(c.activityError)}</p>` : ''}${rows ? `<div class="wl-list">${rows}</div>` : '<p class="wl-empty">Purchases, deposits, sends and payments will appear here.</p>'}</section>`;
 }
-function openWalletMoneyAction(kind){
-  const owner=scopeBelnaWallet();if(!owner || kind!=='send' || belnaWalletBusy)return;
+function openWalletMoneyAction(kind,intent=null){
+  const owner=scopeBelnaWallet();if(!owner||!['send','withdraw','bank_withdraw','earn','earn_deposit','earn_withdraw'].includes(kind)||belnaWalletBusy)return;
   walletMoneyClose?.();walletWithdrawalClose?.();walletCardSetupClose?.(false);
-  const previous=document.activeElement;
-  walletAction=kind;walletActionError='';if(!['processing','awaiting_confirmation'].includes(belnaTransferQuote?.status))belnaTransferQuote=null;
-  const overlay=el(`<div class="wallet-withdraw-overlay"><section class="wallet-withdraw-dialog wallet-money-dialog wl" role="dialog" aria-modal="true" aria-labelledby="wallet-money-title"><header><div><h3 id="wallet-money-title">Send money</h3><p>Review the recipient and amount before you confirm.</p></div><button type="button" class="btn ghost small" data-sheet-close aria-label="Close wallet action">${icon('x',18)}</button></header><div id="wallet-money-content"></div></section></div>`);
+  const previous=document.activeElement;walletAction=kind;walletActionError='';belnaTransferQuote=intent;
+  const title=kind==='send'?'Send USD':kind==='bank_withdraw'?'Withdraw to bank':kind==='withdraw'?'Withdraw USD':kind==='earn'?'Earn':kind==='earn_deposit'?'Deposit into Earn':'Withdraw from Earn';
+  const description=kind==='earn'?'Your Earn balance and options.':kind==='bank_withdraw'?'Withdraw money to your bank account.':'Review the exact request before authorizing it with your wallet.';
+  const overlay=el(`<div class="wallet-withdraw-overlay wallet-money-overlay"><section class="wallet-withdraw-dialog wallet-money-dialog wl" role="dialog" aria-modal="true" aria-labelledby="wallet-money-title"><div class="wallet-dialog-brand" aria-label="Belna Wallet">${Mascot.logo(24)}<b>belna</b><span>Wallet</span></div><header><div><h3 id="wallet-money-title">${title}</h3><p>${description}</p></div><button type="button" class="btn ghost small" data-sheet-close aria-label="Close wallet action">${icon('x',18)}</button></header><div id="wallet-money-content"></div></section></div>`);
   let closed=false,identityTimer;
   const close=()=>{if(closed)return;closed=true;clearInterval(identityTimer);dismissSheet(overlay,()=>overlay.remove());document.removeEventListener('keydown',onKey);if(walletMoneyClose===close){walletMoneyClose=null;walletMoneyRoot=null;walletAction=null;walletActionError='';}restoreWalletFocus(previous);};
-  const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button:not(:disabled),input:not(:disabled),a[href]')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
+  const onKey=e=>{if(overlay!==[...document.querySelectorAll('.wallet-withdraw-overlay')].at(-1))return;if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='Tab'){const nodes=[...overlay.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),a[href]')],first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};
   walletMoneyClose=close;walletMoneyRoot=overlay.querySelector('#wallet-money-content');walletMoneyRoot.innerHTML=walletActionContent();
   overlay.querySelector('header button').onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};
-  overlay.addEventListener('submit',e=>{e.preventDefault();overlay.querySelector('[data-act="belna-wallet-quote"]')?.click();});
-  overlay.addEventListener('input',()=>{if(belnaTransferQuote && !belnaTransferQuote.status){belnaTransferQuote=null;walletActionError='';repaintWallet();}});
-  document.addEventListener('keydown',onKey);document.body.append(overlay);overlay.querySelector('input')?.focus();
+  overlay.addEventListener('submit',e=>{e.preventDefault();overlay.querySelector('[data-act="wallet-bank-register"], [data-act="belna-wallet-quote"]')?.click();});
+  overlay.addEventListener('input',e=>{if(['wallet-earn-risk','wallet-bank-consent','wallet-bank-verify-consent'].includes(e.target.id))return;if(belnaTransferQuote && ['quoted','awaiting_owner'].includes(belnaTransferQuote.status)){belnaTransferQuote=null;walletActionError='';repaintWallet();}});
+  document.addEventListener('keydown',onKey);document.body.append(overlay);(overlay.querySelector('input')||overlay.querySelector('header button'))?.focus();
   identityTimer=setInterval(()=>{if(owner!==billingIdentity())close();},1000);
+  if(kind==='bank_withdraw')refreshWalletBank();
+}
+async function refreshWalletBank(){
+  const owner=scopeBelnaWallet();if(!owner||walletBankLoading)return;
+  walletBankLoading=true;walletActionError='';repaintWallet();
+  try{const result=await window.LingonAuth.api('/api/belna-wallet/bank');if(owner===scopeBelnaWallet()){
+    walletBankState=result;
+    if(result.verification?.ready || (walletBankLink?.step==='terms'&&result.verification?.termsAccepted))walletBankLink=null;
+  }}
+  catch(e){if(owner===scopeBelnaWallet())walletActionError=e.message||'Bank withdrawals could not load. Try again.';}
+  finally{if(owner===scopeBelnaWallet()){walletBankLoading=false;repaintWallet();}}
 }
 function walletActionContent(){
-  const error=walletActionError?`<p class="wl-error" role="alert">${esc(walletActionError)}</p>${/identity check/i.test(walletActionError)?'<button type="button" class="btn ghost small" data-act="wallet-verify-money">Continue secure wallet check</button>':''}`:'';
-  const quote=belnaTransferQuote,pending=['processing','awaiting_confirmation'].includes(quote?.status),busy=belnaWalletBusy?' disabled':'';
-  if (walletAction === 'send') return `<form class="wl-form"><div class="wl-fields"><label class="wl-field">Recipient’s Belna email<input class="field" id="belna-wallet-recipient" type="email" required placeholder="name@example.com" value="${esc(quote?.recipient || '')}"${busy || pending?' disabled':''}></label><label class="wl-field">Amount (USD)<input class="field" id="belna-wallet-send-amount" type="number" required min="1" max="50" step="0.01" value="${esc(quote?.amount ?? '')}"${busy || pending?' disabled':''}></label></div>
-    <span class="wset-actions">${pending?`<button type="button" class="btn small" data-act="belna-wallet-transfer-check" data-id="${esc(quote.quoteId)}"${busy}>Check transfer status</button>`:`<button type="button" class="btn small" data-act="belna-wallet-quote"${busy}>Review send</button>${quote && !quote.status ? `<button type="button" class="btn small" data-act="belna-wallet-send"${busy}>Confirm send</button>` : ''}`}</span>
-    ${quote ? `<p class="wl-hint" role="status">${esc(walletMoney(quote.amount) + ' to ' + quote.recipient + '. ' + (quote.fees || 'Payment partner fees may apply.'))}${quote.status ? ' · ' + esc(walletStatusLabel(quote.status)) : ''}</p>` : ''}<p class="wl-hint">Both people need a Belna Wallet. The recipient’s confirmed Belna sign-in email identifies their connected wallet. Send USD from your available balance, up to $50 total in 24 hours. Bank accounts, card numbers and crypto addresses are not supported recipients.</p>${pending?'<p class="wl-hint">The result is not final yet. Check this transfer before starting another send.</p>':''}${error}</form>`;
-  return '';
+  if(walletAction==='earn')return walletEarnContent();
+  const bank=walletAction==='bank_withdraw';
+  if(bank&&!belnaTransferQuote&&(!walletBankState?.verification?.ready||!walletBankState?.accounts?.length))return walletBankWithdrawalContent();
+  const quote=belnaTransferQuote,busy=belnaWalletBusy?' disabled':'',pending=['processing','awaiting_confirmation'].includes(quote?.status),finished=quote&&['succeeded','failed','rejected','canceled'].includes(quote.status),earn=walletAction?.startsWith('earn_');
+  const recipient=earn?'':bank?`<label class="wl-field">Your bank account<select class="field" id="belna-wallet-bank" aria-label="Your bank account" required${busy||pending||finished||quote?' disabled':''}>${quote?`<option value="${esc(quote.fiatAccountId)}">${esc(quote.recipient)}</option>`:(walletBankState.accounts||[]).map(a=>`<option value="${esc(a.id)}">${esc(a.label)}</option>`).join('')}</select></label>`:`<label class="wl-field">${walletAction==='withdraw'?'Base wallet address':'Belna email'}<input class="field" id="belna-wallet-recipient" type="${walletAction==='withdraw'?'text':'email'}" required maxlength="254" placeholder="${walletAction==='withdraw'?'0x…':'name@example.com'}" value="${esc(quote?.recipient||'')}"${busy||pending||finished?' disabled':''}></label>`;
+  return `<form class="wl-form"><div class="wl-fields">${recipient}<label class="wl-field">Amount (USD)<input class="field" id="belna-wallet-send-amount" type="number" required min="0.01" max="2000" step="0.01" value="${esc(quote?.amount??'')}"${busy||pending||finished?' disabled':''}></label></div>
+    ${earn?'<label class="wl-check"><input type="checkbox" id="wallet-earn-risk" required> I understand yield varies, funds may lose value, and withdrawals may be delayed.</label>':''}
+    <span class="wset-actions">${finished?'':pending?`<button type="button" class="btn small" data-act="belna-wallet-transfer-check" data-id="${esc(quote.quoteId)}"${busy}>Check this request</button>`:quote?`<button type="button" class="btn small" data-act="belna-wallet-send"${busy}>Authorize ${esc(walletMoney(quote.amount))} USD</button><button type="button" class="btn ghost small" data-act="wallet-intent-cancel" data-id="${esc(quote.quoteId)}"${busy}>Cancel request</button>`:`<button type="button" class="btn small" data-act="belna-wallet-quote"${busy}>Review request</button>`}</span>
+    ${quote?`<p class="wl-hint" role="status">${esc(walletMoney(quote.amount)+' USD · '+(earn?'Earn':quote.recipient)+' · '+walletStatusLabel(quote.status))}</p><p class="wl-hint">${esc(quote.fees)}${quote.address?' Destination: '+esc(quote.address):''}</p>`:''}
+    <p class="wl-hint">${bank?'Your digital dollars are converted to EUR and sent to your bank by SEPA. The amount received depends on conversion and provider fees. Your bank may charge to convert EUR to SEK. Bank delivery can take several business days.':earn?'Earn puts your digital dollars into a lending pool. Yield is variable, and funds may lose value. Withdrawals return money to your wallet.':walletAction==='withdraw'?'This existing request sends digital dollars to the reviewed wallet address. It is not a bank payout. Transfers are irreversible.':'Send USD to another Belna wallet using their email address. Transfers are irreversible.'}</p>
+    ${quote?.providerReviewRequired?'<p class="wl-error" role="alert">The bank payout needs provider review after a crypto transfer. Contact support before withdrawing again.</p>':''}
+    ${pending?'<p class="wl-hint">The result is not final. Check this same request before starting another.</p>':''}${walletActionError?`<p class="wl-error" role="alert">${esc(walletActionError)}</p>`:''}</form>`;
 }
-function walletSetupContent(w){
-  if (w.cardProgramAvailable === false) return '';
-  if (w.cardReady ?? w.status === 'ready') return w.paused
-    ? `<div class="wl-note warn">${icon('lock', 17)}<span><b>Card spending is paused</b><small>Resume it in wallet settings.</small></span><button type="button" class="btn ghost small" data-act="wallet-manage">Settings</button></div>`
-    : `<div class="wl-note ok">${icon('shieldcheck', 17)}<span><b>Card payments are on</b><small>${w.agentCardPayments ? `${esc(state.agent.name)} gets a one-time card for each purchase you approve.` : 'Agent card checkout isn’t available yet.'}</small></span></div>`;
-  const busy = belnaWalletBusy ? ' disabled' : '', review = w.status === 'review', denied = w.status === 'denied', verified=w.identityVerified===true;
-  const cardCopy = denied ? 'The issuer has not approved your card application. Contact card support for the next step.'
-    : review ? w.cardApplicationStatus==='approved'?'Your card application is approved. Activate your virtual card to enable agent purchases.':'Your card application is in review with the issuer. Check status after it is approved.'
-    : w.status==='card_action_required' ? w.cardApplicationStatus==='needs_information'?'The card issuer needs more information. Continue in its private setup page.':'Finish the card issuer’s verification in its private setup page.'
-    : w.status==='card_unavailable' ? 'Your card application could not be filed. Retry setup or contact card support.'
-    : `Then ${esc(state.agent.name)} gets a one-time card for each purchase you approve.`;
-  const cardAction = denied || (w.kind!=='personal' && review && w.cardApplicationStatus!=='approved') ? '' : `<button type="button" class="btn ${verified?'':'ghost '}small" data-act="belna-wallet-card-connect"${busy}>${w.cardApplicationStatus==='approved'?'Activate virtual card':w.status==='card_action_required'?'Continue card setup':w.status==='card_unavailable'?'Retry card setup':review?'Check card status':'Connect card'}</button>`;
-  const identityCopy=verified?'Verified with our payment partner':w.verificationStatus==='manual_review'?'In review with our payment partner':w.verificationStatus==='action_required'?'Our payment partner needs more information':w.verificationStatus==='rejected'?'Identity check was declined. Retry with our payment partner.':'Opens with our payment partner';
-  const step = (n, done, title, sub, action = '') => `<li class="wl-step${done ? ' done' : ''}"><span class="wl-step-n" aria-hidden="true">${done ? icon('check', 12) : n}</span><span class="wl-copy"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${action}</li>`;
-  return `<section class="wl-setup" aria-label="Card setup"><div class="wl-setup-head"><b>Let ${esc(state.agent.name)} buy things</b><small>${verified?2:1} of 3 done</small></div><div class="wl-progress" aria-hidden="true"><span${verified?' style="width:66.67%"':''}></span></div>
-    <ol>${step(1, true, w.kind==='personal'?'Connect personal wallet':'Create your wallet', '')}
-    ${step(2, verified, verified?'Identity verified':'Verify your identity', identityCopy, verified||w.verificationStatus==='manual_review'?'':`<button type="button" class="btn small" data-act="belna-wallet-verify"${busy}>${w.verificationStatus==='pending'||w.verificationStatus==='action_required'?'Continue':'Start'}</button>`)}
-    ${step(3, false, 'Connect your card', cardCopy, cardAction)}</ol>${denied||w.status==='card_unavailable'?'<a class="btn ghost small" href="https://docs.whop.com/get-help/whop-support" target="_blank" rel="noopener noreferrer">Card support</a> ':''}<button type="button" class="btn ghost small" data-act="belna-wallet-refresh"${busy}>Check status</button></section>`;
+function walletBankWithdrawalContent(){
+  const bank=walletBankState,busy=belnaWalletBusy||walletBankLoading?' disabled':'',error=walletActionError?`<p class="wl-error" role="alert">${esc(walletActionError)}</p>`:'';
+  if(walletBankLoading&&!bank)return '<p role="status">Checking your bank connection…</p>';
+  if(!belnaWalletCache?.wallet?.bankWithdrawalsAvailable)return `<p>Bank withdrawals are not enabled yet.</p>${error}`;
+  if(!bank)return `${error}<button type="button" class="btn small" data-act="wallet-bank-refresh"${busy}>Try again</button>`;
+  if(!bank.verification.ready)return `<section class="wl-sec" aria-label="Bank withdrawals"><div class="wl-list boxed">${walletRow({ic:'shieldcheck',title:'Verify your identity',sub:bank.verification.status==='not_started'?'A one-time check is required for bank withdrawals.':'Verification: '+esc(walletStatusLabel(bank.verification.status))})}</div><p class="wl-hint">Bridge, our bank payout provider, verifies your identity before you can withdraw. First review its terms, then complete the identity check. You do this yourself; your agent cannot access your documents.</p>${walletBankLink?`<div class="wallet-verification-step" role="status"><b>${walletBankLink.step==='terms'?'Step 1 of 2 · Review bank terms':'Step 2 of 2 · Verify your identity'}</b><p>Your secure verification opens in a new tab. If it did not open, use the button below.</p><a class="btn small" href="${esc(walletBankLink.url)}" target="_blank" rel="noopener noreferrer">${walletBankLink.step==='terms'?'Review bank terms':'Open identity verification'}</a><p>When you finish, return here and check status${walletBankLink.step==='terms'?', then continue to the identity check':''}.</p></div>`:`<label class="wl-check"><input type="checkbox" id="wallet-bank-verify-consent"> I agree to share my wallet identity and email with Bridge to start verification.</label><button type="button" class="btn small wallet-bank-start" data-act="wallet-bank-verify"${busy}>${belnaWalletBusy?'Opening secure verification…':bank.verification.termsAccepted?'Continue verification':'Start verification'}</button>`}<button type="button" class="btn ghost small wallet-bank-check" data-act="wallet-bank-refresh"${busy}>Check status</button><p class="wl-hint">Withdrawals are paid in EUR to your own bank account through SEPA.</p>${error}</section>`;
+  return `<form class="wl-form" aria-label="Link your bank"><p>Link your own bank account to receive EUR withdrawals.</p><div class="wl-fields"><label class="wl-field">Account holder name<input class="field" id="wallet-bank-name" autocomplete="name" required maxlength="200"></label><label class="wl-field">IBAN<input class="field" id="wallet-bank-iban" autocomplete="off" required maxlength="42" placeholder="SE…"></label><label class="wl-field">BIC / SWIFT code<input class="field" id="wallet-bank-bic" autocomplete="off" required maxlength="11"></label></div><label class="wl-check"><input type="checkbox" id="wallet-bank-consent" required> This is my bank account, it accepts EUR SEPA transfers, and I approve sending these details to Bridge.</label><button type="button" class="btn small" data-act="wallet-bank-register"${busy}>Link bank account</button><p class="wl-hint">Your bank details go to Bridge. Belna stores the bank reference and masked account label. Your bank may charge to convert EUR to SEK.</p>${error}</form>`;
 }
+function walletEarnContent(){
+  const e=belnaWalletCache?.earn;
+  const sub=e?.available?`${e.position?.available==null?'':walletMoney(e.position.available)+' USD in Earn'}${e.apy==null?'':' · '+e.apy.toFixed(2)+'% variable APY'}`:(e?.reason||'Awaiting a reviewed vault configuration.');
+  return `<section class="wl-sec" aria-label="Earn balance and options"><div class="wl-list boxed">${walletRow({ic:'chart',title:'Earn on your balance',sub:esc(sub),right:e?.available?`<span class="wset-actions"><button type="button" class="btn ghost small" data-act="wallet-money-action" data-action="earn_deposit">Deposit</button><button type="button" class="btn ghost small" data-act="wallet-money-action" data-action="earn_withdraw"${!(e.position?.available>0)?' disabled':''}>Withdraw</button></span>`:'<span class="wl-tag">Not enabled</span>'})}</div>${e?.available?`<p class="wl-hint">${e.position?.earned==null?'':esc('Yield earned: '+walletMoney(e.position.earned))+' · '}The displayed APY is after Belna’s yield fee${e.yieldFeePercent==null?'':esc(' ('+e.yieldFeePercent+'% of generated yield)')}. APY is the estimated annual rate and can change.</p>`:''}<p class="wl-hint">Variable yield. Funds may lose value and withdrawals may be delayed. You approve each deposit.</p></section>`;
+}
+function walletSetupContent(w){return '';}
 function walletTabContent(){
   scopeBelnaWallet();
   const { w, created } = belnaWalletState();
@@ -6859,8 +7751,8 @@ function walletTabContent(){
     const pending = Number(w.balance?.pending);
     const act = (attrs, ic, label, on = false) => `<button type="button" class="wl-act${on ? ' on' : ''}" ${attrs}${on ? ' aria-pressed="true"' : ''}><span class="wl-act-ic" aria-hidden="true">${icon(ic, 19)}</span>${label}</button>`;
     body += `<section class="wl-balance" aria-label="Belna Wallet balance"><span class="wl-label">Total balance · Belna</span><div class="wl-big"><strong>${esc(walletMoney(walletTotalBalance(w)))}</strong><span>USD</span></div>${pending > 0 ? `<span class="wl-pending">${esc(walletMoney(w.balance?.available))} available · ${esc(walletMoney(pending))} pending</span>` : ''}${w.sandbox ? '<span class="wl-tag">Test wallet · no real money</span>' : ''}${walletBalanceChart(w)}</section>
-      <div class="wl-acts" aria-label="Wallet actions">${act('data-act="belna-wallet-deposit"', 'plus', 'Add money')}${act('data-act="wallet-money-action" data-action="send"', 'aur', 'Send', walletAction === 'send')}${act('data-act="wallet-money-action" data-action="withdraw"' + (w.withdrawalsAvailable===false ? ' disabled' : ''), 'bank', 'Withdraw')}</div>${w.withdrawalsAvailable===false?'<p class="wl-hint">Bank withdrawals are currently unavailable.</p>':''}
-      ${walletActivityContent()}${walletSetupContent(w)}`;
+      <div class="wl-acts" aria-label="Wallet actions">${act('data-act="belna-wallet-deposit"', 'plus', 'Add money')}${act('data-act="wallet-money-action" data-action="send"', 'aur', 'Send', walletAction === 'send')}${act('data-act="wallet-money-action" data-action="bank_withdraw" title="Withdraw to bank"', 'bank', 'Withdraw', walletAction === 'bank_withdraw')}${act('data-act="wallet-money-action" data-action="earn"', 'chart', 'Earn', walletAction === 'earn'||walletAction?.startsWith('earn_'))}</div>
+      <p class="wl-hint">Digital dollars, not a bank deposit. Their value can vary.</p>${walletActivityContent()}`;
   } else {
     const loading = (belnaWalletLoading && !belnaWalletCache) || (walletPreferencesLoading && !walletPreferences);
     body += loading ? '<p class="wl-empty">Loading Belna Wallet…</p>' : walletCreateContent() + (walletOwnSpend().length ? walletActivityContent() : '');
@@ -6869,41 +7761,55 @@ function walletTabContent(){
 }
 // Your own payment methods are not the Belna balance: one button leads to them in Settings.
 function walletPaymentsLink(){
-  const { w, created } = belnaWalletState();
-  const on = OWN_METHODS.filter(([id]) => walletPreferences?.methods?.[id]).map(([, label]) => label);
-  const card = created && w.cardProgramAvailable === false ? walletRow({ ic:'card', title:WALLET_CARD_TITLE, sub:walletCardWaitlistSub(), right:walletCardWaitlistAction() }) : '';
-  return `<section class="wl-sec" aria-label="Card and payment methods"><div class="wl-list boxed">${card}<button type="button" class="wl-row wl-row-link" data-act="payments-manage"><span class="wl-ico" aria-hidden="true">${icon('bag', 17)}</span><span class="wl-copy"><b>Payment methods</b><small>${esc(on.length ? on.join(', ') + ' on' : 'Store cards, payment apps, Shop Pay')} · never uses your balance</small></span>${icon('chevr', 16)}</button></div></section>`;
+  const { w } = belnaWalletState();
+  const on = ownMethodsOn();
+  const card = w?.cardProgramAvailable === false ? walletRow({ ic:'card', title:WALLET_CARD_TITLE, sub:walletCardWaitlistSub(), right:walletCardWaitlistAction() }) : '';
+  const sub = on.length ? `${on.join(' and ').replace(/^./, c => c.toUpperCase())} on · never this balance` : `None on yet · ${state.agent.name} sends you checkout links`;
+  return `<section class="wl-sec" aria-label="Card and payment methods"><div class="wl-list boxed">${card}<button type="button" class="wl-row wl-row-link" data-act="payments-manage"><span class="wl-ico" aria-hidden="true">${icon('bag', 17)}</span><span class="wl-copy"><b>How ${esc(state.agent.name)} pays for purchases</b><small>${esc(sub)}</small></span>${icon('chevr', 16)}</button></div></section>`;
 }
 function safeCheckoutUrl(value){
   try{const u=new URL(value);return u.protocol==='https:' && !u.username && !u.password?u.href:'';}catch{return '';}
 }
-/* ----- Your own payment methods, in Settings › Wallet ----- */
-// Swish, Klarna, Shop Pay and cards saved in stores are charged to the owner's own accounts,
-// never the Belna balance. Each is off until the owner turns it on, and the server refuses a
-// purchase with a method that is off. Belna never takes card or bank details.
+/* ----- Purchases: how the agent pays, in Settings › Wallet ----- */
+// The owner's own payment methods are charged to the owner's own accounts, never the Belna
+// balance. Each switch is off until the owner turns it on, and the server refuses a purchase
+// with a method that is off. Shop Pay is one of the payment apps: at a store's checkout the
+// owner confirms it with the code Shop sends to their phone, so it needs no connection.
+// The optional Shop account link only lets the agent set up Shopify orders without a browser.
+// Belna never takes card or bank details.
 const OWN_METHODS = [
-  ['saved_card', 'Cards saved in stores', 'card', 'Stores you sign in to, like Amazon'],
-  ['payment_apps', 'Payment apps and pay later', 'phone', 'Klarna, Swish, PayPal, Afterpay, Sezzle and more. You approve each payment in the app.'],
-  ['shop_pay', 'Shop Pay', '', 'Shopify stores'],
+  ['payment_apps', 'Payment apps', 'phone', 'Klarna, Swish, Shop Pay, PayPal, Afterpay and more. You confirm each payment yourself, in the app or with a code sent to your phone.', 'Payment apps'],
+  ['saved_card', 'Cards saved in your store accounts', 'card', 'The card you already saved at a store, like Amazon, shown as •••• 1234. Only at stores where you saved a login.', 'store cards'],
 ];
-function ownMethodControl(id, label){
-  const shop = shopPaySnapshot();
-  if (id === 'shop_pay' && !shop.connected) return `<button type="button" class="btn ghost small" data-act="shop-pay-connect"${shopPayBusy ? ' disabled' : (shop.configured ? '' : ' disabled') + ' aria-label="Connect Shop Pay"'}>${shopPayBusy ? 'Please wait…' : 'Connect'}</button>`;
-  return walletSwitch(!!walletPreferences?.methods?.[id], 'pay-method-toggle', label, `data-method="${id}"`);
+// Short names of the methods that are on, for the Wallet panel: "Payment apps and store cards".
+function ownMethodsOn(){
+  return OWN_METHODS.filter(([id]) => walletPreferences?.methods?.[id]).map(([, , , , short]) => short);
 }
-function ownMethodSub(id, sub){
-  const shop = shopPaySnapshot();
-  if (id !== 'shop_pay' || shop.connected) return id === 'shop_pay' && shop.email ? 'Connected as ' + shop.email : sub;
-  return state.shopPayLoading ? 'Checking connection…' : shop.configured ? 'Shopify stores' : 'Currently unavailable';
+// The Shop account link: optional, separate from paying with Shop Pay.
+function shopAccountRows(){
+  const shop = shopPaySnapshot(), busy = shopPayBusy ? ' disabled' : '', agent = esc(state.agent.name);
+  if (!shop.configured && !shop.connected) return '';
+  const mark = `<span class="pm-ic shop" aria-hidden="true">${shopPayBrandMark()}</span>`;
+  if (!shop.connected) return `<div class="wset-row pm-row">${mark}<span class="wset-copy"><b>Shop account <span class="wl-tag">Optional</span></b><small>${state.shopPayLoading ? 'Checking connection…' : `Lets ${agent} set up orders at Shopify stores directly, without opening the store in a browser. You still approve and pay.`}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-connect"${shopPayBusy ? ' disabled' : ' aria-label="Connect Shop account"'}>${shopPayBusy ? 'Please wait…' : 'Connect'}</button></div>`;
+  const limit = shop.nativeCheckout ? `<div class="wset-row"><span class="wset-copy"><b>Shop Pay daily limit</b><small>The most ${agent} can pay with Shop Pay in a day. You still approve every order.</small></span><label class="wl-field">USD<input class="field" id="shoppaylimit" type="number" min="1" max="2000" step="0.01" value="${Number(shop.dailyLimitUsd)||200}"></label><button type="button" class="btn ghost small" data-act="shop-pay-limit"${busy}>Save limit</button></div>` : '';
+  return `<div class="wset-row pm-row">${mark}<span class="wset-copy"><b>Shop account</b><small>${esc((shop.email ? 'Connected as ' + shop.email + ' · ' : 'Connected · ') + state.agent.name + ' sets up Shopify orders directly')}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-disconnect"${busy}>${shopPayBusy ? 'Please wait…' : 'Disconnect'}</button></div>${limit}`;
 }
-// Settings › Wallet: each method's switch, the Shop Pay account and limit, and how it stays safe.
+// Settings › Wallet: how a purchase works, then the switches for the owner's own methods.
 function ownMethodsSettings(){
-  const shop = shopPaySnapshot(), busy = shopPayBusy ? ' disabled' : '';
-  const rows = OWN_METHODS.map(([id, label, ic, sub]) => `<div class="wset-row pm-row"><span class="pm-ic${id === 'shop_pay' ? ' shop' : ''}" aria-hidden="true">${id === 'shop_pay' ? shopPayBrandMark() : icon(ic, 16)}</span><span class="wset-copy"><b>${esc(label)}</b><small>${esc(ownMethodSub(id, sub))}</small></span>${ownMethodControl(id, label)}</div>`).join('');
-  const shopRows = shop.connected ? `<div class="wset-row"><span class="wset-copy"><b>Shop Pay daily limit</b><small>Purchases still need your approval</small></span><label class="wl-field">USD<input class="field" id="shoppaylimit" type="number" min="1" max="2000" step="0.01" value="${Number(shop.dailyLimitUsd)||200}"></label><button type="button" class="btn ghost small" data-act="shop-pay-limit"${busy}>Save limit</button></div>
-    <div class="wset-row"><span class="wset-copy"><b>Shop Pay account</b><small>${esc(shop.email || 'Connected')}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-disconnect"${busy}>${shopPayBusy ? 'Please wait…' : 'Disconnect'}</button></div>` : '';
-  return `<section class="wset-sec" id="payment-connections"><h4 class="wset-label">Payment methods</h4><div class="wset-group">${rows}${shopRows}</div>
-    <ul class="pm-safe" aria-label="How payment methods work"><li>${icon('wallet', 14)}Never uses your Belna balance</li><li>${icon('check', 14)}You approve every purchase</li><li>${icon('lock', 14)}${esc(state.agent.name)} never sees card or bank details</li></ul>
+  const agent = esc(state.agent.name);
+  const step = (n, title, text) => `<li class="wset-row"><span class="pm-step" aria-hidden="true">${n}</span><span class="wset-copy"><b>${title}</b><small>${text}</small></span></li>`;
+  const rows = OWN_METHODS.map(([id, label, ic, sub]) => `<div class="wset-row pm-row"><span class="pm-ic" aria-hidden="true">${icon(ic, 16)}</span><span class="wset-copy"><b>${esc(label)}</b><small>${esc(sub)}</small></span>${walletSwitch(!!walletPreferences?.methods?.[id], 'pay-method-toggle', label, `data-method="${id}"`)}</div>`).join('');
+  return `<section class="wset-sec" id="payment-connections"><h4 class="wset-label">Purchases</h4>
+    <ol class="wset-group pm-steps" aria-label="How a purchase works">
+      ${step(1, `${agent} fills in the order`, 'The items, your delivery address and one of the payment methods you turned on below.')}
+      ${step(2, 'You approve it in chat', 'A card shows the items, total, delivery and how you pay. Nothing is bought until you tap Place order.')}
+      ${step(3, 'You pay from your own account', `Klarna, Swish and Shop Pay ask you to confirm on your phone. ${agent} never sees card or bank details, and your Belna balance is never used.`)}
+    </ol>
+    <h4 class="wset-label pm-label">Payment methods ${agent} may use</h4>
+    <div class="wset-group">${rows}
+      <div class="wset-row pm-row"><span class="pm-ic" aria-hidden="true">${icon('globe', 16)}</span><span class="wset-copy"><b>Pay on the store’s page</b><small>When none of these fit, ${agent} sends you a checkout link and you pay yourself.</small></span><span class="wl-tag pm-always">Always on</span></div>
+      ${shopAccountRows()}
+    </div>
     ${walletPreferencesError ? `<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>` : ''}${shopPayError ? `<p class="wl-error" role="alert">${esc(shopPayError)}</p>` : ''}</section>`;
 }
 const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
@@ -7095,6 +8001,59 @@ function drawLiveFrame(data){
    Realtime channel for this task. The viewer says it is watching every 10 s (frames
    flow only while someone watches); takeover and input go back on the same channel. */
 let liveRealtimeCfg = null;
+/* A task's answer while the worker writes it (task.answerTopic; liveAnswer in task-runtime.js):
+   the open chat listens on the task's own Realtime channel for as long as the task works. The
+   saved answer has the same id and replaces what streamed; what streamed is never saved. */
+const answerChannels = new Map();
+function syncAnswerStreams(){
+  const c = chat(), want = new Map();
+  if (c && signedIn()) for (const t of Object.values(c.managedTasks || {})) {
+    if (/^answer-[a-f0-9]{64}$/.test(t.answerTopic || '') && ['queued','running'].includes(t.status)) want.set(t.answerTopic, t.id);
+  }
+  for (const [topic, ch] of answerChannels) if (!want.has(topic) || ch.chatId !== c?.id) { ch.close(); answerChannels.delete(topic); }
+  for (const [topic, taskId] of want) if (!answerChannels.has(topic)) answerChannels.set(topic, openAnswerChannel(c, taskId, topic));
+}
+// A session that ends or changes hands (not only an explicit sign-out) stops the old account's streams.
+window.addEventListener('belna-auth-changed', () => syncAnswerStreams());
+function openAnswerChannel(c, taskId, topic){
+  const ch = { chatId:c.id, ws:null, beat:0, closed:false, close(){ this.closed = true; clearInterval(this.beat); try { this.ws?.close(); } catch {} } };
+  const shown = () => chat() === c && $('#tinner');
+  const onAnswer = (event, data) => {
+    if (data.taskId !== taskId || !Number.isInteger(data.v)) return;
+    const id = `${taskId}:answer:v${data.v}`;
+    let m = c.messages.find(x => x.managedId === id);
+    if (event === 'retract') {
+      if (m?.draft) { c.messages.splice(c.messages.indexOf(m), 1); document.querySelector(`[data-mid="${m.id}"]`)?.remove(); }
+      return;
+    }
+    if (event !== 'answer' || typeof data.text !== 'string' || (m && !m.draft)) return;
+    if (!m) {
+      m = { id:uid(), managedId:id, role:'agent', kind:'text', text:'', draft:true };
+      c.messages.push(m);
+      if (shown()) { const t = $('#thread'), pinned = t && t.scrollHeight - t.scrollTop - t.clientHeight < 100; const node = msgNode(c, m); node.classList.add('msg-new'); $('#tinner').appendChild(node); if (pinned) t.scrollTop = t.scrollHeight; }
+    }
+    m.text = data.text.slice(0, 20000);
+    if (shown()) streamPaint(c, m);
+  };
+  const cfgRequest = liveRealtimeCfg ? Promise.resolve(liveRealtimeCfg) : window.LingonAuth.api('/api/live/realtime').then((cfg) => (liveRealtimeCfg = cfg));
+  cfgRequest.then((cfg) => {
+    if (ch.closed || !cfg?.url) return;
+    const ws = new WebSocket(cfg.url + '?apikey=' + encodeURIComponent(cfg.key) + '&vsn=1.0.0');
+    let ref = 1;
+    ch.ws = ws;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ topic:'realtime:' + topic, event:'phx_join', payload:{ config:{ broadcast:{ self:false, ack:false }, presence:{ key:'' }, private:false } }, ref:'1', join_ref:'1' }));
+      ch.beat = setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ topic:'phoenix', event:'heartbeat', payload:{}, ref:String(++ref) })); }, 25000);
+    };
+    ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.event === 'broadcast' && msg.payload) onAnswer(msg.payload.event, msg.payload.payload || {});
+    };
+    // A dropped connection rejoins while the task still works.
+    ws.onclose = () => { clearInterval(ch.beat); if (!ch.closed && answerChannels.get(topic) === ch) { answerChannels.delete(topic); setTimeout(syncAnswerStreams, 3000); } };
+  }).catch(() => {});
+  return ch;
+}
 function liveConnectRealtime(id){
   liveClose();
   liveIdShown = id; liveControl = false;
@@ -7145,7 +8104,7 @@ function liveConnect(id){
   const sess = window.LingonAuth && window.LingonAuth.get();
   if (!sess || !sess.access_token){ $('#livestate').textContent = 'sign in expired'; return; }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(proto + '//' + location.host + '/ws/live/' + id + '?token=' + encodeURIComponent(sess.access_token));
+  const ws = new WebSocket(proto + '//' + location.host + '/ws/live/' + encodeURIComponent(id) + '?token=' + encodeURIComponent(sess.access_token));
   liveWS = ws; liveIdShown = id; liveControl = false;
   ws.binaryType = 'arraybuffer';
   const wrap = () => $('#livewrap'), st = () => $('#livestate');
@@ -7197,7 +8156,7 @@ function pcConnect(selectedId){
   const sess = window.LingonAuth && window.LingonAuth.get();
   if (!sess || !sess.access_token) return;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(proto + '//' + location.host + '/ws/pc/' + pcId + '?token=' + encodeURIComponent(sess.access_token));
+  const ws = new WebSocket(proto + '//' + location.host + '/ws/pc/' + encodeURIComponent(pcId) + '?token=' + encodeURIComponent(sess.access_token));
   pcWS = ws; pcIdShown = pcId;
   ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
@@ -7289,7 +8248,7 @@ async function ensureMailbox(name){
     if (owner !== billingIdentity()) return null;
   }
   const seq = mailFetchSeq;
-  const request = window.LingonAuth.api('/api/mail/ensure', { method:'POST', body: JSON.stringify({ agentName }) })
+  const request = window.LingonAuth.api('/api/mail/ensure', { method:'POST', body: '{}' })
     .then((data) => {
       if (owner !== billingIdentity()) return null;
       if (seq === mailFetchSeq) mailCache = data;
@@ -7312,13 +8271,12 @@ async function getMail(force, folder){
   const seq = ++mailFetchSeq;
   const request = (async () => {
     try {
-      const name = (state.agent && state.agent.name) || '';
       let result;
       if (tab === 'write') {
-        result = await window.LingonAuth.api('/api/mail?folder=inbox&name=' + encodeURIComponent(name));
+        result = await window.LingonAuth.api('/api/mail?folder=inbox');
         result.folder = 'write';
       } else {
-        result = await window.LingonAuth.api('/api/mail?folder=' + encodeURIComponent(tab) + '&name=' + encodeURIComponent(name));
+        result = await window.LingonAuth.api('/api/mail?folder=' + encodeURIComponent(tab));
       }
       if (owner === billingIdentity() && seq === mailFetchSeq) mailCache = result;
       return result;
@@ -7532,13 +8490,17 @@ function canvasDocumentHTML(file, value, opts = {}){
   if (format === 'md' || format === 'markdown') return header + `<div class="canvas-document">${md(content)}</div>`;
   return header + `<pre class="canvas-file-text">${esc(content || 'No preview available for this file.')}</pre>`;
 }
+// Chart data can arrive with a chat's synced state, so it is drawn only as numbers and plain
+// colours: a value or colour carrying markup would otherwise end up inside a style attribute.
+function chartValue(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function chartColor(c){ return /^(?:#[0-9a-f]{3,8}|var\(--[\w-]+\))$/i.test(String(c || '')) ? c : 'var(--acc)'; }
 // The chart, page, code or plan a chat produced (the chat's own artifact).
 function chatArtifactHTML(a){
   if (!a) return '';
   if (a.kind === 'chart'){
-    const max = Math.max.apply(null, a.data.map(d => d.v));
+    const max = Math.max.apply(null, a.data.map(d => chartValue(d.v)));
     return `<div class="chartbox"><div class="ct">${esc(a.title)}</div><div class="cs">n = 1,392 qualifying comments · last 30 days</div>
-      <div class="bars">${a.data.map((d, i) => `<div class="bcol"><span class="v">${d.v}%</span><div class="bar" style="height:${Math.round(d.v / max * 100)}%;background:${d.c};animation-delay:${i * 60}ms"></div><span class="l">${esc(d.l)}</span></div>`).join('')}</div>
+      <div class="bars">${a.data.map((d, i) => `<div class="bcol"><span class="v">${chartValue(d.v)}%</span><div class="bar" style="height:${Math.round(chartValue(d.v) / max * 100)}%;background:${chartColor(d.c)};animation-delay:${i * 60}ms"></div><span class="l">${esc(d.l)}</span></div>`).join('')}</div>
       <div class="chartfoot">${esc(a.foot)}</div></div>`;
   }
   if (a.kind === 'html') return `<div class="arti-frame"><iframe sandbox="allow-scripts" title="${esc(a.title)}" srcdoc="${esc(a.html)}"></iframe></div>`;
@@ -7558,7 +8520,8 @@ function canvasKind(cd){
   if (!cd) return '';
   if (cd.type === 'browser') return cd.desktop ? 'computer' : 'browser';
   if (['file','canvas','artifact'].includes(cd.type)) return 'file';
-  if (cd.type === 'subagents' || cd.type === 'learn' || (cd.type === 'present' && ['dashboard','table'].includes(cd.kind))) return 'card';
+  if (cd.streaming) return '';
+  if (cd.type === 'subagents' || cd.type === 'learn' || (cd.type === 'present' && ['dashboard','table','compare','calculator','timeline','places','recipe','draft','checklist','plan'].includes(cd.kind))) return 'card';
   return '';
 }
 // Newest first across every chat. A task's browser or computer shows once, as its newest card.
@@ -7850,7 +8813,8 @@ function paintCanvas(){
     if (an) an.addEventListener('change', e => {
       const v = e.target.value.trim(); if (!v) return;
       state.agent.name = publicAgentName(v); save(); paintSide(); paintMain(); paintCanvas();
-      ensureMailbox(state.agent.name).then(() => { if ($('#cbody')) paintCanvas(); });
+      // The mail address follows the saved name (bo@mail.belna.se), so save it first.
+      persistAgentContext().then(() => ensureMailbox(state.agent.name)).then(() => { if ($('#cbody')) paintCanvas(); }).catch(err => toast(err.message));
       toast('Renamed — they answer to ' + state.agent.name + ' now.');
     });
   } else {
@@ -8032,7 +8996,7 @@ function paintProfile(M){
   $('#pname').addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
     state.agent.name = publicAgentName(v); save(); paintSide(); paintCanvas();
-    ensureMailbox(state.agent.name);
+    persistAgentContext().then(() => ensureMailbox(state.agent.name)).catch(err => toast(err.message));
     toast('Renamed — they answer to ' + state.agent.name + ' now.');
   });
 }
@@ -8287,6 +9251,10 @@ function paintSettings(M){
           <div class="swatches" style="justify-content:flex-start;margin-top:12px">${THEMES.map(t => `<button class="swatch ${curTheme.id === t.id ? 'on' : ''}" data-act="theme" data-v="${t.id}" title="${t.name}"><span style="width:26px;height:26px;border-radius:50%;background:${t.c};display:block"></span></button>`).join('')}</div>
         </div></div></div>
     </div>
+    ${inAppleApp() ? `<div class="psec"><h3>${icon('shield',15)} This device</h3>
+      <div class="kv"><div class="row"><div><b>Apple apps &amp; privacy</b><div class="sub">Calendar, Reminders, Contacts and Health on this device, AI data consent and account deletion.</div></div>
+      <div class="rgt"><button class="btn soft small" data-act="apple-apps">Open</button></div></div></div>
+    </div>` : ''}
     <div class="psec"><h3 style="color:var(--acc)">${icon('alert',15)} Danger zone</h3>
       <div class="kv"><div class="row"><div><b>Release this agent</b><div class="sub">Deletes chats, vault, memory and the claim on this device.</div></div>
       <div class="rgt"><button class="btn soft small" data-act="reset">Release</button></div></div></div>
@@ -8304,7 +9272,7 @@ function paintSettings(M){
   } else if (tab === 'support'){
     body = settingsSupportBody();
   }
-  const description = ({ wallet:'Your Belna balance, your own payment methods and delivery addresses.', billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.';
+  const description = ({ wallet:'Your Belna balance, how purchases are paid and your delivery addresses.', billing:'Plans, payment details, and invoices.', usage:'Your monthly tokens, daily limits, extra tokens, and gift cards.', profiles:'Your account, agent appearance, and private settings — all scoped to you.', secrets:'Logins, API keys and other credentials your agent can use without seeing them.', browser:'Manage your agent’s browser profile and approval settings.', issue:'Report a problem with the app.', support:'Send feedback or contact our support team.' })[tab] || 'Scoped to your account, never shared.';
   if (phone) M.innerHTML = `<div class="page set-page"><div class="pageinner set-sub">
     <div class="set-sub-head"><button class="set-round" data-act="stab" data-t="home" aria-label="Back to Settings" title="Settings">${icon('chevl',20)}</button><h1>${esc(SETTINGS_TABS.find(([id]) => id === tab)[1])}</h1></div>
     <p class="psub">${description}</p>
@@ -8334,8 +9302,7 @@ function paintSettings(M){
   if (pn) pn.addEventListener('change', e => {
     const v = e.target.value.trim(); if (!v) return;
     state.agent.name = publicAgentName(v); save(); paintSide(); paintCanvas();
-    persistAgentContext().catch(e=>toast(e.message));
-    ensureMailbox(v);
+    persistAgentContext().then(() => ensureMailbox(state.agent.name)).catch(e=>toast(e.message));
     toast('Renamed — they answer to ' + v + ' now.');
   });
   const un = $('#uname');
@@ -8348,7 +9315,7 @@ function paintSettings(M){
   const browserName=M.querySelector('#browser-agent-name');
   if(browserName)browserName.addEventListener('change',e=>{
     const name=String(e.target.value || '').trim();if(!name){e.target.value=state.agent.name;return;}
-    state.agent.name=publicAgentName(name);save();paintSide();paintCanvas();persistAgentContext().catch(err=>toast(err.message));ensureMailbox(state.agent.name);paintSettings(M);toast('Agent name updated.');
+    state.agent.name=publicAgentName(name);save();paintSide();paintCanvas();persistAgentContext().then(()=>ensureMailbox(state.agent.name)).catch(err=>toast(err.message));paintSettings(M);toast('Agent name updated.');
   });
   const memoryFile=M.querySelector('#browser-memory-file');
   if(memoryFile)memoryFile.addEventListener('change',async e=>{
@@ -8511,14 +9478,51 @@ function appleConnectorRows(query,filter){
   }).join('');
 }
 window.addEventListener('belna-apple-status', () => { if (state.view === 'apps' && $('#main')) paintApps($('#main')); });
+// Outside the Apple app, the account's devices show which Apple apps the agent can use and
+// where. Connecting and disconnecting stay in Belna on that device, which owns the permission.
+var appleAccountDevices = null, appleDevicesFor = null, appleDevicesPending = null;
+function refreshAppleAccountDevices(force){
+  if (window.BelnaApple?.available || !signedIn() || appleDevicesPending) return;
+  const owner = billingIdentity();
+  if (!force && appleDevicesFor === owner) return;
+  appleDevicesFor = owner;
+  appleDevicesPending = window.LingonAuth.api('/api/apple/devices').then((j) => {
+    if (owner !== billingIdentity()) return;
+    appleAccountDevices = Array.isArray(j.devices) ? j.devices : [];
+    if (state.view === 'apps' && $('#main')) paintApps($('#main'));
+  }).catch(() => {}).finally(() => { appleDevicesPending = null; });
+}
+function appleAccountScopes(){
+  const devices = appleDevicesFor === billingIdentity() && Array.isArray(appleAccountDevices) ? appleAccountDevices : [];
+  return APPLE_CONNECTORS.map((app) => ({ app, on: devices.filter((d) => d.capabilities?.[app.scope] === true) })).filter((x) => x.on.length);
+}
+function appleAccountRows(query){
+  return appleAccountScopes().filter(({ app }) => !query || `${app.name} ${app.description}`.toLowerCase().includes(query)).map(({ app, on }) => {
+    const open = state.appOpen === 'apple-' + app.scope;
+    const where = [...new Set(on.map((d) => d.name || (d.platform === 'mac' ? 'Mac' : 'iPhone')))].join(', ');
+    const ready = on.some((d) => d.online);
+    return `<article class="conn-row apple-connector is-connected ${open ? 'is-open' : ''}" data-apple-scope="${app.scope}">
+      <div class="conn-head" data-act="toggle-apple-connector" data-scope="${app.scope}" role="button" tabindex="0" aria-expanded="${open}" aria-label="${app.name}, connected on ${esc(where)}">
+        <span class="app-logo apple-connector-logo"><img src="${app.iconSrc}" alt="" width="40" height="40" decoding="async"><i class="app-pip">${icon('check',10)}</i></span>
+        <span class="conn-meta"><b>${app.name}</b><span>${esc(`Connected on ${where}${ready ? '' : ' · open Belna there to use it'}`)}</span></span>
+        <span class="chip green">Connected</span>
+        <span class="conn-chev">${icon('chev',16)}</span>
+      </div>
+      ${open ? `<div class="conn-body"><div class="conn-sec"><h3>Devices</h3>
+        ${on.map((d) => `<div class="conn-account"><span class="conn-ava">${icon(d.platform === 'mac' ? 'laptop' : 'phone',16)}</span><div class="conn-who"><b>${esc(d.name || 'Apple device')}</b><span>${d.online ? 'Belna is open there: ready now' : `Last open ${esc(fmtAgo(Date.parse(d.last_seen_at)))}`}</span></div></div>`).join('')}
+        <p class="conn-hint">${app.description} Your agent uses it while Belna is open on that device. To disconnect it or change access, open Belna there and go to Connectors.</p></div></div>` : ''}
+    </article>`;
+  }).join('');
+}
 function paintApps(M){
   const apps = Array.isArray(state.composioApps) ? state.composioApps : [];
   const own = Array.isArray(state.customConnectors) ? state.customConnectors : [];
   const q = String(state.appQuery || '').toLowerCase().trim();
   const filter = state.appFilter === 'connected' ? 'connected' : 'all';
   const appleStatus = window.BelnaApple?.connectionStatus?.();
-  const connectedCount = apps.filter((a) => a.connected).length + own.length + APPLE_CONNECTORS.filter(app => appleStatus?.capabilities[app.scope]).length;
-  const appleRows = appleConnectorRows(q,filter);
+  const nativeApple = !!window.BelnaApple?.available;
+  const connectedCount = apps.filter((a) => a.connected).length + own.length + (nativeApple ? APPLE_CONNECTORS.filter(app => appleStatus?.capabilities[app.scope]).length : appleAccountScopes().length);
+  const appleRows = nativeApple ? appleConnectorRows(q,filter) : appleAccountRows(q);
   // The owner's own APIs and MCP servers count as connected: they exist once they work.
   const ownList = q ? own.filter((c) => [c.name, c.host, c.description, c.kind === 'mcp' ? 'mcp server' : 'api'].some((v) => String(v || '').toLowerCase().includes(q))) : own;
 
@@ -8558,7 +9562,7 @@ function paintApps(M){
         <span class="app-logo">${appLogoHtml(a)}${a.connected ? `<i class="app-pip">${icon('check',10)}</i>` : ''}</span>
         <span class="conn-meta"><b>${esc(a.name || a.toolkit)}</b><span title="${esc(subTitle)}">${esc(sub)}${firstName && firstMail ? ` · ${esc(firstMail)}` : ''}</span></span>
         ${a.connected ? `<span class="conn-faces">${faces}</span><span class="chip green">Connected</span>` : ''}
-        <button type="button" class="btn ghost small conn-quick" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}" title="${esc(quickLabel + ' ' + (a.name || a.toolkit))}">${icon('plus',13)} ${quickLabel}</button>
+        <button type="button" class="btn ghost small conn-quick" data-act="connect-app" data-toolkit="${esc(a.toolkit)}" data-auth="${esc(a.authConfigId || '')}" aria-label="${esc(quickLabel + ' ' + (a.name || a.toolkit))}" title="${esc(quickLabel + ' ' + (a.name || a.toolkit))}">${icon('plus',13)} <span>${quickLabel}</span></button>
         <span class="conn-chev">${icon('chev',16)}</span>
       </div>
       ${open ? connectorBodyHtml(a) : ''}
@@ -8573,10 +9577,11 @@ function paintApps(M){
   const grouped = ownList.length && (list.length || state.composioLoading);
   let board = `<div class="conn-list">${ownList.length ? `${grouped ? '<h2 class="conn-group">Your own</h2>' : ''}${ownRows}${grouped ? '<h2 class="conn-group">Apps</h2>' : ''}` : ''}${rows}</div>${ask}`;
   if (state.composioLoading && !list.length) board = `<div class="conn-list">${ownRows}${'<article class="conn-row skel"></article>'.repeat(ownList.length ? 3 : 6)}</div>`;
-  else if (!state.composioLoading && !apps.length && !own.length && !window.BelnaApple?.available) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Ask ${agentName} in chat to connect an app, API or MCP server.</span></div>`;
+  else if (!state.composioLoading && !apps.length && !own.length && !nativeApple && !appleAccountScopes().length) board = `<div class="apps-empty">${icon('box',22)}<b>No connectors yet</b><span>Ask ${agentName} in chat to connect an app, API or MCP server.</span></div>`;
   else if (!state.composioLoading && !list.length && !ownList.length) board = appleRows ? ask : `<div class="apps-empty">${icon('search',22)}<b>No match</b></div>`;
 
   M.innerHTML = `<div class="page"><div class="pageinner apps-page">
+    ${chat()?.onboardingAnswers ? `<div class="onboarding-return"><div><b>Your universe, at your pace</b><p>Connect something now, or come back whenever you like.</p></div><button class="btn ghost small" data-act="onboarding-return">Back to ${esc(state.agent.name)} ${icon('chevr',14)}</button></div>` : ''}
     <div class="apps-toolbar">
       <h1>Connectors</h1>
       <label class="apps-search-wrap">${icon('search',16)}<input class="field apps-search" id="appquery" placeholder="Search connectors" value="${esc(state.appQuery || '')}"></label>
@@ -8586,7 +9591,8 @@ function paintApps(M){
       </div>
       <button class="iconbtn" data-act="refresh-apps" title="Refresh">${icon('refresh',16)}</button>
     </div>
-    ${window.BelnaApple?.available ? (appleRows ? `<h2 class="conn-group">Apple apps</h2><div class="conn-list apple-connectors">${appleRows}</div>` : '') : '<p class="conn-hint">Apple Calendar, Reminders, Contacts and Health connect through the Belna app on your iPhone, iPad or Mac.</p>'}
+    ${appleRows ? `<h2 class="conn-group">Apple apps</h2><div class="conn-list apple-connectors">${appleRows}</div>` : ''}
+    ${nativeApple ? '' : `<p class="conn-hint">${appleRows ? 'Connect or change Apple apps in the Belna app on your iPhone, iPad or Mac.' : 'Apple Calendar, Reminders, Contacts and Health connect through the Belna app on your iPhone, iPad or Mac.'}</p>`}
     ${board}
   </div></div>`;
   const input = $('#appquery');
@@ -8601,7 +9607,8 @@ function paintApps(M){
     });
   }
   if (!state.composioLoading && signedIn()) refreshComposioApps();
-  if (window.BelnaApple?.available && !appleStatus) window.BelnaApple.refreshStatus?.().catch(()=>{});
+  if (nativeApple && !appleStatus) window.BelnaApple.refreshStatus?.().catch(()=>{});
+  if (!nativeApple) refreshAppleAccountDevices();
 }
 
 /* ---------------- Your own connectors: APIs and MCP servers the agent sets up ---------------- */
@@ -8766,6 +9773,21 @@ window.matchMedia('(max-width: 760px)').addEventListener('change', () => {
   else if (state.view === 'library' && $('#main')) paintLibrary($('#main'));
   else if (state.view === 'goals' && $('#main')) paintGoals($('#main'));
 });
+function refreshReturningConnectors() {
+  const owner = billingIdentity();
+  if (!owner) return;
+  const waiting = state.chats.some(c => c.messages.some(m => m.kind === 'card' && m.card?.type === 'connect' && m.card.status === 'pending'));
+  if (!pendingConnect && !waiting && !(state.view === 'apps' && state.appOpen)) return;
+  window.BelnaApple?.refreshStatus?.().catch(()=>{});
+  refreshComposioApps(true).then(() => {
+    if (owner !== billingIdentity()) return;
+    for (const app of state.composioApps.filter(a => a.connected)) resumeConnectCards(app.toolkit).catch(()=>{});
+    if (state.view === 'apps' && state.appOpen && !state.appOpen.startsWith('apple-')) openConnector(state.appOpen, true).catch(()=>{});
+  }).catch(()=>{});
+}
+// The TestFlight shell emits this when its SwiftUI scene becomes active, even
+// when WKWebView does not deliver a browser focus/visibility event.
+window.addEventListener('belna-apple-changed', refreshReturningConnectors);
 window.addEventListener('focus', () => {
   startWorkspacePresence();
   if (signedIn() && !clientReadyOwner) loadClientState().catch(() => {});
@@ -8775,14 +9797,11 @@ window.addEventListener('focus', () => {
   refreshReturningWallet();
   // Returning from the OAuth tab: pull the fresh account list so the newly
   // connected mail/name/profile appears without a manual Refresh.
-  if (signedIn() && (pendingConnect || (state.view === 'apps' && state.appOpen))) {
-    window.BelnaApple?.refreshStatus?.().catch(()=>{});
-    refreshComposioApps(true).then(() => { if (state.appOpen && !state.appOpen.startsWith('apple-')) openConnector(state.appOpen, true); });
-  }
+  refreshReturningConnectors();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { stopWorkspacePresence(); void flushClientState(); }
-  else {startWorkspacePresence();refreshReturningWallet();}
+  else {startWorkspacePresence();refreshReturningWallet();refreshReturningConnectors();}
 });
 window.addEventListener('pagehide', () => { stopVoice(); stopWorkspacePresence(); void flushClientState(); });
 document.addEventListener('submit', async e => {
@@ -8834,6 +9853,33 @@ document.addEventListener('submit', async e => {
   await answerOnboarding(c, m, form.elements.agentName.value);
 });
 document.addEventListener('input', e => {
+  // A draft keeps the owner's edits; Copy and Open in Mail use them.
+  const draftBody = e.target.closest?.('[data-draft-body]');
+  if (draftBody) {
+    const c = state.chats.find(x => x.id === draftBody.dataset.chat);
+    const m = c?.messages.find(x => x.id === draftBody.dataset.msg);
+    if (m?.card?.kind !== 'draft' || m.card.streaming) return;
+    m.card.progress = { ...(m.card.progress || {}), body:draftBody.innerText.replace(/\n$/, '').slice(0, 12000) };
+    clearTimeout(learnSaveTimer); learnSaveTimer = setTimeout(save, 400);
+    return;
+  }
+  // A calculator works its outputs out again as an input changes; the values are saved with the card.
+  const calcInput = e.target.closest?.('[data-calc-input]');
+  if (calcInput) {
+    const box = calcInput.closest('.cv-calc');
+    const c = state.chats.find(x => x.id === box?.dataset.chat);
+    const m = c?.messages.find(x => x.id === box?.dataset.msg);
+    const value = Number(calcInput.value);
+    if (m?.card?.kind !== 'calculator' || m.card.streaming || calcInput.value === '' || !Number.isFinite(value)) return;
+    const name = calcInput.dataset.calcInput;
+    m.card.progress = { ...(m.card.progress || {}), values:{ ...calcValues(m.card), [name]:value } };
+    // The number field and its slider follow each other.
+    for (const other of box.querySelectorAll('[data-calc-input]')) if (other !== calcInput && other.dataset.calcInput === name) other.value = String(value);
+    const out = box.querySelector('[data-calc-out]');
+    if (out) out.innerHTML = calcOutputsHTML(m.card, m.card.progress.values);
+    clearTimeout(learnSaveTimer); learnSaveTimer = setTimeout(save, 400);
+    return;
+  }
   // A graph's slider redraws only the graph while it moves; the value is saved with the card.
   const slider = e.target.closest?.('[data-learn-slider]');
   if (slider) {
@@ -8885,9 +9931,24 @@ document.addEventListener('click', async e => {
   const c = state.chats.find(x => x.id === b.dataset.chat);
   const m = c && c.messages.find(x => x.id === b.dataset.msg);
 
-  if (signedIn() && needsOnboarding() && !['qopt','togglemenu','usermenu','signout','voice'].includes(act)) {
+  const onboardingConnectorAction = chat()?.onboardingAnswers?.theme && state.view === 'apps' && (
+    ['refresh-apps','app-filter','toggle-connector','connect-app','disconnect-app','perm-kind','perm-toggle','toggle-apple-connector','apple-apps','toggle-cc','cc-open','cc-check','cc-rekey','cc-rekey-save','cc-remove','cc-perm','cc-perm-kind'].includes(act)
+    || (act === 'nav' && ['chat','apps'].includes(b.dataset.view))
+  );
+  if (signedIn() && needsOnboarding() && !onboardingConnectorAction && !['qopt','togglemenu','usermenu','signout','voice','onboarding-reveal','onboarding-connectors','onboarding-return'].includes(act)) {
     e.preventDefault(); toast('Finish setting up your agent first.'); return;
   }
+  if (act === 'onboarding-reveal') {
+    if (m?.onboardingSpeech && !m.onboardingDone && onboardingUnlocked(c, m)) finishOnboardingSpeech(c, m);
+    return;
+  }
+  if (act === 'onboarding-connectors') {
+    if (!m?.card?.onboarding || !onboardingUnlocked(c, m)) return;
+    state.view = 'apps'; state.appFilter = 'all'; state.appQuery = ''; mobileNavOpen = false;
+    clearTimeout(onboardingTimer); onboardingTimer = null;
+    save(); renderApp(); refreshComposioApps(); return;
+  }
+  if (act === 'onboarding-return') { state.view = 'chat'; mobileNavOpen = false; save(); renderApp(); return; }
   if (act === 'select-pack'){
     const picker = b.closest('.billing-select');
     if (!picker) return;
@@ -8906,6 +9967,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'qopt' && m?.card?.onboarding) { await answerOnboarding(c, m, b.dataset.o); return; }
   if (act.startsWith('learn-') && m?.card?.type === 'learn') { learnAct(c, m, act, b); return; }
+  if (act.startsWith('pc-') && m?.card?.type === 'present') { presentAct(c, m, act, b); return; }
   if (act === 'life-ask'){
     e.preventDefault();
     const prompt = (b.dataset.prompt || '').trim();
@@ -8980,6 +10042,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'refresh-apps'){
     window.BelnaApple?.refreshStatus?.().catch(()=>{});
+    refreshAppleAccountDevices(true);
     refreshComposioApps(true).then(() => { if (state.appOpen && !state.appOpen.startsWith('apple-')) openConnector(state.appOpen, true); });
     return;
   }
@@ -8995,7 +10058,33 @@ document.addEventListener('click', async e => {
   if(act==='wallet-verify-payment'){openWalletVerification(b.dataset.id);return;}
   if(act==='belna-wallet-deposit'){openWalletWithdrawal('deposit');return;}
   if(act==='wallet-verify-money'){openWalletWithdrawal('verify');return;}
-  if(act==='wallet-money-action'){if(b.dataset.action==='withdraw'){openWalletWithdrawal();return;}openWalletMoneyAction(b.dataset.action);return;}
+  if(act==='wallet-money-action'){openWalletMoneyAction(b.dataset.action);return;}
+  if(act==='wallet-bank-refresh'){refreshWalletBank();return;}
+  if(act==='wallet-bank-verify'||act==='wallet-bank-register'){
+    const owner=scopeBelnaWallet();if(!owner||belnaWalletBusy)return;
+    const register=act==='wallet-bank-register';
+    if(register&&!b.closest('form')?.reportValidity())return;
+    if(!$(register?'#wallet-bank-consent':'#wallet-bank-verify-consent')?.checked){walletActionError=register?'Approve sharing your own bank details with Bridge first.':'Approve sharing your wallet identity and email with Bridge first.';repaintWallet();return;}
+    const input=register?{consent:true,accountOwnerName:$('#wallet-bank-name')?.value,iban:$('#wallet-bank-iban')?.value,bic:$('#wallet-bank-bic')?.value}:{consent:true};
+    // Open from the click itself so browsers do not block the hosted flow after
+    // the async SDK and provider checks. Keep a visible fallback if blocked.
+    let verificationWindow;
+    if(!register)try{
+      verificationWindow=window.open('about:blank','_blank');
+      if(verificationWindow){verificationWindow.opener=null;verificationWindow.document.title='Opening bank verification';verificationWindow.document.body.textContent='Opening your secure bank verification…';}
+    }catch{}
+    belnaWalletBusy=true;walletActionError='';repaintWallet();
+    try{const result=await (await loadPrivyWallet()).bank(register?'register':'verify',input);if(owner!==scopeBelnaWallet()||walletAction!=='bank_withdraw'){verificationWindow?.close();return;}
+      if(register){walletBankState=result;walletBankLink=null;toast('Bank linked. Review an amount to withdraw.');}
+      else if(result.url){walletBankLink=result;if(verificationWindow&&!verificationWindow.closed)verificationWindow.location.replace(result.url);}
+      else{verificationWindow?.close();await refreshWalletBank();}
+    }catch(e){verificationWindow?.close();if(owner===scopeBelnaWallet())walletActionError=e.message||'Your bank connection could not complete. Check status before trying again.';}
+    finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();}}return;
+  }
+  if(act==='wallet-intent'){const i=(belnaWalletCache?.intents||[]).find(i=>i.quoteId===b.dataset.id);if(i)openWalletMoneyAction(i.kind,i);return;}
+  if(act==='wallet-copy-address'){try{await navigator.clipboard.writeText(belnaWalletCache.wallet.address);toast('Wallet address copied.');}catch{toast('Copy the wallet address shown in settings.');}return;}
+  if(act==='wallet-export'){try{const sdk=await loadPrivyWallet();await sdk.export();}catch(e){toast(e.message);}return;}
+  if(act==='wallet-intent-cancel'){const owner=scopeBelnaWallet();if(!owner||belnaWalletBusy)return;belnaWalletBusy=true;repaintWallet();try{await window.LingonAuth.api('/api/belna-wallet/cancel',{method:'POST',body:JSON.stringify({quoteId:b.dataset.id})});if(owner===scopeBelnaWallet())belnaTransferQuote=null;}catch(e){if(owner===scopeBelnaWallet())walletActionError=e.message;}finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();refreshBelnaWallet(true);}}return;}
   if(act==='wallet-card-interest'){joinWalletCardWaitlist();return;}
   if(act.startsWith('wallet-address-')){
     const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy)return;
@@ -9017,49 +10106,28 @@ document.addEventListener('click', async e => {
   if (act === 'belna-wallet-refresh'){ refreshBelnaWallet(true); return; }
   if(act==='wallet-view-card'){openWalletCardSetup();return;}
   if (act.startsWith('belna-wallet-')){
-    const owner = scopeBelnaWallet();
-    if (!owner || belnaWalletBusy) return;
-    if (act === 'belna-wallet-card-connect' && ['needs_verification','needs_information'].includes(belnaWalletCache?.wallet?.cardApplicationStatus)) { openWalletCardSetup(); return; }
-    let action, payload = {};
-    if (act === 'belna-wallet-setup') { action='setup'; payload={ country:$('#belna-wallet-country')?.value || '' }; }
-    else if (act === 'belna-wallet-verify') action='verify';
-    else if (act === 'belna-wallet-card-connect') action='card-connect';
-    else if (act === 'belna-wallet-limit') { action='controls'; payload={ dailyLimitUsd:Number($('#belna-wallet-limit')?.value) }; }
-    else if (act === 'belna-wallet-freeze') { action='controls'; payload={ frozen:b.dataset.frozen === 'true' }; }
-    else if (act === 'belna-wallet-deposit') action='deposit';
-    else if (act === 'belna-wallet-quote') { if(!b.closest('form')?.reportValidity())return;action='quote'; payload={ recipient:($('#belna-wallet-recipient')?.value || '').trim().toLowerCase(), amount:Number($('#belna-wallet-send-amount')?.value) };belnaTransferQuote=null; }
-    else if (act === 'belna-wallet-transfer-check') { action='send'; payload={ quoteId:b.dataset.id, confirm:true }; }
-    else if (act === 'belna-wallet-send' && belnaTransferQuote) {if(belnaTransferQuote.recipient!==($('#belna-wallet-recipient')?.value || '').trim().toLowerCase() || belnaTransferQuote.amount!==Number($('#belna-wallet-send-amount')?.value)){belnaTransferQuote=null;walletActionError='The details changed. Review this send again.';repaintWallet();return;}action='send'; payload={ quoteId:belnaTransferQuote.quoteId, confirm:true }; }
-    else return;
-    belnaWalletBusy = true;
-    if(['quote','send'].includes(action))walletActionError='';
-    if(action==='send' && belnaTransferQuote)belnaTransferQuote={...belnaTransferQuote,status:'awaiting_confirmation'};
-    b.disabled = true;
-    if(['quote','send'].includes(action))repaintWallet();
-    if(action==='setup'){belnaWalletError='';b.textContent='Creating wallet…';}
-    window.LingonAuth.api('/api/belna-wallet/' + action, { method:'POST', body:JSON.stringify(payload) }).then(j => {
-      if (owner !== scopeBelnaWallet()) return;
-      if(action==='setup' && j.state){
-        const url=new URL(j.url);if(!['api.whop.com','sandbox-api.whop.com'].includes(url.hostname) || url.protocol!=='https:' || url.pathname!=='/oauth/authorize' || url.searchParams.get('state')!==j.state)throw Error('Your wallet sign-in link could not be confirmed.');
-        sessionStorage.setItem('belna.whopConnect',JSON.stringify({state:j.state,owner}));location.assign(url.href);return;
-      }
-      if(action==='setup' && (!j.wallet || j.wallet.kind==='personal' || ['unavailable','not_created','setup_pending','personal_connection_required'].includes(j.wallet.status)))throw Error('Your connected wallet was not created. Please try again.');
-      if (j.wallet) { belnaWalletCache=j; belnaWalletError=''; }
-      // A new wallet becomes the active one only when nothing else pays: switching away from a
-      // connected existing card is the owner's choice, made in Wallet settings.
-      const existingCard=walletPreferences?.activeMethod==='existing_card' || shopPaySnapshot().connected || walletPreferences?.merchantEnabled;
-      if(action==='setup'){walletConnectOpen=false;if(!walletPreferences?.selectionSaved && !existingCard)window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify({activeMethod:'belna_wallet'})}).then(p=>{if(owner===scopeBelnaWallet()){walletPreferences=p;repaintWallet();}}).catch(e=>toast(e.message));state.view='settings';state.settingsTab='wallet';save();renderApp();}
-      if (action === 'quote') belnaTransferQuote=j;
-      else if (action === 'send') { belnaTransferQuote=j; toast(j.status === 'succeeded' ? 'Money sent.' : j.status === 'failed' ? 'Transfer failed.' : 'Transfer processing.'); refreshBelnaWallet(true); }
-      else if (j.url) window.location.assign(j.url);
-      else if (action === 'controls') { if (payload.dailyLimitUsd != null) walletLimitEdit=false; toast(payload.frozen === true ? 'Card spending paused.' : payload.frozen === false ? 'Card spending resumed.' : 'Daily card allowance saved.'); }
-      else toast(action === 'setup' ? `${j.wallet?.cardProgramAvailable===false?'Wallet created. You can now add, send and receive money.':'Wallet created. Complete your identity check to set up your card.'}${existingCard ? ' Your existing card stays active until you switch.' : ''}` : 'Wallet updated.');
-    }).catch(e => { if (owner === scopeBelnaWallet()) { if(action==='send' && e.transferNotStarted===true)belnaTransferQuote=null;if(['quote','send'].includes(action))walletActionError=e.message || 'Your wallet action could not be completed. Try again.';if(action==='setup')belnaWalletError=e.message || 'Could not create your wallet. Please try again.';toast(e.message || 'Could not update your wallet.');if(action==='card-connect')refreshBelnaWallet(true); } }).finally(() => {
-      if (owner !== scopeBelnaWallet()) return;
-      belnaWalletBusy=false;
-      b.disabled=false;
-      repaintWallet();
-    });
+    const owner=scopeBelnaWallet();if(!owner||belnaWalletBusy)return;
+    let action,payload={};
+    if(act==='belna-wallet-setup'){const country=$('#belna-wallet-country');if(!country?.reportValidity())return;action='setup';payload.country=country.value;}
+    else if(act==='belna-wallet-limit'){action='controls';payload={dailyLimitUsd:Number($('#belna-wallet-limit')?.value)};}
+    else if(act==='belna-wallet-freeze'){action='controls';payload={frozen:b.dataset.frozen==='true'};}
+    else if(act==='belna-wallet-quote'){if(!b.closest('form')?.reportValidity())return;action='quote';payload={kind:walletAction||'send',recipient:($('#belna-wallet-recipient')?.value||'').trim(),fiatAccountId:$('#belna-wallet-bank')?.value,amount:Number($('#belna-wallet-send-amount')?.value)};belnaTransferQuote=null;}
+    else if(['belna-wallet-send','belna-wallet-transfer-check'].includes(act)&&belnaTransferQuote){
+      if(act==='belna-wallet-send' && (belnaTransferQuote.amount!==Number($('#belna-wallet-send-amount')?.value)||(walletAction==='bank_withdraw'?belnaTransferQuote.fiatAccountId!==$('#belna-wallet-bank')?.value:!walletAction?.startsWith('earn_')&&belnaTransferQuote.recipient!==($('#belna-wallet-recipient')?.value||'').trim().toLowerCase()))){belnaTransferQuote=null;walletActionError='The details changed. Review this request again.';repaintWallet();return;}
+      if(walletAction?.startsWith('earn_')&&!$('#wallet-earn-risk')?.checked){walletActionError='Review and accept the Earn risks before authorizing.';repaintWallet();return;}
+      action='authorize';payload={quoteId:belnaTransferQuote.quoteId,riskAccepted:$('#wallet-earn-risk')?.checked===true,reviewed:belnaTransferQuote};
+    }else return;
+    belnaWalletBusy=true;walletActionError='';b.disabled=true;repaintWallet();
+    try{
+      const result=action==='setup'?await (await loadPrivyWallet()).setup(payload.country):action==='authorize'?await (await loadPrivyWallet()).authorize(payload.quoteId,payload.riskAccepted,payload.reviewed):await window.LingonAuth.api('/api/belna-wallet/'+action,{method:'POST',body:JSON.stringify(payload)});
+      if(owner!==scopeBelnaWallet())return;
+      if(result.wallet){belnaWalletCache=result;belnaWalletError='';}
+      if(action==='setup'){walletConnectOpen=false;state.view='settings';state.settingsTab='wallet';save();renderApp();toast('Your Belna Wallet is ready.');}
+      else if(action==='quote')belnaTransferQuote=result;
+      else if(action==='authorize'){belnaTransferQuote=result;toast(result.status==='succeeded'?'Wallet action completed.':result.status==='failed'||result.status==='rejected'?'Wallet action did not complete.':'Wallet action submitted. Check its status.');}
+      else{walletLimitEdit=false;toast(payload.frozen===true?'Wallet transfers paused.':payload.frozen===false?'Wallet transfers resumed.':'24-hour transfer limit saved.');}
+    }catch(e){if(owner===scopeBelnaWallet()){const message=action==='setup' && (e.privyErrorCode==='too_many_requests' || /too many requests|rate.?limit/i.test(e.message||''))?'Your wallet connection is temporarily busy. Wait a minute, then try again.':e.message||'Your wallet request could not complete.';if(action==='setup')belnaWalletError=message;else walletActionError=message;toast(message);}}
+    finally{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;b.disabled=false;repaintWallet();if(!['quote','setup'].includes(action))refreshBelnaWallet(true);}}
     return;
   }
   if (act === 'payments-stripe-apps'){
@@ -9350,7 +10418,7 @@ document.addEventListener('click', async e => {
     save(); paintCanvas();
     if (next === 'subagents') refreshSubAgents(true);
     if (next === 'mail') getMail(true, state.mailTab).then(() => { if (state.canvasTab === 'mail' && $('#cbody')) paintMail($('#cbody')); });
-    if (next === 'wallet') { refreshBelnaWallet(true); refreshShopPay(true); }
+    if (next === 'wallet') { refreshBelnaWallet(); refreshShopPay(); }
     return;
   }
   if (act === 'appr-toggle'){
@@ -9919,10 +10987,18 @@ document.addEventListener('click', async e => {
   if (act === 'otp-resend'){ authOtpResend(); return; }
   if (act === 'signout'){
     stopWorkspacePresence();
+    // Live views and streamed answers belong to the account that is signing out.
+    liveClose();
+    for (const ch of answerChannels.values()) ch.close();
+    answerChannels.clear();
     closeGift();
     giftCache = null;
     await flushClientState();
     await flushDeletedChats();
+    // The wallet's own session (Privy keeps it in this browser, able to sign) ends with the
+    // Belna one: through the SDK when it is loaded, and any stored copy is removed either way.
+    try { await Promise.race([window.BelnaPrivy?.signOut?.(), new Promise(resolve => setTimeout(resolve, 4000))]); } catch {}
+    try { for (const k of Object.keys(localStorage)) if (k.startsWith('privy:')) localStorage.removeItem(k); } catch {}
     window.LingonAuth.set(null);
     resetClientSync();
     state.view = 'chat';
@@ -10062,7 +11138,7 @@ document.addEventListener('click', async e => {
   }
   if (act === 'reset'){
     if (confirm('Release this agent? This deletes the claim, chats, vault and memory on this device.')){
-      localStorage.removeItem(LS); location.reload();
+      cancelSave(); localStorage.removeItem(LS); location.reload();
     }
     return;
   }
@@ -10161,12 +11237,18 @@ async function bootHash(){
 }
 const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) => {
   expirePending();
-  applyTheme();
   // Navigation can remove the React host while the scripts/auth are loading.
   // A later mount will attach the already initialized app to its new host.
-  root = document.getElementById('root');
-  if (!root) return;
+  // Under the site's React page (LingonDeferMount) the scripts run while React loads, and
+  // mount() hands the host over once React has hydrated; the account starts loading first.
+  // The theme is set on <body> only then, so React hydrates the page it rendered.
+  const host = async () => {
+    root = window.LingonDeferMount ? await hostGiven : document.getElementById('root');
+    if (root) applyTheme();
+    return root;
+  };
   if (st && String(st).startsWith('error:')) {
+    if (!await host()) return;
     const msg = String(st).slice(6);
     // Land on the auth card so the failure is visible in context.
     renderAuth();
@@ -10175,15 +11257,40 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) =>
     else setTimeout(() => toast('Sign-in failed: ' + msg), 400);
     return;
   }
+  let shownEarly = false;
   if (signedIn()) {
     ensureOwnerScope();
     await hydrateStoredFiles();
-    await loadClientState();
-    await syncFromBackend(true).catch(error => console.warn('Account data restore failed:',error));
     if (window.BelnaApple?.available) { state.view = 'chat'; state.canvasOpen = false; mobileNavOpen = false; }
+    // A returning owner sees the chats saved on this device straight away; the account's
+    // copy is merged in when it arrives (on a phone that can take seconds).
+    let synced = () => {};
+    if (!state.pendingPrompt && !needsOnboarding() && state.ownerId === currentUserId() && state.chats.length > 0)
+      bootSync = new Promise(resolve => { synced = resolve; });
+    const account = (async () => {
+      try {
+        await loadClientState();
+        await syncFromBackend(true).catch(error => console.warn('Account data restore failed:',error));
+      } finally { bootSync = null; synced(); }
+    })();
+    if (!await host()) return;
+    if (bootSync) {
+      shownEarly = chatsOnScreen = true;
+      leaveSetupChat();
+      render();
+    }
+    await account;
+    if (window.BelnaApple?.available && !shownEarly) { state.view = 'chat'; state.canvasOpen = false; mobileNavOpen = false; }
     leaveSetupChat();
-  }
-  if (signedIn() && state.pendingPrompt && !needsOnboarding()) {
+    // The restored account is kept on this device right away.
+    flushSave();
+  } else if (!await host()) return;
+  if (shownEarly && signedIn() && $('#app') && !needsOnboarding() && !state.pendingPrompt) {
+    // Only what the account copy changed is redrawn; the page the owner moved to stays.
+    applyTheme();
+    paintSide();
+    if (state.view === 'chat') paintMain();
+  } else if (signedIn() && state.pendingPrompt && !needsOnboarding()) {
     void landingRun(state.pendingPrompt, state.pendingPromptFiles || []).catch(error => { console.error(error); render(); });
   } else render();
   try {
@@ -10205,14 +11312,15 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) =>
       window.history.replaceState(null, '', window.location.pathname);
       if (f) handleBillingReturn(f, q);
       if (shop) {
-        // Back to the payment methods in Settings, where Shop Pay was connected.
+        // Back to Purchases in Settings, where the Shop account was connected. Connecting it
+        // turns no payment method on; paying with Shop Pay is the Payment apps switch.
         state.view = 'settings';
         state.settingsTab = 'wallet';
         save();
         renderApp();
         $('#payment-connections')?.scrollIntoView({block:'start'});
-        refreshShopPay(true).then(()=>{if(shop==='connected')return finishShopPayChoice();try{sessionStorage.removeItem('belna.shopPayChoice');}catch{}});
-        setTimeout(() => toast(shop === 'connected' ? 'Shop Pay connected. Purchases still need your approval.' : ('Shop Pay: ' + (msg || 'could not connect.'))), 400);
+        refreshShopPay(true);
+        setTimeout(() => toast(shop === 'connected' ? 'Shop account connected. You still approve every order.' : ('Shop account: ' + (msg || 'could not connect.'))), 400);
       }
     }
   } catch {}
@@ -10228,6 +11336,7 @@ document.addEventListener('visibilitychange', () => {
 });
 window.LingonAppRuntime = {
   async mount(element){
+    hostReady(element);
     await bootReady;
     if (root === element && root.childElementCount) return;
     root = element;

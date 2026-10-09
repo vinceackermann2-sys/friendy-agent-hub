@@ -1,7 +1,7 @@
 // Invoke every minute from Supabase Cron. This worker never receives card
 // credentials and remains disabled until its server secrets are configured.
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
-import { createBelnaWallet } from '../../../src/lingon-server/belna-wallet.js';
+import { createLegacyBelnaWallet } from '../../../src/lingon-server/belna-wallet.js';
 import { createBelnaWalletStore } from '../../../src/lingon-server/belna-wallet-store.js';
 
 async function equal(a:string,b:string) {
@@ -21,7 +21,7 @@ Deno.serve(async req => {
   if(!(await equal(req.headers.get('authorization') || '','Bearer '+secret)))return new Response('Unauthorized',{status:401});
   const store={ ...createBelnaWalletStore({supa:()=>db,ensureProfile:async()=>{}}),supaConfigured:()=>true };
   // App and worker share the service-only connected-wallet configuration.
-  const wallet=createBelnaWallet({store,env:{ WHOP_COMPANY_API_KEY:Deno.env.get('WHOP_COMPANY_API_KEY'),
+  const wallet=createLegacyBelnaWallet({store,env:{ WHOP_COMPANY_API_KEY:Deno.env.get('WHOP_COMPANY_API_KEY'),
     WHOP_SANDBOX:'false',WHOP_PLATFORM_ACCOUNT_ID:Deno.env.get('WHOP_PLATFORM_ACCOUNT_ID') }});
   let stage='provider';
   async function recordHealth(ok:boolean, providerStatus?:number) {
@@ -38,7 +38,7 @@ Deno.serve(async req => {
     stage='queue';
     const { data:events,error }=await db.rpc('claim_belna_wallet_webhook_events',{batch_size:5});
     if(error)throw error;
-    const outcomes=await Promise.allSettled((events||[]).map(async event=>{
+    const outcomes=await Promise.allSettled((events||[]).map(async (event:any)=>{
       await wallet.reconcilePurchaseCard(event.account_id,event.card_id);
       const {error:markError}=await db.from('belna_wallet_webhook_events')
         .update({processed_at:new Date().toISOString(),locked_until:null})
@@ -56,7 +56,7 @@ Deno.serve(async req => {
       unresolvedConnections:connections.unresolved,eventsChecked:outcomes.length,failedEvents },
       {status:healthy ? 200 : 503});
   } catch (error) {
-    await recordHealth(false,error?.providerStatus).catch(()=>{});
+    await recordHealth(false,(error as {providerStatus?:number})?.providerStatus).catch(()=>{});
     return new Response('Wallet recovery needs attention',{status:503});
   }
 });
