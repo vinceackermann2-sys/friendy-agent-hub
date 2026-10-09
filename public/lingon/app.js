@@ -342,7 +342,7 @@
     <div class="belna-stars" aria-hidden="true">${Jo}</div>
     <header class="hero ahero promo-hero">
       <h1>S\xE5 h\xE4r f\xE5r du veckan att g\xE5 runt utan att barnen f\xE5r det s\xE4mre.</h1>
-      <p class="tagline"><strong>St\xE4da, h\xE4mta, l\xE4mna, handla, tar det n\xE5gonsin slut?</strong></p>
+      <p class="tagline"><strong>Handla, fixa, deala, dona, tar det n\xE5gonsin slut?</strong></p>
       <p class="tagline">Man skulle kunna tro att dagen tog slut vid 4, men h\xE4nder det n\xE5gonsin?</p>
       <div class="promo-overflow" aria-label="Vardagens \xF6verfl\xF6de: handla mat, st\xE4da, skola, sport">
         <div class="promo-overflow-card po-1"><span class="po-emoji">\u{1F6D2}</span><div><b>Handla mat</b><small>ICA \xB7 17:30 \xB7 mj\xF6lk, \xE4gg, pasta\u2026</small></div></div>
@@ -351,14 +351,14 @@
         <div class="promo-overflow-card po-4"><span class="po-emoji">\u26BD</span><div><b>Sport</b><small>Tr\xE4ning 18:00 \xB7 match l\xF6rdag \xB7 gympap\xE5se</small></div></div>
         <div class="promo-overflow-card po-5"><span class="po-emoji">\u{1F9FE}</span><div><b>Fakturor</b><small>El \xB7 f\xF6rskola \xB7 f\xF6rs\xE4kring</small></div></div>
       </div>
-      <div class="promo-calm"><span>Blir det n\xE5gonsin en lugn stund?</span><span>Hemma, jobbet?</span><span>Var gick 8 timmars arbetsdagen? \u{1F602}</span></div>
-      <p class="tagline promo-why">Det var d\xE4rf\xF6r vi skapade Belna, din egen AI-agent som kan sk\xF6ta dagssysslorna.</p>
+      <div class="promo-calm"><span>Blir det n\xE5gonsin en lugn stund?</span><span>inte hemma eller jobbet p\xE5 jobbet i allafall\u{1F602}</span><span></span></div>
+      <p class="tagline promo-why">Det var d\xE4rf\xF6r vi skapade Belna, din egen AI Au pair.</p>
     </header>
     </div>
 
     <section class="asection promo-vs" aria-label="Vi mot dom">
       <div class="promo-section-head">
-        <h2>Vanlig AI-chatt eller egen agent?</h2>
+        <h2>Vanlig AI-chatt eller egen Au pair?</h2>
       </div>
       <div class="promo-vs-grid">
         <article class="promo-vs-card promo-vs-old">
@@ -367,7 +367,7 @@
             <li><span class="promo-mark cross">${g("x",15)}</span><span><b>S\xE4ker</b><small>Dina uppgifter tr\xE4nar andras modeller</small></span></li>
             <li><span class="promo-mark cross">${g("x",15)}</span><span><b>Mer huvudv\xE4rk</b><small>Fler tr\xE5dar \u2013 mer att h\xE5lla koll p\xE5</small></span></li>
             <li><span class="promo-mark cross">${g("x",15)}</span><span><b>Ingen agent</b><small>Kan inte handla, betala eller boka</small></span></li>
-            <li><span class="promo-mark cross">${g("x",15)}</span><span><b>Inte svensk</b><small>Data utomlands, support p\xE5 engelska</small></span></li>
+            <li><span class="promo-mark cross">${g("x",15)}</span><span><b>Inte svensk</b><small>Data utomlands\xA0</small></span></li>
           </ul>
         </article>
         <article class="promo-vs-card promo-vs-belna">
@@ -375,8 +375,8 @@
           <ul>
             <li><span class="promo-mark check">${g("check",15)}</span><span><b>S\xE4ker</b><small>Krypterat, isolerat, ditt</small></span></li>
             <li><span class="promo-mark check">${g("check",15)}</span><span><b>F\xE4rre tr\xE5dar</b><small>En agent h\xE5ller ihop hela veckan</small></span></li>
-            <li><span class="promo-mark check">${g("check",15)}</span><span><b>Egen agent</b><small>Handlar, betalar och bokar \xE5t dig</small></span></li>
-            <li><span class="promo-mark check">${g("check",15)}</span><span><b>Svensk</b><small>Byggd i Sverige, p\xE5 svenska</small></span></li>
+            <li><span class="promo-mark check">${g("check",15)}</span><span><b>Egen Au pair</b><small>Handlar, betalar och bokar \xE5t dig</small></span></li>
+            <li><span class="promo-mark check">${g("check",15)}</span><span><b>Svensk</b><small>Byggd i Sverige</small></span></li>
           </ul>
         </article>
       </div>
@@ -384,7 +384,7 @@
 
     <section class="asection promo-agent" aria-label="Din egen mini-superman">
       <div class="promo-section-head">
-        <p class="promo-superman"><strong>Belna</strong> \xE4r den f\xF6rsta agenten som kan sk\xF6ta handlingen, fakturorna och barnens schema \u2014 din egen minisuperman \u{1F9B8}</p>
+        <p class="promo-superman"><strong>Belna</strong> \xE4r den f\xF6rsta AI:n som kan sk\xF6ta handlingen, fakturorna och barnens schema \u2014 din egen minisuperman \u{1F9B8}</p>
       </div>
       <div class="promo-phone-row">
         <div class="landing-phone-shell promo-chat-phone">
@@ -422,7 +422,7 @@
     <section class="asection promo-own" aria-label="Du \xE4ger din AI-agent">
       <div class="secure-agent-layout">
         <div class="secure-agent-copy">
-          <h2>Du \xE4ger din AI-agent</h2>
+          <h2>Du \xE4ger din Agent</h2>
           <p>Varje agent har sin egna s\xE4kra dator, och ser aldrig dina uppgifter utan de blir krypterade. Och du best\xE4mmer sj\xE4lv vad du vill godk\xE4nna.</p>
         </div>
         ${Ko()}
@@ -558,7 +558,9 @@
         <article class="compare-side compare-belna">
           <div class="compare-copy">
             <span class="compare-kicker">With Belna</span>
-            <h2>You get your own personal Aupair<br><span>that does the work.</span></h2>
+            <h2>You get your own personal&nbsp;
+Au pair
+that does the work.</h2>
           </div>
           <div class="agent-system" aria-hidden="true">
             <span class="orbit-ring orbit-one"></span>
