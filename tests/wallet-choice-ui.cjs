@@ -12,8 +12,7 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
     let shop={configured:true,connected:false,dailyLimitUsd:200};
     let waitlist={joined:false,joinedAt:null},interestAttempts=0;
     let history=[{at:new Date(Date.now()-4*86400000).toISOString(),total:20},{at:new Date(Date.now()-2*86400000).toISOString(),total:80},{at:new Date(Date.now()-86400000).toISOString(),total:65}];
-    let connectAttempts=0,releaseConnect,rejectPreference=false;
-    const pendingConnect=new Promise(resolve=>{releaseConnect=resolve;});
+    let rejectPreference=false;
     const calls=[],secrets=[{id:'login-user',ref:'sec_user',name:'amazon.com username'},{id:'login-password',ref:'sec_password',name:'amazon.com password'}];
     await context.addInitScript(()=>{
       localStorage.setItem('lingon.session',JSON.stringify({access_token:'wallet-choice-fixture',user:{id:'wallet-choice-owner',email:'owner@example.invalid'}}));
@@ -27,19 +26,11 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
       else if(pathname==='/api/wallet-preferences'){if(req.method()==='POST'){if(rejectPreference){rejectPreference=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Wallet choice could not be saved. Try again.'})});}{const {methods,...rest}=body;prefs={...prefs,...rest,methods:{...prefs.methods,...(methods||{})}};prefs.merchantEnabled=prefs.methods.saved_card;}}result=prefs;}
       else if(pathname==='/api/secrets')result={encrypted:true,secrets};
       else if(pathname==='/api/shop-pay')result={shopPay:shop,orders:[]};
-      else if(pathname==='/api/shop-pay/connect'){
-        connectAttempts++;
-        if(connectAttempts===1){await pendingConnect;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Shop Pay is temporarily unavailable. Try again.'})});}
-        result={url:'https://accounts.shop.app/oauth/authorize?state=fixture'};
-      }
-      else if(pathname==='/api/shop-pay/limit'){shop={...shop,dailyLimitUsd:body.dailyLimitUsd};result={shopPay:shop};}
-      else if(pathname==='/api/shop-pay/disconnect'){shop={...shop,connected:false};result={shopPay:shop};}
       else if(pathname==='/api/shipping-addresses')result={addresses:[]};
       else if(pathname==='/api/belna-wallet/verify'){Object.assign(wallet,{identityVerified:true,verificationStatus:'approved'});result={wallet};}
       else if(pathname==='/api/belna-wallet/quote')result={quoteId:'review-fixture',amount:body.amount,recipient:body.recipient,fees:'Partner fees may apply.'};
       await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
     });
-    await context.route('https://accounts.shop.app/**',route=>route.fulfill({contentType:'text/html',body:'<p>Shop sign-in fixture</p>'}));
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     const leaveSettings=async()=>{if(await page.getByRole('button',{name:'Back to chat',exact:true}).isVisible())return page.getByRole('button',{name:'Back to chat',exact:true}).click();await page.getByRole('button',{name:'Back to Settings',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();};
     const panel=page.locator('.wallet-panel');
@@ -72,45 +63,23 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
     assert.equal(await settings.getByText('Identity verification',{exact:true}).count(),0);
     assert.equal(await settings.locator('.wpay').count(),0,'no payment preference picker: each method has its own switch');
     assert.equal(await settings.locator('#shoppaylimit,[data-act="wallet-view-card"],[data-act="belna-wallet-card-connect"]').count(),0,'without the card program, settings omit card controls');
-    await settings.locator('#payment-connections .pm-row').filter({hasText:'Shop account'}).waitFor();
+    assert.equal(await settings.getByText(/Shop account/).count(),0,'there is no Shop account to connect');
+    assert.equal(await settings.locator('[data-act^="shop-pay-"]').count(),0,'no Shop Pay connect, limit or disconnect controls');
     await settings.locator('#wallet-shipping-section').waitFor();
     fs.mkdirSync(path.resolve(__dirname,'../artifacts/wallet-choice'),{recursive:true});
     await page.screenshot({path:path.resolve(__dirname,`../artifacts/wallet-choice/belna-settings-${width}.png`),fullPage:true});
     await leaveSettings();await ensurePanel();
-    await panel.getByRole('button',{name:/^How .* pays for purchases/}).click();await settings.locator('#payment-connections').getByRole('button',{name:'Connect Shop account',exact:true}).waitFor();await settings.locator('#wallet-shipping-section').waitFor();
+    await panel.getByRole('button',{name:/^How .* pays for purchases/}).click();await settings.locator('#payment-connections').waitFor();await settings.locator('#wallet-shipping-section').waitFor();
     // Store logins live in Settings › Secrets only, not in Wallet.
     assert.equal(await settings.getByText('amazon.com',{exact:true}).count(),0,'no store logins in Wallet');
     assert.ok(!(await settings.innerText()).includes('sec_password'),'Wallet never shows login secrets');
     assert.equal(await settings.getByText('Identity verification',{exact:true}).count(),0);
-    await settings.getByRole('button',{name:'Connect Shop account',exact:true}).click();
-    await settings.getByRole('button',{name:'Please wait…',exact:true}).waitFor();
-    assert.equal(await settings.getByRole('button',{name:'Please wait…',exact:true}).isDisabled(),true);
-    releaseConnect();await settings.getByRole('alert').filter({hasText:'Shop Pay is temporarily unavailable.'}).waitFor();
-    assert.equal(connectAttempts,1,'connection cannot submit twice while pending');
-    await settings.getByRole('button',{name:'Connect Shop account',exact:true}).click();
-    await page.waitForURL('https://accounts.shop.app/**');
-    shop={...shop,connected:true,email:'owner@example.invalid',nativeCheckout:true};
-    const postsBefore=calls.filter(c=>c.path==='/api/wallet-preferences'&&c.method==='POST').length;
-    await page.goto(base+'/app?shop_pay=connected');await settings.locator('#payment-connections').waitFor();
-    await page.getByText('Shop account connected. You still approve every order.',{exact:true}).waitFor();
-    await settings.getByText('Connected as owner@example.invalid · Audit sets up Shopify orders directly',{exact:true}).waitFor();
-    // Paying with Shop Pay is the Payment apps switch: connecting the account turns nothing on.
-    assert.equal(await settings.locator('[role="switch"][aria-label="Shop Pay"]').count(),0,'Shop Pay has no switch of its own');
-    assert.equal(prefs.methods.payment_apps,false,'connecting the Shop account turns no payment method on');
-    assert.equal(calls.filter(c=>c.path==='/api/wallet-preferences'&&c.method==='POST').length,postsBefore,'the return saves no preference');
-    await settings.locator('#shoppaylimit').waitFor();
-    await settings.locator('#shoppaylimit').fill('75');await settings.getByRole('button',{name:'Save limit',exact:true}).click();
-    await page.getByText('Shop Pay daily limit saved.',{exact:true}).waitFor();assert.equal(shop.dailyLimitUsd,75);
     await page.locator('.page').evaluate(node=>{node.scrollTop=0;});
     await page.screenshot({path:path.resolve(__dirname,`../artifacts/wallet-choice/existing-settings-${width}.png`),fullPage:true});
     await leaveSettings();await ensurePanel();
     await panel.getByRole('button',{name:'Wallet settings',exact:true}).click();
     await settings.getByRole('switch',{name:'Cards saved in your store accounts',exact:true}).click();
     await settings.locator('[role="switch"][aria-label="Cards saved in your store accounts"][aria-checked="false"]').waitFor();
-    const switchesBefore=JSON.stringify(prefs.methods);
-    await settings.getByRole('button',{name:'Disconnect',exact:true}).click();await settings.getByRole('button',{name:'Connect Shop account',exact:true}).waitFor();
-    await page.getByText('Shop account disconnected.',{exact:true}).waitFor();
-    assert.equal(JSON.stringify(prefs.methods),switchesBefore,'disconnecting the Shop account leaves the payment switches as they were');
     // A failed switch keeps the previous state; switches work from the keyboard.
     rejectPreference=true;await settings.getByRole('switch',{name:'Payment apps',exact:true}).click();
     await settings.getByRole('alert').filter({hasText:'Wallet choice could not be saved.'}).waitFor();
@@ -128,30 +97,26 @@ const base=process.env.UI_BASE || 'http://127.0.0.1:8000';
     await page.locator('#canvas').screenshot({path:path.resolve(__dirname,`../artifacts/wallet-choice/belna-empty-${width}.png`)});
     assert.deepEqual(errors,[]);await context.close();
   }
-  // Returning from the Shop sign-in never turns a payment method on, even with an old intent saved.
-  for(const scenario of ['activate-choice','already-on','changed-owner','no-intent']){
+  // An old Shop sign-in return link (the Shop account was removed) only loses its parameters.
+  {
     const context=await browser.newContext({viewport:{width:1280,height:1000}}),posts=[];
-    let prefs={activeMethod:null,selectionSaved:true,merchantEnabled:false,methods:{...{payment_apps:false,shop_pay:false,saved_card:false,belna_wallet:false},...(scenario==='already-on'?{payment_apps:true,shop_pay:true}:{})}};
-    await context.addInitScript(scenario=>{
+    await context.addInitScript(()=>{
       localStorage.setItem('lingon.session',JSON.stringify({access_token:'fixture',user:{id:'alice',email:'alice@example.invalid'}}));
-      localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'alice',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'settings',settingsTab:'wallet',activeChat:'wallet',chats:[{id:'wallet',title:'Wallet',messages:[],at:Date.now()}],canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
-      if(scenario!=='no-intent')sessionStorage.setItem('belna.shopPayChoice',JSON.stringify({owner:scenario==='changed-owner'?'bob':'alice',activeMethod:null}));
-    },scenario);
+      localStorage.setItem('lingon.v1',JSON.stringify({ownerId:'alice',onboarded:true,agent:{name:'Audit',color:'lingon',pers:'Precise'},view:'chat',activeChat:'wallet',chats:[{id:'wallet',title:'Wallet',messages:[],at:Date.now()}],canvasTab:'payments',vault:{secrets:[],apps:[],approvals:[],mode:'default'}}));
+    });
     await context.route('**/api/**',async route=>{
       const req=route.request(),pathname=new URL(req.url()).pathname;let result={};
-      if(pathname==='/api/shop-pay')result={shopPay:{connected:true,configured:true,email:'alice@example.invalid'},orders:[]};
-      else if(pathname==='/api/wallet-preferences'){if(req.method()==='POST'){const body=JSON.parse(req.postData());posts.push(body);{const {methods,...rest}=body;prefs={...prefs,...rest,methods:{...prefs.methods,...(methods||{})}};prefs.merchantEnabled=prefs.methods.saved_card;}}result=prefs;}
+      if(req.method()==='POST')posts.push(pathname);
+      if(pathname==='/api/wallet-preferences')result={activeMethod:null,selectionSaved:true,merchantEnabled:false,methods:{payment_apps:false,shop_pay:false,saved_card:false,belna_wallet:false}};
       else if(pathname==='/api/belna-wallet')result={wallet:{configured:true,kind:'connected',status:'ready',cardProgramAvailable:false,identityVerified:true,balance:{available:50,pending:0}}};
       await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
     });
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
-    await page.goto(base+'/app?shop_pay=connected');
-    await page.getByText('Shop account connected. You still approve every order.',{exact:true}).waitFor();
-    await page.locator('#payment-connections').waitFor();
-    assert.equal(prefs.methods.shop_pay,scenario==='already-on');
-    assert.deepEqual(posts,[],`${scenario}: the Shop account return saves no preference`);
+    await page.goto(base+'/app?shop_pay=connected&shop_pay_msg=x');
+    await page.waitForFunction(()=>!location.search);
+    assert.deepEqual(posts.filter(p=>/wallet-preferences|shop-pay/.test(p)),[],'an old return link saves nothing');
     assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('Wallet choice: no Payments tab, per-method switches with retry and keyboard, clean sidebar, saved card waitlist, balance chart and empty state, desktop/mobile settings, drafts, private logins, Shop account retry/return/limit/disconnect that never turns a method on and keyboard navigation passed');
+  console.log('Wallet choice: no Payments tab, per-method switches with retry and keyboard, clean sidebar, saved card waitlist, balance chart and empty state, desktop/mobile settings, drafts, private logins, no Shop account, old Shop return links ignored and keyboard navigation passed');
   }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -301,7 +301,7 @@ async function buyerLinkedToken(userId, { resourceHost, scope } = {}) {
   if (!credentials) fail('NO_SHOP', 'Shop Pay sign-in is not configured.');
   const row = await store.getShopPayAccount(userId);
   let shopToken = shopTokenFromRow(row);
-  if (!shopToken) fail('NO_SHOP_LINK', 'The Shop account is not connected. The owner can connect it in Settings → Wallet → Purchases; otherwise use the store in the browser or give the owner the link.');
+  if (!shopToken) fail('NO_SHOP_LINK', 'This Shopify checkout cannot be set up directly. Use the store in the browser (a payment app such as Shop Pay, Klarna or Swish) or give the owner the link.');
   const shop = await shopAuthServer();
   if (row.shopTokenExpiresAt && row.shopTokenExpiresAt < Date.now() + 15e3) {
     const refreshToken = row.encryptedRefreshToken && store.openSecret(row.encryptedRefreshToken);
@@ -349,7 +349,7 @@ async function bearerFor(userId, { resourceHost, scope, allowApp = true } = {}) 
       return { value, host };
     } catch (e) { if (!allowApp || !sharedTokenHost(host) || e.code === 'NO_SHOP' || e.code === 'SHOP_CONFIG') throw e; }
   }
-  if (!allowApp || !sharedTokenHost(host)) fail('NO_SHOP_LINK', 'This store needs the Shop account connected (Settings → Wallet → Purchases) or its myshopify.com domain. Otherwise use the store in the browser or give the owner the link.');
+  if (!allowApp || !sharedTokenHost(host)) fail('NO_SHOP_LINK', 'This Shopify checkout cannot be set up directly (only myshopify.com addresses can). Use the store in the browser (a payment app such as Shop Pay, Klarna or Swish) or give the owner the link.');
   return { value: await appAccessToken(), host };
 }
 

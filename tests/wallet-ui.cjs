@@ -45,7 +45,7 @@ const {chromium}=require('playwright');
   assert.equal(await page.locator('[data-act="ctab"][data-t="payments"]').count(),0,'no separate Payments tab');
   await page.getByRole('button',{name:'Wallet settings',exact:true}).click();await page.locator('#payment-connections').waitFor();
   for(const name of ['Payment apps','Cards saved in your store accounts'])assert.equal(await page.locator('#payment-connections').getByRole('switch',{name,exact:true}).getAttribute('aria-checked'),'false',name+' starts off');
-  await page.getByRole('button',{name:'Connect Shop account',exact:true}).waitFor();
+  assert.equal(await page.locator('[data-act^="shop-pay-"]').count(),0,'no Shop account to connect');
   await page.getByRole('switch',{name:'Cards saved in your store accounts',exact:true}).click();await page.locator('#payment-connections').locator('[role="switch"][aria-label="Cards saved in your store accounts"][aria-checked="true"]').waitFor();await leaveSettings();
   await page.locator('.wallet-panel').getByRole('button',{name:/^How .* pays for purchases/}).filter({hasText:'Store cards on'}).waitFor();
   assert.match(await page.locator('.wallet-panel').getByRole('region',{name:'Wallet activity'}).innerText(),/Amazon[\s\S]*Order placed/,'own-method purchases show in Activity even before a Belna Wallet exists');

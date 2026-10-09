@@ -1638,7 +1638,6 @@ button.appr-row:hover,button.appr-row:focus-visible{ background:var(--bg); outli
 .outfit-chip.on{ color:var(--ink); border-color:var(--ag, var(--ink)); background:rgba(var(--ag-rgb, 0,0,0), .08); box-shadow:inset 0 0 0 1px var(--ag, var(--ink)); }
 .pay-side{flex:none;display:flex;align-items:center;gap:12px;}
 .pm-ic{flex:none;width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:#F1F3F6;color:#4B5563;}
-.pm-ic.shop{width:46px;padding:0 5px;background:#5A31F4;color:#fff;}.pm-ic.shop svg{width:100%;height:auto;}
 /* Settings › Wallet › Purchases: the three steps of a purchase, then the method switches. */
 .pm-steps{margin:0;padding:0;list-style:none;}
 .pm-steps .wset-row{align-items:flex-start;padding-top:13px;padding-bottom:13px;}
@@ -3848,7 +3847,6 @@ button.wl-row{border:0;background:none;cursor:pointer;}button.wl-row:hover{backg
 .wpay.compact .wpay-copy b{font-size:13.5px;}.wpay.compact .wpay-copy small{font-size:12px;}
 .wpay.compact .wpay-side{font-size:12px;}
 .wpay.compact .wpay-extra{margin:0 12px 12px;}
-.wset-row:has(#shoppaylimit){flex-wrap:wrap;}.wset-row #shoppaylimit{width:105px;}
 .wl-note .btn{flex:none;}.wl-note .wl-copy{min-width:0;}
 .wallet-panel .wl-lede{margin:0;}
 @media(prefers-reduced-motion:reduce){.wpay-opt,.wl-switch,.wl-switch span{transition:none;}}

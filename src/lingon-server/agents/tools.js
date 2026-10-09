@@ -905,7 +905,7 @@ const TOOLS = {
   },
   shop_status: {
     name: 'shop_status', type: 'function', approval: false,
-    description: 'Read whether Shop Pay is connected, remaining daily Shop Pay spend, and recent orders.',
+    description: 'Read recent Shopify orders made through Belna. Paying with Shop Pay needs no connection: it is one of the payment apps (wallet_status paymentSelection.methods.payment_apps), so never tell the owner to connect Shop Pay.',
     run: async (_, ctx) => {
       const snap = await shoppay.agentStatus(ctx.userId);
       ctx.trace(entry('wallet', `shop_status: ${snap.connected ? 'connected' : 'disconnected'}`));
@@ -962,7 +962,7 @@ const TOOLS = {
     approvalDetail: async ({ merchant, checkoutId }, { userId }) => JSON.stringify(await shoppay.purchaseQuote(userId, { merchant, checkoutId })),
     run: async ({ merchant, checkoutId }, ctx) => {
       const selection=await belnaWallet.preferences(ctx.userId);
-      // Shop Pay is one of the payment apps: their one switch decides, not the Shop account link.
+      // Shop Pay is one of the payment apps: their one switch decides.
       if(!selection.methods?.payment_apps)throw new Error('Payment apps (Shop Pay is one of them) are turned off. Ask the owner to turn them on in Settings → Wallet before purchasing.');
       const out = await shoppay.completePurchase(ctx.userId, { merchant, checkoutId, confirm: true, approvedQuote: ctx.approvedDetail });
       ctx.trace(entry('wallet', `shop_purchase: ${out.status} ${out.merchant} ${out.amount}`));

@@ -28,7 +28,6 @@ const {startAppServer}=require('./helpers/app-server.cjs');
    if(pathname==='/api/belna-wallet')result={wallet,balanceHistory:[],activity:[{title:'Deposit',amount:125,status:'completed'}]};
    else if(pathname==='/api/wallet-preferences'){if(request.method()==='POST'){if(rejectSave){rejectSave=false;return reject('Payment methods could not be saved. Try again.');}methods={...methods,...(body.methods||{})};}result=prefs();}
    else if(pathname==='/api/shop-pay')result={shopPay:shop,orders:[{title:'Unsafe order link',status:'needs_buyer',amount:10,currency:'USD',continueUrl:'https://user:password@malicious.example/checkout'}]};
-   else if(pathname==='/api/shop-pay/connect')return reject('Shop Pay is temporarily unavailable. Try again.');
    else if(pathname==='/api/wallet-history')result={history:[{title:'Store purchase',amount:12,currency:'USD',status:'completed'}]};
    else if(pathname==='/api/belna-wallet/card-waitlist'){if(request.method()==='POST')waitlist=true;result={cardWaitlist:{joined:waitlist,joinedAt:waitlist?new Date().toISOString():null}};}
    else if(pathname.startsWith('/api/shipping-addresses')){
@@ -85,9 +84,9 @@ const {startAppServer}=require('./helpers/app-server.cjs');
   assert.deepEqual(calls.filter(x=>x.pathname==='/api/wallet-preferences' && x.method==='POST').at(-1).body,{methods:{payment_apps:true}});
   rejectSave=true;await own.getByRole('switch',{name:'Cards saved in your store accounts',exact:true}).click();
   await own.getByRole('alert').filter({hasText:'Payment methods could not be saved'}).waitFor();assert.equal(methods.saved_card,false);
-  await own.getByRole('button',{name:'Connect Shop account',exact:true}).click();await own.getByRole('alert').filter({hasText:'Shop Pay is temporarily unavailable'}).waitFor();
   assert.equal(await own.getByRole('switch',{name:'Shop Pay',exact:true}).count(),0,'Shop Pay has no switch of its own');
-  assert.match(await own.locator('.pm-row').filter({hasText:'Shop account'}).innerText(),/Optional/,'the Shop account link is optional');
+  assert.equal(await own.getByText(/Shop account/).count(),0,'there is no Shop account to connect');
+  assert.equal(await own.locator('[data-act^="shop-pay-"]').count(),0,'no Shop Pay connect, limit or disconnect controls');
   await own.getByRole('switch',{name:'Cards saved in your store accounts',exact:true}).click();await own.locator('[role="switch"][aria-label="Cards saved in your store accounts"][aria-checked="true"]').waitFor();
   assert.equal(await settings.getByText('Store purchase',{exact:true}).count(),0,'purchases are in Activity, not Settings');
   await settings.getByRole('button',{name:'Add address',exact:true}).click();

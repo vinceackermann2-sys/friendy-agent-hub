@@ -7302,14 +7302,11 @@ function refreshShopPay(force = false){
   if (shopPayRefreshRequest?.owner===owner) return shopPayRefreshRequest.promise;
   if (!force && state.shopPay && !state.shopPayLoading) return Promise.resolve();
   state.shopPayLoading = true;
-  shopPayError = '';
   const request=window.LingonAuth.api('/api/shop-pay').then((j) => {
     if (owner !== billingIdentity()) return;
     state.shopPay = j.shopPay || null;
     state.shopPayOrders = Array.isArray(j.orders) ? j.orders : [];
-  }).catch((e) => {
-    if (owner === billingIdentity()) shopPayError = e.message || 'Could not load Shop Pay. Try again.';
-  }).finally(() => {
+  }).catch(() => {}).finally(() => {
     if(shopPayRefreshRequest?.promise===request)shopPayRefreshRequest=null;
     if (owner !== billingIdentity()) return;
     state.shopPayLoading = false;
@@ -7318,27 +7315,9 @@ function refreshShopPay(force = false){
   });
   shopPayRefreshRequest={owner,promise:request};return request;
 }
-async function updateShopPay(action,payload={}){
-  const owner=scopeBelnaWallet();if(!owner || shopPayBusy)return;
-  shopPayBusy=true;shopPayError='';repaintWallet();
-  try{
-    const j=await window.LingonAuth.api('/api/shop-pay/'+action,{method:'POST',body:JSON.stringify(payload)});
-    if(owner!==scopeBelnaWallet())return;
-    if(action==='connect'){
-      const url=new URL(j.url);
-      if(url.protocol!=='https:' || url.hostname!=='accounts.shop.app')throw Error('Could not confirm your Shop sign-in link.');
-      window.location.assign(url.href);return;
-    }
-    state.shopPay=j.shopPay || {connected:false,configured:true};state.shopPayOrders=j.orders || [];
-    save();
-    // Paying with Shop Pay is the Payment apps switch, so disconnecting the account leaves it as it is.
-    toast(action==='disconnect'?'Shop account disconnected.':'Shop Pay daily limit saved.');
-  }catch(e){if(owner===scopeBelnaWallet())shopPayError=e.message || 'Could not update Shop Pay. Try again.';}
-  finally{if(owner===scopeBelnaWallet()){shopPayBusy=false;repaintWallet();}}
-}
 let walletHistory=[],walletHistoryLoading=false,walletHistoryLoaded=false;
 let walletPreferences=null,walletPreferencesLoading=false,walletConnectOpen=false,walletExistingOpen=false,walletAction=null;
-let shopPayBusy=false,shopPayError='',walletPreferencesError='';
+let walletPreferencesError='';
 let walletCardWaitlist=null,walletCardWaitlistLoading=false,walletCardWaitlistBusy=false,walletCardWaitlistError='';
 let walletAddresses=null, walletAddressesLoading=false, walletAddressEdit=null, walletAddressError='';
 let belnaWalletOwner = null, belnaWalletCache = null, belnaWalletLoading = false, belnaWalletError = '', belnaWalletBusy = false, belnaTransferQuote = null, walletActionError = '';
@@ -7418,7 +7397,7 @@ function scopeBelnaWallet(){
     walletCardSetupClose?.(false);
     walletVerificationClose?.();
     walletHistory=[];walletHistoryLoading=false;walletHistoryLoaded=false;walletPreferences=null;walletPreferencesLoading=false;walletConnectOpen=false;walletExistingOpen=false;walletAction=null;walletActionError='';walletLimitEdit=false;
-    shopPayBusy=false;shopPayError='';walletPreferencesError='';
+    walletPreferencesError='';
     walletCardWaitlist=null;walletCardWaitlistLoading=false;walletCardWaitlistBusy=false;walletCardWaitlistError='';
     walletAddresses=null; walletAddressesLoading=false; walletAddressEdit=null; walletAddressError='';
     belnaWalletOwner = owner; belnaWalletCache = null; belnaWalletLoading = false; belnaWalletError = ''; belnaWalletBusy = false; belnaTransferQuote=null;
@@ -7568,7 +7547,7 @@ function walletDefaultAddress(){
 function walletRow({ ic = 'wallet', mark = '', tone = '', title, sub = '', right = '', cls = '' }){
   return `<div class="wl-row${cls ? ' ' + cls : ''}"><span class="wl-ico${tone ? ' ' + tone : ''}" aria-hidden="true">${tone === 'shop' ? shopPayBrandMark() : mark ? esc(mark) : icon(ic, 17)}</span><span class="wl-copy"><b>${esc(title)}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right}</div>`;
 }
-const walletSwitch = (on, act, label, extra = '') => `<button type="button" class="wl-switch${on ? ' on' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-act="${act}" ${extra}${belnaWalletBusy || shopPayBusy ? ' disabled' : ''}><span></span></button>`;
+const walletSwitch = (on, act, label, extra = '') => `<button type="button" class="wl-switch${on ? ' on' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-act="${act}" ${extra}${belnaWalletBusy ? ' disabled' : ''}><span></span></button>`;
 
 /* ----- Settings › Wallet ----- */
 function walletCardStatus(w){
@@ -7635,7 +7614,7 @@ function refreshWalletHistory(force=false){
    .finally(()=>{if(owner===scopeBelnaWallet()){walletHistoryLoading=false;repaintWallet();}});
 }
 function setWalletPreferences(payload){
- const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy || shopPayBusy)return;
+ const owner=scopeBelnaWallet();if(!owner || belnaWalletBusy)return;
  const focusedRadio=document.activeElement?.matches('.wpay-main[role="radio"],.wl-method[role="radio"]');
  belnaWalletBusy=true;walletPreferencesError='';repaintWallet();window.LingonAuth.api('/api/wallet-preferences',{method:'POST',body:JSON.stringify(payload)}).then(j=>{if(owner===scopeBelnaWallet()){walletPreferences=j;walletExistingOpen=false;walletConnectOpen=false;if(Object.hasOwn(payload,'activeMethod')){walletAction=null;belnaTransferQuote=null;walletLimitEdit=false;walletAddressEdit=null;}}}).catch(e=>{if(owner===scopeBelnaWallet())walletPreferencesError=e.message || 'Could not switch wallet. Try again.';}).finally(()=>{if(owner===scopeBelnaWallet()){belnaWalletBusy=false;repaintWallet();if(focusedRadio){const root=state.view==='settings'?$('#wallet-settings-content'):$('#cbody');root?.querySelector('.wpay-main[aria-checked="true"],.wl-method[aria-checked="true"]')?.focus({preventScroll:true});}}});
 }
@@ -7776,8 +7755,7 @@ function safeCheckoutUrl(value){
 // The owner's own payment methods are charged to the owner's own accounts, never the Belna
 // balance. Each switch is off until the owner turns it on, and the server refuses a purchase
 // with a method that is off. Shop Pay is one of the payment apps: at a store's checkout the
-// owner confirms it with the code Shop sends to their phone, so it needs no connection.
-// The optional Shop account link only lets the agent set up Shopify orders without a browser.
+// owner confirms it with the code Shop sends to their phone, so there is nothing to connect.
 // Belna never takes card or bank details.
 const OWN_METHODS = [
   ['payment_apps', 'Payment apps', 'phone', 'Klarna, Swish, Shop Pay, PayPal, Afterpay and more. You confirm each payment yourself, in the app or with a code sent to your phone.', 'Payment apps'],
@@ -7786,15 +7764,6 @@ const OWN_METHODS = [
 // Short names of the methods that are on, for the Wallet panel: "Payment apps and store cards".
 function ownMethodsOn(){
   return OWN_METHODS.filter(([id]) => walletPreferences?.methods?.[id]).map(([, , , , short]) => short);
-}
-// The Shop account link: optional, separate from paying with Shop Pay.
-function shopAccountRows(){
-  const shop = shopPaySnapshot(), busy = shopPayBusy ? ' disabled' : '', agent = esc(state.agent.name);
-  if (!shop.configured && !shop.connected) return '';
-  const mark = `<span class="pm-ic shop" aria-hidden="true">${shopPayBrandMark()}</span>`;
-  if (!shop.connected) return `<div class="wset-row pm-row">${mark}<span class="wset-copy"><b>Shop account <span class="wl-tag">Optional</span></b><small>${state.shopPayLoading ? 'Checking connection…' : `Lets ${agent} set up orders at Shopify stores directly, without opening the store in a browser. You still approve and pay.`}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-connect"${shopPayBusy ? ' disabled' : ' aria-label="Connect Shop account"'}>${shopPayBusy ? 'Please wait…' : 'Connect'}</button></div>`;
-  const limit = shop.nativeCheckout ? `<div class="wset-row"><span class="wset-copy"><b>Shop Pay daily limit</b><small>The most ${agent} can pay with Shop Pay in a day. You still approve every order.</small></span><label class="wl-field">USD<input class="field" id="shoppaylimit" type="number" min="1" max="2000" step="0.01" value="${Number(shop.dailyLimitUsd)||200}"></label><button type="button" class="btn ghost small" data-act="shop-pay-limit"${busy}>Save limit</button></div>` : '';
-  return `<div class="wset-row pm-row">${mark}<span class="wset-copy"><b>Shop account</b><small>${esc((shop.email ? 'Connected as ' + shop.email + ' · ' : 'Connected · ') + state.agent.name + ' sets up Shopify orders directly')}</small></span><button type="button" class="btn ghost small" data-act="shop-pay-disconnect"${busy}>${shopPayBusy ? 'Please wait…' : 'Disconnect'}</button></div>${limit}`;
 }
 // Settings › Wallet: how a purchase works, then the switches for the owner's own methods.
 function ownMethodsSettings(){
@@ -7810,9 +7779,8 @@ function ownMethodsSettings(){
     <h4 class="wset-label pm-label">Payment methods ${agent} may use</h4>
     <div class="wset-group">${rows}
       <div class="wset-row pm-row"><span class="pm-ic" aria-hidden="true">${icon('globe', 16)}</span><span class="wset-copy"><b>Pay on the store’s page</b><small>When none of these fit, ${agent} sends you a checkout link and you pay yourself.</small></span><span class="wl-tag pm-always">Always on</span></div>
-      ${shopAccountRows()}
     </div>
-    ${walletPreferencesError ? `<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>` : ''}${shopPayError ? `<p class="wl-error" role="alert">${esc(shopPayError)}</p>` : ''}</section>`;
+    ${walletPreferencesError ? `<p class="wl-error" role="alert">${esc(walletPreferencesError)}</p>` : ''}</section>`;
 }
 const UPKEEP_ICONS = { personal_email:'mail', memory:'book', relationships:'users', ideas:'spark', study:'globe', reflection:'star', skills:'code', quiet:'clock' };
 function automationItemHtml(agent){
@@ -10050,7 +10018,7 @@ document.addEventListener('click', async e => {
   }
   if(act==='wallet-manage' || act==='wallet-manage-shipping' || act==='payments-manage'){state.view='settings';state.settingsTab='wallet';save();renderApp();if(act==='wallet-manage-shipping')$('#wallet-shipping-section')?.scrollIntoView({block:'start'});if(act==='payments-manage')$('#payment-connections')?.scrollIntoView({block:'start'});return;}
   if(act==='wallet-connect-belna'){walletConnectOpen=true;walletExistingOpen=false;repaintWallet();$('#belna-wallet-country')?.focus();return;}
-  if(act==='wallet-existing-options'){$('#payment-connections')?.scrollIntoView({block:'start'});$('#payment-connections [data-act="shop-pay-connect"]')?.focus({preventScroll:true});return;}
+  if(act==='wallet-existing-options'){$('#payment-connections')?.scrollIntoView({block:'start'});return;}
   if(act==='wallet-merchant-connect'){setWalletPreferences({methods:{saved_card:true}});return;}
   if(act==='pay-method-toggle'){const m=b.dataset.method;setWalletPreferences({methods:{[m]:!walletPreferences?.methods?.[m]}});return;}
   if(act==='wallet-switch'){setWalletPreferences({activeMethod:b.dataset.method || null});return;}
@@ -10135,19 +10103,6 @@ document.addEventListener('click', async e => {
   if (act === 'payments-stripe-apps'){
     state.appQuery = 'stripe'; state.appFilter = 'all'; state.view = 'apps';
     save(); renderApp(); refreshComposioApps(true); return;
-  }
-  if (act === 'shop-pay-connect'){
-    updateShopPay('connect');
-    return;
-  }
-  if (act === 'shop-pay-disconnect'){
-    updateShopPay('disconnect');
-    return;
-  }
-  if (act === 'shop-pay-limit'){
-    const field=$('#shoppaylimit');if(!field?.reportValidity() || !field.value)return;
-    updateShopPay('limit',{dailyLimitUsd:Number(field.value)});
-    return;
   }
   if (act === 'shop-pay-refresh'){ refreshShopPay(true); return; }
   if (act === 'payments-refresh'){ refreshShopPay(true); refreshBelnaWallet(true); return; }
@@ -11308,22 +11263,11 @@ const bootReady = hydrateStoredFiles().then(() => bootHash()).then(async (st) =>
     const q = new URLSearchParams(window.location.search);
     if (q.get('connected_app')) { handleConnectedAppReturn(); return; }
     const f = q.get('billing');
-    const shop = q.get('shop_pay');
-    if (f || shop) {
-      const msg = q.get('shop_pay_msg');
+    // An old Shop account sign-in return (the link was removed): drop its parameters.
+    if (q.get('shop_pay')) window.history.replaceState(null, '', window.location.pathname);
+    if (f) {
       window.history.replaceState(null, '', window.location.pathname);
-      if (f) handleBillingReturn(f, q);
-      if (shop) {
-        // Back to Purchases in Settings, where the Shop account was connected. Connecting it
-        // turns no payment method on; paying with Shop Pay is the Payment apps switch.
-        state.view = 'settings';
-        state.settingsTab = 'wallet';
-        save();
-        renderApp();
-        $('#payment-connections')?.scrollIntoView({block:'start'});
-        refreshShopPay(true);
-        setTimeout(() => toast(shop === 'connected' ? 'Shop account connected. You still approve every order.' : ('Shop account: ' + (msg || 'could not connect.'))), 400);
-      }
+      handleBillingReturn(f, q);
     }
   } catch {}
 });
